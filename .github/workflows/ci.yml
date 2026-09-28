@@ -54,7 +54,9 @@ jobs:
 
       # A floor, not a target. It exists so coverage cannot drift down without
       # someone deciding to accept it. Raise the number when the real figure
-      # climbs; never lower it to make a change pass.
+      # climbs; never lower it to make a change pass. The figure is the Linux
+      # one, because that is where this step runs; the platform-only files are
+      # few enough that the other platforms land within a point of it.
       - name: coverage floor
         if: runner.os == 'Linux'
         run: |

@@ -67,6 +67,24 @@ All notable changes to Termixgo are recorded here. The format follows
   same thing. The command line stored the prefixed spelling while the app stored
   the bare id, so `doctor`, the status bar and a `modelPricing` override could
   disagree about the same model. Both go through one resolver now.
+- Four `staticcheck` findings are fixed, which matters because the CI job that
+  runs it fails the build: a `fmt.Sprintf` with no arguments, two error strings
+  that opened with a capital letter, and a struct field in a test that nothing
+  read.
+- A test asserted the Windows spelling of the secret file's access detail
+  (`"1 entries"`), so it failed on Linux, where the detail is a mode. It now
+  checks the evidence that matches the platform. This was found by cloning the
+  repository inside WSL and running the suite there, which is now documented in
+  `CONTRIBUTING.md`.
+
+### Build
+
+- The repository has line-ending rules in `.gitattributes` instead of relying on
+  `core.autocrlf`. A checkout on Linux or macOS now gets LF for every source,
+  shell and build file, which is what a correct `make check` and a readable
+  `gofmt` need. `*.ps1` stays CRLF because PowerShell's here-strings and batch
+  parsing are line-ending sensitive. The `Makefile`, the docs and the workflow
+  files were CRLF in the working tree and are LF now.
 
 ### Security
 
