@@ -1,0 +1,822 @@
+package ui
+
+import (
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/99apps-id/termixgo/internal/agent"
+	"github.com/99apps-id/termixgo/internal/app"
+	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/provider"
+)
+
+// chatModel builds a model that is already set up, so the UI starts in chat
+// mode rather than opening the onboarding wizard.
+//
+// A fresh install has no default model, which makes New open the wizard and
+// send every keystroke to the picker. Tests that exercise the chat loop need a
+// configured model to reach it. The model is a local one, so no API key is
+// needed and nothing is called over the network during construction.
+func chatModel(t *testing.T) *Model {
+	t.Helper()
+	t.Setenv(config.EnvHome, t.TempDir())
+
+	cfg := config.Default()
+	cfg.DefaultModel = "qwen2.5-coder:latest"
+	cfg.ApprovalMode = config.ApprovalAll
+	if err := config.Save(cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	application, err := app.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("app.New: %v", err)
+	}
+	if !application.HasModel() {
+		t.Fatalf("the fixture should have a usable model")
+	}
+
+	model := New(application)
+	if model.current != modeChat {
+		t.Fatalf("the fixture should start in chat mode, got mode %d", model.current)
+	}
+	resize(model, 120, 40)
+	return model
+}
+
+// key builds a key message from its name, the way Bubble Tea delivers one.
+func key(name string) tea.KeyMsg {
+	switch name {
+	case "enter":
+		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
+	case "up":
+		return tea.KeyMsg{Type: tea.KeyUp}
+	case "down":
+		return tea.KeyMsg{Type: tea.KeyDown}
+	case "ctrl+c":
+		return tea.KeyMsg{Type: tea.KeyCtrlC}
+	case "backspace":
+		return tea.KeyMsg{Type: tea.KeyBackspace}
+	default:
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(name)}
+	}
+}
+
+// press sends one key through Update and returns the model.
+func press(t *testing.T, model *Model, name string) *Model {
+	t.Helper()
+	next, _ := model.Update(key(name))
+	updated, ok := next.(*Model)
+	if !ok {
+		t.Fatalf("Update returned %T, want *Model", next)
+	}
+	return updated
+}
+
+// display refreshes the viewport and returns the rendered view without colour.
+//
+// applyEvent updates the transcript; refresh is what the real Update loop calls
+// afterwards to push it into the viewport, so a test that reads the view has to
+// do the same.
+func display(model *Model) string {
+	model.refresh()
+	return stripANSI(model.View())
+}
+
+// ---------------------------------------------------------------- event folding
+
+// TestThinkingAccumulatesThenCloses is the reasoning display contract: chunks
+// join one live block, and the closing event turns it into a timed one.
+func TestThinkingAccumulatesThenCloses(t *testing.T) {
+	model := chatModel(t)
+
+	model.applyEvent(agent.Event{Kind: agent.EventThinking, Text: "first "})
+	model.applyEvent(agent.Event{Kind: agent.EventThinking, Text: "second"})
+
+	thinking := 0
+	for _, item := range model.blocks {
+		if item.kind != blockThinking {
+			continue
+		}
+		thinking++
+		if item.reasoning != "first second" {
+			t.Errorf("reasoning = %q, want the chunks joined", item.reasoning)
+		}
+		if !item.running {
+			t.Errorf("the block should still be running")
+		}
+	}
+	if thinking != 1 {
+		t.Fatalf("chunks must share one block, got %d", thinking)
+	}
+
+	model.applyEvent(agent.Event{Kind: agent.EventReasoned, Text: "first second", ToolMillis: 4200})
+	for _, item := range model.blocks {
+		if item.kind != blockThinking {
+			continue
+		}
+		if item.running {
+			t.Errorf("the block should no longer be running")
+		}
+		if item.seconds != 4 {
+			t.Errorf("seconds = %d, want 4", item.seconds)
+		}
+	}
+	if view := display(model); strings.Contains(view, "Thinking...") {
+		t.Errorf("a finished block must not still read as thinking:\n%s", view)
+	}
+}
+
+func TestTextChunksJoinOneBlock(t *testing.T) {
+	model := chatModel(t)
+
+	model.applyEvent(agent.Event{Kind: agent.EventText, Text: "Hello "})
+	model.applyEvent(agent.Event{Kind: agent.EventText, Text: "world"})
+
+	assistants := 0
+	for _, item := range model.blocks {
+		if item.kind != blockAssistant {
+			continue
+		}
+		assistants++
+		if item.text != "Hello world" {
+			t.Errorf("text = %q", item.text)
+		}
+	}
+	if assistants != 1 {
+		t.Fatalf("text chunks must share one block, got %d", assistants)
+	}
+}
+
+// TestTextAfterThinkingClosesTheThinkingBlock is a display guard: a live
+// thinking block left next to the answer reads as if the model is still busy.
+func TestTextAfterThinkingClosesTheThinkingBlock(t *testing.T) {
+	model := chatModel(t)
+
+	model.applyEvent(agent.Event{Kind: agent.EventThinking, Text: "hmm"})
+	model.applyEvent(agent.Event{Kind: agent.EventText, Text: "Answer"})
+
+	for _, item := range model.blocks {
+		if item.kind == blockThinking && item.running {
+			t.Fatalf("the thinking block should have closed when the answer started")
+		}
+	}
+}
+
+func TestToolStartAndEndPairUp(t *testing.T) {
+	model := chatModel(t)
+
+	model.applyEvent(agent.Event{Kind: agent.EventToolStart, ToolName: "read_file", ToolLabel: "Reading main.go"})
+	tools := 0
+	for _, item := range model.blocks {
+		if item.kind != blockTool {
+			continue
+		}
+		tools++
+		if !item.running {
+			t.Errorf("the tool should start as running")
+		}
+	}
+	if tools != 1 {
+		t.Fatalf("expected one tool block, got %d", tools)
+	}
+
+	model.applyEvent(agent.Event{
+		Kind: agent.EventToolEnd, ToolName: "read_file", ToolLabel: "Read main.go",
+		ToolOK: true, ToolMillis: 12, ToolResult: "content",
+	})
+
+	tools = 0
+	for _, item := range model.blocks {
+		if item.kind != blockTool {
+			continue
+		}
+		tools++
+		if item.running {
+			t.Errorf("the tool should no longer be running")
+		}
+		if item.toolLabel != "Read main.go" {
+			t.Errorf("label = %q, want the past tense", item.toolLabel)
+		}
+		if item.toolMillis != 12 {
+			t.Errorf("millis = %d", item.toolMillis)
+		}
+	}
+	if tools != 1 {
+		t.Fatalf("the end event must update the existing block, got %d blocks", tools)
+	}
+}
+
+func TestToolEndWithoutAStartStillRenders(t *testing.T) {
+	model := chatModel(t)
+
+	// A dropped start event must not lose the result entirely.
+	model.applyEvent(agent.Event{Kind: agent.EventToolEnd, ToolName: "grep", ToolLabel: "Searched x", ToolOK: true})
+
+	found := false
+	for _, item := range model.blocks {
+		if item.kind == blockTool && item.toolName == "grep" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a tool end without a start should still be recorded")
+	}
+}
+
+func TestFailedToolIsMarkedFailed(t *testing.T) {
+	model := chatModel(t)
+
+	model.applyEvent(agent.Event{Kind: agent.EventToolStart, ToolName: "run_command", ToolLabel: "Running tests"})
+	model.applyEvent(agent.Event{Kind: agent.EventToolEnd, ToolName: "run_command", ToolLabel: "Ran tests", ToolOK: false})
+
+	for _, item := range model.blocks {
+		if item.kind == blockTool && item.toolOK {
+			t.Fatalf("a failed tool must not be marked ok")
+		}
+	}
+	if view := display(model); !strings.Contains(view, "Ran tests") {
+		t.Errorf("the failure should still be visible:\n%s", view)
+	}
+}
+
+func TestPlanReplacesTheLatestPlanBlock(t *testing.T) {
+	model := chatModel(t)
+
+	model.applyEvent(agent.Event{Kind: agent.EventPlan, Plan: []agent.Todo{{Title: "one", Status: "in_progress"}}})
+	model.applyEvent(agent.Event{Kind: agent.EventPlan, Plan: []agent.Todo{
+		{Title: "one", Status: "completed"},
+		{Title: "two", Status: "in_progress"},
+	}})
+
+	plans := 0
+	for _, item := range model.blocks {
+		if item.kind != blockPlan {
+			continue
+		}
+		plans++
+		if len(item.plan) != 2 {
+			t.Errorf("the plan should be replaced, got %d items", len(item.plan))
+		}
+	}
+	if plans != 1 {
+		t.Fatalf("expected one plan block, got %d", plans)
+	}
+}
+
+func TestErrorsAndNoticesAppearInTheTranscript(t *testing.T) {
+	model := chatModel(t)
+
+	model.applyEvent(agent.Event{Kind: agent.EventNotice, Text: "note one"})
+	model.applyEvent(agent.Event{Kind: agent.EventError, Err: errFixture{}})
+
+	view := display(model)
+	if !strings.Contains(view, "note one") {
+		t.Errorf("the notice is missing:\n%s", view)
+	}
+	if !strings.Contains(view, "fixture failure") {
+		t.Errorf("the error is missing:\n%s", view)
+	}
+}
+
+// TestStepCapExplainsItself covers the case where a run stops at the budget and
+// the operator has no idea why nothing more happened.
+func TestStepCapExplainsItself(t *testing.T) {
+	model := chatModel(t)
+
+	model.applyEvent(agent.Event{Kind: agent.EventTurnEnd, StopReason: "step-cap"})
+	if view := display(model); !strings.Contains(view, "step budget") {
+		t.Errorf("a step-capped run must say so:\n%s", view)
+	}
+}
+
+// TestStatusBarShowsTokenUsage checks the number the operator watches.
+//
+// The status bar reads the app, not the event stream: the app is what
+// accumulates usage and cost, and the UI only renders it. Asserting on an
+// event here would test a path that does not exist.
+func TestStatusBarShowsTokenUsage(t *testing.T) {
+	model := chatModel(t)
+	model.app.AddUsage(provider.Usage{PromptTokens: 1200, CompletionTokens: 300, TotalTokens: 1500})
+
+	if view := display(model); !strings.Contains(view, "tokens 1500") {
+		t.Errorf("the token count should reach the status bar:\n%s", view)
+	}
+}
+
+// TestStatusBarHidesZeroSpend keeps a free session from looking like a billed
+// one, and keeps a row of noise out of the bar.
+func TestStatusBarHidesZeroSpend(t *testing.T) {
+	model := chatModel(t)
+
+	// The fixture is a local model, so the cost is known and zero.
+	if _, known := model.app.Cost(); !known {
+		t.Fatalf("the local fixture should report a known cost")
+	}
+	if view := display(model); strings.Contains(view, "$") {
+		t.Errorf("nothing has been spent, so no amount should be shown:\n%s", view)
+	}
+}
+
+type errFixture struct{}
+
+func (errFixture) Error() string { return "fixture failure" }
+
+// ---------------------------------------------------------------- key routing
+
+func TestCtrlCQuits(t *testing.T) {
+	model := chatModel(t)
+	_, cmd := model.Update(key("ctrl+c"))
+	if cmd == nil {
+		t.Fatalf("ctrl+c should return a command")
+	}
+	if msg := cmd(); msg == nil {
+		t.Fatalf("ctrl+c should produce a message")
+	}
+}
+
+func TestEnterWithAnEmptyComposerDoesNothing(t *testing.T) {
+	model := chatModel(t)
+	before := len(model.blocks)
+
+	updated := press(t, model, "enter")
+	if len(updated.blocks) != before {
+		t.Errorf("an empty submit must not add a block")
+	}
+	if updated.running {
+		t.Errorf("an empty submit must not start a run")
+	}
+}
+
+func TestEnterSubmitsAndClearsTheComposer(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("/status")
+
+	updated := press(t, model, "enter")
+
+	if updated.composer.Value() != "" {
+		t.Errorf("the composer should be cleared, got %q", updated.composer.Value())
+	}
+	if view := display(updated); !strings.Contains(view, "workspace:") {
+		t.Errorf("/status should have produced a status block:\n%s", view)
+	}
+}
+
+func TestEscStopsARunningTurn(t *testing.T) {
+	model := chatModel(t)
+	model.running = true
+
+	updated := press(t, model, "esc")
+	if updated.notice == "" {
+		t.Errorf("stopping should tell the operator what is happening")
+	}
+	if view := display(updated); !strings.Contains(strings.ToLower(view), "stopping") {
+		t.Errorf("the notice should be visible:\n%s", view)
+	}
+}
+
+func TestEscClearsTheComposerWhenIdle(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("half a thought")
+
+	updated := press(t, model, "esc")
+	if updated.composer.Value() != "" {
+		t.Errorf("esc should clear the composer, got %q", updated.composer.Value())
+	}
+}
+
+func TestEnterWhileRunningIsRefused(t *testing.T) {
+	model := chatModel(t)
+	model.running = true
+	model.composer.SetValue("a second request")
+	before := len(model.blocks)
+
+	updated := press(t, model, "enter")
+	if len(updated.blocks) != before {
+		t.Errorf("a second submit must be refused, not queued")
+	}
+	if updated.composer.Value() != "a second request" {
+		t.Errorf("the typed text should be kept for later, got %q", updated.composer.Value())
+	}
+	if updated.notice == "" {
+		t.Errorf("the refusal should be explained")
+	}
+}
+
+func TestTabCompletesASlashCommand(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("/mo")
+	model.updateSlashMatches()
+
+	updated := press(t, model, "tab")
+	if !strings.HasPrefix(updated.composer.Value(), "/model") {
+		t.Errorf("tab should complete to /model, got %q", updated.composer.Value())
+	}
+	if len(updated.slashMatches) != 0 {
+		t.Errorf("the menu should close after completing")
+	}
+}
+
+func TestArrowKeysMoveTheSlashCursor(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("/")
+	model.updateSlashMatches()
+	if len(model.slashMatches) < 3 {
+		t.Fatalf("the fixture needs at least three commands, got %d", len(model.slashMatches))
+	}
+
+	model = press(t, model, "down")
+	if model.slashCursor != 1 {
+		t.Errorf("down should advance the cursor, got %d", model.slashCursor)
+	}
+	model = press(t, model, "up")
+	if model.slashCursor != 0 {
+		t.Errorf("up should retreat the cursor, got %d", model.slashCursor)
+	}
+	// Wrapping backwards from the top lands on the last entry.
+	model = press(t, model, "up")
+	if model.slashCursor != len(model.slashMatches)-1 {
+		t.Errorf("up from the top should wrap, got %d", model.slashCursor)
+	}
+}
+
+func TestHelpModeClosesOnAnyKey(t *testing.T) {
+	model := chatModel(t)
+	model.current = modeHelp
+
+	updated := press(t, model, "x")
+	if updated.current != modeChat {
+		t.Errorf("any key should close help, got mode %d", updated.current)
+	}
+}
+
+// ---------------------------------------------------------------- approval
+
+// TestApprovalKeysMapToDecisions is a safety contract. A key that maps to the
+// wrong decision either blocks work that was approved or runs work that was
+// refused, so each mapping is asserted by name.
+func TestApprovalKeysMapToDecisions(t *testing.T) {
+	cases := []struct {
+		key  string
+		want agent.Decision
+	}{
+		{"y", agent.DecisionAllowOnce},
+		{"enter", agent.DecisionAllowOnce},
+		{"s", agent.DecisionAllowSession},
+		{"a", agent.DecisionAllowAlways},
+		{"n", agent.DecisionDeny},
+		{"esc", agent.DecisionDeny},
+	}
+	for _, testCase := range cases {
+		model := chatModel(t)
+		reply := make(chan agent.Decision, 1)
+		model.pendingApproval = &agent.ApprovalRequest{Tool: "run_command", Risk: "command", Detail: "Running tests"}
+		model.approvalReply = reply
+
+		press(t, model, testCase.key)
+
+		select {
+		case got := <-reply:
+			if got != testCase.want {
+				t.Errorf("key %q produced %v, want %v", testCase.key, got, testCase.want)
+			}
+		default:
+			t.Errorf("key %q did not answer the request", testCase.key)
+		}
+		if model.pendingApproval != nil {
+			t.Errorf("key %q should clear the pending request", testCase.key)
+		}
+	}
+}
+
+// TestUnknownApprovalKeyKeepsAsking is the safe failure: a stray keypress must
+// not be read as consent.
+func TestUnknownApprovalKeyKeepsAsking(t *testing.T) {
+	model := chatModel(t)
+	reply := make(chan agent.Decision, 1)
+	model.pendingApproval = &agent.ApprovalRequest{Tool: "run_command"}
+	model.approvalReply = reply
+
+	updated := press(t, model, "q")
+
+	if updated.pendingApproval == nil {
+		t.Fatalf("an unrecognised key must leave the request pending")
+	}
+	select {
+	case decision := <-reply:
+		t.Fatalf("an unrecognised key must not answer, got %v", decision)
+	default:
+	}
+	if !strings.Contains(stripANSI(updated.View()), "Approval needed") {
+		t.Errorf("the prompt should still be on screen")
+	}
+}
+
+// TestAllowAlwaysIsRemembered checks the one decision that outlives the run.
+func TestAllowAlwaysIsRemembered(t *testing.T) {
+	model := chatModel(t)
+	reply := make(chan agent.Decision, 1)
+	model.pendingApproval = &agent.ApprovalRequest{Tool: "write_file"}
+	model.approvalReply = reply
+
+	updated := press(t, model, "a")
+
+	if !updated.app.Policy().SessionAllowed["write_file"] {
+		t.Errorf("allow-always should be recorded in the policy")
+	}
+	if view := display(updated); !strings.Contains(view, "always allowed") {
+		t.Errorf("the transcript should record the decision:\n%s", view)
+	}
+}
+
+func TestApprovalDecisionIsRecordedInTheTranscript(t *testing.T) {
+	model := chatModel(t)
+	reply := make(chan agent.Decision, 1)
+	model.pendingApproval = &agent.ApprovalRequest{Tool: "run_command"}
+	model.approvalReply = reply
+
+	updated := press(t, model, "n")
+
+	view := display(updated)
+	if !strings.Contains(view, "denied") || !strings.Contains(view, "run_command") {
+		t.Errorf("the transcript should record who was denied:\n%s", view)
+	}
+}
+
+// ---------------------------------------------------------------- questions
+
+func TestAskKeyAnswersAndEscDeclines(t *testing.T) {
+	model := chatModel(t)
+	reply := make(chan string, 1)
+	model.pendingAsk = &askRequestMsg{question: "which port?", options: []string{"3000", "8080"}, reply: reply}
+
+	model.input.SetValue("3000")
+	press(t, model, "enter")
+
+	if got := <-reply; got != "3000" {
+		t.Errorf("answer = %q", got)
+	}
+	if model.pendingAsk != nil {
+		t.Errorf("the question should be cleared")
+	}
+
+	second := chatModel(t)
+	secondReply := make(chan string, 1)
+	second.pendingAsk = &askRequestMsg{question: "again?", reply: secondReply}
+	press(t, second, "esc")
+	if got := <-secondReply; got != "(no answer)" {
+		t.Errorf("declining should send a clear no-answer marker, got %q", got)
+	}
+}
+
+func TestAskWithAnEmptyAnswerKeepsWaiting(t *testing.T) {
+	model := chatModel(t)
+	reply := make(chan string, 1)
+	model.pendingAsk = &askRequestMsg{question: "which port?", reply: reply}
+
+	updated := press(t, model, "enter")
+
+	if updated.pendingAsk == nil {
+		t.Fatalf("an empty answer must not resolve the question")
+	}
+	select {
+	case got := <-reply:
+		t.Fatalf("an empty answer must not be sent, got %q", got)
+	default:
+	}
+}
+
+// ---------------------------------------------------------------- slash dispatch
+
+// TestEverySlashCommandIsHandled walks the whole catalogue, so a command that
+// panics or falls through to "unknown" is caught when it is added, not by a
+// user.
+func TestEverySlashCommandIsHandled(t *testing.T) {
+	for _, command := range SlashCommands() {
+		name := strings.TrimPrefix(command.Trigger, "/")
+		if name == "exit" {
+			// Quitting is covered separately: it would end the walk.
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			model := chatModel(t)
+			next, _ := model.runSlash(name, "")
+			final, ok := next.(*Model)
+			if !ok {
+				t.Fatalf("runSlash returned %T", next)
+			}
+			if view := display(final); strings.Contains(view, "Unknown command") {
+				t.Errorf("/%s is in the catalogue but is not handled", name)
+			}
+		})
+	}
+}
+
+func TestExitCommandQuits(t *testing.T) {
+	model := chatModel(t)
+	_, cmd := model.runSlash("exit", "")
+	if cmd == nil {
+		t.Fatalf("/exit should return a command")
+	}
+}
+
+func TestUnknownSlashCommandNamesItself(t *testing.T) {
+	model := chatModel(t)
+	next, _ := model.runSlash("nonsense", "")
+	final := next.(*Model)
+
+	view := display(final)
+	if !strings.Contains(view, "nonsense") {
+		t.Errorf("the error should name the command:\n%s", view)
+	}
+	if !strings.Contains(view, "/help") {
+		t.Errorf("the error should point at help:\n%s", view)
+	}
+}
+
+func TestTrustCommandRoundTrip(t *testing.T) {
+	model := chatModel(t)
+
+	next, _ := model.runSlash("trust", "on")
+	model = next.(*Model)
+	if !model.app.Trusted() {
+		t.Fatalf("/trust on did not trust the folder")
+	}
+	if view := display(model); !strings.Contains(view, "now trusted") {
+		t.Errorf("the change should be reported:\n%s", view)
+	}
+
+	next, _ = model.runSlash("trust", "off")
+	model = next.(*Model)
+	if model.app.Trusted() {
+		t.Fatalf("/trust off did not untrust the folder")
+	}
+
+	next, _ = model.runSlash("trust", "sideways")
+	model = next.(*Model)
+	if view := display(model); !strings.Contains(view, "Usage") {
+		t.Errorf("an invalid argument should show usage:\n%s", view)
+	}
+}
+
+func TestApprovalCommandValidates(t *testing.T) {
+	model := chatModel(t)
+
+	next, _ := model.runSlash("approval", "ask")
+	model = next.(*Model)
+	if string(model.appConfig().ApprovalMode) != "ask" {
+		t.Errorf("approval mode = %q, want ask", model.appConfig().ApprovalMode)
+	}
+
+	next, _ = model.runSlash("approval", "bogus")
+	model = next.(*Model)
+	if view := display(model); !strings.Contains(view, "ask, edits, all") {
+		t.Errorf("an invalid mode should list the valid ones:\n%s", view)
+	}
+}
+
+func TestToolsCommandListsTheFullSet(t *testing.T) {
+	model := chatModel(t)
+	next, _ := model.runSlash("tools", "")
+	final := next.(*Model)
+
+	view := display(final)
+	for _, want := range []string{"read_file", "run_background", "git_commit", "edit"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("/tools should list %s:\n%s", want, view)
+		}
+	}
+}
+
+func TestSkillsCommandHandlesNoSkills(t *testing.T) {
+	model := chatModel(t)
+	next, _ := model.runSlash("skills", "reload")
+	final := next.(*Model)
+
+	// The fixture has no skills, so the honest answer is to say so and where
+	// to put one.
+	if view := display(final); !strings.Contains(strings.ToLower(view), "skill") {
+		t.Errorf("/skills should say something about skills:\n%s", view)
+	}
+}
+
+func TestMemoryAndPlanCommandsHandleEmptyState(t *testing.T) {
+	model := chatModel(t)
+
+	next, _ := model.runSlash("memory", "")
+	model = next.(*Model)
+	if view := display(model); !strings.Contains(strings.ToLower(view), "learned") {
+		t.Errorf("/memory with nothing stored should say so:\n%s", view)
+	}
+
+	next, _ = model.runSlash("plan", "")
+	model = next.(*Model)
+	if view := display(model); !strings.Contains(strings.ToLower(view), "plan is empty") {
+		t.Errorf("/plan with no plan should say so:\n%s", view)
+	}
+}
+
+// TestNewCommandClearsTheConversation is the /new contract.
+func TestNewCommandClearsTheConversation(t *testing.T) {
+	model := chatModel(t)
+	model.app.Session().AddUser("hello")
+	if model.app.Session().Turns() != 1 {
+		t.Fatalf("the fixture should have one turn")
+	}
+
+	next, _ := model.runSlash("new", "")
+	final := next.(*Model)
+
+	if final.app.Session().Turns() != 0 {
+		t.Errorf("turns = %d after /new, want 0", final.app.Session().Turns())
+	}
+	if view := display(final); !strings.Contains(view, "new session") {
+		t.Errorf("the change should be reported:\n%s", view)
+	}
+}
+
+func TestCostCommandReportsWhatIsKnown(t *testing.T) {
+	model := chatModel(t)
+	next, _ := model.runSlash("cost", "")
+	final := next.(*Model)
+
+	view := display(final)
+	if !strings.Contains(view, "Tokens:") {
+		t.Errorf("/cost should report tokens:\n%s", view)
+	}
+	// The fixture is a local model, so the app knows the cost is zero. It must
+	// not claim the cost is unknown.
+	if !strings.Contains(view, "Estimated spend") {
+		t.Errorf("/cost should report spend:\n%s", view)
+	}
+	if strings.Contains(view, "cost unknown") {
+		t.Errorf("a local model is known-free, not unknown:\n%s", view)
+	}
+}
+
+func TestPsCommandReportsNothingRunning(t *testing.T) {
+	model := chatModel(t)
+
+	next, _ := model.runSlash("ps", "")
+	model = next.(*Model)
+	if view := display(model); !strings.Contains(strings.ToLower(view), "no background processes") {
+		t.Errorf("/ps with nothing running should say so:\n%s", view)
+	}
+
+	next, _ = model.runSlash("ps", "kill")
+	model = next.(*Model)
+	if view := display(model); !strings.Contains(view, "Usage") {
+		t.Errorf("/ps kill without a handle should show usage:\n%s", view)
+	}
+}
+
+func TestPsKillUnknownHandleIsRefused(t *testing.T) {
+	model := chatModel(t)
+	next, _ := model.runSlash("ps", "kill proc-99")
+	final := next.(*Model)
+
+	if view := display(final); !strings.Contains(view, "proc-99") {
+		t.Errorf("the refusal should name the handle:\n%s", view)
+	}
+}
+
+func TestModelCommandWithNoArgumentOpensThePicker(t *testing.T) {
+	model := chatModel(t)
+	next, _ := model.runSlash("model", "")
+	final := next.(*Model)
+
+	if final.current != modePicker {
+		t.Fatalf("a bare /model should open the picker, got mode %d", final.current)
+	}
+	if len(final.picker.items) == 0 {
+		t.Errorf("the picker should be populated")
+	}
+}
+
+func TestInitWithoutAModelExplainsSetup(t *testing.T) {
+	// A fresh app has no model, which is exactly the case /init has to explain.
+	t.Setenv(config.EnvHome, t.TempDir())
+	application, err := app.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("app.New: %v", err)
+	}
+	model := New(application)
+	model.current = modeChat
+	resize(model, 120, 40)
+
+	next, cmd := model.runSlash("init", "")
+	final := next.(*Model)
+
+	if view := display(final); !strings.Contains(view, "Pick a model") {
+		t.Errorf("/init without a model should point at setup:\n%s", view)
+	}
+	if cmd != nil {
+		t.Errorf("/init without a model must not start a run")
+	}
+}

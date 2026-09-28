@@ -1,0 +1,44 @@
+# Release pipeline.
+#
+# Triggered by a tag like v0.2.0. The version is stamped into the binary through
+# ldflags, and the checksums file is what users verify a download against.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # goreleaser reads the tag and the full history for the changelog.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The release must not ship something the gate would have rejected.
+      - name: gate
+        run: |
+          gofmt -s -l . | tee /tmp/fmt.txt
+          test ! -s /tmp/fmt.txt
+          go vet ./...
+          go build ./...
+          go test ./...
+          go test -race ./...
+
+      - name: goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

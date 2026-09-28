@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        shell: bash
+        run: |
+          unformatted="$(gofmt -s -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "these files need gofmt -s -w:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./...
+
+      # The race detector needs cgo. The Linux runner has a C toolchain, so
+      # this is where concurrency is verified. Concurrency does not vary by OS,
+      # so one platform is enough; the last commands are the ones most likely
+      # to race, since they touch a session while the UI reads it.
+      - name: race detector
+        if: runner.os == 'Linux'
+        run: sh scripts/race.sh
+
+      # A floor, not a target. It exists so coverage cannot drift down without
+      # someone deciding to accept it. Raise the number when the real figure
+      # climbs; never lower it to make a change pass.
+      - name: coverage floor
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          go test -coverprofile=coverage.out ./...
+          total="$(go tool cover -func=coverage.out | tail -1 | grep -oE '[0-9]+\.[0-9]+')"
+          floor=90
+          awk -v total="$total" -v floor="$floor" 'BEGIN {
+            printf "total coverage: %.1f%% (floor %d%%)\n", total, floor
+            if (total + 0 < floor + 0) {
+              printf "coverage fell below the floor\n"
+              exit 1
+            }
+          }'
+
+  staticcheck:
+    name: staticcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: staticcheck
+        uses: dominikh/staticcheck-action@v1
+        with:
+          version: latest
+          install-go: false
+
+  build-matrix:
+    name: build all platforms
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A cross-compile catches a build tag or an OS-specific file that only
+      # breaks on the platform nobody tested locally.
+      - name: cross compile
+        run: |
+          set -euo pipefail
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os="${target%%/*}"
+            arch="${target##*/}"
+            echo "building $os/$arch"
+            GOOS="$os" GOARCH="$arch" go build -o /dev/null ./cmd/termixgo
+          done

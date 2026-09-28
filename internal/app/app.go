@@ -1,0 +1,736 @@
+// Package app wires the pieces together: configuration, secrets, providers,
+// skills, the agent runner and the Telegram companion. The terminal UI and
+// the bot both drive this one object, so a prompt means the same thing
+// wherever it is typed.
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"sync"
+
+	"github.com/99apps-id/termixgo/internal/agent"
+	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/provider"
+	"github.com/99apps-id/termixgo/internal/secrets"
+	"github.com/99apps-id/termixgo/internal/skill"
+	"github.com/99apps-id/termixgo/internal/telegram"
+)
+
+// eventBuffer is deep enough that a burst of tool output never blocks a run.
+const eventBuffer = 512
+
+// ErrBusy reports that a turn is already in flight. Callers surface it rather
+// than queueing, so a second surface never appears to hang.
+var ErrBusy = errors.New("a turn is already running; stop it first")
+
+// ErrNoModel reports that onboarding has not finished.
+var ErrNoModel = errors.New("no model is configured; run /setup to add a provider key and pick a model")
+
+// Interactor is the UI side of the agent: approvals and questions. When it is
+// nil, approvals are denied and questions fail, which is the safe default for
+// a headless run.
+type Interactor interface {
+	Approve(request agent.ApprovalRequest) agent.Decision
+	Ask(question string, options []string) (string, error)
+}
+
+// App is the shared, concurrency-safe application state.
+type App struct {
+	mu sync.Mutex
+
+	cfg       config.Config
+	store     *secrets.Store
+	workspace string
+
+	trusted bool
+	skills  []skill.Skill
+	memory  *agent.Memory
+	todos   *agent.TodoStore
+	tools   *agent.Registry
+	session *agent.Session
+
+	// processes owns the background processes. It lives on the app, not on one
+	// run's environment, because a dev server must outlive the turn that
+	// started it.
+	processes *agent.ProcessManager
+
+	client    provider.Client
+	model     provider.Model
+	wireModel string
+	policy    *agent.ApprovalPolicy
+	usage     provider.Usage
+	// pricing is the resolved rate for the current model, and costKnown says
+	// whether it is a real figure. Both are resolved when the model is chosen
+	// rather than after the first usage event, so /cost is consistent from the
+	// first moment. A local model is known-free, which is not "unknown".
+	pricing   provider.Pricing
+	costKnown bool
+	// costUSD is the estimated spend across the live session, mirrored from
+	// the runner so the status bar and /cost can show it without a lookup.
+	costUSD float64
+
+	// ephemeral suppresses session files. A one-shot `termixgo run` must not
+	// leave a conversation behind on every invocation.
+	ephemeral bool
+
+	interactor Interactor
+	observer   func(agent.Event)
+
+	events  chan agent.Event
+	runMu   sync.Mutex
+	cancel  context.CancelFunc
+	running bool
+
+	bot       *telegram.Bot
+	botCancel context.CancelFunc
+	botStatus string
+}
+
+// New loads the state for a workspace and prepares a session.
+func New(workspace string) (*App, error) {
+	absolute, err := os.Getwd()
+	if err == nil && strings.TrimSpace(workspace) == "" {
+		workspace = absolute
+	}
+	workspace = config.CleanFolder(workspace)
+
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	store, err := secrets.Load()
+	if err != nil {
+		return nil, err
+	}
+	skills, err := skill.Discover(workspace)
+	if err != nil {
+		skills = nil
+	}
+
+	instance := &App{
+		cfg:       cfg,
+		store:     store,
+		workspace: workspace,
+		trusted:   cfg.IsTrusted(workspace),
+		skills:    skills,
+		memory:    agent.NewMemory(workspace),
+		todos:     agent.NewTodoStore(),
+		tools:     agent.DefaultRegistry(),
+		processes: agent.NewProcessManager(),
+		events:    make(chan agent.Event, eventBuffer),
+	}
+	// The manager outlives a turn, so its emitter is installed once here rather
+	// than being handed a per-run environment.
+	instance.processes.SetEmitter(instance.emit)
+	instance.policy = &agent.ApprovalPolicy{
+		Mode:           agent.ApprovalModeOrDefault(cfg),
+		AlwaysAllowed:  stringSet(cfg.AlwaysAllowedTools),
+		SessionAllowed: map[string]bool{},
+	}
+	instance.session = agent.NewSession(workspace, "")
+
+	if err := instance.restoreModel(); err != nil {
+		// A missing or unusable model is not fatal: the UI sends the operator
+		// to /setup, and every other feature still works.
+		instance.model = provider.Model{}
+	}
+	return instance, nil
+}
+
+// restoreModel resolves the configured model and builds its client.
+func (a *App) restoreModel() error {
+	id := strings.TrimSpace(a.cfg.DefaultModel)
+	if id == "" {
+		return errors.New("no default model is configured")
+	}
+	model, ok := provider.ModelByID(id)
+	if !ok {
+		// A custom endpoint or a model added by hand keeps its provider from
+		// the config, or falls back to the first key-based provider.
+		model = provider.Model{ID: id, Label: id, Provider: a.guessProvider(id)}
+	}
+	return a.applyModel(model)
+}
+
+func (a *App) guessProvider(modelID string) string {
+	if index := strings.Index(modelID, ":"); index > 0 {
+		return modelID[:index]
+	}
+	for _, candidate := range provider.Providers() {
+		if candidate.NeedsKey && provider.HasKey(a.store, candidate.ID) {
+			return candidate.ID
+		}
+	}
+	return "openai"
+}
+
+// applyModel validates a model, builds the client and records it.
+func (a *App) applyModel(model provider.Model) error {
+	info, ok := provider.ByID(model.Provider)
+	if !ok {
+		return fmt.Errorf("unknown provider %q", model.Provider)
+	}
+	if info.NeedsKey && !provider.HasKey(a.store, info.ID) {
+		return fmt.Errorf("no API key for %s yet; run /setup", info.Label)
+	}
+	client, err := provider.NewClient(info.ID, provider.BaseURLFor(a.cfg, info.ID), provider.ResolverFor(a.store))
+	if err != nil {
+		return err
+	}
+	a.client = client
+	a.model = model
+	a.wireModel = provider.WireModel(a.cfg, model)
+	a.pricing, a.costKnown = provider.PricedFor(a.cfg, model)
+	if a.session != nil {
+		a.session.SetModel(model.ID)
+	}
+	return nil
+}
+
+// Events is the channel the UI pumps for agent activity.
+func (a *App) Events() <-chan agent.Event { return a.events }
+
+// Config returns a copy of the configuration.
+func (a *App) Config() config.Config {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg
+}
+
+// Secrets returns the secret store.
+func (a *App) Secrets() *secrets.Store { return a.store }
+
+// Workspace is the canonical workspace root.
+func (a *App) Workspace() string { return a.workspace }
+
+// Trusted reports the folder's trust state.
+func (a *App) Trusted() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.trusted
+}
+
+// CurrentModel returns the selected model.
+func (a *App) CurrentModel() provider.Model {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.model
+}
+
+// Model returns the model name for the Telegram Agent interface.
+func (a *App) Model() string { return a.ModelLabel() }
+
+// SetModel switches model by free text, for the Telegram Agent interface.
+func (a *App) SetModel(query string) (string, error) {
+	model, err := a.SetModelByQuery(query)
+	if err != nil {
+		return "", err
+	}
+	return model.Label, nil
+}
+
+// ModelLabel is the short model name for the status bar.
+func (a *App) ModelLabel() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.model.Label != "" {
+		return a.model.Label
+	}
+	return a.cfg.DefaultModel
+}
+
+// Session returns the live session.
+func (a *App) Session() *agent.Session {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.session
+}
+
+// currentSession is the unlocked read used from inside a turn, where the
+// caller has already decided the session cannot be swapped underneath it.
+func (a *App) currentSession() *agent.Session {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.session
+}
+
+// Todos returns the plan store.
+func (a *App) Todos() *agent.TodoStore { return a.todos }
+
+// Skills returns the discovered skills.
+func (a *App) Skills() []skill.Skill {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.skills
+}
+
+// Usage returns accumulated token usage.
+func (a *App) Usage() provider.Usage {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.usage
+}
+
+// Cost returns the estimated spend of the live session, and whether a price
+// was known for the model. A free local model reports known with zero.
+func (a *App) Cost() (float64, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.costUSD, a.costKnown
+}
+
+// SetInteractor installs the UI callbacks.
+func (a *App) SetInteractor(interactor Interactor) { a.interactor = interactor }
+
+// SetEphemeral controls whether a turn writes a session file. One-shot runs
+// set it so repeated invocations do not accumulate sessions in CI.
+func (a *App) SetEphemeral(ephemeral bool) {
+	a.mu.Lock()
+	a.ephemeral = ephemeral
+	a.mu.Unlock()
+}
+
+// Ephemeral reports whether session files are disabled.
+func (a *App) Ephemeral() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ephemeral
+}
+
+// SetObserver installs a single agent-event observer. It is how the Telegram
+// bridge follows a run without competing with the terminal UI for the event
+// channel.
+func (a *App) SetObserver(observer func(agent.Event)) {
+	a.mu.Lock()
+	a.observer = observer
+	a.mu.Unlock()
+}
+
+// AddUsage accumulates token usage into the app and the session.
+func (a *App) AddUsage(usage provider.Usage) {
+	a.mu.Lock()
+	a.usage = a.usage.Add(usage)
+	session := a.session
+	a.mu.Unlock()
+	if session != nil {
+		session.AddUsage(usage)
+	}
+}
+
+// SetTrust updates the folder trust state and persists it.
+func (a *App) SetTrust(trusted bool) error {
+	a.mu.Lock()
+	a.trusted = trusted
+	if trusted {
+		a.cfg = a.cfg.Trust(a.workspace)
+	} else {
+		a.cfg = a.cfg.Untrust(a.workspace)
+	}
+	cfg := a.cfg
+	a.mu.Unlock()
+	return config.Save(cfg)
+}
+
+// UpdateConfig applies a change and persists it.
+func (a *App) UpdateConfig(change func(cfg *config.Config)) error {
+	a.mu.Lock()
+	change(&a.cfg)
+	a.cfg = a.cfg.WithRecent(a.workspace)
+	a.policy = &agent.ApprovalPolicy{
+		Mode:           agent.ApprovalModeOrDefault(a.cfg),
+		AlwaysAllowed:  a.policy.AlwaysAllowed,
+		SessionAllowed: a.policy.SessionAllowed,
+	}
+	a.pricing, a.costKnown = provider.PricedFor(a.cfg, a.model)
+	cfg := a.cfg
+	a.mu.Unlock()
+	return config.Save(cfg)
+}
+
+// Policy returns the live approval policy.
+func (a *App) Policy() *agent.ApprovalPolicy { return a.policy }
+
+// AllowTool permanently allows a tool across sessions.
+func (a *App) AllowTool(name string) {
+	a.mu.Lock()
+	a.policy.AllowSession(name)
+	if !containsString(a.cfg.AlwaysAllowedTools, name) {
+		a.cfg.AlwaysAllowedTools = append(append([]string{}, a.cfg.AlwaysAllowedTools...), name)
+	}
+	cfg := a.cfg
+	a.mu.Unlock()
+	_ = config.Save(cfg)
+}
+
+// SetModelByQuery switches model from free text: a catalogue id, a label, a
+// substring, or "provider:id" for anything not in the catalogue.
+func (a *App) SetModelByQuery(query string) (provider.Model, error) {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return provider.Model{}, errors.New("a model id is required")
+	}
+	var model provider.Model
+	if found, ok := provider.ModelFromQuery(trimmed); ok {
+		model = found
+	}
+	if model.ID == "" {
+		// Keep the current provider and treat the text as a raw model id,
+		// which is how a brand-new vendor model is used before the catalogue
+		// knows it.
+		current := a.CurrentModel()
+		providerID := current.Provider
+		if providerID == "" {
+			providerID = a.guessProvider(trimmed)
+		}
+		model = provider.Model{ID: trimmed, Provider: providerID, Label: trimmed, APIID: trimmed}
+	}
+	a.mu.Lock()
+	err := a.applyModel(model)
+	if err == nil {
+		a.cfg.DefaultModel = model.ID
+	}
+	cfg := a.cfg
+	a.mu.Unlock()
+	if err != nil {
+		return provider.Model{}, err
+	}
+	if saveErr := config.Save(cfg); saveErr != nil {
+		return model, saveErr
+	}
+	return model, nil
+}
+
+// SetApprovalMode changes the approval policy.
+func (a *App) SetApprovalMode(mode config.ApprovalMode) error {
+	if !config.ValidApprovalMode(mode) {
+		return fmt.Errorf("approval mode must be one of ask, edits, all")
+	}
+	a.mu.Lock()
+	a.cfg.ApprovalMode = mode
+	a.policy = &agent.ApprovalPolicy{
+		Mode:           agent.ApprovalMode(mode),
+		AlwaysAllowed:  a.policy.AlwaysAllowed,
+		SessionAllowed: a.policy.SessionAllowed,
+	}
+	cfg := a.cfg
+	a.mu.Unlock()
+	return config.Save(cfg)
+}
+
+// NewSession starts a fresh conversation and clears the plan.
+func (a *App) NewSession() {
+	session := agent.NewSession(a.workspace, a.CurrentModel().ID)
+	a.mu.Lock()
+	a.session = session
+	a.mu.Unlock()
+	a.todos.Set(nil)
+}
+
+// LoadSession replaces the live session.
+func (a *App) LoadSession(session *agent.Session) {
+	if session == nil {
+		return
+	}
+	a.mu.Lock()
+	a.session = session
+	a.mu.Unlock()
+	a.todos.Set(session.Todos())
+}
+
+// Running reports whether a turn is in flight.
+func (a *App) Running() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.running
+}
+
+// Stop cancels the running turn.
+func (a *App) Stop() {
+	a.mu.Lock()
+	cancel := a.cancel
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// env builds the per-run tool environment.
+func (a *App) env() *agent.Env {
+	return &agent.Env{
+		Workspace:   a.workspace,
+		Config:      a.Config(),
+		Secrets:     a.store,
+		Skills:      a.Skills(),
+		Memory:      a.memory,
+		Todos:       a.todos,
+		Trusted:     a.Trusted(),
+		Processes:   a.processes,
+		Emit:        a.emit,
+		Approve:     a.approve,
+		Ask:         a.ask,
+		RunSubagent: a.runSubagent,
+	}
+}
+
+// Processes exposes the background process manager.
+func (a *App) Processes() *agent.ProcessManager { return a.processes }
+
+// Shutdown stops everything the app started. The command calls it on exit so a
+// dev server does not outlive the terminal that started it.
+func (a *App) Shutdown() {
+	a.StopTelegram()
+	if a.processes != nil {
+		a.processes.Shutdown()
+	}
+}
+
+func (a *App) emit(event agent.Event) {
+	if event.Kind == agent.EventUsage {
+		a.AddUsage(event.Usage)
+	}
+	switch event.Kind {
+	case agent.EventUsage, agent.EventTurnEnd:
+		// Every usage event carries the run's running total, so assigning is
+		// correct and also repairs the value after a resumed session.
+		a.mu.Lock()
+		a.costUSD = event.CostUSD
+		a.costKnown = event.CostKnown
+		a.mu.Unlock()
+	}
+	a.mu.Lock()
+	observer := a.observer
+	a.mu.Unlock()
+	if observer != nil {
+		observer(event)
+	}
+	select {
+	case a.events <- event:
+	default:
+		// Dropping a display event is better than blocking the run; the
+		// final state is always reconciled by the UI.
+	}
+}
+
+func (a *App) approve(request agent.ApprovalRequest) agent.Decision {
+	if a.interactor == nil {
+		return agent.DecisionDeny
+	}
+	return a.interactor.Approve(request)
+}
+
+func (a *App) ask(question string, options []string) (string, error) {
+	if a.interactor == nil {
+		return "", errors.New("the operator is not available for questions")
+	}
+	return a.interactor.Ask(question, options)
+}
+
+func (a *App) runSubagent(ctx context.Context, prompt string, readOnly bool) (string, error) {
+	a.mu.Lock()
+	client := a.client
+	model := a.wireModel
+	a.mu.Unlock()
+	if client == nil {
+		return "", errors.New("no provider client is available")
+	}
+	return agent.RunReadOnlySubagent(ctx, a.env(), client, model, prompt, agent.SubagentMaxSteps)
+}
+
+// RunTurn runs one operator turn, streaming events to the UI.
+func (a *App) RunTurn(ctx context.Context, input string) error {
+	return a.runTurn(ctx, input)
+}
+
+// runTurn is the single path a turn takes, whether it was typed in the TUI,
+// sent over Telegram or passed to `termixgo run`. Sharing it keeps the model,
+// budget, approval policy and tool wiring identical everywhere.
+//
+// The single-run slot is taken with TryLock rather than Lock: a second caller
+// must be told the agent is busy instead of queueing behind a turn it cannot
+// see, which is what let a Telegram prompt block the terminal indefinitely.
+func (a *App) runTurn(ctx context.Context, input string) error {
+	if !a.runMu.TryLock() {
+		return ErrBusy
+	}
+	defer a.runMu.Unlock()
+
+	a.mu.Lock()
+	client := a.client
+	model := a.wireModel
+	window := a.model.Window()
+	price := a.pricing
+	costKnown := a.costKnown
+	if client == nil {
+		a.mu.Unlock()
+		return ErrNoModel
+	}
+	a.running = true
+	a.mu.Unlock()
+
+	runCtx, cancel := context.WithCancel(ctx)
+	a.mu.Lock()
+	a.cancel = cancel
+	a.mu.Unlock()
+	defer func() {
+		cancel()
+		a.mu.Lock()
+		a.cancel = nil
+		a.running = false
+		a.mu.Unlock()
+	}()
+
+	runner := &agent.Runner{
+		Client:        client,
+		Model:         model,
+		Config:        a.Config(),
+		Env:           a.env(),
+		Tools:         a.tools,
+		Policy:        a.policy,
+		MaxSteps:      a.Config().MaxSteps,
+		ContextBudget: agent.HistoryBudget(window),
+		Pricing:       price,
+		CostKnown:     costKnown,
+		CostBudgetUSD: a.Config().CostBudgetUSD,
+	}
+	session := a.currentSession()
+	if err := runner.Run(runCtx, session, input); err != nil {
+		return err
+	}
+	session.SetTodos(a.todos.Items())
+	if a.Ephemeral() {
+		return nil
+	}
+	return session.Save()
+}
+
+// RunPrompt runs one turn for the Telegram bridge, forwarding short progress
+// lines and returning the final answer text.
+func (a *App) RunPrompt(ctx context.Context, prompt string, progress func(string)) (string, error) {
+	if progress != nil {
+		progress("Working...")
+		a.SetObserver(func(event agent.Event) {
+			if line := telegramProgressLine(event); line != "" {
+				progress(line)
+			}
+		})
+		defer a.SetObserver(nil)
+	}
+	if err := a.runTurn(ctx, prompt); err != nil {
+		return "", err
+	}
+	return a.currentSession().LastAssistantText(), nil
+}
+
+// telegramProgressLine renders one event as a short chat line.
+func telegramProgressLine(event agent.Event) string {
+	switch event.Kind {
+	case agent.EventToolStart:
+		return event.ToolLabel
+	case agent.EventToolEnd:
+		if !event.ToolOK {
+			return event.ToolLabel + " (failed)"
+		}
+		return event.ToolLabel
+	case agent.EventNotice:
+		return event.Text
+	case agent.EventError:
+		if event.Err != nil {
+			return event.Err.Error()
+		}
+	}
+	return ""
+}
+
+// Status renders the short status block shared by /status and the bot.
+func (a *App) Status() string {
+	usage := a.Usage()
+	done, total := a.todos.Progress()
+	session := a.Session()
+	trust := "untrusted"
+	if a.Trusted() {
+		trust = "trusted"
+	}
+	lines := []string{
+		fmt.Sprintf("workspace: %s (%s)", a.workspace, trust),
+		fmt.Sprintf("model: %s (%s)", orNone(a.ModelLabel()), orNone(a.CurrentModel().Provider)),
+		fmt.Sprintf("approval: %s", a.Config().ApprovalMode),
+		fmt.Sprintf("context: %s", a.contextUsage()),
+		fmt.Sprintf("session: %s, %d turn(s)", session.ID(), session.Turns()),
+		fmt.Sprintf("plan: %d/%d complete", done, total),
+		fmt.Sprintf("tokens: %d in, %d out", usage.PromptTokens, usage.CompletionTokens),
+	}
+	if a.botStatus != "" {
+		lines = append(lines, "telegram: "+a.botStatus)
+	} else {
+		lines = append(lines, "telegram: off")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// HasModel reports whether a usable model is configured.
+func (a *App) HasModel() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.client != nil
+}
+
+// ContextUsage renders how much of the model's window the conversation is
+// using, which is the number that explains an unexpected trim.
+func (a *App) ContextUsage() string { return a.contextUsage() }
+
+func (a *App) contextUsage() string {
+	session := a.Session()
+	return agent.HistoryHint(session.Messages(), agent.HistoryBudget(a.CurrentModel().Window()))
+}
+
+// NeedsSetup reports whether onboarding is required.
+func (a *App) NeedsSetup() bool {
+	return !a.HasModel()
+}
+
+// ReloadSkills refreshes the skill list.
+func (a *App) ReloadSkills() {
+	if skills, err := skill.Discover(a.workspace); err == nil {
+		a.mu.Lock()
+		a.skills = skills
+		a.mu.Unlock()
+	}
+}
+
+// Tools exposes the tool registry for /tools.
+func (a *App) Tools() *agent.Registry { return a.tools }
+
+func stringSet(values []string) map[string]bool {
+	set := make(map[string]bool, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			set[trimmed] = true
+		}
+	}
+	return set
+}
+
+// pricingFor resolves a model's price and whether it is known.
+func (a *App) pricingFor(model provider.Model) (provider.Pricing, bool) {
+	return provider.PricedFor(a.Config(), model)
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func orNone(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "none"
+	}
+	return value
+}

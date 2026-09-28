@@ -1,0 +1,53 @@
+# Line endings, pinned explicitly.
+#
+# This project is developed on Windows and released from Linux and macOS, and
+# a mismatch here is not cosmetic: a shell script with CRLF fails on Linux with
+# "$'\r': command not found", and a Go source file with CRLF makes gofmt
+# rewrite every line. core.autocrlf is a per-machine setting, so it is not a
+# guarantee anyone else can rely on. These rules are.
+
+# Normalise on commit and check out with LF for everything not listed below.
+* text=auto eol=lf
+
+# Source and build files are LF everywhere, in the repository and in the
+# working tree, so the two platforms see byte-identical files.
+*.go       text eol=lf
+*.sh       text eol=lf
+*.mod      text eol=lf
+*.sum      text eol=lf
+Makefile   text eol=lf
+*.md       text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.json     text eol=lf
+.gitignore text eol=lf
+LICENSE    text eol=lf
+NOTICE     text eol=lf
+
+# PowerShell and the Windows command shell are the one exception. Their
+# here-strings and batch parsing are line-ending sensitive, and CRLF is what
+# those tools are built around, so these stay CRLF.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binaries: never touched by the text filters, or a "conversion" would corrupt
+# them.
+*.exe  binary
+*.dll  binary
+*.so   binary
+*.dylib binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.pdf  binary
+*.zip  binary
+*.gz   binary
+*.tgz  binary
+
+# A generated file that would otherwise dominate every diff and the language
+# statistics for the repository.
+go.sum linguist-generated=true

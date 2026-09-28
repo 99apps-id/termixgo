@@ -1,0 +1,211 @@
+package ui
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/99apps-id/termixgo/internal/agent"
+	"github.com/99apps-id/termixgo/internal/provider"
+)
+
+// pickerItem is one selectable row.
+type pickerItem struct {
+	ID     string
+	Label  string
+	Detail string
+	Extra  string
+}
+
+// picker is a filterable list overlay.
+type picker struct {
+	title   string
+	action  string
+	items   []pickerItem
+	visible []pickerItem
+	cursor  int
+	filter  string
+}
+
+func newPicker() picker { return picker{} }
+
+// openPicker shows the overlay.
+func (m *Model) openPicker(title, action string, items []pickerItem) {
+	m.picker = picker{title: title, action: action, items: items}
+	m.picker.applyFilter()
+	m.current = modePicker
+	m.refresh()
+}
+
+// applyFilter recomputes the visible rows from the filter text.
+func (p *picker) applyFilter() {
+	needle := strings.ToLower(strings.TrimSpace(p.filter))
+	if needle == "" {
+		p.visible = p.items
+	} else {
+		filtered := make([]pickerItem, 0, len(p.items))
+		for _, item := range p.items {
+			haystack := strings.ToLower(item.ID + " " + item.Label + " " + item.Detail)
+			if strings.Contains(haystack, needle) {
+				filtered = append(filtered, item)
+			}
+		}
+		p.visible = filtered
+	}
+	if p.cursor >= len(p.visible) {
+		p.cursor = max(0, len(p.visible)-1)
+	}
+}
+
+func (p *picker) selected() (pickerItem, bool) {
+	if len(p.visible) == 0 {
+		return pickerItem{}, false
+	}
+	return p.visible[p.cursor], true
+}
+
+func (m *Model) handlePickerKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		if strings.HasPrefix(m.picker.action, "setup-") {
+			m.current = modeSetup
+			m.picker = picker{}
+			return m, nil
+		}
+		m.current = modeChat
+		m.picker = picker{}
+		m.refresh()
+		return m, nil
+	case "up", "ctrl+p":
+		m.picker.cursor = (m.picker.cursor - 1 + max(1, len(m.picker.visible))) % max(1, len(m.picker.visible))
+		return m, nil
+	case "down", "ctrl+n":
+		m.picker.cursor = (m.picker.cursor + 1) % max(1, len(m.picker.visible))
+		return m, nil
+	case "backspace":
+		if m.picker.filter != "" {
+			m.picker.filter = m.picker.filter[:len(m.picker.filter)-1]
+			m.picker.applyFilter()
+		}
+		return m, nil
+	case "enter":
+		item, ok := m.picker.selected()
+		if !ok {
+			return m, nil
+		}
+		action := m.picker.action
+		m.current = modeChat
+		m.picker = picker{}
+		return m.applyPickerChoice(action, item)
+	}
+	if key.Type == tea.KeyRunes {
+		m.picker.filter += string(key.Runes)
+		m.picker.applyFilter()
+	}
+	return m, nil
+}
+
+// applyPickerChoice runs the action bound to the open picker.
+func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, tea.Cmd) {
+	switch action {
+	case "model":
+		model, err := m.app.SetModelByQuery(item.ID)
+		if err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		} else {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "Model is now " + model.Label})
+		}
+	case "session":
+		session, err := agent.LoadSession(item.ID)
+		if err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+			break
+		}
+		m.app.LoadSession(session)
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Resumed session %s (%d turns)", shortID(session.ID()), session.Turns())})
+	case "setup-provider":
+		m.setup.providerID = item.ID
+		m.setup.message = ""
+		m.setup.errText = ""
+		if !providerNeedsKey(item.ID) {
+			// A local server needs no key: go straight to model selection.
+			m.setup.step = setupModel
+			m.openPicker("Setup: default model", "setup-model", setupModelItems(item.ID))
+			return m, nil
+		}
+		m.current = modeSetup
+		m.setup.step = setupKey
+		m.input.SetValue("")
+		m.input.Placeholder = "API key"
+		m.input.EchoMode = textinput.EchoPassword
+		m.input.Focus()
+		m.refresh()
+		return m, textareaBlink()
+	case "setup-model":
+		model, err := m.app.SetModelByQuery(item.ID)
+		if err != nil {
+			m.setup.errText = err.Error()
+			m.current = modeSetup
+			return m, nil
+		}
+		m.setup.summary = append(m.setup.summary, "model: "+model.Label)
+		m.setup.step = setupTelegramAsk
+		m.setup.message = "Connect the Telegram companion bot now?"
+		m.setup.errText = ""
+		m.current = modeSetup
+		m.refresh()
+		return m, nil
+	}
+	m.refresh()
+	return m, nil
+}
+
+func (m *Model) viewPicker() string {
+	title := m.picker.title
+	var body []string
+	body = append(body, m.styles.BoxTitle.Render(title))
+	body = append(body, "")
+	if m.picker.filter != "" {
+		body = append(body, m.styles.Dim.Render("filter: "+m.picker.filter))
+	}
+	const windowSize = 14
+	start := 0
+	if m.picker.cursor >= windowSize {
+		start = m.picker.cursor - windowSize + 1
+	}
+	end := start + windowSize
+	if end > len(m.picker.visible) {
+		end = len(m.picker.visible)
+	}
+	for index := start; index < end; index++ {
+		item := m.picker.visible[index]
+		line := item.Label
+		if item.Detail != "" {
+			line += "  " + m.styles.MenuDesc.Render(item.Detail)
+		}
+		if item.Extra != "" {
+			line += "  " + m.styles.Plan.Render(item.Extra)
+		}
+		if index == m.picker.cursor {
+			body = append(body, m.styles.MenuSelected.Render("> ")+line)
+			continue
+		}
+		body = append(body, "  "+line)
+	}
+	if len(m.picker.visible) == 0 {
+		body = append(body, m.styles.Dim.Render("  No matches."))
+	}
+	body = append(body, "", m.styles.Hint.Render("Type to filter | Up/Down move | Enter select | Esc cancel"))
+	return m.styles.Box.Width(m.width - 4).Render(strings.Join(body, "\n"))
+}
+
+// providerNeedsKey reports whether a provider requires an API key.
+func providerNeedsKey(id string) bool {
+	info, ok := provider.ByID(id)
+	if !ok {
+		return true
+	}
+	return info.NeedsKey
+}

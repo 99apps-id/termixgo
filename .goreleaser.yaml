@@ -1,0 +1,65 @@
+# goreleaser configuration for Termixgo.
+#
+# The version, commit and build date are stamped through ldflags, which only
+# works because internal/version declares them as vars rather than consts.
+version: 2
+
+project_name: termixgo
+
+before:
+  hooks:
+    - go mod tidy
+    - go vet ./...
+
+builds:
+  - id: termixgo
+    main: ./cmd/termixgo
+    binary: termixgo
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/99apps-id/termixgo/internal/version.Version={{ .Version }}
+      - -X github.com/99apps-id/termixgo/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/99apps-id/termixgo/internal/version.BuildDate={{ .Date }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - TERMIXGO.md
+      - CHANGELOG.md
+      - LICENSE
+      - NOTICE
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  # The changelog is curated by hand in CHANGELOG.md, so the release notes
+  # point at the commits rather than duplicating them badly.
+  use: github-native
+
+release:
+  draft: true
+  prerelease: auto
+
+# A plain-text summary so `gh release view` and the web page stay readable.
+metadata:
+  mod_timestamp: "{{ .CommitTimestamp }}"

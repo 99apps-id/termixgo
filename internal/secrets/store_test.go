@@ -1,0 +1,137 @@
+package secrets
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+
+	"github.com/99apps-id/termixgo/internal/config"
+)
+
+func withTempHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	return home
+}
+
+func TestSetGetDeleteRoundTrip(t *testing.T) {
+	withTempHome(t)
+	store, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if store.Has(ProviderKey("openai")) {
+		t.Fatalf("a fresh store should be empty")
+	}
+	if err := store.Set(ProviderKey("openai"), "sk-secret"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if !store.Has(ProviderKey("openai")) {
+		t.Fatalf("Has should be true after Set")
+	}
+
+	// A second load must see the value, which is the whole point of the file.
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := reloaded.Get(ProviderKey("openai")); got != "sk-secret" {
+		t.Errorf("reloaded value = %q", got)
+	}
+
+	if err := store.Delete(ProviderKey("openai")); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	afterDelete, _ := Load()
+	if afterDelete.Has(ProviderKey("openai")) {
+		t.Errorf("the key should be gone after Delete")
+	}
+}
+
+func TestSecretFileIsPrivate(t *testing.T) {
+	withTempHome(t)
+	store, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set(TelegramTokenKey(), "123:abc"); err != nil {
+		t.Fatal(err)
+	}
+	path, err := config.HomePath(FileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ProtectionError(); err != nil {
+		t.Fatalf("the store reported a protection failure: %v", err)
+	}
+	// Inspect works on every platform: mode bits on POSIX, the DACL on
+	// Windows. This is the assertion that would have caught the inherited
+	// group-read grant the Windows path used to have.
+	access, err := Inspect(path)
+	if err != nil {
+		t.Fatalf("inspect secrets: %v", err)
+	}
+	if !access.OwnerOnly {
+		t.Errorf("secret file is reachable beyond the owner: %v", access.Entries)
+	}
+	if _, err := Inspect(store.Path()); err != nil {
+		t.Fatalf("inspect by store path: %v", err)
+	}
+
+	if runtime.GOOS == "windows" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat secrets: %v", err)
+	}
+	// The process umask can only tighten this, never loosen it.
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("secrets file mode = %o, want 600", info.Mode().Perm())
+	}
+	dirInfo, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirInfo.Mode().Perm()&0o077 != 0 {
+		t.Errorf("state directory mode = %o, want no group or other access", dirInfo.Mode().Perm())
+	}
+}
+
+func TestDeleteMissingKeyIsNotAnError(t *testing.T) {
+	withTempHome(t)
+	store, _ := Load()
+	if err := store.Delete(ProviderKey("nope")); err != nil {
+		t.Errorf("deleting a missing key should be a no-op, got %v", err)
+	}
+}
+
+func TestKeysAreSortedAndRedacted(t *testing.T) {
+	withTempHome(t)
+	store, _ := Load()
+	_ = store.Set(ProviderKey("openai"), "sk-1234567890")
+	_ = store.Set(TelegramTokenKey(), "123456:ABCDEF")
+
+	keys := store.Keys()
+	if len(keys) != 2 {
+		t.Fatalf("Keys = %v, want two entries", keys)
+	}
+	if keys[0] > keys[1] {
+		t.Errorf("keys must be sorted: %v", keys)
+	}
+}
+
+func TestRedactNeverRevealsTheWholeSecret(t *testing.T) {
+	cases := []string{"sk-1234567890abcdef", "short", ""}
+	for _, value := range cases {
+		redacted := Redact(value)
+		if value != "" && redacted == value {
+			t.Errorf("Redact(%q) revealed the whole value", value)
+		}
+	}
+	if Redact("") != "(not set)" {
+		t.Errorf("an empty secret should read as not set, got %q", Redact(""))
+	}
+}
