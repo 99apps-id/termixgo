@@ -24,10 +24,11 @@ everything the agent does is printed as terminal output.
 
 ## Install
 
-Windows: run `Termixgo-<version>-windows-amd64-setup.exe` from the release.
-It installs to `%LOCALAPPDATA%\Programs\Termixgo`, adds it to the user PATH
-and registers an uninstaller. Afterwards `termixgo` works from any folder;
-open a new terminal first so it picks up the PATH change.
+Windows: extract `Termixgo-<version>-windows-amd64-installer.zip` anywhere
+and double-click `INSTALL.bat`. It installs to
+`%LOCALAPPDATA%\Programs\Termixgo`, adds it to the user PATH and registers
+an uninstaller. Afterwards `termixgo` works from any folder; open a new
+terminal first so it picks up the PATH change.
 
 Linux (including a VPS, no root needed):
 

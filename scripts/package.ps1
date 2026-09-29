@@ -97,36 +97,36 @@ try {
     Write-Host "== archives =="
     foreach ($item in $built) {
         $target = $item.Target
+        # Windows ships only the installer bundle below; a bare binary zip
+        # would split the download story for no reason.
+        if ($target.OS -eq "windows") { continue }
         # The archives are named for the platform they run on, so a person
         # downloading one does not have to open it to find out.
         $stem = "termixgo-$Version-$($target.OS)-$($target.Arch)"
-        if ($target.OS -eq "windows") {
-            $archive = Join-Path $dist "$stem.zip"
-            & 7z a -tzip -bso0 -bsp0 $archive $item.Path (Join-Path $root "LICENSE") (Join-Path $root "NOTICE") (Join-Path $root "README.md") | Out-Null
-        } else {
-            $archive = Join-Path $dist "$stem.tar.gz"
-            # The tarball carries canonical names: the binary is `termixgo`
-            # and the installer sits beside it, so the VPS flow is extract
-            # and run with nothing to rename or hunt for.
-            $stage = Join-Path $dist "tarball-stage"
-            if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-            New-Item -ItemType Directory -Path $stage | Out-Null
-            Copy-Item $item.Path (Join-Path $stage "termixgo") -Force
-            Copy-Item (Join-Path $root "packaging\linux\install.sh") $stage -Force
-            foreach ($doc in @("LICENSE", "NOTICE", "README.md")) {
-                Copy-Item (Join-Path $root $doc) $stage -Force
-            }
-            # GNU tar reads `C:` as a remote host, so the archive and the
-            # stage reach it as relative paths with no colon anywhere.
-            Push-Location $dist
-            try {
-                & tar -czf "$stem.tar.gz" -C "tarball-stage" termixgo install.sh LICENSE NOTICE README.md
-            }
-            finally {
-                Pop-Location
-            }
-            Remove-Item $stage -Recurse -Force
-        }        if ($LASTEXITCODE -ne 0) { throw "archive failed for $stem" }
+        $archive = Join-Path $dist "$stem.tar.gz"
+        # The tarball carries canonical names: the binary is `termixgo`
+        # and the installer sits beside it, so the VPS flow is extract
+        # and run with nothing to rename or hunt for.
+        $stage = Join-Path $dist "tarball-stage"
+        if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+        New-Item -ItemType Directory -Path $stage | Out-Null
+        Copy-Item $item.Path (Join-Path $stage "termixgo") -Force
+        Copy-Item (Join-Path $root "packaging\linux\install.sh") $stage -Force
+        foreach ($doc in @("LICENSE", "NOTICE", "README.md")) {
+            Copy-Item (Join-Path $root $doc) $stage -Force
+        }
+        # GNU tar reads `C:` as a remote host, so the archive and the
+        # stage reach it as relative paths with no colon anywhere.
+        Push-Location $dist
+        try {
+            & tar -czf "$stem.tar.gz" -C "tarball-stage" termixgo install.sh LICENSE NOTICE README.md
+        }
+        finally {
+            Pop-Location
+        }
+        Remove-Item $stage -Recurse -Force
+        }
+        if ($LASTEXITCODE -ne 0) { throw "archive failed for $stem" }
         Write-Host ("  {0}" -f (Split-Path $archive -Leaf))
     }
 
