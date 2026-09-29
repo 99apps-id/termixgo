@@ -108,7 +108,12 @@ type Model struct {
 	// approvalCursor is the highlighted approval option. Arrow keys move it
 	// and Enter confirms it, so the operator is not limited to letter keys.
 	approvalCursor int
-	pendingAsk     *askRequestMsg
+
+	// lastPaint is when the transcript was last pushed into the viewport.
+	// Streaming deltas update the blocks at once but repaint at most this
+	// often, so a fast model cannot flood the terminal with full frames.
+	lastPaint  time.Time
+	pendingAsk *askRequestMsg
 }
 
 // Limits bundles size thresholds used by the layout and the setup wizard.
@@ -273,8 +278,13 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(typed)
 
 	case eventMsg:
-		m.applyEvent(agent.Event(typed))
-		m.refresh()
+		event := agent.Event(typed)
+		m.applyEvent(event)
+		// Text deltas arrive in bursts during a fast stream, and every
+		// repaint rebuilds the whole transcript. Painting each one flickers
+		// the terminal and starves it; structural events still paint at
+		// once so tool boundaries never lag behind the text.
+		m.maybeRefresh(event.Kind == agent.EventText || event.Kind == agent.EventThinking)
 		return m, waitForEvent(m.app.Events())
 
 	case tickMsg:
@@ -843,10 +853,25 @@ func (m *Model) layout() {
 	m.refresh()
 }
 
-// refresh re-renders the transcript into the viewport. When the operator
+// paintMinInterval is the fastest the transcript repaints during a burst of
+// streamed deltas. Structural changes (tool boundaries, notices, errors)
+// always paint at once; only running text is paced.
+const paintMinInterval = 120 * time.Millisecond
+
+// maybeRefresh paints now, or later when streaming and the last paint was
+// recent. State always applies first: a skipped paint only delays pixels,
+// and the tick plus any structural event catches up within a blink.
+func (m *Model) maybeRefresh(streaming bool) {
+	if !streaming || time.Since(m.lastPaint) >= paintMinInterval {
+		m.refresh()
+	}
+}
+
+// refresh re-renders the transcript into the viewport. When the operator is
 // scrolled up, the offset is kept so reading history is not yanked away by
 // new output; otherwise the view follows the bottom.
 func (m *Model) refresh() {
+	m.lastPaint = time.Now()
 	follow := m.viewport.AtBottom()
 	content := transcript(m.blocks, m.styles, m.viewport.Width, m.showDetails)
 	m.viewport.SetContent(content)
