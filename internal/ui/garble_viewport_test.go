@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,47 @@ import (
 
 	"github.com/99apps-id/termixgo/internal/agent"
 )
+
+// escapePattern matches one complete SGR sequence. Anything that looks like
+// an escape but fails this pattern is a malformed sequence, and terminals
+// eat the characters after one looking for its end.
+var escapePattern = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// TestStyledOutputHasOnlyWholeEscapes forces colour on and requires every
+// escape in a fully styled transcript to be well-formed. A sliced sequence
+// makes the terminal swallow following text, which reads exactly like the
+// dropped characters seen on screen.
+func TestStyledOutputHasOnlyWholeEscapes(t *testing.T) {
+	forceColor(t)
+	styles := NewStyles(DefaultPalette())
+	text := "Backend: Tauri 2 + Rust (`src-tauri/`), PTY via `portable-pty`.\n\nSecond paragraph with **bold** and `code` and a very long unbroken word https://example.com/some/deep/path/that/never/breaks/at/all/ok."
+	for _, width := range []int{40, 60, 80, 120, 200} {
+		rendered := transcript([]block{{kind: blockAssistant, text: text}}, styles, width, true)
+		stripped := escapePattern.ReplaceAllString(rendered, "")
+		if strings.Contains(stripped, "\x1b") {
+			t.Errorf("width %d holds a malformed escape:\n%q", width, rendered)
+		}
+		// Every word must survive with escapes present, in order. Code
+		// spans and bold markers are consumed by styling by design.
+		plain := strings.ReplaceAll(text, "`", "")
+		plain = strings.ReplaceAll(plain, "**", "")
+		want := strings.Fields(plain)
+		got := strings.Fields(stripped)
+		if len(got) < len(want) {
+			t.Errorf("width %d: %d words, want at least %d:\n%q", width, len(got), len(want), stripped)
+			continue
+		}
+		index := 0
+		for _, word := range got {
+			if index < len(want) && word == want[index] {
+				index++
+			}
+		}
+		if index != len(want) {
+			t.Errorf("width %d: words out of order or missing:\n%q", width, stripped)
+		}
+	}
+}
 
 // realGarbleText is the stored assistant message once seen mangled on
 // screen: dropped spaces and backticks plus shuffled letters, while storage
@@ -108,6 +150,41 @@ func TestFullViewPreservesAssistantText(t *testing.T) {
 	for _, word := range strings.Fields(plain) {
 		if !strings.Contains(visible, word) {
 			t.Errorf("joined view lost %q:\n%s", word, visible)
+		}
+	}
+}
+
+// TestFullViewHasOnlyWholeEscapes renders a busy screen exactly like
+// production View does: running thinking with shimmer, a running tool, an
+// approval dialog with a diff, and a non-empty composer. Every escape must
+// be well-formed, because the composer rewrap and the per-rune shimmer are
+// the two places most likely to slice a sequence.
+func TestFullViewHasOnlyWholeEscapes(t *testing.T) {
+	forceColor(t)
+	model := chatModel(t)
+	resize(model, 120, 40)
+	model.blocks = append(model.blocks,
+		block{kind: blockUser, text: "fix it"},
+		block{kind: blockThinking, running: true, reasoning: "live thought"},
+		block{kind: blockTool, running: true, toolName: "read_file", toolLabel: "Reading main.go"},
+		block{kind: blockAssistant, text: realGarbleText},
+	)
+	model.composer.SetValue("follow-up @mai")
+	model.pendingApproval = &agent.ApprovalRequest{
+		Tool: "edit", Risk: "edit", Detail: "Editing main.go",
+		Diff: "--- main.go\n+++ main.go\n-func A() {}\n+func A() int {}",
+	}
+	model.refresh()
+	view := model.View()
+	stripped := escapePattern.ReplaceAllString(view, "")
+	if strings.Contains(stripped, "\x1b") {
+		t.Errorf("the full view holds a malformed escape:\n%q", view)
+	}
+	// The approval dialog replaces the composer row, so the composer text is
+	// intentionally absent here; its rewrap is covered by composer tests.
+	for _, word := range []string{"Thinking", "Reading", "Backend", "Approval needed"} {
+		if !strings.Contains(stripped, word) {
+			t.Errorf("the full view lost %q", word)
 		}
 	}
 }
