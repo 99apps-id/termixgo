@@ -64,6 +64,9 @@ func (t *grepTool) Run(ctx context.Context, env *Env, args map[string]any) (Resu
 	if root == "" {
 		root = env.Workspace
 	}
+	if err := checkWorkspacePath(env, root); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	glob := argString(args, "glob")
 	maxResults := argInt(args, "max_results", 30, 1, 500)
 
@@ -171,6 +174,9 @@ func (t *globTool) Run(ctx context.Context, env *Env, args map[string]any) (Resu
 	root := resolvePath(env, argString(args, "path", "root"))
 	if root == "" {
 		root = env.Workspace
+	}
+	if err := checkWorkspacePath(env, root); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
 	}
 	maxResults := argInt(args, "max_results", 200, 1, 2000)
 

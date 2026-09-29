@@ -53,6 +53,9 @@ func (t *editTool) Run(ctx context.Context, env *Env, args map[string]any) (Resu
 		return Result{Output: "old_string is required", IsError: true}, nil
 	}
 	path := resolvePath(env, raw)
+	if err := checkWorkspacePath(env, path); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	result, err := applyEdits(env, path, instructions)
 	if err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
@@ -100,6 +103,9 @@ func (t *multiEditTool) Run(ctx context.Context, env *Env, args map[string]any) 
 		return Result{Output: "edits must contain at least one replacement", IsError: true}, nil
 	}
 	path := resolvePath(env, raw)
+	if err := checkWorkspacePath(env, path); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	result, applyErr := applyEdits(env, path, instructions)
 	if applyErr != nil {
 		return Result{Output: applyErr.Error(), IsError: true}, nil

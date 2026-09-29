@@ -59,6 +59,9 @@ func (t *runCommandTool) Run(ctx context.Context, env *Env, args map[string]any)
 	if dir == "" {
 		dir = env.Workspace
 	}
+	if err := checkWorkspacePath(env, dir); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		return Result{Output: fmt.Sprintf("working directory %s is not available", dir), IsError: true}, nil
 	}

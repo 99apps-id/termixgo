@@ -47,6 +47,9 @@ func (t *backgroundTool) Run(ctx context.Context, env *Env, args map[string]any)
 	if dir == "" {
 		dir = env.Workspace
 	}
+	if err := checkWorkspacePath(env, dir); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	process, err := env.Processes.Start(ctx, command, dir)
 	if err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil

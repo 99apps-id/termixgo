@@ -256,6 +256,32 @@ func TestResolvePathHandlesTildeAbsoluteAndRelative(t *testing.T) {
 	}
 }
 
+func TestCheckWorkspacePathRejectsTraversal(t *testing.T) {
+	env := &Env{Workspace: t.TempDir()}
+
+	if err := checkWorkspacePath(env, env.Workspace); err != nil {
+		t.Errorf("the workspace root must be accepted: %v", err)
+	}
+	inside := filepath.Join(env.Workspace, "sub", "file.go")
+	if err := checkWorkspacePath(env, inside); err != nil {
+		t.Errorf("a path inside the workspace must be accepted: %v", err)
+	}
+	// A relative traversal must be rejected.
+	traversal := filepath.Join(env.Workspace, "..", "etc", "passwd")
+	if err := checkWorkspacePath(env, traversal); err == nil {
+		t.Errorf("a traversal path must be rejected")
+	}
+	// An absolute path outside the workspace must be rejected.
+	outside := filepath.Join(t.TempDir(), "elsewhere", "file.go")
+	if err := checkWorkspacePath(env, outside); err == nil {
+		t.Errorf("an absolute path outside the workspace must be rejected")
+	}
+	// Without a workspace every path is accepted.
+	if err := checkWorkspacePath(&Env{}, outside); err != nil {
+		t.Errorf("without a workspace = %v, want no error", err)
+	}
+}
+
 func TestDisplayPathMakesAPathRelative(t *testing.T) {
 	env := &Env{Workspace: t.TempDir()}
 	inside := filepath.Join(env.Workspace, "internal", "agent", "loop.go")

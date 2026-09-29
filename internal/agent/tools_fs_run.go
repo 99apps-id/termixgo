@@ -14,6 +14,9 @@ func (t *readFileTool) Run(ctx context.Context, env *Env, args map[string]any) (
 		return Result{Output: "path is required", IsError: true}, nil
 	}
 	path := resolvePath(env, raw)
+	if err := checkWorkspacePath(env, path); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return Result{Output: openError(err, displayPath(env, path)), IsError: true}, nil
@@ -62,6 +65,9 @@ func (t *readFileTool) Run(ctx context.Context, env *Env, args map[string]any) (
 
 func (t *listDirectoryTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	path := resolvePath(env, argString(args, "path", "dir", "directory"))
+	if err := checkWorkspacePath(env, path); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	if path == "" {
 		path = env.Workspace
 	}
@@ -101,6 +107,9 @@ func (t *writeFileTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	}
 	text := toString(content)
 	path := resolvePath(env, raw)
+	if err := checkWorkspacePath(env, path); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return Result{Output: fmt.Sprintf("create parent directory: %v", err), IsError: true}, nil
 	}
@@ -120,6 +129,9 @@ func (t *createDirectoryTool) Run(ctx context.Context, env *Env, args map[string
 		return Result{Output: "path is required", IsError: true}, nil
 	}
 	path := resolvePath(env, raw)
+	if err := checkWorkspacePath(env, path); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	existed := false
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
 		existed = true
@@ -139,6 +151,9 @@ func (t *deleteFileTool) Run(ctx context.Context, env *Env, args map[string]any)
 		return Result{Output: "path is required", IsError: true}, nil
 	}
 	path := resolvePath(env, raw)
+	if err := checkWorkspacePath(env, path); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	if _, err := os.Stat(path); err != nil {
 		return Result{Output: openError(err, displayPath(env, path)), IsError: true}, nil
 	}
@@ -153,6 +168,12 @@ func (t *moveFileTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	to := resolvePath(env, argString(args, "to", "destination", "dest"))
 	if from == "" || to == "" {
 		return Result{Output: "from and to are required", IsError: true}, nil
+	}
+	if err := checkWorkspacePath(env, from); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	if err := checkWorkspacePath(env, to); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
 	}
 	if _, err := os.Stat(from); err != nil {
 		return Result{Output: openError(err, displayPath(env, from)), IsError: true}, nil

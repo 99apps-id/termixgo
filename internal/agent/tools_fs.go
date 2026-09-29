@@ -40,6 +40,22 @@ func displayPath(env *Env, path string) string {
 	return filepath.ToSlash(relative)
 }
 
+// checkWorkspacePath returns an error if the resolved path escapes the
+// workspace. When there is no workspace the path is accepted as-is.
+func checkWorkspacePath(env *Env, path string) error {
+	if strings.TrimSpace(env.Workspace) == "" {
+		return nil
+	}
+	rel, err := filepath.Rel(env.Workspace, path)
+	if err != nil {
+		return fmt.Errorf("cannot resolve path against workspace: %v", err)
+	}
+	if strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return fmt.Errorf("path escapes the workspace: %s", displayPath(env, path))
+	}
+	return nil
+}
+
 // openError explains a filesystem failure in terms the model can act on.
 func openError(err error, path string) string {
 	if os.IsNotExist(err) {
