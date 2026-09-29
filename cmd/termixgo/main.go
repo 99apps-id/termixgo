@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 
@@ -378,12 +379,21 @@ func runMCP(args []string, stdout io.Writer) error {
 }
 
 // firstSentence clips a tool description to one line for the listing.
+//
+// The cap counts bytes and the cut moves back to a rune boundary. A description
+// can come from an MCP server, which writes it in whatever language it likes, so
+// a slice at a fixed offset splits a multi-byte character and the terminal paints
+// a replacement glyph where the text should be.
 func firstSentence(text string) string {
 	collapsed := strings.Join(strings.Fields(text), " ")
 	if len(collapsed) <= 70 {
 		return collapsed
 	}
-	return collapsed[:70] + "..."
+	cut := 70
+	for cut > 0 && !utf8.RuneStart(collapsed[cut]) {
+		cut--
+	}
+	return collapsed[:cut] + "..."
 }
 
 // runHarness shows or selects the agent harness profile.
