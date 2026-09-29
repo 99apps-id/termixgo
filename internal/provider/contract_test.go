@@ -195,9 +195,23 @@ func TestModelsForKeepsCatalogueOrder(t *testing.T) {
 		}
 	}
 	// The order must match the catalogue, which is what the picker renders.
-	first := ModelsFor("openai")[0]
-	if first.ID != "gpt-5.4-mini" {
-		t.Errorf("first openai model = %q, want the catalogue head", first.ID)
+	var expected []string
+	for _, m := range Models() {
+		if m.Provider == "openai" {
+			expected = append(expected, m.ID)
+		}
+	}
+	if len(expected) == 0 {
+		t.Fatal("openai should have models")
+	}
+	got := ModelsFor("openai")
+	if len(got) != len(expected) {
+		t.Fatalf("ModelsFor(openai) has %d models, the catalogue has %d", len(got), len(expected))
+	}
+	for i, id := range expected {
+		if got[i].ID != id {
+			t.Fatalf("openai model %d = %q, want catalogue order %q", i, got[i].ID, id)
+		}
 	}
 	if got := ModelsFor("no-such-provider"); len(got) != 0 {
 		t.Errorf("ModelsFor = %#v, want empty", got)

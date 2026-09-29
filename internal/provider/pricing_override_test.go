@@ -6,15 +6,14 @@ import (
 )
 
 func TestPricingWithPrefersAnOverride(t *testing.T) {
-	model, ok := ModelByID("claude-sonnet-4-5")
-	if !ok {
-		t.Fatal("claude-sonnet-4-5 is missing")
-	}
+	model := pickModel(t, "a priced cloud model", func(m Model) bool {
+		return !m.Free() && m.Pricing().Known()
+	})
 	builtIn := model.Pricing()
 
 	// An operator who knows better than the table wins, which is the whole
 	// point: a reseller or a gateway has its own prices.
-	overrides := map[string]Pricing{"claude-sonnet-4-5": {InputPerMillion: 1, OutputPerMillion: 2}}
+	overrides := map[string]Pricing{model.ID: {InputPerMillion: 1, OutputPerMillion: 2}}
 	got := model.PricingWith(overrides)
 	if got.InputPerMillion != 1 || got.OutputPerMillion != 2 {
 		t.Errorf("override ignored: %+v", got)
@@ -25,7 +24,9 @@ func TestPricingWithPrefersAnOverride(t *testing.T) {
 }
 
 func TestPricingWithFallsBackToTheTable(t *testing.T) {
-	model, _ := ModelByID("gpt-5.4-mini")
+	model := pickModel(t, "a priced cloud model", func(m Model) bool {
+		return !m.Free() && m.Pricing().Known()
+	})
 	if got := model.PricingWith(map[string]Pricing{"something-else": {1, 2}}); got != model.Pricing() {
 		t.Errorf("an unrelated override must not change the price: %+v", got)
 	}

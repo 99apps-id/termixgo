@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/secrets"
 )
 
@@ -18,6 +19,43 @@ func withState(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 	return home
+}
+
+// catalogueModel returns the head of the catalogue, which is the fixture a
+// command test needs when it has to name a model that really exists. Pinning
+// an id here turned every vendor rename into a failure about argument parsing.
+func catalogueModel(t *testing.T) provider.Model {
+	t.Helper()
+	models := provider.Models()
+	if len(models) == 0 {
+		t.Fatal("the catalogue is empty")
+	}
+	return models[0]
+}
+
+// labelledModel returns a catalogue entry with a multi-word label that appears
+// exactly once, which is what the label-resolution tests need: the label has to
+// be several words for the joining rule to matter, and unique for the result to
+// be predictable.
+func labelledModel(t *testing.T) provider.Model {
+	t.Helper()
+	for _, model := range provider.Models() {
+		if !strings.Contains(model.Label, " ") || model.Label == model.ID {
+			continue
+		}
+		unique := true
+		for _, other := range provider.Models() {
+			if other.Label == model.Label && other.ID != model.ID {
+				unique = false
+				break
+			}
+		}
+		if unique {
+			return model
+		}
+	}
+	t.Fatal("no catalogue model has a unique multi-word label")
+	return provider.Model{}
 }
 
 // runCLI captures stdout and stderr for one invocation.
@@ -66,28 +104,30 @@ func TestUnknownCommandNamesTheHelpCommand(t *testing.T) {
 
 func TestModelCommandRoundTrip(t *testing.T) {
 	withState(t)
+	first := catalogueModel(t)
 
-	if _, _, err := runCLI(t, "model", "claude-sonnet-4-5"); err != nil {
+	if _, _, err := runCLI(t, "model", first.ID); err != nil {
 		t.Fatalf("model set: %v", err)
 	}
 	stdout, _, err := runCLI(t, "model")
 	if err != nil {
 		t.Fatalf("model get: %v", err)
 	}
-	if !strings.Contains(stdout, "claude-sonnet-4-5") {
+	if !strings.Contains(stdout, first.ID) {
 		t.Errorf("model get = %q", stdout)
 	}
 
 	// A label resolves to its stable id.
-	if _, _, err := runCLI(t, "model", "Claude Opus 4.1"); err != nil {
+	labelled := labelledModel(t)
+	if _, _, err := runCLI(t, "model", labelled.Label); err != nil {
 		t.Fatalf("model by label: %v", err)
 	}
 	loaded, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if loaded.DefaultModel != "claude-opus-4-1" {
-		t.Errorf("DefaultModel = %q, want claude-opus-4-1", loaded.DefaultModel)
+	if loaded.DefaultModel != labelled.ID {
+		t.Errorf("DefaultModel = %q, want %s", loaded.DefaultModel, labelled.ID)
 	}
 }
 
@@ -216,14 +256,20 @@ func TestSecretCommandRejectsBadInput(t *testing.T) {
 func TestModelsCommandListsAndFilters(t *testing.T) {
 	withState(t)
 
+	anthropic := provider.ModelsFor("anthropic")
+	openai := provider.ModelsFor("openai")
+	if len(anthropic) == 0 || len(openai) == 0 {
+		t.Fatal("the fixture needs models for both providers")
+	}
+
 	stdout, _, err := runCLI(t, "models", "--provider", "anthropic")
 	if err != nil {
 		t.Fatalf("models: %v", err)
 	}
-	if !strings.Contains(stdout, "claude-sonnet-4-5") {
+	if !strings.Contains(stdout, anthropic[0].ID) {
 		t.Errorf("anthropic models = %q", stdout)
 	}
-	if strings.Contains(stdout, "gpt-5.4-mini") {
+	if strings.Contains(stdout, openai[0].ID) {
 		t.Errorf("the provider filter did not apply: %q", stdout)
 	}
 

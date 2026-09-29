@@ -82,12 +82,18 @@ func TestModelCommandAcceptsAModelOutsideTheCatalogue(t *testing.T) {
 func TestModelCommandJoinsAQuotedName(t *testing.T) {
 	withState(t)
 
-	if _, _, err := runCLI(t, "model", "DeepSeek", "Reasoner"); err != nil {
+	labelled := labelledModel(t)
+	words := strings.Fields(labelled.Label)
+	if len(words) < 2 {
+		t.Fatalf("the fixture needs a multi-word label, got %q", labelled.Label)
+	}
+	args := append([]string{"model"}, words...)
+	if _, _, err := runCLI(t, args...); err != nil {
 		t.Fatalf("model: %v", err)
 	}
 	cfg, _ := config.Load()
-	if cfg.DefaultModel != "deepseek-reasoner" {
-		t.Errorf("DefaultModel = %q, want the catalogue id resolved from the label", cfg.DefaultModel)
+	if cfg.DefaultModel != labelled.ID {
+		t.Errorf("DefaultModel = %q, want %s resolved from the label", cfg.DefaultModel, labelled.ID)
 	}
 }
 

@@ -74,15 +74,23 @@ func TestDecodeArguments(t *testing.T) {
 }
 
 func TestFindModelResolvesIdLabelAndSubstring(t *testing.T) {
-	if model, ok := FindModel("claude-sonnet-4-5"); !ok || model.Provider != "anthropic" {
-		t.Errorf("exact id did not resolve: %+v ok=%v", model, ok)
+	// Pick a real entry rather than a fixed id, so a catalogue update does not
+	// break the test that guards the resolver.
+	target := pickModel(t, "an anthropic model", func(m Model) bool { return m.Provider == "anthropic" })
+
+	if model, ok := FindModel(target.ID); !ok || model.Provider != "anthropic" {
+		t.Errorf("exact id %q did not resolve: %+v ok=%v", target.ID, model, ok)
 	}
-	if model, ok := FindModel("GPT-5.6 Sol"); !ok || model.ID != "gpt-5.6" {
-		t.Errorf("label did not resolve: %+v ok=%v", model, ok)
+	if model, ok := FindModel(target.Label); !ok || model.ID != target.ID {
+		t.Errorf("label %q did not resolve: %+v ok=%v", target.Label, model, ok)
 	}
 	if model, ok := FindModel("deepseek"); ok {
-		// "deepseek" matches two models, so it must not resolve to one.
+		// "deepseek" matches several models, so it must not resolve to one.
 		t.Errorf("an ambiguous query should not resolve, got %+v", model)
+	}
+	// An empty query resolves nothing rather than everything.
+	if _, ok := FindModel("   "); ok {
+		t.Errorf("a blank query must not resolve")
 	}
 }
 

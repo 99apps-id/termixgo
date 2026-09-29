@@ -12,10 +12,20 @@ import (
 )
 
 func TestWindowUsesTheModelThenTheProviderDefault(t *testing.T) {
-	// A listed model wins over its provider default.
-	gpt41 := Model{ID: "gpt-4.1", Provider: "openai"}
-	if got := gpt41.Window(); got != 1047576 {
-		t.Errorf("gpt-4.1 window = %d, want 1047576", got)
+	// Find a listed model whose window differs from its provider default, so
+	// this test proves the per-model entry wins without pinning an id.
+	var listed Model
+	for _, m := range Models() {
+		if contextWindows[m.ID] > 0 && contextWindows[m.ID] != providerContextWindows[m.Provider] {
+			listed = m
+			break
+		}
+	}
+	if listed.ID == "" {
+		t.Fatal("no catalogued model overrides its provider window")
+	}
+	if got := listed.Window(); got != contextWindows[listed.ID] {
+		t.Errorf("%s window = %d, want %d", listed.ID, got, contextWindows[listed.ID])
 	}
 	// An unlisted model falls back to the provider.
 	unlisted := Model{ID: "some-new-model", Provider: "anthropic"}

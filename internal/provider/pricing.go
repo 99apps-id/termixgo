@@ -23,39 +23,121 @@ type Pricing struct {
 func (p Pricing) Known() bool { return p.InputPerMillion > 0 || p.OutputPerMillion > 0 }
 
 // pricingTable maps a model id or wire id to its price.
+//
+// Figures are the vendors' published list prices at the time of writing, in
+// dollars per million tokens. Long-context tiers are not modelled: a vendor that
+// doubles the rate above a prompt threshold is recorded at the base rate, so a
+// very large prompt is under-estimated rather than over-estimated.
 var pricingTable = map[string]Pricing{
-	"gpt-5.4-mini": {0.25, 2.00},
-	"gpt-5.4":      {1.25, 10.00},
-	"gpt-5.6":      {2.50, 20.00},
-	"gpt-4.1":      {2.00, 8.00},
-	"o4-mini":      {1.10, 4.40},
+	// OpenAI.
+	"gpt-6-astra":   {10.00, 50.00},
+	"gpt-6-sol":     {2.00, 10.00},
+	"gpt-6-luna":    {0.10, 0.50},
+	"gpt-5.6-terra": {2.00, 12.00},
+	"gpt-5.5":       {5.00, 30.00},
+	"gpt-5.4":       {2.50, 15.00},
+	"gpt-5.4-mini":  {0.75, 4.50},
+	"gpt-5.3-codex": {1.75, 14.00},
 
-	"claude-sonnet-4-5":        {3.00, 15.00},
-	"claude-opus-4-1":          {15.00, 75.00},
-	"claude-haiku-4-5":         {1.00, 5.00},
-	"claude-3-7-sonnet-latest": {3.00, 15.00},
+	// Anthropic.
+	"claude-fable-5-1":  {10.00, 50.00},
+	"claude-opus-5-5":   {4.00, 20.00},
+	"claude-opus-5":     {5.00, 25.00},
+	"claude-sonnet-5":   {2.00, 10.00},
+	"claude-sonnet-4-6": {3.00, 15.00},
+	"claude-haiku-4-5":  {1.00, 5.00},
 
-	"gemini-3-pro":     {2.00, 12.00},
-	"gemini-2.5-pro":   {1.25, 10.00},
-	"gemini-2.5-flash": {0.30, 2.50},
+	// Google.
+	"gemini-3.1-pro-preview": {2.00, 12.00},
+	"gemini-3.8-flash":       {0.75, 3.75},
+	"gemini-3.7-flash":       {0.75, 3.75},
+	"gemini-3.5-flash":       {1.50, 9.00},
+	"gemini-3.5-flash-lite":  {0.30, 2.50},
 
-	"deepseek-chat":     {0.27, 1.10},
-	"deepseek-reasoner": {0.55, 2.19},
+	// xAI.
+	"grok-4.7":       {2.00, 6.00},
+	"grok-4.6":       {2.00, 6.00},
+	"grok-4.5":       {2.00, 6.00},
+	"grok-build-0.1": {1.00, 2.00},
 
+	// DeepSeek.
+	"deepseek-v4-pro":     {0.78, 1.57},
+	"deepseek-v4.1-flash": {0.30, 1.20},
+	"deepseek-v4-flash":   {0.06, 0.14},
+
+	// StepFun.
+	"step-3.7-flash": {0.20, 1.15},
+	"step-3.5-flash": {0.10, 0.30},
+
+	// Moonshot.
+	"kimi-k3":        {3.00, 15.00},
+	"kimi-k2.7-code": {0.66, 3.30},
+	"kimi-k2.6":      {0.65, 3.41},
+
+	// MiniMax.
+	"minimax-m3":   {0.30, 1.20},
+	"minimax-m2.7": {0.30, 1.20},
+
+	// Zhipu.
+	"glm-5.3":       {0.60, 4.40},
+	"glm-5.3-flash": {0.15, 0.50},
+	"glm-4.7":       {0.60, 2.20},
+
+	// Alibaba Qwen.
+	"qwen3.8-max": {2.00, 6.00},
+	"qwen3.8-27b": {0.42, 3.00},
+	"qwen3.7-max": {1.48, 4.43},
+
+	// Mistral.
+	"mistral-large-2512": {0.50, 1.50},
+	"devstral-2512":      {0.40, 2.00},
+	"mistral-medium-3-5": {1.50, 7.50},
+	"codestral-2508":     {0.30, 0.90},
+
+	// Baidu.
+	"ernie-4.5-300b-a47b": {0.90, 3.60},
+
+	// Volcengine.
+	"doubao-seed-2-1-pro":   {0.60, 3.00},
+	"doubao-seed-2-1-turbo": {0.30, 1.50},
+
+	// Fast inference hosts.
+	"openai/gpt-oss-120b":     {0.15, 0.60},
+	"openai/gpt-oss-20b":      {0.08, 0.30},
 	"llama-3.3-70b-versatile": {0.59, 0.79},
-	"openai/gpt-oss-120b":     {0.15, 0.75},
-	"qwen/qwen3-32b":          {0.29, 0.59},
+	"qwen/qwen3.8-27b":        {0.80, 4.00},
+	"gpt-oss-120b":            {0.35, 0.75},
+	"qwen-3.8-27b":            {0.35, 0.75},
 
-	"grok-4":      {3.00, 15.00},
-	"grok-3-mini": {0.30, 0.50},
+	// Third-party hosts of open weights.
+	"together/kimi-k3":            {3.00, 15.00},
+	"together/qwen3.8-27b":        {0.42, 3.00},
+	"deepinfra/kimi-k3":           {2.50, 12.50},
+	"deepinfra/qwen3.8-27b":       {0.30, 2.40},
+	"fireworks/deepseek-v4-pro":   {0.90, 3.60},
+	"fireworks/kimi-k3":           {3.00, 15.00},
+	"siliconflow/deepseek-v4-pro": {0.78, 1.57},
+	"novita/deepseek-v4-pro":      {0.80, 1.60},
+	"nvidia/kimi-k3":              {3.00, 15.00},
+	"nebius/kimi-k3":              {2.80, 14.00},
+	"sambanova/minimax-m2.7":      {0.30, 1.20},
+	"hyperbolic/qwen3.8-27b":      {0.40, 2.50},
+	"huggingface/glm-5.3":         {0.60, 4.40},
+	"vercel/minimax-m3":           {0.30, 1.20},
+	"github/gpt-6-astra":          {10.00, 50.00},
 
-	"llama-3.3-70b": {0.85, 1.20},
-	"qwen-3-32b":    {0.40, 0.80},
+	// Aggregators.
+	"anthropic/claude-opus-5.5": {4.00, 20.00},
+	"openai/gpt-6-astra":        {10.00, 50.00},
+	"moonshotai/kimi-k3":        {3.00, 15.00},
+	"z-ai/glm-5.3":              {0.60, 4.40},
+	"qwen/qwen3.8-max":          {2.00, 6.00},
+	"deepseek/deepseek-v4-pro":  {0.78, 1.57},
 
-	"mistral-large-latest": {2.00, 6.00},
-	"codestral-latest":     {0.30, 0.90},
-
-	"anthropic/claude-sonnet-4.5": {3.00, 15.00},
+	// Search and enterprise endpoints.
+	"sonar-pro":              {3.00, 15.00},
+	"sonar-deep-research":    {2.00, 8.00},
+	"command-a-plus-05-2026": {2.50, 10.00},
 }
 
 // Local providers run on the operator's own hardware, so their marginal cost
@@ -63,6 +145,17 @@ var pricingTable = map[string]Pricing{
 var localProviders = map[string]bool{
 	"ollama": true, "lmstudio": true, "mlx": true,
 }
+
+// routingModels bill at whichever model the router picks, so no list price
+// exists for them. They are the one honest gap in the table: a cost budget
+// cannot be trusted for them, and saying so beats inventing a number.
+var routingModels = map[string]bool{
+	"openrouter/auto": true,
+}
+
+// PriceVaries reports whether the model is a router whose cost depends on the
+// model it selects, which means no list price applies to it.
+func (m Model) PriceVaries() bool { return routingModels[m.ID] }
 
 // Pricing returns the recorded price for a model, or the zero value when none
 // is known.
@@ -84,6 +177,12 @@ func (m Model) PricingWith(overrides map[string]Pricing) Pricing {
 		if price, ok := overrides[wire]; ok && price.Known() {
 			return price
 		}
+	}
+	// A local server has no vendor price. Its wire name can collide with a
+	// cloud model of the same name, and billing someone for tokens their own
+	// machine produced would be plain wrong.
+	if m.Free() {
+		return Pricing{}
 	}
 	if price, ok := pricingTable[m.ID]; ok {
 		return price

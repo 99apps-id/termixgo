@@ -8,13 +8,27 @@ import (
 	"github.com/99apps-id/termixgo/internal/secrets"
 )
 
+// pricedCatalogueModel returns a cloud model the built-in table prices, which
+// is the fixture the cost tests need. Deriving it keeps a catalogue update
+// from turning a routine vendor rename into a test failure.
+func pricedCatalogueModel(t *testing.T) provider.Model {
+	t.Helper()
+	for _, model := range provider.Models() {
+		if model.Free() || model.PriceVaries() {
+			continue
+		}
+		if model.Pricing().Known() {
+			return model
+		}
+	}
+	t.Fatal("the catalogue has no priced cloud model")
+	return provider.Model{}
+}
+
 func TestPricingForPrefersAConfiguredOverride(t *testing.T) {
 	application := newTestApp(t)
 
-	model, ok := provider.ModelByID("claude-sonnet-4-5")
-	if !ok {
-		t.Fatal("claude-sonnet-4-5 is missing from the catalogue")
-	}
+	model := pricedCatalogueModel(t)
 	builtIn, known := application.pricingFor(model)
 	if !known || !builtIn.Known() {
 		t.Fatalf("the fixture model should have a built-in price, got %+v known=%v", builtIn, known)
@@ -22,7 +36,7 @@ func TestPricingForPrefersAConfiguredOverride(t *testing.T) {
 
 	if err := application.UpdateConfig(func(cfg *config.Config) {
 		cfg.ModelPricing = map[string]config.ModelPrice{
-			"claude-sonnet-4-5": {InputPerMillion: 0.01, OutputPerMillion: 0.02},
+			model.ID: {InputPerMillion: 0.01, OutputPerMillion: 0.02},
 		}
 	}); err != nil {
 		t.Fatalf("UpdateConfig: %v", err)
@@ -132,14 +146,15 @@ func TestCostIsKnownBeforeTheFirstTurn(t *testing.T) {
 // TestCostIsKnownForAPricedModelBeforeAnyTurn covers the cloud case.
 func TestCostIsKnownForAPricedModelBeforeAnyTurn(t *testing.T) {
 	application := newTestApp(t)
-	if err := application.Secrets().Set(secrets.ProviderKey("anthropic"), "sk-ant-test"); err != nil {
+	priced := pricedCatalogueModel(t)
+	if err := application.Secrets().Set(secrets.ProviderKey(priced.Provider), "sk-ant-test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := application.SetModelByQuery("claude-sonnet-4-5"); err != nil {
+	if _, err := application.SetModelByQuery(priced.ID); err != nil {
 		t.Fatalf("SetModelByQuery: %v", err)
 	}
 	if _, known := application.Cost(); !known {
-		t.Errorf("a model in the price table should report a known cost before any turn")
+		t.Errorf("%s is in the price table, so its cost must be known before any turn", priced.ID)
 	}
 }
 
