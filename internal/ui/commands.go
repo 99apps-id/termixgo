@@ -26,6 +26,62 @@ const initPrompt = "Analyse this repository and write a TERMIXGO.md at the works
 	"the commands to build, test, lint and typecheck, the main module map, and the conventions " +
 	"a new contributor must follow. Read real files first; do not guess. Keep it under 120 lines."
 
+// slashArgAction prefixes a picker action that carries the command name, so a
+// chosen argument runs the command the menu was opened for.
+const slashArgAction = "slash-arg:"
+
+// openSlashArgs shows the argument choices for a command. It is what makes the
+// menu usable for a command whose argument is a closed set: choosing /trust
+// from the menu offers on and off instead of only printing the state.
+func (m *Model) openSlashArgs(name string) (tea.Model, tea.Cmd) {
+	options := SlashOptions(name)
+	if len(options) == 0 {
+		return m, nil
+	}
+	items := make([]pickerItem, 0, len(options)+1)
+	// The bare form stays available as a row when the command has one, so
+	// "show me the current value" is still one keystroke away. The label
+	// states what the row does rather than naming a specific command's state,
+	// because one menu serves every command.
+	if command, ok := FindSlash(name); ok && command.Args != "" && strings.HasPrefix(command.Args, "[") {
+		items = append(items, pickerItem{ID: "", Label: "(no argument)", Detail: command.Summary})
+	}
+	for _, option := range options {
+		detail := option.Detail
+		if option.Complete {
+			detail += " (then type the rest)"
+		}
+		items = append(items, pickerItem{ID: option.Value, Label: option.Value, Detail: detail})
+	}
+	m.openPicker("Arguments for "+slashTrigger(name), slashArgAction+name, items)
+	return m, nil
+}
+
+// slashTrigger renders the canonical "/name" for a command name.
+func slashTrigger(name string) string {
+	if command, ok := FindSlash(name); ok {
+		return command.Trigger
+	}
+	return "/" + strings.TrimPrefix(name, "/")
+}
+
+// applySlashArg runs one argument chosen from the menu. A choice that only
+// starts an argument, such as a session id, completes the composer instead of
+// running the command, because the rest still has to be typed.
+func (m *Model) applySlashArg(name, value string) (tea.Model, tea.Cmd) {
+	for _, option := range SlashOptions(name) {
+		if option.Value != value || !option.Complete {
+			continue
+		}
+		m.composer.SetValue(slashTrigger(name) + " " + value + " ")
+		m.composer.CursorEnd()
+		m.updateSlashMatches()
+		m.refresh()
+		return m, textareaBlink()
+	}
+	return m.runSlash(strings.TrimPrefix(name, "/"), value)
+}
+
 // runSlash dispatches a slash command.
 func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 	switch name {

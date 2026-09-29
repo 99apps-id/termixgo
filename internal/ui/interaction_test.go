@@ -807,6 +807,161 @@ func TestExitCommandQuits(t *testing.T) {
 	}
 }
 
+// TestTabOnAnArgumentCommandOpensItsArguments covers the menu path. Tab is the
+// documented way to complete a command, so on a command whose argument is a
+// closed set it has to offer those values: completing to bare text left the
+// operator to remember them, which made the menu look read-only.
+func TestTabOnAnArgumentCommandOpensItsArguments(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("/trust")
+	model.updateSlashMatches()
+	model.slashCursor = 0
+
+	opened := press(t, model, "tab")
+	if opened.current != modePicker {
+		t.Fatalf("Tab on /trust should open the argument menu, mode is %d", opened.current)
+	}
+	if opened.picker.action != "slash-arg:trust" {
+		t.Fatalf("picker action = %q, want the trust argument menu", opened.picker.action)
+	}
+	values := map[string]bool{}
+	for _, item := range opened.picker.items {
+		values[item.ID] = true
+	}
+	for _, want := range []string{"", "on", "off"} {
+		if !values[want] {
+			t.Errorf("the argument menu is missing %q, has %v", want, values)
+		}
+	}
+}
+
+// TestPickingAnArgumentRunsTheCommand proves the chosen row reaches the
+// command, so the value takes effect rather than only being printed.
+func TestPickingAnArgumentRunsTheCommand(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("/trust")
+	model.updateSlashMatches()
+
+	opened := press(t, model, "tab")
+	for index, item := range opened.picker.visible {
+		if item.ID == "off" {
+			opened.picker.cursor = index
+		}
+	}
+	chosen := press(t, opened, "enter")
+
+	if chosen.app.Trusted() {
+		t.Errorf("choosing off should have untrusted the folder")
+	}
+	if chosen.current != modeChat {
+		t.Errorf("choosing an argument should return to chat, mode is %d", chosen.current)
+	}
+}
+
+// TestEnterAfterASpaceOpensTheArgumentMenu covers the typed route: "/approval "
+// asks for the arguments, and the prefix menu has nothing to complete there.
+func TestEnterAfterASpaceOpensTheArgumentMenu(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("/approval ")
+	model.updateSlashMatches()
+
+	opened := press(t, model, "enter")
+	if opened.current != modePicker {
+		t.Fatalf("Enter on \"/approval \" should open the argument menu, mode is %d", opened.current)
+	}
+	values := map[string]bool{}
+	for _, item := range opened.picker.items {
+		values[item.ID] = true
+	}
+	for _, want := range []string{"ask", "edits", "all", "plan"} {
+		if !values[want] {
+			t.Errorf("the argument menu is missing %q", want)
+		}
+	}
+}
+
+// TestChoosingAnIncompleteArgumentFillsTheComposer keeps a value that only
+// starts an argument from being run on its own: /sessions delete needs an id,
+// so choosing "delete" has to leave the operator typing.
+func TestChoosingAnIncompleteArgumentFillsTheComposer(t *testing.T) {
+	model := chatModel(t)
+	before := len(model.blocks)
+	model.composer.SetValue("/sessions")
+	model.updateSlashMatches()
+
+	opened := press(t, model, "tab")
+	for index, item := range opened.picker.visible {
+		if item.ID == "delete" {
+			opened.picker.cursor = index
+		}
+	}
+	chosen := press(t, opened, "enter")
+
+	if chosen.current != modeChat {
+		t.Fatalf("an incomplete argument should return to typing, mode is %d", chosen.current)
+	}
+	if got := chosen.composer.Value(); !strings.HasPrefix(got, "/sessions delete") {
+		t.Errorf("the composer = %q, want the command and the chosen argument", got)
+	}
+	if len(chosen.blocks) != before {
+		t.Errorf("nothing should have run, block count went from %d to %d", before, len(chosen.blocks))
+	}
+}
+
+// TestHarnessIsOfferedAsAChoice verifies the one command whose options come
+// from another catalogue rather than from a literal list.
+func TestHarnessIsOfferedAsAChoice(t *testing.T) {
+	options := SlashOptions("harness")
+	if len(options) < 5 {
+		t.Fatalf("only %d harness options", len(options))
+	}
+	seen := map[string]bool{}
+	for _, option := range options {
+		seen[option.Value] = true
+	}
+	if !seen[agent.DefaultHarnessProfile] {
+		t.Errorf("the default profile %q should be offered", agent.DefaultHarnessProfile)
+	}
+}
+
+// TestEveryArgumentCommandOffersItsDocumentedValues guards the catalogue: a
+// command that names its arguments in Args but declares no options is one the
+// menu cannot offer, which is the defect this menu fixes.
+func TestEveryArgumentCommandOffersItsDocumentedValues(t *testing.T) {
+	for _, command := range slashCommands {
+		if !strings.Contains(command.Args, "|") {
+			continue
+		}
+		name := strings.TrimPrefix(command.Trigger, "/")
+		options := SlashOptions(name)
+		if len(options) == 0 {
+			t.Errorf("%s documents %q but offers no choices in the menu", command.Trigger, command.Args)
+			continue
+		}
+		documented := strings.NewReplacer("[", "", "]", "").Replace(command.Args)
+		for _, value := range strings.Split(documented, "|") {
+			value = strings.TrimSpace(value)
+			if value == "" || strings.HasPrefix(value, "<") {
+				// An angle-bracketed token is free text the operator types,
+				// so it has no fixed choice to offer in the menu.
+				continue
+			}
+			found := false
+			for _, option := range options {
+				if option.Value == value {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("%s documents %q but the menu does not offer it", command.Trigger, value)
+			}
+		}
+	}
+}
+
+// TestUnknownSlashCommandNamesItself checks the failure path. A command that
+// does not exist must say so and point at help rather than do nothing.
 func TestUnknownSlashCommandNamesItself(t *testing.T) {
 	model := chatModel(t)
 	next, _ := model.runSlash("nonsense", "")

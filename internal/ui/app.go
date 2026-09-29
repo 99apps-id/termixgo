@@ -434,7 +434,8 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 	case "enter":
-		value := strings.TrimSpace(m.composer.Value())
+		raw := m.composer.Value()
+		value := strings.TrimSpace(raw)
 		if value == "" {
 			return m, nil
 		}
@@ -464,6 +465,18 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if matches[cursor].Trigger != value {
 					value = matches[cursor].Trigger
 				}
+			}
+		}
+		// A command followed by a space is the operator asking for its
+		// arguments. The prefix menu has nothing to complete at that point, so
+		// without this the argument list is only reachable by memory.
+		if strings.HasSuffix(raw, " ") && strings.Count(value, " ") == 0 && strings.HasPrefix(value, "/") {
+			name := strings.TrimPrefix(value, "/")
+			if _, ok := FindSlash(name); ok && len(SlashOptions(name)) > 0 {
+				m.composer.SetValue(slashTrigger(name) + " ")
+				m.slashMatches = nil
+				m.mentionMatches = nil
+				return m.openSlashArgs(name)
 			}
 		}
 		if slashName, _, ok := ParseSlash(value); ok {
@@ -522,9 +535,17 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.slashMatches = nil
 				return m, nil
 			}
+			trigger := strings.TrimPrefix(m.slashMatches[m.slashCursor].Trigger, "/")
 			m.composer.SetValue(m.slashMatches[m.slashCursor].Trigger + " ")
 			m.slashMatches = nil
-			return m, nil
+			if len(SlashOptions(trigger)) == 0 {
+				return m, nil
+			}
+			// The command takes an argument from a known set, so completing it
+			// to bare text would leave the operator to remember the values.
+			// Opening the argument menu is what makes the menu usable rather
+			// than read-only.
+			return m.openSlashArgs(trigger)
 		}
 	case "pgup":
 		m.viewport.HalfViewUp()
@@ -1140,7 +1161,7 @@ func (m *Model) viewSlashMenu() string {
 	} else {
 		rows = append(rows, truncate("  "+m.styles.MenuDesc.Render("<- back  Return to typing"), body))
 	}
-	rows = append(rows, truncate(m.styles.Hint.Render("Up/Down move | Tab complete | Enter run | Esc back"), body))
+	rows = append(rows, truncate(m.styles.Hint.Render("Up/Down move | Tab arguments | Enter run | Esc back"), body))
 	// No Width() here: the Menu style adds one column of padding on each side
 	// on top of whatever Width constrains, which wraps an exactly-sized row.
 	// Truncating every row to width-2 and letting the padding fill the rest is

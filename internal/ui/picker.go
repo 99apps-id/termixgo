@@ -107,6 +107,9 @@ func (m *Model) handlePickerKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // applyPickerChoice runs the action bound to the open picker.
 func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, tea.Cmd) {
+	if name, ok := strings.CutPrefix(action, slashArgAction); ok {
+		return m.applySlashArg(name, item.ID)
+	}
 	switch action {
 	case "model":
 		model, err := m.app.SetModelByQuery(item.ID)
