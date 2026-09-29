@@ -70,7 +70,7 @@ func (t *searchMemoryTool) Run(ctx context.Context, env *Env, args map[string]an
 
 	// Fallback: plain text search through memory and journal files.
 	var matches []string
-	mem := agent.NewMemory(env.Workspace)
+	mem := NewMemory(env.Workspace)
 	block := mem.PromptBlock()
 	if block != "" && strings.Contains(strings.ToLower(block), strings.ToLower(query)) {
 		matches = append(matches, "[memory] "+block)

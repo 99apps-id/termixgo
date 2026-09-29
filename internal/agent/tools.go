@@ -9,6 +9,7 @@ import (
 
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/provider"
+	"github.com/99apps-id/termixgo/internal/search"
 	"github.com/99apps-id/termixgo/internal/secrets"
 	"github.com/99apps-id/termixgo/internal/skill"
 )
