@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -657,6 +658,28 @@ var (
 	spaceRun   = regexp.MustCompile(`[ \t\r\f\v]+`)
 )
 
+// errBlockedRedirect reports a redirect to a host the tool refuses to fetch.
+var errBlockedRedirect = errors.New("redirect target is a link-local or cloud metadata address")
+
+// fetchClient is the client web_fetch uses.
+//
+// The direct URL is checked before the request in Run; the redirect is checked
+// here, because a redirect is a second URL the model did not choose and
+// http.DefaultClient follows one blindly. Without this a page that redirected
+// to 169.254.169.254 reached the cloud metadata endpoint the guard exists to
+// keep out, which is the one host the operator cannot see being contacted.
+var fetchClient = &http.Client{
+	CheckRedirect: func(request *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return fmt.Errorf("stopped after 5 redirects")
+		}
+		if isBlockedHost(request.URL.Hostname()) {
+			return fmt.Errorf("%w: %s", errBlockedRedirect, request.URL.Hostname())
+		}
+		return nil
+	},
+}
+
 func (t *webFetchTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	raw := strings.TrimSpace(argString(args, "url"))
 	parsed, err := url.Parse(raw)
@@ -673,8 +696,11 @@ func (t *webFetchTool) Run(ctx context.Context, env *Env, args map[string]any) (
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
 	request.Header.Set("User-Agent", "Termixgo/0.1 (+https://github.com/99apps-id/termixgo)")
-	response, err := http.DefaultClient.Do(request)
+	response, err := fetchClient.Do(request)
 	if err != nil {
+		if errors.Is(err, errBlockedRedirect) {
+			return Result{Output: "That URL redirects to a link-local or cloud metadata address, which the agent does not fetch.", IsError: true}, nil
+		}
 		if isNetworkUnreachable(err) {
 			return Result{
 				Output:  fmt.Sprintf("fetch failed: %v\nHint: the machine is offline or the host could not be resolved. Do not keep retrying web_fetch or web_search; continue with local files and tools.", err),

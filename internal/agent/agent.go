@@ -138,6 +138,9 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	if segments < 1 {
 		segments = 1
 	}
+	// Usage is summed across every segment, so the turn total reported at the
+	// end is the whole turn rather than its last step.
+	var turnUsage provider.Usage
 runLoop:
 	for segment := 0; segment < segments; segment++ {
 		segmentWorked := false
@@ -175,7 +178,6 @@ runLoop:
 			var answer strings.Builder
 			var reasoning strings.Builder
 			var calls []provider.ToolCall
-			var turnUsage provider.Usage
 			var reasoningStart time.Time
 
 			streamErr := r.Client.Stream(ctx, request, func(event provider.StreamEvent) error {
@@ -254,7 +256,11 @@ runLoop:
 						continue
 					}
 				}
-				session.AddUsage(turnUsage)
+				// The emitter is the single accumulator: App.emit folds every
+				// EventUsage into the app total and the session together. Adding
+				// the turn total here as well recorded the last step's tokens a
+				// second time, so a one step turn persisted twice its usage and
+				// the session file disagreed with the status line.
 				session.SetCost(sessionCost)
 				emit(Event{Kind: EventTurnEnd, StopReason: "stop", Usage: turnUsage, CostUSD: sessionCost, CostKnown: costKnown})
 				return nil
