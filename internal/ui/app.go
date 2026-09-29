@@ -1296,7 +1296,7 @@ func (m *Model) viewStatus() string {
 	// The task in flight is named rather than only counted, so a glance at the
 	// status line says what the agent is doing without scrolling the transcript.
 	if active, ok := m.app.Todos().Active(); ok {
-		identity = append(identity, m.styles.Plan.Render("task "+truncate(active.Title, 40)))
+		identity = append(identity, m.styles.Plan.Render("task "+truncate(sanitizeText(active.Title), 40)))
 	}
 	identity = append(identity,
 		m.styles.Dim.Render("session "+shortID(m.app.Session().ID())),

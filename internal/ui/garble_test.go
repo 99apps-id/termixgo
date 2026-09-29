@@ -62,6 +62,23 @@ func TestRenderPreservesWordOrder(t *testing.T) {
 	}
 }
 
+// TestTranscriptStripsTerminalControlSequences is the frame-injection guard:
+// model or tool output that carries a raw escape or carriage return must never
+// reach the terminal, because the terminal obeys it and rewrites the frame under
+// the cursor, which reads as words cut and pasted from a neighbouring line.
+func TestTranscriptStripsTerminalControlSequences(t *testing.T) {
+	styles := NewStyles(DefaultPalette())
+	text := "before\x1b[2Ja\x1b[1mb\rcd\tef"
+	rendered := transcript([]block{{kind: blockAssistant, text: text}}, styles, 80, true)
+	if strings.ContainsAny(rendered, "\x1b\r\t") {
+		t.Errorf("a control character survived the render: %q", rendered)
+	}
+	plain := stripANSI(rendered)
+	if !strings.Contains(plain, "before") || !strings.Contains(plain, "abcd") {
+		t.Errorf("text was lost while stripping controls: %q", plain)
+	}
+}
+
 // TestRenderKeepsThinkingAndAnswerSeparate ensures a thinking block followed
 // by its answer renders both texts verbatim, so a collapsed reasoning header
 // can never swallow answer characters.

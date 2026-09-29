@@ -56,6 +56,16 @@ func transcript(blocks []block, styles Styles, width int, showDetails bool) stri
 	}
 	parts := make([]string, 0, len(blocks))
 	for _, item := range blocks {
+		// Model and tool text can carry terminal control characters. They are
+		// dropped before any styling so the terminal never obeys a sequence the
+		// agent happened to print, which is what scrambled the frame.
+		item.text = sanitizeText(item.text)
+		item.reasoning = sanitizeText(item.reasoning)
+		item.toolLabel = sanitizeText(item.toolLabel)
+		item.toolResult = sanitizeText(item.toolResult)
+		for index := range item.plan {
+			item.plan[index].Title = sanitizeText(item.plan[index].Title)
+		}
 		rendered := renderBlock(item, styles, width, showDetails)
 		if strings.TrimSpace(rendered) == "" {
 			continue

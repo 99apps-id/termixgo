@@ -52,6 +52,11 @@ func (p *plainPrinter) color(code, text string) string {
 
 // print renders one event.
 func (p *plainPrinter) print(event agent.Event) {
+	// Strip terminal control characters so a piped run's log cannot be made to
+	// emit colour or cursor sequences from model or tool output.
+	event.Text = sanitizeText(event.Text)
+	event.ToolLabel = sanitizeText(event.ToolLabel)
+	event.ToolResult = sanitizeText(event.ToolResult)
 	switch event.Kind {
 	case agent.EventThinking:
 		if !p.reasoning {
