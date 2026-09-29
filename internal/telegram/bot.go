@@ -366,6 +366,31 @@ func (b *Bot) runPhoto(ctx context.Context, chatID int64, message *Message) {
 	})
 }
 
+// typingRefresh is how often the typing action is renewed while a turn runs.
+// Telegram clears the indicator after about five seconds, so four keeps it
+// continuous without sending a request the API would ignore anyway. It is a
+// variable so a test can exercise the keepalive without waiting out the real
+// interval.
+var typingRefresh = 4 * time.Second
+
+// keepTyping renews the chat's typing indicator until done is closed or the
+// bot's context ends. It runs off the run's own goroutine so a slow network
+// call cannot delay the turn.
+func (b *Bot) keepTyping(ctx context.Context, chatID int64, done <-chan struct{}) {
+	ticker := time.NewTicker(typingRefresh)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_ = b.client.SendChatAction(ctx, chatID, "typing")
+		}
+	}
+}
+
 // runWithCard runs one turn behind the single-run gate and mirrors progress
 // into one message that is edited in place instead of flooding the chat.
 func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Context, func(string)) (string, error)) {
@@ -380,6 +405,13 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 		b.logf("could not send the progress message: %v", err)
 	}
 	_ = b.client.SendChatAction(ctx, chatID, "typing")
+	// Telegram clears a typing action after a few seconds, so a long turn
+	// showed no sign of life for most of its run and read as stuck. The
+	// keepalive renews the indicator until the turn returns, which is what
+	// tells the operator the agent is still working.
+	typingDone := make(chan struct{})
+	go b.keepTyping(ctx, chatID, typingDone)
+	defer close(typingDone)
 
 	var lastEdit time.Time
 	progress := func(line string) {
