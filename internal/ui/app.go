@@ -239,6 +239,11 @@ func RunWithOptions(application *app.App, options Options) error {
 
 // welcome appends the opening screen block.
 func (m *Model) welcome() {
+	m.blocks = append(m.blocks, m.welcomeBlock())
+}
+
+// welcomeBlock builds the opening screen from the current state.
+func (m *Model) welcomeBlock() block {
 	trust := m.styles.NoTrust.Render("untrusted")
 	if m.app.Trusted() {
 		trust = m.styles.Trust.Render("trusted")
@@ -258,7 +263,20 @@ func (m *Model) welcome() {
 	if !m.app.Trusted() {
 		info = append(info, m.styles.Hint.Render("This folder is untrusted: writes and commands will ask first. Run /trust on to change that."))
 	}
-	m.blocks = append(m.blocks, block{kind: blockWelcome, text: strings.Join(info, "\n")})
+	return block{kind: blockWelcome, text: strings.Join(info, "\n")}
+}
+
+// refreshWelcome rebuilds the opening screen after its state changed.
+//
+// The block is built once at startup, so an onboarding run that picked a model
+// left the old name in the transcript next to a header showing the new one.
+func (m *Model) refreshWelcome() {
+	for index := range m.blocks {
+		if m.blocks[index].kind == blockWelcome {
+			m.blocks[index] = m.welcomeBlock()
+			return
+		}
+	}
 }
 
 // Init implements tea.Model.

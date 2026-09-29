@@ -276,6 +276,7 @@ func (m *Model) saveCustomModel() (tea.Model, tea.Cmd) {
 	}
 	m.input.SetValue("")
 	m.input.Blur()
+	m.refreshWelcome()
 	m.setup.summary = append(m.setup.summary, "model: "+model.Label)
 	m.setup.step = setupTelegramAsk
 	m.setup.message = "Connect the Telegram companion bot now?"

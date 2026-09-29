@@ -116,6 +116,7 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 		if err != nil {
 			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
 		} else {
+			m.refreshWelcome()
 			m.blocks = append(m.blocks, block{kind: blockNotice, text: "Model is now " + model.Label})
 		}
 		return m, m.enterChat()
@@ -172,6 +173,7 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 			m.current = modeSetup
 			return m, nil
 		}
+		m.refreshWelcome()
 		m.setup.summary = append(m.setup.summary, "model: "+model.Label)
 		m.setup.step = setupTelegramAsk
 		m.setup.message = "Connect the Telegram companion bot now?"

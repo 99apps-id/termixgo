@@ -224,6 +224,7 @@ func (m *Model) slashModel(args string) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 	}
+	m.refreshWelcome()
 	m.blocks = append(m.blocks, block{kind: blockNotice, text: "Model is now " + model.Label})
 	m.refresh()
 	return m, nil
@@ -459,12 +460,14 @@ func (m *Model) slashTrust(args string) (tea.Model, tea.Cmd) {
 		if err := m.app.SetTrust(true); err != nil {
 			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
 		} else {
+			m.refreshWelcome()
 			m.blocks = append(m.blocks, block{kind: blockNotice, text: "This folder is now trusted. Writes and commands run without asking."})
 		}
 	case "off", "no", "false":
 		if err := m.app.SetTrust(false); err != nil {
 			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
 		} else {
+			m.refreshWelcome()
 			m.blocks = append(m.blocks, block{kind: blockNotice, text: "This folder is now untrusted."})
 		}
 	default:

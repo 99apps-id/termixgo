@@ -93,6 +93,9 @@ All notable changes to Termixgo are recorded here. The format follows
   step.
 - A call to a tool that does not exist now answers with near matches and, when
   tool search is on, how to discover one, instead of a bare name-not-found.
+- The opening screen follows a model or trust change. It was built once at
+  startup, so an onboarding run that picked a model left the old name in the
+  transcript next to a header showing the new one.
 
 ### Fixed
 
