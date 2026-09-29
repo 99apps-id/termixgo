@@ -109,6 +109,7 @@ func DefaultRegistry() *Registry {
 		&moveFileTool{},
 		&grepTool{},
 		&globTool{},
+		&searchMemoryTool{},
 		&runCommandTool{},
 		&runChecksTool{},
 		&backgroundTool{},

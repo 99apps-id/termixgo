@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/99apps-id/termixgo/internal/app"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/secrets"
@@ -23,10 +22,7 @@ func wizardModel(t *testing.T) *Model {
 	t.Helper()
 	t.Setenv(config.EnvHome, t.TempDir())
 
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	model := New(application)
 	if model.current != modePicker || model.setup.step != setupProvider {
 		t.Fatalf("a fresh install should open the wizard on the provider step, got mode %d step %d", model.current, model.setup.step)

@@ -61,7 +61,12 @@ func CreateCheckpoint(ctx context.Context, workspace, message string) (Checkpoin
 		message = "manual checkpoint"
 	}
 	entry := fmt.Sprintf("%s %s %s", checkpointPrefix, head, message)
-	if _, err := gitOutput(ctx, workspace, "stash", "push", "--include-untracked", "-m", entry); err != nil {
+	// Termixgo's own state directory is excluded from the snapshot. It holds the
+	// full-text index, its WAL and the error journal, which are state rather than
+	// the operator's work, and stashing them makes a stash apply collide with the
+	// live files. The pathspec covers the repository root; an excluded path that
+	// does not exist is not an error for git.
+	if _, err := gitOutput(ctx, workspace, "stash", "push", "--include-untracked", "-m", entry, "--", ".", ":(exclude).termixgo"); err != nil {
 		return Checkpoint{}, fmt.Errorf("stash the working tree: %w", err)
 	}
 	// The push leaves the tree clean; applying brings the work back while

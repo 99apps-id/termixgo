@@ -11,11 +11,26 @@ import (
 	"github.com/99apps-id/termixgo/internal/secrets"
 )
 
+// newApp builds an app in the given workspace and registers its shutdown.
+//
+// Shutdown matters on Windows: the full-text index and the MCP pool hold open
+// handles, and a test's temp directory cannot be removed while they are open.
+// Registering the cleanup here rather than at each call site is what keeps a
+// new test from forgetting it.
+func newApp(t *testing.T, workspace string) (*App, error) {
+	t.Helper()
+	application, err := New(workspace)
+	if err == nil {
+		t.Cleanup(application.Shutdown)
+	}
+	return application, err
+}
+
+// newTestApp builds an app with a private state directory and workspace.
 func newTestApp(t *testing.T) *App {
 	t.Helper()
 	t.Setenv(config.EnvHome, t.TempDir())
-	workspace := t.TempDir()
-	application, err := New(workspace)
+	application, err := newApp(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

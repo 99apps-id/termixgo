@@ -200,7 +200,7 @@ func TestStartTelegramRegistersTheConfiguredBot(t *testing.T) {
 func TestTelegramTokenRoundTrip(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
-	application, err := New(t.TempDir())
+	application, err := newApp(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -285,12 +285,18 @@ func TestRunPromptRestoresTheObserverOnFailure(t *testing.T) {
 
 // TestNewWithoutAWorkspaceUsesTheWorkingDirectory is the bare `termixgo` case:
 // the folder is inferred rather than demanded.
+//
+// The working directory is moved to a temp dir first. The app keeps its state
+// in <workspace>/.termixgo, so a test that inferred the package directory would
+// write a database into the source tree.
 func TestNewWithoutAWorkspaceUsesTheWorkingDirectory(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	application, err := New("")
+	t.Chdir(t.TempDir())
+	application, err := newApp(t, "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	t.Cleanup(application.Shutdown)
 	if strings.TrimSpace(application.Workspace()) == "" {
 		t.Fatalf("the workspace should be inferred from the working directory")
 	}
@@ -311,7 +317,7 @@ func TestNewSucceedsWithAModelWhoseKeyIsMissing(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	application, err := New(t.TempDir())
+	application, err := newApp(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("New should still succeed: %v", err)
 	}

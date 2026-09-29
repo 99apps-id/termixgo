@@ -127,6 +127,10 @@ func runOnce(prompt string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// The index and the MCP pool hold open handles, so they are released on the
+	// way out. A one-shot run is short-lived, and leaving a handle behind would
+	// keep a temp directory busy for as long as the process lives.
+	defer application.Shutdown()
 	if !application.HasModel() {
 		return fmt.Errorf("no model is configured; run 'termixgo setup'")
 	}

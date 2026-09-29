@@ -77,7 +77,7 @@ func TestRunTurnEndToEnd(t *testing.T) {
 		t.Fatalf("store key: %v", err)
 	}
 
-	application, err := New(directory)
+	application, err := newApp(t, directory)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -138,7 +138,7 @@ drain:
 // TestRunTurnWithoutModelExplainsSetup checks the friendly failure path.
 func TestRunTurnWithoutModelExplainsSetup(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	application, err := New(t.TempDir())
+	application, err := newApp(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestRunTurnWithoutModelExplainsSetup(t *testing.T) {
 
 func TestStatusThroughTheStack(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	application, err := New(t.TempDir())
+	application, err := newApp(t, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

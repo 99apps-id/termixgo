@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/99apps-id/termixgo/internal/agent"
-	"github.com/99apps-id/termixgo/internal/app"
 	"github.com/99apps-id/termixgo/internal/config"
 )
 
@@ -42,10 +41,7 @@ func heldChatModel(t *testing.T) (*Model, chan struct{}, <-chan struct{}) {
 	if err := config.Save(cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	model := New(application)
 	resize(model, 120, 40)
 	return model, release, started

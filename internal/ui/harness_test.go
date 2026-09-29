@@ -5,7 +5,23 @@ import (
 	"testing"
 
 	"github.com/99apps-id/termixgo/internal/agent"
+	"github.com/99apps-id/termixgo/internal/app"
 )
+
+// testApp builds an app for a UI test and registers its shutdown.
+//
+// Shutdown is not optional on Windows: the full-text index and the MCP pool hold
+// open handles, so a test's temp directory cannot be removed while they are
+// open. Registering it here keeps every call site from having to remember.
+func testApp(t *testing.T) *app.App {
+	t.Helper()
+	application, err := app.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("app.New: %v", err)
+	}
+	t.Cleanup(application.Shutdown)
+	return application
+}
 
 // runHarness sends the /harness command and returns the resulting model.
 func runHarness(t *testing.T, model *Model, args string) *Model {

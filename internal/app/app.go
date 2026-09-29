@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/mcp"
 	"github.com/99apps-id/termixgo/internal/provider"
+	"github.com/99apps-id/termixgo/internal/search"
 	"github.com/99apps-id/termixgo/internal/secrets"
 	"github.com/99apps-id/termixgo/internal/skill"
 	"github.com/99apps-id/termixgo/internal/telegram"
@@ -59,6 +61,11 @@ type App struct {
 	todos   *agent.TodoStore
 	tools   *agent.Registry
 	session *agent.Session
+
+	// search is the full-text index behind search_memory. It is nil when the
+	// index could not be opened, which only degrades that one tool to the
+	// substring fallback rather than failing the session.
+	search *search.Store
 
 	// processes owns the background processes. It lives on the app, not on one
 	// run's environment, because a dev server must outlive the turn that
@@ -161,6 +168,15 @@ func New(workspace string) (*App, error) {
 		SessionAllowed: map[string]bool{},
 	}
 	instance.session = agent.NewSession(workspace, "")
+
+	// The full-text index lives in the state directory inside the workspace,
+	// which is where the error journal already is: the database is state, not
+	// content, so it must not land in the files the model reads. A failure here
+	// only degrades search_memory to its substring fallback.
+	if store, err := search.OpenIn(workspace, filepath.Join(workspace, ".termixgo")); err == nil {
+		instance.search = store
+		agent.IndexLearnedContent(store, instance.memory, instance.journal)
+	}
 
 	// MCP servers are connected before the first turn so the model sees their
 	// tools from the start. A server that fails is recorded and skipped: the
@@ -683,7 +699,10 @@ func (a *App) env() *agent.Env {
 		Processes: a.processes,
 		// The journal is shared with the runner, which records into it, and read
 		// back by search_memory, which is why the same store is passed here.
-		Journal:     a.journal,
+		Journal: a.journal,
+		// The full-text index behind search_memory. Nil degrades that tool to
+		// its substring fallback rather than failing the turn.
+		Search:      a.search,
 		Emit:        a.emit,
 		Approve:     a.approve,
 		Ask:         a.ask,
@@ -704,9 +723,14 @@ func (a *App) Shutdown() {
 	a.mu.Lock()
 	pool := a.mcp
 	a.mcp = nil
+	store := a.search
+	a.search = nil
 	a.mu.Unlock()
 	if pool != nil {
 		pool.Close()
+	}
+	if store != nil {
+		_ = store.Close()
 	}
 }
 

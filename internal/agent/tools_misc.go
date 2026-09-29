@@ -415,6 +415,10 @@ func (t *rememberTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	if err := env.Memory.Remember(fact, scope); err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
+	// Keep the full-text index in step with the file that just changed, so a
+	// later search_memory finds this fact through the index rather than only
+	// through the substring fallback.
+	IndexLearnedContent(env.Search, env.Memory, env.Journal)
 	return Result{Output: fmt.Sprintf("Remembered (%s): %s", scope, Shorten(fact, 120))}, nil
 }
 

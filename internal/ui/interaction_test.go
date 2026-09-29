@@ -10,7 +10,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/99apps-id/termixgo/internal/agent"
-	"github.com/99apps-id/termixgo/internal/app"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/provider"
 )
@@ -33,10 +32,7 @@ func chatModel(t *testing.T) *Model {
 		t.Fatalf("save config: %v", err)
 	}
 
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	if !application.HasModel() {
 		t.Fatalf("the fixture should have a usable model")
 	}
@@ -1249,10 +1245,7 @@ func TestModelCommandWithNoArgumentOpensThePicker(t *testing.T) {
 func TestInitWithoutAModelExplainsSetup(t *testing.T) {
 	// A fresh app has no model, which is exactly the case /init has to explain.
 	t.Setenv(config.EnvHome, t.TempDir())
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	model := New(application)
 	model.current = modeChat
 	resize(model, 120, 40)

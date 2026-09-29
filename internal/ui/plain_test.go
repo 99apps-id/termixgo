@@ -24,10 +24,7 @@ func plainApp(t *testing.T) *app.App {
 	if err := config.Save(cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	return application
 }
 
@@ -278,10 +275,7 @@ func (endlessReader) Read(p []byte) (int, error) {
 
 func TestRunOnceWithoutAModelFails(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	var out bytes.Buffer
 	if err := RunOnceWithContext(context.Background(), application, "hello", &out); err == nil {
 		t.Fatalf("a one-shot run without a model must fail")
@@ -348,10 +342,7 @@ func TestIsInteractiveIsFalseForNonTerminals(t *testing.T) {
 // TestSetupWizardStartsAtTheProviderStep is the first-run contract.
 func TestSetupWizardStartsAtTheProviderStep(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 
 	model := New(application)
 	if model.current != modePicker {
@@ -373,10 +364,7 @@ func TestSetupWizardStartsAtTheProviderStep(t *testing.T) {
 // silently moving on.
 func TestSetupWizardRefusesAnEmptyKey(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	model := New(application)
 	model.setup.providerID = "anthropic"
 	model.setup.step = setupKey
@@ -398,10 +386,7 @@ func TestSetupWizardRefusesAnEmptyKey(t *testing.T) {
 // TestSetupWizardStoresAKeyAndOffersModels walks the path an operator takes.
 func TestSetupWizardStoresAKeyAndOffersModels(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	model := New(application)
 	model.setup.providerID = "anthropic"
 	model.setup.step = setupKey
@@ -433,10 +418,7 @@ func TestSetupWizardStoresAKeyAndOffersModels(t *testing.T) {
 // TestSetupWizardCustomModelRequiresText covers the hand-typed model path.
 func TestSetupWizardCustomModelRequiresText(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	model := New(application)
 	model.setup.providerID = "openai-compatible"
 	model.setup.step = setupCustomModel
@@ -457,10 +439,7 @@ func TestSetupWizardCustomModelRequiresText(t *testing.T) {
 // TestSetupWizardFinishesAndReturnsToChat checks the end of onboarding.
 func TestSetupWizardFinishesAndReturnsToChat(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	model := New(application)
 	model.setup.step = setupTelegramAsk
 	model.current = modeSetup
@@ -536,10 +515,7 @@ func TestProviderNeedsKey(t *testing.T) {
 // bot verification against an empty token.
 func TestSaveTelegramTokenRefusesAnEmptyToken(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	model := New(application)
 	model.setup.step = setupTelegramToken
 	model.current = modeSetup
@@ -564,10 +540,7 @@ func TestSaveTelegramTokenRefusesAnEmptyToken(t *testing.T) {
 // step, which must finish onboarding rather than trapping the operator.
 func TestSaveTelegramTokenEscapeSkipsTelegram(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	model := New(application)
 	model.setup.providerID = "ollama"
 	model.setup.step = setupTelegramToken

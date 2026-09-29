@@ -43,6 +43,12 @@ func (m *Memory) globalPath() string {
 	return filepath.Join(home, "memory.md")
 }
 
+// Paths reports the project and global memory files, so the full-text index can
+// keep a document per file without duplicating the naming convention here.
+func (m *Memory) Paths() (project, global string) {
+	return m.projectPath(), m.globalPath()
+}
+
 // Remember appends a fact to one scope, enforcing the caps.
 func (m *Memory) Remember(fact, scope string) error {
 	trimmed := strings.TrimSpace(fact)

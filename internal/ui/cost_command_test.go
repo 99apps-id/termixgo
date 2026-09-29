@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/99apps-id/termixgo/internal/app"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/secrets"
 )
@@ -21,10 +20,7 @@ func unpricedModel(t *testing.T) *Model {
 	if err := config.Save(cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	if err := application.Secrets().Set(secrets.ProviderKey("openai"), "sk-test"); err != nil {
 		t.Fatalf("store key: %v", err)
 	}

@@ -143,7 +143,7 @@ func mcpApp(t *testing.T, servers ...config.MCPServer) *App {
 	if err := config.Save(cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
-	application, err := New(t.TempDir())
+	application, err := newApp(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestNoConfiguredServersLeavesTheBuiltinsAlone(t *testing.T) {
 	if err := config.Save(config.Default()); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
-	application, err := New(t.TempDir())
+	application, err := newApp(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

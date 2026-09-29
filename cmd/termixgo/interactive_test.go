@@ -39,6 +39,10 @@ func TestSignalContextIsCancellable(t *testing.T) {
 // does: no terminal, so it must fall back to the plain REPL and return at EOF.
 func TestRunInteractivePlainModeWithPipedStreams(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
+	// The command builds its app from the working directory, and the app keeps
+	// its state in <workspace>/.termixgo. Without moving first, a test run would
+	// leave a search index inside the source tree.
+	t.Chdir(t.TempDir())
 
 	var out bytes.Buffer
 	stopped := make(chan error, 1)
@@ -67,6 +71,9 @@ func TestRunInteractivePlainModeWithPipedStreams(t *testing.T) {
 // starting a poller that cannot authenticate.
 func TestEnableTelegramStaysOffWithoutAToken(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
+	// app.New("") infers the working directory, and the app keeps its state in
+	// <workspace>/.termixgo. Moving into a temp dir keeps the source tree clean.
+	t.Chdir(t.TempDir())
 
 	cfg := config.Default()
 	cfg.Telegram.Enabled = true // enabled, but no token is stored
@@ -92,6 +99,9 @@ func TestEnableTelegramStaysOffWithoutAToken(t *testing.T) {
 // started and reported, and the failed verification leaves it stopped.
 func TestEnableTelegramStartsWithATokenButNoNetwork(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
+	// Same reason as above: app.New("") infers the working directory, so the
+	// test must not stand in the package directory.
+	t.Chdir(t.TempDir())
 
 	store, err := secrets.Load()
 	if err != nil {
@@ -167,12 +177,15 @@ func TestTelegramCommandReportsAndPersists(t *testing.T) {
 
 // TestMainSeamKeepsTheWorkingDirectory isolates the CLI tests that read the
 // current directory for folder trust.
+//
+// The baseline is read after withState, which moves into a temp directory
+// itself: what this test guards is that runCLI does not move again.
 func TestMainSeamKeepsTheWorkingDirectory(t *testing.T) {
+	withState(t)
 	before, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	withState(t)
 	if _, _, err := runCLI(t, "trust", "on"); err != nil {
 		t.Fatalf("trust on: %v", err)
 	}

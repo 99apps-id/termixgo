@@ -14,10 +14,16 @@ import (
 
 // withState points the whole CLI at a throwaway state directory, which is what
 // keeps these tests off the developer's real configuration.
+//
+// It also moves the process into a temp working directory. The CLI builds its
+// app from the working directory, and the app keeps its state in
+// <workspace>/.termixgo, so a test that stayed in the package directory would
+// leave a search index and an error journal inside the source tree.
 func withState(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
+	t.Chdir(t.TempDir())
 	return home
 }
 

@@ -36,19 +36,39 @@ type Store struct {
 	mu       sync.Mutex
 	db       *sql.DB
 	root     string
-	stop     chan struct{}
+	dataDir  string
 	indexing bool
+	// indexedAt is when the workspace walk last finished, which is what keeps a
+	// burst of searches from re-walking the tree on every call.
+	indexedAt time.Time
 }
 
-// Open opens (or creates) the search database inside the given directory.
+// Open opens (or creates) the search database inside the given directory and
+// indexes files under that same directory.
+//
+// It is the shape the tests use. A caller that keeps its state elsewhere, such
+// as <workspace>/.termixgo, wants OpenIn.
 func Open(root string) (*Store, error) {
+	return OpenIn(root, root)
+}
+
+// OpenIn opens the database in dataDir while indexing files under root.
+//
+// The two are separate on purpose: the index covers the operator's workspace,
+// but writing search.db into that workspace would add a binary file to the tree
+// the model reads. dataDir is where the state belongs, and it is skipped by the
+// walk so the database, its WAL and the journal are never indexed as content.
+func OpenIn(root, dataDir string) (*Store, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, fmt.Errorf("search: root is required")
 	}
-	if err := os.MkdirAll(root, 0o700); err != nil {
+	if strings.TrimSpace(dataDir) == "" {
+		dataDir = root
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("search: cannot create dir: %w", err)
 	}
-	dbPath := filepath.Join(root, defaultDBSuffix)
+	dbPath := filepath.Join(dataDir, defaultDBSuffix)
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("search: open db: %w", err)
@@ -62,8 +82,7 @@ func Open(root string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("search: create table: %w", err)
 	}
-	store := &Store{db: db, root: root, stop: make(chan struct{})}
-	go store.indexLoop()
+	store := &Store{db: db, root: root, dataDir: dataDir}
 	return store, nil
 }
 
@@ -71,12 +90,6 @@ func Open(root string) (*Store, error) {
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	select {
-	case <-s.stop:
-		// already closed
-	default:
-		close(s.stop)
-	}
 	if s.db != nil {
 		return s.db.Close()
 	}
@@ -146,6 +159,10 @@ func (s *Store) SearchScope(query, scope string, limit int) ([]Result, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
+	// The workspace documents are refreshed before the query, so a hit reflects
+	// the files as they are now rather than as they were at startup. Memory and
+	// journal documents are kept fresh by the writer, so they need no walk.
+	s.refreshWorkspace()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(`SELECT scope, path, title, snippet(docs, 3, '', '', ' ... ', 40), rank FROM docs WHERE docs MATCH ? AND (? = 'all' OR scope = ?) ORDER BY rank LIMIT ?`, expression, scope, scope, limit)
@@ -217,29 +234,39 @@ func ftsQuery(raw string) string {
 }
 
 // indexLoop periodically refreshes the workspace file index.
-func (s *Store) indexLoop() {
-	ticker := time.NewTicker(2 * time.Minute)
-	defer ticker.Stop()
-	s.indexWorkspace()
-	for {
-		select {
-		case <-ticker.C:
-			s.indexWorkspace()
-		case <-s.stop:
-			return
-		}
-	}
-}
+//
+// There is deliberately no timer. A walk of the whole workspace every couple of
+// minutes reads every matching file on the operator's machine for a tool that is
+// used occasionally, which is cost paid while the agent is idle. The index is
+// refreshed before a search instead, so it is fresh exactly when it is read and
+// costs nothing when nobody searches.
+//
+// workspaceIndexTTL is how stale the workspace documents may be before a search
+// triggers a re-walk. The refresh then covers whatever changed since.
+const workspaceIndexTTL = 5 * time.Minute
 
-func (s *Store) indexWorkspace() {
+// refreshWorkspace re-walks the tree when the workspace documents are stale.
+// A burst of searches therefore walks once, not once per call.
+func (s *Store) refreshWorkspace() {
 	s.mu.Lock()
-	if s.indexing {
+	if s.indexing || time.Since(s.indexedAt) < workspaceIndexTTL {
 		s.mu.Unlock()
 		return
 	}
 	s.indexing = true
 	s.mu.Unlock()
 
+	s.indexWorkspace()
+
+	s.mu.Lock()
+	s.indexing = false
+	s.indexedAt = time.Now()
+	s.mu.Unlock()
+}
+
+// indexWorkspace walks the root and indexes the text files it finds. The caller
+// owns the indexing flag, so this does not take the lock itself.
+func (s *Store) indexWorkspace() {
 	var files []string
 	_ = filepath.WalkDir(s.root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -248,6 +275,12 @@ func (s *Store) indexWorkspace() {
 		if d.IsDir() {
 			name := d.Name()
 			if name == ".git" || name == "node_modules" || name == "dist" || name == ".next" {
+				return filepath.SkipDir
+			}
+			// The state directory holds the database, its WAL and the error
+			// journal. None of it is content, and walking it would index the
+			// database file itself.
+			if s.dataDir != s.root && filepath.Clean(path) == filepath.Clean(s.dataDir) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -269,8 +302,4 @@ func (s *Store) indexWorkspace() {
 		rel, _ := filepath.Rel(s.root, path)
 		_ = s.Index("workspace", rel, filepath.Base(path), text)
 	}
-
-	s.mu.Lock()
-	s.indexing = false
-	s.mu.Unlock()
 }

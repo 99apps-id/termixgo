@@ -33,7 +33,7 @@ func readyApp(t *testing.T) (*App, *httptest.Server) {
 		t.Fatalf("save config: %v", err)
 	}
 
-	application, err := New(t.TempDir())
+	application, err := newApp(t, t.TempDir())
 	if err != nil {
 		server.Close()
 		t.Fatalf("New: %v", err)
@@ -69,7 +69,7 @@ func readyAppHeld(t *testing.T, release <-chan struct{}) (*App, *httptest.Server
 		t.Fatalf("save config: %v", err)
 	}
 
-	application, err := New(t.TempDir())
+	application, err := newApp(t, t.TempDir())
 	if err != nil {
 		server.Close()
 		t.Fatalf("New: %v", err)

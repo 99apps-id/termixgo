@@ -86,7 +86,7 @@ func TestSteerReachesTheRunningTurn(t *testing.T) {
 	if err := config.Save(cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
-	application, err := New(t.TempDir())
+	application, err := newApp(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -7,17 +7,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/99apps-id/termixgo/internal/agent"
-	"github.com/99apps-id/termixgo/internal/app"
 	"github.com/99apps-id/termixgo/internal/config"
 )
 
 func newTestModel(t *testing.T) *Model {
 	t.Helper()
 	t.Setenv(config.EnvHome, t.TempDir())
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	return New(application)
 }
 
@@ -122,10 +118,7 @@ func TestSlashMenuAppearsWhileTyping(t *testing.T) {
 func TestPlainModeStreamsOnce(t *testing.T) {
 	// RunOnce must print the answer and not require a terminal.
 	t.Setenv(config.EnvHome, t.TempDir())
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	var builder strings.Builder
 	if err := RunOnce(application, "hello", &builder); err == nil {
 		// No model configured means a clean error rather than a panic.

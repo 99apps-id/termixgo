@@ -53,6 +53,15 @@ func NewErrorJournal(workspace string) (*ErrorJournal, error) {
 	return &ErrorJournal{path: path, limit: 2000}, nil
 }
 
+// Path reports the journal file, so the full-text index can index it as one
+// document without duplicating the naming convention here.
+func (j *ErrorJournal) Path() string {
+	if j == nil {
+		return ""
+	}
+	return j.path
+}
+
 // Record appends one failure. It writes synchronously so the caller can
 // observe the entry immediately. The file is small and the write is fast,
 // so the agent loop is not meaningfully slowed down.

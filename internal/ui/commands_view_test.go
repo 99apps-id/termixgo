@@ -944,10 +944,7 @@ func servedModel(t *testing.T, server *httptest.Server) *Model {
 		t.Fatalf("save config: %v", err)
 	}
 
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	// A key is required before the client is built. It is never sent anywhere,
 	// because the base URL points at the test server.
 	if err := application.Secrets().Set(secrets.ProviderKey("openai"), "sk-test"); err != nil {

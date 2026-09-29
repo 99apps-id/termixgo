@@ -27,10 +27,7 @@ func onceApp(t *testing.T, baseURL string) *app.App {
 	if err := config.Save(cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
-	application, err := app.New(t.TempDir())
-	if err != nil {
-		t.Fatalf("app.New: %v", err)
-	}
+	application := testApp(t)
 	if !application.HasModel() {
 		t.Fatalf("the fixture should have a usable model")
 	}
