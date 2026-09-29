@@ -1112,54 +1112,103 @@ func (m *Model) viewHeader() string {
 func (m *Model) viewStatus() string {
 	done, total := m.app.Todos().Progress()
 	usage := m.app.Usage()
-	parts := []string{
-		m.styles.Dim.Render(fmt.Sprintf("session %s", shortID(m.app.Session().ID()))),
-		m.styles.Dim.Render(fmt.Sprintf("turns %d", m.app.Session().Turns())),
-		m.styles.Dim.Render(m.app.ContextUsage()),
+	spend, known := m.app.Cost()
+
+	// The vitals are the numbers the operator watches while a turn runs, so they
+	// are built first and always kept on screen. A narrow terminal drops the
+	// session id and the approval label instead: both are repeated in the header
+	// and in /status, while the token count and the spend have nowhere else to go.
+	vitals := []string{m.styles.Dim.Render(fmt.Sprintf("tokens %d", usage.TotalTokens))}
+	costStyle := m.styles.Dim
+	if limit := m.appConfig().CostBudgetUSD; limit > 0 && spend >= limit {
+		// Over budget is the one spend figure that should shout.
+		costStyle = m.styles.StatusWarn
+	}
+	if known {
+		vitals = append(vitals, costStyle.Render(fmt.Sprintf("$%.4f", spend)))
+	} else {
+		// A model with no price cannot be budgeted, and saying so is better than
+		// a zero that reads as "free".
+		vitals = append(vitals, costStyle.Render("cost n/a"))
 	}
 	if m.running && !m.hintsVisible() {
-		// The hints row carries the live working indicator while it is on
-		// screen, so repeating it here would print the same elapsed time
-		// above and below the composer. A menu, an approval prompt or a
-		// question replaces that row, and only then does the status line
-		// become the one place the indicator can live.
+		// The hints row carries the live working indicator while it is on screen,
+		// so repeating it here would print the same elapsed time above and below
+		// the composer. A menu, an approval prompt or a question replaces that
+		// row, and only then does the status line become the one place the
+		// indicator can live.
 		elapsed := time.Since(m.runStarted).Round(time.Second)
-		parts = append(parts, m.styles.Plan.Render(fmt.Sprintf("%s working %s", m.spin.View(), elapsed)))
+		vitals = append([]string{m.styles.Plan.Render(fmt.Sprintf("%s working %s", m.spin.View(), elapsed))}, vitals...)
 	}
+
+	// Everything else, most useful first: the drop loop below removes from the
+	// end, so the context usage survives longer than the session id.
+	identity := []string{m.styles.Dim.Render(m.app.ContextUsage())}
 	if total > 0 {
-		parts = append(parts, m.styles.Plan.Render(fmt.Sprintf("plan %d/%d", done, total)))
+		identity = append(identity, m.styles.Plan.Render(fmt.Sprintf("plan %d/%d", done, total)))
 	}
 	// The task in flight is named rather than only counted, so a glance at the
 	// status line says what the agent is doing without scrolling the transcript.
 	if active, ok := m.app.Todos().Active(); ok {
-		parts = append(parts, m.styles.Plan.Render("task "+truncate(active.Title, 40)))
+		identity = append(identity, m.styles.Plan.Render("task "+truncate(active.Title, 40)))
 	}
-	if usage.TotalTokens > 0 {
-		parts = append(parts, m.styles.Dim.Render(fmt.Sprintf("tokens %d", usage.TotalTokens)))
-	}
-	if spend, known := m.app.Cost(); known && spend > 0 {
-		style := m.styles.Dim
-		if limit := m.appConfig().CostBudgetUSD; limit > 0 && spend >= limit {
-			style = m.styles.StatusWarn
-		}
-		parts = append(parts, style.Render(fmt.Sprintf("$%.4f", spend)))
-	}
-	parts = append(parts, m.styles.Dim.Render("approval "+string(m.app.Config().ApprovalMode)))
+	identity = append(identity,
+		m.styles.Dim.Render("session "+shortID(m.app.Session().ID())),
+		m.styles.Dim.Render(fmt.Sprintf("turns %d", m.app.Session().Turns())),
+		m.styles.Dim.Render("approval "+string(m.app.Config().ApprovalMode)),
+	)
 	if count := m.queuedCount(); count > 0 {
-		parts = append(parts, m.styles.Dim.Render(fmt.Sprintf("queue %d", count)))
+		identity = append(identity, m.styles.Dim.Render(fmt.Sprintf("queue %d", count)))
 	}
-	// A scrolled-up transcript stops following new output, so the status
-	// names the way back instead of leaving the operator wondering why the
-	// view went still.
+	// A scrolled-up transcript stops following new output, so the status names the
+	// way back instead of leaving the operator wondering why the view went still.
 	if !m.viewport.AtBottom() {
-		parts = append(parts, m.styles.Notice.Render("scrolled (End follows)"))
+		identity = append(identity, m.styles.Notice.Render("scrolled (End follows)"))
 	}
 	if m.notice != "" {
-		parts = append(parts, m.styles.Notice.Render(m.notice))
+		identity = append(identity, m.styles.Notice.Render(m.notice))
 	}
-	// The status line is a summary, so a narrow terminal clips it rather than
-	// wrapping it; a wrapped line would push the composer off the frame.
-	return truncate(strings.Join(parts, m.styles.Dim.Render(" | ")), max(1, m.width))
+	return m.composeStatus(identity, vitals)
+}
+
+// composeStatus joins the identity parts with the vitals, keeping the numbers on
+// screen.
+//
+// The identity parts are added from the front, most useful first, and only while
+// they fit beside the vitals. When even the vitals alone are too wide, they are
+// dropped from the front too: the working indicator goes first, because the token
+// count and the spend are the two figures that appear nowhere else on screen.
+func (m *Model) composeStatus(identity, vitals []string) string {
+	separator := m.styles.Dim.Render(" | ")
+	sepWidth := lipgloss.Width(separator)
+
+	for len(vitals) > 1 && lipgloss.Width(strings.Join(vitals, separator)) > m.width {
+		vitals = vitals[1:]
+	}
+	vitalsText := strings.Join(vitals, separator)
+	vitalsWidth := lipgloss.Width(vitalsText)
+
+	room := m.width - vitalsWidth - sepWidth
+	var kept []string
+	for _, part := range identity {
+		trial := append(append([]string{}, kept...), part)
+		if lipgloss.Width(strings.Join(trial, separator)) > room {
+			break
+		}
+		kept = trial
+	}
+	if len(kept) == 0 {
+		return truncate(vitalsText, max(1, m.width))
+	}
+
+	identityText := strings.Join(kept, separator)
+	// Right-aligning the vitals keeps their position stable as the identity text
+	// grows and shrinks, so the numbers do not jump around during a run.
+	gap := m.width - lipgloss.Width(identityText) - vitalsWidth
+	if gap < sepWidth {
+		return truncate(identityText+separator+vitalsText, max(1, m.width))
+	}
+	return identityText + strings.Repeat(" ", gap) + vitalsText
 }
 
 func shortID(id string) string {

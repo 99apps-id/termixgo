@@ -319,17 +319,55 @@ func TestStatusBarShowsTokenUsage(t *testing.T) {
 	}
 }
 
-// TestStatusBarHidesZeroSpend keeps a free session from looking like a billed
-// one, and keeps a row of noise out of the bar.
-func TestStatusBarHidesZeroSpend(t *testing.T) {
-	model := chatModel(t)
-
+// TestStatusBarAlwaysShowsTheVitals pins the contract the operator asked for:
+// the token count and the spend are on screen from the start of a session and
+// survive a narrow terminal, where the session id and the approval label are
+// dropped instead.
+func TestStatusBarAlwaysShowsTheVitals(t *testing.T) {
 	// The fixture is a local model, so the cost is known and zero.
+	model := chatModel(t)
 	if _, known := model.app.Cost(); !known {
 		t.Fatalf("the local fixture should report a known cost")
 	}
-	if view := display(model); strings.Contains(view, "$") {
-		t.Errorf("nothing has been spent, so no amount should be shown:\n%s", view)
+	view := display(model)
+	for _, want := range []string{"tokens 0", "$0.0000"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the bar should show %q before any turn:\n%s", want, view)
+		}
+	}
+
+	// An unpriced model says so rather than showing a zero that reads as free.
+	unpriced := New(unpricedModel(t).app)
+	resize(unpriced, 100, 30)
+	if _, known := unpriced.app.Cost(); known {
+		t.Fatalf("the fixture model must be unpriced")
+	}
+	if view := display(unpriced); !strings.Contains(view, "cost n/a") {
+		t.Errorf("an unpriced model should say cost n/a:\n%s", view)
+	}
+}
+
+// TestStatusBarKeepsTheVitalsOnANarrowTerminal is the reason the bar is built in
+// two groups. The row is a single line clipped to the terminal, so the parts
+// that used to sit at the end disappeared exactly when a run was busy.
+func TestStatusBarKeepsTheVitalsOnANarrowTerminal(t *testing.T) {
+	for _, width := range []int{50, 60, 80, 100} {
+		model := chatModel(t)
+		resize(model, width, 24)
+		model.app.AddUsage(provider.Usage{PromptTokens: 1200, CompletionTokens: 300, TotalTokens: 1500})
+		model.app.Todos().Set([]agent.Todo{{ID: "1", Title: strings.Repeat("a long task name ", 3), Status: "in_progress"}})
+		model.notice = "Telegram paired."
+
+		row := stripANSI(model.viewStatus())
+		if !strings.Contains(row, "tokens 1500") {
+			t.Errorf("at %d columns the token count was dropped:\n%s", width, row)
+		}
+		if !strings.Contains(row, "$") {
+			t.Errorf("at %d columns the spend was dropped:\n%s", width, row)
+		}
+		if len([]rune(row)) > width {
+			t.Errorf("at %d columns the row is %d wide, which wraps", width, len([]rune(row)))
+		}
 	}
 }
 

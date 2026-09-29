@@ -968,9 +968,13 @@ func servedModel(t *testing.T, server *httptest.Server) *Model {
 
 // TestViewStatusShowsSpendOnlyOnceItIsKnown is the whole cost chain in one
 // assertion: the provider reports usage, the runner prices it, the app stores
-// it and the status bar renders it. It also pins that a fresh session does not
-// show a misleading $0.0000.
-func TestViewStatusShowsSpendOnlyOnceItIsKnown(t *testing.T) {
+// it and the status bar renders it.
+//
+// The figure is always present once the model is priced, so the operator can
+// watch the spend from the start of a session. A zero is truthful rather than
+// misleading: it says this session has spent nothing yet, and it keeps the
+// position of the number stable instead of appearing mid-run.
+func TestViewStatusShowsSpendFromTheStart(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(writer, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n")
@@ -983,10 +987,13 @@ func TestViewStatusShowsSpendOnlyOnceItIsKnown(t *testing.T) {
 
 	model := servedModel(t, server)
 
-	// Before any turn the model is priced but nothing has been spent, so a
-	// figure would be noise.
-	if before := display(model); strings.Contains(before, "$") {
-		t.Errorf("nothing spent yet, so no figure:\n%s", before)
+	// Before any turn the model is priced, so the figure shows as zero.
+	before := display(model)
+	if !strings.Contains(before, "$0.0000") {
+		t.Errorf("the spend should be visible before the first turn:\n%s", before)
+	}
+	if !strings.Contains(before, "tokens 0") {
+		t.Errorf("the token count should be visible before the first turn:\n%s", before)
 	}
 
 	var out bytes.Buffer
