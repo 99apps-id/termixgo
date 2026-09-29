@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -60,14 +61,58 @@ func runGit(ctx context.Context, env *Env, args ...string) (string, error) {
 	return output, nil
 }
 
-// isGitRepository reports whether the workspace is inside a git work tree.
+// maxGitAncestorDepth bounds how many levels above the workspace a .git
+// directory may be found. A monorepo workspace three levels deep is normal;
+// a .git accidentally left in the user's home directory five levels above a
+// temp folder is not.
+const maxGitAncestorDepth = 3
+
+// isGitRepository reports whether the workspace is inside a git work tree
+// whose root is close to the workspace. A .git far up the directory tree
+// (such as an accidental repository in the user's home directory) is rejected
+// because it would make every subfolder look like a repository and give the
+// operator git output from the wrong project.
 func isGitRepository(workspace string) bool {
 	if strings.TrimSpace(workspace) == "" {
 		return false
 	}
-	command := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+	command := exec.Command("git", "rev-parse", "--show-toplevel")
 	command.Dir = workspace
-	return command.Run() == nil
+	output, err := command.Output()
+	if err != nil {
+		return false
+	}
+	toplevel := filepath.Clean(strings.TrimSpace(string(output)))
+	absWorkspace := filepath.Clean(workspace)
+	if abs, resolveErr := filepath.Abs(workspace); resolveErr == nil {
+		absWorkspace = filepath.Clean(abs)
+	}
+	// On Windows git returns forward-slash paths; normalise both to the
+	// OS separator so the comparison works everywhere.
+	toplevel = filepath.FromSlash(toplevel)
+	absWorkspace = filepath.FromSlash(absWorkspace)
+
+	if strings.EqualFold(absWorkspace, toplevel) {
+		return true
+	}
+	// The workspace may be a subdirectory of the toplevel (normal for a
+	// monorepo). Reject if the depth is too large, which catches an
+	// accidental .git at the home-directory or drive-root level.
+	rel, relErr := filepath.Rel(toplevel, absWorkspace)
+	if relErr != nil {
+		return false
+	}
+	// filepath.Rel uses ".." when toplevel is not an ancestor, so reject.
+	if strings.HasPrefix(rel, "..") {
+		return false
+	}
+	depth := 0
+	for _, ch := range filepath.ToSlash(rel) {
+		if ch == '/' {
+			depth++
+		}
+	}
+	return depth <= maxGitAncestorDepth
 }
 
 // gitArgs builds argv from optional flags and paths.
