@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -477,7 +478,11 @@ func runServe(stdout io.Writer) error {
 	return nil
 }
 
-const serviceTaskName = "TermixgoAssistant"
+const (
+	serviceTaskName = "TermixgoAssistant"
+	launchdLabel    = "com.termixgo.assistant"
+	systemdService  = "termixgo.service"
+)
 
 func runService(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
@@ -501,6 +506,47 @@ func serviceInstall(stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("cannot resolve binary path: %v", err)
 	}
+	switch runtime.GOOS {
+	case "windows":
+		return serviceInstallWindows(stdout, binary)
+	case "darwin":
+		return serviceInstallDarwin(stdout, binary)
+	case "linux":
+		return serviceInstallLinux(stdout, binary)
+	default:
+		return fmt.Errorf("auto-start is not supported on %s", runtime.GOOS)
+	}
+}
+
+func serviceUninstall(stdout io.Writer) error {
+	switch runtime.GOOS {
+	case "windows":
+		return serviceUninstallWindows(stdout)
+	case "darwin":
+		return serviceUninstallDarwin(stdout)
+	case "linux":
+		return serviceUninstallLinux(stdout)
+	default:
+		return fmt.Errorf("auto-start is not supported on %s", runtime.GOOS)
+	}
+}
+
+func serviceStatus(stdout io.Writer) error {
+	switch runtime.GOOS {
+	case "windows":
+		return serviceStatusWindows(stdout)
+	case "darwin":
+		return serviceStatusDarwin(stdout)
+	case "linux":
+		return serviceStatusLinux(stdout)
+	default:
+		return fmt.Errorf("auto-start is not supported on %s", runtime.GOOS)
+	}
+}
+
+// windows -------------------------------------------------------------
+
+func serviceInstallWindows(stdout io.Writer, binary string) error {
 	command := fmt.Sprintf(`"%s" serve`, binary)
 	cmd := exec.Command("schtasks.exe", []string{
 		"/Create",
@@ -519,7 +565,7 @@ func serviceInstall(stdout io.Writer) error {
 	return nil
 }
 
-func serviceUninstall(stdout io.Writer) error {
+func serviceUninstallWindows(stdout io.Writer) error {
 	cmd := exec.Command("schtasks.exe", []string{
 		"/Delete",
 		"/TN", serviceTaskName,
@@ -534,7 +580,7 @@ func serviceUninstall(stdout io.Writer) error {
 	return nil
 }
 
-func serviceStatus(stdout io.Writer) error {
+func serviceStatusWindows(stdout io.Writer) error {
 	cmd := exec.Command("schtasks.exe", []string{
 		"/Query",
 		"/TN", serviceTaskName,
@@ -552,6 +598,156 @@ func serviceStatus(stdout io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "%s", output)
 	return nil
+}
+
+// darwin -------------------------------------------------------------
+
+func serviceInstallDarwin(stdout io.Writer, binary string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot resolve home: %v", err)
+	}
+	agentDir := filepath.Join(home, "Library", "LaunchAgents")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		return fmt.Errorf("cannot create LaunchAgents dir: %v", err)
+	}
+	plistPath := filepath.Join(agentDir, launchdLabel+".plist")
+	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>%s</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>%s</string>
+		<string>serve</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/tmp/termixgo-stdout.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/termixgo-stderr.log</string>
+</dict>
+</plist>`, launchdLabel, binary)
+	if err := os.WriteFile(plistPath, []byte(plist), 0o644); err != nil {
+		return fmt.Errorf("cannot write plist: %v", err)
+	}
+	cmd := exec.Command("launchctl", "load", plistPath)
+	cmd.Stdout = stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("launchctl load failed: %v", err)
+	}
+	fmt.Fprintf(stdout, "Service installed. Termixgo will start automatically after reboot/login.\n")
+	return nil
+}
+
+func serviceUninstallDarwin(stdout io.Writer) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	plistPath := filepath.Join(home, "Library", "LaunchAgents", launchdLabel+".plist")
+	_ = exec.Command("launchctl", "unload", plistPath).Run()
+	_ = os.Remove(plistPath)
+	fmt.Fprintf(stdout, "Service uninstalled.\n")
+	return nil
+}
+
+func serviceStatusDarwin(stdout io.Writer) error {
+	cmd := exec.Command("launchctl", "list")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("launchctl list failed: %v\n%s", err, strings.TrimSpace(string(output)))
+	}
+	if strings.Contains(string(output), launchdLabel) {
+		fmt.Fprintf(stdout, "Service is installed and loaded.\n")
+	} else {
+		fmt.Fprintf(stdout, "Service is not loaded.\n")
+	}
+	return nil
+}
+
+// linux -------------------------------------------------------------
+
+func serviceInstallLinux(stdout io.Writer, binary string) error {
+	systemDir, err := systemdUserDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(systemDir, 0o755); err != nil {
+		return fmt.Errorf("cannot create systemd user dir: %v", err)
+	}
+	servicePath := filepath.Join(systemDir, systemdService)
+	unit := fmt.Sprintf(`[Unit]
+Description=Termixgo Assistant
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%s serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`, binary)
+	if err := os.WriteFile(servicePath, []byte(unit), 0o644); err != nil {
+		return fmt.Errorf("cannot write service file: %v", err)
+	}
+	cmds := [][]string{
+		{"systemctl", "--user", "daemon-reload"},
+		{"systemctl", "--user", "enable", "--now", systemdService},
+	}
+	for _, args := range cmds {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Stdout = stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("%s failed: %v", strings.Join(args, " "), err)
+		}
+	}
+	fmt.Fprintf(stdout, "Service installed. Termixgo will start automatically after login.\n")
+	return nil
+}
+
+func serviceUninstallLinux(stdout io.Writer) error {
+	systemDir, err := systemdUserDir()
+	if err != nil {
+		return err
+	}
+	servicePath := filepath.Join(systemDir, systemdService)
+	_ = exec.Command("systemctl", "--user", "disable", "--now", systemdService).Run()
+	_ = os.Remove(servicePath)
+	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	fmt.Fprintf(stdout, "Service uninstalled.\n")
+	return nil
+}
+
+func serviceStatusLinux(stdout io.Writer) error {
+	cmd := exec.Command("systemctl", "--user", "status", systemdService, "--no-pager")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(output), "could not be found") {
+			fmt.Fprintf(stdout, "Service is not installed.\n")
+			return nil
+		}
+		return fmt.Errorf("status check failed: %v\n%s", err, strings.TrimSpace(string(output)))
+	}
+	fmt.Fprintf(stdout, "%s", output)
+	return nil
+}
+
+func systemdUserDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "systemd", "user"), nil
 }
 
 func runDoctor(stdout io.Writer) error {
@@ -637,7 +833,7 @@ Usage:
   termixgo telegram [status|on|off]
   termixgo serve                  Run the Telegram assistant 24/7
   termixgo service [install|uninstall|status]
-                                  Manage auto-start after reboot
+                                  Manage auto-start (systemd, launchd, schtasks)
   termixgo doctor                 Inspect configuration and provider keys
   termixgo version                Print the version
   termixgo help                   Show this help
