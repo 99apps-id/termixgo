@@ -115,6 +115,7 @@ func DefaultRegistry() *Registry {
 		&rememberTool{},
 		&useSkillTool{},
 		&findSkillTool{},
+		&installSkillTool{},
 		&askUserTool{},
 		&webFetchTool{},
 		&thinkTool{},

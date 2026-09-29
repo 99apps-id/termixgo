@@ -78,6 +78,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runSecret(args[1:], stdin, stdout)
 	case "telegram":
 		return runTelegram(args[1:], stdout)
+	case "serve":
+		return runServe(stdout)
 	case "doctor":
 		return runDoctor(stdout)
 	default:
@@ -337,6 +339,50 @@ func runTelegram(args []string, stdout io.Writer) error {
 	return nil
 }
 
+func runServe(stdout io.Writer) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	store, loadErr := secrets.Load()
+	if loadErr != nil {
+		return loadErr
+	}
+	token := strings.TrimSpace(store.Get(secrets.TelegramTokenKey()))
+	if token == "" {
+		return fmt.Errorf("no Telegram token configured; run 'termixgo setup' or 'termixgo telegram on'")
+	}
+	if !cfg.Telegram.Enabled {
+		return fmt.Errorf("Telegram is disabled; run 'termixgo telegram on' first")
+	}
+
+	fmt.Fprintf(stdout, "Starting Termixgo assistant (Ctrl+C to stop)...\n")
+	fmt.Fprintf(stdout, "Telegram: enabled\n")
+	fmt.Fprintf(stdout, "Chat: %d\n", cfg.Telegram.ChatID)
+
+	application, err := app.New("")
+	if err != nil {
+		return err
+	}
+	defer application.Shutdown()
+
+	if err := application.StartTelegram(); err != nil {
+		return err
+	}
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-sigChan
+		cancel()
+	}()
+
+	<-ctx.Done()
+	fmt.Fprintf(stdout, "\nAssistant stopped.\n")
+	return nil
+}
+
 func runDoctor(stdout io.Writer) error {
 	fmt.Fprintf(stdout, "%s (%s/%s)\n\n", version.Full(), runtime.GOOS, runtime.GOARCH)
 	home, err := config.Home()
@@ -417,6 +463,7 @@ Usage:
   termixgo harness [id]           Show or set the agent harness profile
   termixgo secret <provider> [k]  Store a provider API key
   termixgo telegram [status|on|off]
+  termixgo serve                  Run the Telegram assistant 24/7
   termixgo doctor                 Inspect configuration and provider keys
   termixgo version                Print the version
   termixgo help                   Show this help

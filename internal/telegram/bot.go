@@ -102,6 +102,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		{Command: "new", Description: "Start a new session"},
 		{Command: "status", Description: "Show status"},
 		{Command: "model", Description: "Show or switch the model"},
+		{Command: "unpair", Description: "Detach this chat"},
 		{Command: "help", Description: "List commands"},
 	}
 	if err := b.client.SetMyCommands(ctx, commands); err != nil {

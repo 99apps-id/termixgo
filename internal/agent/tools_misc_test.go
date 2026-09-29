@@ -412,3 +412,42 @@ func TestWebFetchTruncatesALargePage(t *testing.T) {
 		t.Errorf("a truncated page must say so, got the tail %q", result.Output[len(result.Output)-40:])
 	}
 }
+
+func TestInstallSkillFromLocalDirectory(t *testing.T) {
+	tool := &installSkillTool{}
+	env := testEnv(t)
+
+	skillDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: local-skill\ndescription: installed locally\n---\n\nbody"), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	result, err := tool.Run(context.Background(), env, map[string]any{
+		"source": skillDir,
+		"scope":  "user",
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("Run: err=%v result=%+v", err, result)
+	}
+	if !strings.Contains(result.Output, "Installed skill") {
+		t.Errorf("output = %q, want install confirmation", result.Output)
+	}
+	if !strings.Contains(result.Output, "local-skill") {
+		t.Errorf("output = %q, want skill name", result.Output)
+	}
+}
+
+func TestInstallSkillRejectsMissingSource(t *testing.T) {
+	tool := &installSkillTool{}
+	env := testEnv(t)
+
+	result, err := tool.Run(context.Background(), env, map[string]any{
+		"source": "",
+	})
+	if err != nil || !result.IsError {
+		t.Fatalf("missing source must fail: err=%v result=%+v", err, result)
+	}
+	if !strings.Contains(result.Output, "source is required") {
+		t.Errorf("output = %q, want missing source error", result.Output)
+	}
+}

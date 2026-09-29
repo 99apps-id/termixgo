@@ -8,12 +8,228 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/skill"
 )
+
+// installSkillTool installs a skill from a git repository or local path.
+type installSkillTool struct{}
+
+func (t *installSkillTool) Name() string      { return "install_skill" }
+func (t *installSkillTool) Aliases() []string { return []string{"add_skill"} }
+func (t *installSkillTool) Mutating() bool    { return false }
+func (t *installSkillTool) Risk() Risk        { return RiskEdit }
+func (t *installSkillTool) Label(a map[string]any) string {
+	return "Installing skill " + Shorten(argString(a, "source"), 40)
+}
+func (t *installSkillTool) DoneLabel(a map[string]any) string {
+	return "Installed skill " + Shorten(argString(a, "source"), 40)
+}
+func (t *installSkillTool) Description() string {
+	return "Install a skill from a git repository URL or local filesystem path. The source must contain a SKILL.md file."
+}
+func (t *installSkillTool) Schema() map[string]any {
+	return object(map[string]any{
+		"source": strProp("Git repository URL or local path to a skill folder."),
+		"scope":  strProp("Installation scope: 'user' (default) or 'project'."),
+		"name":   strProp("Optional skill name override."),
+	}, "source")
+}
+
+func (t *installSkillTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	source := strings.TrimSpace(argString(args, "source"))
+	if source == "" {
+		return Result{Output: "source is required", IsError: true}, nil
+	}
+	scope := strings.ToLower(strings.TrimSpace(argString(args, "scope")))
+	if scope != "project" {
+		scope = "user"
+	}
+	nameOverride := strings.TrimSpace(argString(args, "name"))
+
+	workdir := ""
+	if isGitURL(source) {
+		repoDir, err := cloneGitRepo(ctx, source)
+		if err != nil {
+			return Result{Output: fmt.Sprintf("failed to clone %s: %v", source, err), IsError: true}, nil
+		}
+		defer os.RemoveAll(repoDir)
+		workdir = repoDir
+	} else {
+		abs, err := filepath.Abs(source)
+		if err != nil {
+			return Result{Output: fmt.Sprintf("invalid source path: %v", err), IsError: true}, nil
+		}
+		info, err := os.Stat(abs)
+		if err != nil || !info.IsDir() {
+			return Result{Output: fmt.Sprintf("source is not a directory: %s", abs), IsError: true}, nil
+		}
+		workdir = abs
+	}
+
+	skillPath, err := findSkillMarkdown(workdir)
+	if err != nil {
+		return Result{Output: fmt.Sprintf("no SKILL.md found in %s: %v", workdir, err), IsError: true}, nil
+	}
+
+	frontmatter, _, err := parseSkillFile(skillPath)
+	if err != nil {
+		return Result{Output: fmt.Sprintf("invalid SKILL.md: %v", err), IsError: true}, nil
+	}
+
+	name := nameOverride
+	if name == "" {
+		name = frontmatter.Name
+	}
+	if name == "" {
+		name = skill.NormalizeName(filepath.Base(workdir))
+	}
+
+	installDir, err := skillInstallDir(env, scope)
+	if err != nil {
+		return Result{Output: fmt.Sprintf("cannot resolve skill directory: %v", err), IsError: true}, nil
+	}
+
+	targetDir := filepath.Join(installDir, name)
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return Result{Output: fmt.Sprintf("cannot create skill directory: %v", err), IsError: true}, nil
+	}
+
+	targetPath := filepath.Join(targetDir, "SKILL.md")
+	if err := copyFile(skillPath, targetPath); err != nil {
+		return Result{Output: fmt.Sprintf("cannot install skill: %v", err), IsError: true}, nil
+	}
+
+	helperFiles := make([]string, 0)
+	sourceBase := filepath.Dir(skillPath)
+	entries, _ := os.ReadDir(sourceBase)
+	for _, entry := range entries {
+		if entry.Name() == "SKILL.md" || entry.IsDir() {
+			continue
+		}
+		src := filepath.Join(sourceBase, entry.Name())
+		dst := filepath.Join(targetDir, entry.Name())
+		if err := copyFile(src, dst); err != nil {
+			return Result{Output: fmt.Sprintf("cannot copy helper file %s: %v", entry.Name(), err), IsError: true}, nil
+		}
+		helperFiles = append(helperFiles, entry.Name())
+	}
+
+	description := frontmatter.Description
+	if description == "" {
+		description = "(no description)"
+	}
+	return Result{Output: fmt.Sprintf("Installed skill %q to %s (scope %s). Description: %s. Files: %s", name, targetDir, scope, description, strings.Join(helperFiles, ", "))}, nil
+}
+
+// isGitURL reports whether the source looks like a git URL.
+func isGitURL(source string) bool {
+	source = strings.ToLower(source)
+	return strings.HasPrefix(source, "https://") ||
+		strings.HasPrefix(source, "http://") ||
+		strings.HasPrefix(source, "git@") ||
+		strings.HasPrefix(source, "ssh://") ||
+		strings.HasSuffix(source, ".git")
+}
+
+// cloneGitRepo clones a git repository to a temporary directory and returns
+// the path. The caller is responsible for removing the directory.
+func cloneGitRepo(ctx context.Context, source string) (string, error) {
+	tmp, err := os.MkdirTemp("", "skill-clone-*")
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", "--no-checkout", source, tmp)
+	cmd.Dir = os.TempDir()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		os.RemoveAll(tmp)
+		return "", fmt.Errorf("git clone failed: %s: %v", strings.TrimSpace(string(output)), err)
+	}
+	return tmp, nil
+}
+
+// findSkillMarkdown walks a directory and returns the path to the first
+// SKILL.md file it finds.
+func findSkillMarkdown(root string) (string, error) {
+	var found string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d == nil || d.IsDir() {
+			return nil
+		}
+		if strings.EqualFold(filepath.Base(path), "SKILL.md") {
+			found = path
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if found == "" {
+		return "", fmt.Errorf("no SKILL.md found in %s", root)
+	}
+	return found, nil
+}
+
+// parseSkillFile reads a SKILL.md and returns its frontmatter and body.
+func parseSkillFile(path string) (skill.Frontmatter, string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return skill.Frontmatter{}, "", err
+	}
+	frontmatter, body, err := skill.Parse(data)
+	if err != nil {
+		return skill.Frontmatter{}, "", err
+	}
+	_ = body
+	return frontmatter, body, nil
+}
+
+// skillInstallDir returns the directory where skills of the given scope are
+// installed.
+func skillInstallDir(env *Env, scope string) (string, error) {
+	if scope == "project" {
+		if strings.TrimSpace(env.Workspace) == "" {
+			return "", fmt.Errorf("no workspace configured for project skills")
+		}
+		return skill.ProjectDir(env.Workspace), nil
+	}
+	home, err := config.Home()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "skills"), nil
+}
+
+// copyFile copies a file from src to dst.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	if err != nil {
+		return err
+	}
+	return out.Close()
+}
 
 // todoWriteTool replaces the plan.
 type todoWriteTool struct{}
