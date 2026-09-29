@@ -100,7 +100,7 @@ func (t *runChecksTool) Schema() map[string]any {
 		"kind":         map[string]any{"type": "string", "enum": []string{"test", "lint", "format", "typecheck", "build"}, "description": "Which check to run. Defaults to test."},
 		"command":      strProp("Explicit command that overrides detection."),
 		"timeout_secs": intProp("Timeout in seconds, 1 to 900. Defaults to 300."),
-	}, "kind")
+	})
 }
 
 func (t *runChecksTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {

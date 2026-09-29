@@ -366,7 +366,15 @@ func (s *Session) Save() error {
 }
 
 // LoadSession reads one session by id.
+//
+// The id is confined to the sessions directory, the same guard DeleteSession
+// applies. Joining an unchecked id let "../name" read a file one level above the
+// directory, and the id is operator input from /sessions, which is exactly where
+// a separator has to be refused rather than joined.
 func LoadSession(id string) (*Session, error) {
+	if err := checkSessionID(id); err != nil {
+		return nil, err
+	}
 	dir, err := config.SessionsDir()
 	if err != nil {
 		return nil, err

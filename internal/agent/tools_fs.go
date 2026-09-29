@@ -222,14 +222,25 @@ func pathOrDot(args map[string]any) string {
 }
 
 // object builds a JSON Schema object with the given required keys.
+//
+// A blank name is dropped rather than stored. The required list is a variadic,
+// so a call such as object(props, "") reads as "no required keys" but would
+// declare a property named "" that nothing can satisfy, and the model is then
+// told to send an argument that cannot exist.
 func object(properties map[string]any, required ...string) map[string]any {
 	schema := map[string]any{
 		"type":                 "object",
 		"properties":           properties,
 		"additionalProperties": false,
 	}
-	if len(required) > 0 {
-		schema["required"] = required
+	kept := make([]string, 0, len(required))
+	for _, name := range required {
+		if strings.TrimSpace(name) != "" {
+			kept = append(kept, name)
+		}
+	}
+	if len(kept) > 0 {
+		schema["required"] = kept
 	}
 	return schema
 }

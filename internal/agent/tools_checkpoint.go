@@ -61,7 +61,7 @@ func (t *rewindTool) Description() string {
 func (t *rewindTool) Schema() map[string]any {
 	return object(map[string]any{
 		"ref": strProp("Checkpoint ref such as stash@{0}. Defaults to the newest checkpoint."),
-	}, "")
+	})
 }
 
 func (t *rewindTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
