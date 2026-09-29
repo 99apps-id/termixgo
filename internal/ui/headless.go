@@ -119,6 +119,27 @@ func (p *plainPrinter) print(event agent.Event) {
 type plainInteractor struct {
 	in  io.Reader
 	out io.Writer
+	// reader is built once and reused. A bufio.Reader buffers ahead of the line
+	// it returns, so a fresh one per question throws away whatever else arrived
+	// in the same read: over a pipe that is the operator's next request, which
+	// then never runs.
+	reader *bufio.Reader
+}
+
+// input returns the one reader this interactor reads questions from.
+func (i *plainInteractor) input() *bufio.Reader {
+	if i.reader == nil {
+		i.reader = bufio.NewReader(i.in)
+	}
+	return i.reader
+}
+
+func (i *plainInteractor) readLine() (string, error) {
+	line, err := i.input().ReadString('\n')
+	if err != nil && strings.TrimSpace(line) == "" {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
 }
 
 func (i *plainInteractor) Approve(request agent.ApprovalRequest) agent.Decision {
@@ -133,12 +154,11 @@ func (i *plainInteractor) Approve(request agent.ApprovalRequest) agent.Decision 
 		}
 	}
 	fmt.Fprint(i.out, "[y] once  [s] session  [a] always  [n] deny: ")
-	reader := bufio.NewReader(i.in)
-	line, err := reader.ReadString('\n')
+	answer, err := i.readLine()
 	if err != nil {
 		return agent.DecisionDeny
 	}
-	switch strings.ToLower(strings.TrimSpace(line)) {
+	switch strings.ToLower(answer) {
 	case "y", "yes":
 		return agent.DecisionAllowOnce
 	case "s":
@@ -156,12 +176,10 @@ func (i *plainInteractor) Ask(question string, options []string) (string, error)
 		fmt.Fprintf(i.out, "  %d. %s\n", index+1, option)
 	}
 	fmt.Fprint(i.out, "Answer: ")
-	reader := bufio.NewReader(i.in)
-	line, err := reader.ReadString('\n')
+	answer, err := i.readLine()
 	if err != nil {
 		return "", err
 	}
-	answer := strings.TrimSpace(line)
 	if len(options) > 0 {
 		if index := parseIndex(answer); index > 0 && index <= len(options) {
 			return options[index-1], nil

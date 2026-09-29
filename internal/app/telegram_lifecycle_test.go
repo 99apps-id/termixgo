@@ -76,8 +76,8 @@ func TestSetTelegramChatUpdatesARunningBot(t *testing.T) {
 	if err := application.SetTelegramChat(1234, 5678); err != nil {
 		t.Fatalf("SetTelegramChat: %v", err)
 	}
-	if application.bot.ChatID != 1234 || application.bot.OwnerUserID != 5678 {
-		t.Errorf("bot holds chat %d owner %d, want 1234 and 5678", application.bot.ChatID, application.bot.OwnerUserID)
+	if chatID, owner := application.bot.Pairing(); chatID != 1234 || owner != 5678 {
+		t.Errorf("bot holds chat %d owner %d, want 1234 and 5678", chatID, owner)
 	}
 	if application.botStatus != "paired" {
 		t.Errorf("status = %q, want paired", application.botStatus)
@@ -149,13 +149,14 @@ func TestRegeneratePairingCodePersistsAndInvalidatesTheOldOne(t *testing.T) {
 	}
 	// A running bot must be handed the new code, or /pair would keep failing
 	// until the app restarts.
-	application.bot = &telegram.Bot{PairingCode: first}
+	application.bot = &telegram.Bot{}
+	application.bot.SetPairingCode(first)
 	third, err := application.RegeneratePairingCode()
 	if err != nil {
 		t.Fatalf("RegeneratePairingCode: %v", err)
 	}
-	if application.bot.PairingCode != third {
-		t.Errorf("the running bot kept %q, want %q", application.bot.PairingCode, third)
+	if got := application.bot.PairingCode(); got != third {
+		t.Errorf("the running bot kept %q, want %q", got, third)
 	}
 }
 
@@ -182,10 +183,10 @@ func TestStartTelegramRegistersTheConfiguredBot(t *testing.T) {
 	if application.bot == nil {
 		t.Fatalf("no bot was registered")
 	}
-	if application.bot.ChatID != 99 || application.bot.OwnerUserID != 11 {
-		t.Errorf("the bot did not inherit the pairing: chat %d owner %d", application.bot.ChatID, application.bot.OwnerUserID)
+	if chatID, owner := application.bot.Pairing(); chatID != 99 || owner != 11 {
+		t.Errorf("the bot did not inherit the pairing: chat %d owner %d", chatID, owner)
 	}
-	if application.bot.PairingCode == "" {
+	if application.bot.PairingCode() == "" {
 		t.Errorf("the bot should carry the active pairing code")
 	}
 	if status := application.TelegramStatus(); status == "" {

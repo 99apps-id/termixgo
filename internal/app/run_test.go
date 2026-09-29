@@ -130,7 +130,7 @@ func TestRegeneratePairingCodeUpdatesARunningBot(t *testing.T) {
 	}
 
 	application.mu.Lock()
-	live := application.bot.PairingCode
+	live := application.bot.PairingCode()
 	application.mu.Unlock()
 	if live != code {
 		t.Errorf("the running bot holds %q, want the new code %q", live, code)

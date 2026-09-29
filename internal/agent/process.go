@@ -24,6 +24,11 @@ const (
 	processWaitDelay = 5 * time.Second
 	// shutdownWait is how long Shutdown waits for each process to go.
 	shutdownWait = 10 * time.Second
+	// finishedKeep is how many finished processes stay addressable. The handle
+	// is how the operator reads the last output, so a finished process is kept
+	// rather than dropped, but each one holds its output buffer and a long
+	// session must not accumulate one per command ever started.
+	finishedKeep = 16
 )
 
 // ErrNoSuchProcess reports a handle that is not in the manager. It is a
@@ -164,7 +169,11 @@ func (m *ProcessManager) Start(ctx context.Context, command, dir string) (*Proce
 	}
 
 	m.mu.Lock()
-	if len(m.processes) >= maxBackgroundProcesses {
+	// Only a process that has not exited counts against the cap: a finished
+	// handle is kept so its output is still readable, and counting it made the
+	// manager refuse new work once eight commands had completed, which is a
+	// failure with nothing running to stop.
+	if m.runningLocked() >= maxBackgroundProcesses {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("already running %d background processes; stop one with run_kill first", maxBackgroundProcesses)
 	}
@@ -225,6 +234,7 @@ func (m *ProcessManager) Start(ctx context.Context, command, dir string) (*Proce
 	m.mu.Lock()
 	m.processes[id] = process
 	m.order = append(m.order, id)
+	m.pruneFinishedLocked()
 	m.mu.Unlock()
 
 	if emit != nil {
@@ -332,6 +342,54 @@ func (m *ProcessManager) Running() int {
 	return count
 }
 
+// runningLocked counts unfinished processes. The caller holds m.mu, which is
+// what lets Start decide whether there is room without dropping and retaking
+// the lock.
+func (m *ProcessManager) runningLocked() int {
+	count := 0
+	for _, id := range m.order {
+		if process, ok := m.processes[id]; ok && !process.Exited() {
+			count++
+		}
+	}
+	return count
+}
+
+// pruneFinishedLocked forgets the oldest finished handles once too many have
+// accumulated. Running handles are always kept.
+func (m *ProcessManager) pruneFinishedLocked() {
+	finished := 0
+	for _, id := range m.order {
+		if process, ok := m.processes[id]; ok && process.Exited() {
+			finished++
+		}
+	}
+	excess := finished - finishedKeep
+	for _, id := range m.order {
+		if excess <= 0 {
+			break
+		}
+		process, ok := m.processes[id]
+		if !ok || !process.Exited() {
+			continue
+		}
+		delete(m.processes, id)
+		excess--
+	}
+	m.order = compactOrder(m.order, m.processes)
+}
+
+// compactOrder drops the ids that are no longer in the map, keeping order.
+func compactOrder(order []string, processes map[string]*Process) []string {
+	kept := order[:0]
+	for _, id := range order {
+		if _, ok := processes[id]; ok {
+			kept = append(kept, id)
+		}
+	}
+	return kept
+}
+
 // ringBuffer keeps the most recent bytes written to it, plus a running total so
 // a reader can ask for "everything since offset N" and be told when output was
 // lost to the wrap.
@@ -378,7 +436,7 @@ func (r *ringBuffer) ReadSince(offset int64) (string, int64, bool) {
 	text := strings.TrimRight(string(r.data[start:]), "\n")
 	if len(text) > maxLogChunkChars {
 		// Keep the tail and say so, so a huge burst cannot flood the model.
-		text = "... [earlier output omitted]\n" + text[len(text)-maxLogChunkChars:]
+		text = "... [earlier output omitted]\n" + clipTailBytes(text, maxLogChunkChars)
 	}
 	return text, r.written, dropped
 }

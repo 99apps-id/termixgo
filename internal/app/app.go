@@ -824,6 +824,10 @@ func (a *App) runTurn(ctx context.Context, input string) error {
 		MaxSteps:      cfg.MaxSteps,
 		Harness:       cfg.HarnessProfile,
 		ContextBudget: agent.HistoryBudget(window),
+		// An interactive turn continues past its step budget while it is still
+		// making progress, so a small configured MaxSteps cannot pause real work
+		// mid-task. A subagent leaves this unset and keeps a hard budget.
+		TurnSegments:  agent.DefaultTurnSegments,
 		Pricing:       price,
 		CostKnown:     costKnown,
 		CostBudgetUSD: cfg.CostBudgetUSD,

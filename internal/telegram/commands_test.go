@@ -98,8 +98,7 @@ func pairedBot(t *testing.T, agent Agent) (*Bot, *recordingAPI) {
 	api := newRecordingAPI(t)
 	bot := New("123:abc", agent)
 	bot.client = api.client()
-	bot.ChatID = 7
-	bot.OwnerUserID = 9
+	bot.Pair(7, 9)
 	return bot, api
 }
 
@@ -128,7 +127,7 @@ func TestUnpairedBotOnlyAcceptsPair(t *testing.T) {
 	api := newRecordingAPI(t)
 	bot := New("123:abc", &scriptedAgent{})
 	bot.client = api.client()
-	bot.PairingCode = "123456"
+	bot.SetPairingCode("123456")
 
 	bot.handleMessage(context.Background(), message("/help"))
 	if !strings.Contains(lastText(t, api, "sendMessage"), "not paired yet") {
@@ -139,13 +138,13 @@ func TestUnpairedBotOnlyAcceptsPair(t *testing.T) {
 	if !strings.Contains(lastText(t, api, "sendMessage"), "Wrong pairing code") {
 		t.Errorf("a wrong code must be refused, got %q", lastText(t, api, "sendMessage"))
 	}
-	if bot.ChatID != 0 {
+	if bot.Paired() {
 		t.Errorf("a wrong code must not pair the chat")
 	}
 
 	bot.handleMessage(context.Background(), message("/pair 123456"))
-	if bot.ChatID != 7 || bot.OwnerUserID != 9 {
-		t.Fatalf("a correct code should pair the owner, got chat %d owner %d", bot.ChatID, bot.OwnerUserID)
+	if chatID, owner := bot.Pairing(); chatID != 7 || owner != 9 {
+		t.Fatalf("a correct code should pair the owner, got chat %d owner %d", chatID, owner)
 	}
 	if !strings.Contains(lastText(t, api, "sendMessage"), "Paired.") {
 		t.Errorf("reply = %q, want a confirmation", lastText(t, api, "sendMessage"))
@@ -161,7 +160,7 @@ func TestPairingWithoutACodeIsRefused(t *testing.T) {
 	if !strings.Contains(lastText(t, api, "sendMessage"), "No pairing code") {
 		t.Errorf("reply = %q, want it to send the operator to /setup", lastText(t, api, "sendMessage"))
 	}
-	if bot.ChatID != 0 {
+	if bot.Paired() {
 		t.Errorf("nothing should have paired")
 	}
 }
@@ -170,7 +169,7 @@ func TestPairingPersistsThroughTheCallback(t *testing.T) {
 	api := newRecordingAPI(t)
 	bot := New("123:abc", &scriptedAgent{})
 	bot.client = api.client()
-	bot.PairingCode = "654321"
+	bot.SetPairingCode("654321")
 	var pairedChat, pairedOwner int64
 	bot.OnPaired = func(chatID, ownerUserID int64) {
 		pairedChat, pairedOwner = chatID, ownerUserID
@@ -188,7 +187,7 @@ func TestPairingPersistsThroughTheCallback(t *testing.T) {
 func TestGroupChatWithNoPinnedOwnerFailsClosed(t *testing.T) {
 	agent := &scriptedAgent{answer: "secret"}
 	bot, api := pairedBot(t, agent)
-	bot.OwnerUserID = 0
+	bot.Pair(7, 0)
 
 	bot.handleMessage(context.Background(), &Message{
 		Chat: Chat{ID: 7, Type: "group"},
@@ -314,8 +313,8 @@ func TestOwnerCommands(t *testing.T) {
 			text: "/unpair",
 			want: "Unpaired.",
 			check: func(t *testing.T, agent *scriptedAgent, bot *Bot) {
-				if bot.ChatID != 0 || bot.OwnerUserID != 0 {
-					t.Errorf("the pairing should be cleared, got chat %d owner %d", bot.ChatID, bot.OwnerUserID)
+				if chatID, owner := bot.Pairing(); chatID != 0 || owner != 0 {
+					t.Errorf("the pairing should be cleared, got chat %d owner %d", chatID, owner)
 				}
 			},
 		},
@@ -453,8 +452,7 @@ func TestRunPromptFallsBackToANewMessageWhenTheCardFails(t *testing.T) {
 	// send-a-card path is skipped.
 	bot := New("123:abc", &scriptedAgent{answer: "still delivered"})
 	bot.client = newClientAt("123:abc", "http://127.0.0.1:9")
-	bot.ChatID = 7
-	bot.OwnerUserID = 9
+	bot.Pair(7, 9)
 
 	var logged []string
 	bot.Log = func(line string) { logged = append(logged, line) }

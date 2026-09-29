@@ -1024,9 +1024,12 @@ func (m *Model) viewStatus() string {
 		m.styles.Dim.Render(fmt.Sprintf("turns %d", m.app.Session().Turns())),
 		m.styles.Dim.Render(m.app.ContextUsage()),
 	}
-	if m.running {
-		// The hints row is replaced by menus while choosing, so the status
-		// carries its own live working indicator with the spinner frame.
+	if m.running && !m.hintsVisible() {
+		// The hints row carries the live working indicator while it is on
+		// screen, so repeating it here would print the same elapsed time
+		// above and below the composer. A menu, an approval prompt or a
+		// question replaces that row, and only then does the status line
+		// become the one place the indicator can live.
 		elapsed := time.Since(m.runStarted).Round(time.Second)
 		parts = append(parts, m.styles.Plan.Render(fmt.Sprintf("%s working %s", m.spin.View(), elapsed)))
 	}
@@ -1088,6 +1091,15 @@ func (m *Model) applyComposerStyle() {
 	}
 	m.composer.FocusedStyle.Base = base
 	m.composer.BlurredStyle.Base = base
+}
+
+// hintsVisible reports whether the row that carries the live working
+// indicator is on screen. Every surface that replaces the composer and the
+// hints, which is a menu, an approval prompt or a question, takes that row
+// away, so the status line has to know whether it is still there.
+func (m *Model) hintsVisible() bool {
+	return m.pendingApproval == nil && m.pendingAsk == nil &&
+		len(m.slashMatches) == 0 && len(m.mentionMatches) == 0
 }
 
 func (m *Model) viewHints() string {
@@ -1311,7 +1323,11 @@ func (m *Model) updateSlashMatches() {
 	m.ensureCustomCommands()
 	matches := MatchSlash(m.composer.Value())
 	matches = append(matches, m.matchCustom(m.composer.Value())...)
-	if len(matches) != len(m.slashMatches) {
+	// The highlight follows the first match whenever the set itself changes.
+	// Comparing lengths is not enough: "/model" and "/harness" both match
+	// exactly one command, and a cursor parked on the back row would survive
+	// the swap and make Enter close the menu instead of running anything.
+	if slashSignature(matches) != slashSignature(m.slashMatches) {
 		m.slashCursor = 0
 	}
 	// The cursor may rest on the back row past the end, which stays valid
@@ -1323,6 +1339,16 @@ func (m *Model) updateSlashMatches() {
 	m.updateMentionMatches()
 }
 
+// slashSignature identifies a menu set for the cursor: same length with
+// different entries is still a different menu.
+func slashSignature(matches []SlashCommand) string {
+	triggers := make([]string, 0, len(matches))
+	for _, match := range matches {
+		triggers = append(triggers, match.Trigger)
+	}
+	return strings.Join(triggers, "\n")
+}
+
 // updateMentionMatches recomputes the @file menu from the token being typed.
 func (m *Model) updateMentionMatches() {
 	token, at, ok := parseMention(m.composer.Value())
@@ -1332,7 +1358,7 @@ func (m *Model) updateMentionMatches() {
 		return
 	}
 	matches := mentionCandidates(m.app.Workspace(), token, mentionMatchCap)
-	if len(matches) != len(m.mentionMatches) {
+	if strings.Join(matches, "\n") != strings.Join(m.mentionMatches, "\n") {
 		m.mentionCursor = 0
 	}
 	if m.mentionCursor >= len(matches) {

@@ -50,7 +50,7 @@ func (m *Memory) Remember(fact, scope string) error {
 		return errors.New("the fact is empty")
 	}
 	if len(trimmed) > maxFactChars {
-		trimmed = trimmed[:maxFactChars]
+		trimmed = clipBytes(trimmed, maxFactChars)
 	}
 	path := m.projectPath()
 	if strings.EqualFold(scope, "global") {

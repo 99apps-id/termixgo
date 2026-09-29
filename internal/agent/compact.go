@@ -66,13 +66,17 @@ func Compact(messages []provider.Message, budgetTokens int) []provider.Message {
 		trimmed[index] = elide(trimmed[index])
 	}
 
-	// Still over budget: drop the oldest messages, but stop at the floor and
-	// never leave a tool result at the head.
+	// Still over budget: drop the oldest messages. The floor is not the only
+	// stop: a request may not begin with a tool result, so a drop that would
+	// put one at the head is refused and the head stays on the assistant turn
+	// that owns those results. Being a little over budget is a smaller problem
+	// than a sequence the provider rejects.
 	for EstimateMessages(trimmed) > budgetTokens && len(trimmed) > keepMinMessages {
-		trimmed = trimmed[1:]
-		for len(trimmed) > keepMinMessages && trimmed[0].Role == provider.RoleTool {
-			trimmed = trimmed[1:]
+		candidate := trimmed[1:]
+		if len(candidate) == 0 || candidate[0].Role == provider.RoleTool {
+			break
 		}
+		trimmed = candidate
 	}
 	if EstimateMessages(trimmed) > budgetTokens {
 		for index := 0; index < len(trimmed)-keepMinMessages; index++ {
@@ -116,7 +120,7 @@ func clipText(text string) string {
 	if len(text) <= elidedTextLimit {
 		return text
 	}
-	return text[:elidedTextLimit] + "... [trimmed]"
+	return clipBytes(text, elidedTextLimit) + "... [trimmed]"
 }
 
 // defaultContextBudget is the history budget when a model's window is unknown.

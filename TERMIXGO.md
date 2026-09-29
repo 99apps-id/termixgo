@@ -62,7 +62,16 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
 ## Agent invariants
 
 - `agent.Runner.Run` owns the loop: stream, execute tools, repeat, bounded by
-  `MaxSteps`. Every step reports through `Env.Emit`.
+  `MaxSteps` per segment and `TurnSegments` segments per turn. Every step
+  reports through `Env.Emit`. An interactive turn continues into the next
+  segment while the previous one was still dispatching tools, so a small
+  configured `maxSteps` cannot pause a task that is making progress; the loop
+  guard and the cost cap stay the inner stops and the segment count is the
+  outer ceiling. A subagent leaves `TurnSegments` at zero and keeps a hard
+  budget.
+- Any string bound in `internal/agent` goes through `clipBytes` or
+  `clipTailBytes`. A byte slice at a fixed offset can land inside a multi-byte
+  character, and the terminal then paints a replacement glyph.
 - The approval decision is taken before a mutating tool runs, through
   `Env.Approve`. The desktop build has no gates; Termixgo adds real ones, so
   trust and `ApprovalMode` must be honoured.

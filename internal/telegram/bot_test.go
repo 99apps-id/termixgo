@@ -5,6 +5,14 @@ import (
 	"testing"
 )
 
+// bound builds a bot already attached to a chat, which is the state most
+// handler tests want.
+func bound(chatID, ownerUserID int64) *Bot {
+	bot := &Bot{}
+	bot.Pair(chatID, ownerUserID)
+	return bot
+}
+
 func TestSplitCommand(t *testing.T) {
 	cases := []struct {
 		input   string
@@ -28,7 +36,7 @@ func TestSplitCommand(t *testing.T) {
 }
 
 func TestOwnerGating(t *testing.T) {
-	bot := &Bot{ChatID: 100, OwnerUserID: 7}
+	bot := bound(100, 7)
 
 	if bot.isOwner(Chat{ID: 100, Type: "private"}, &User{ID: 8}) {
 		t.Errorf("a different user id must not be the owner")
@@ -49,11 +57,11 @@ func TestUnpairedBotRejectsEverything(t *testing.T) {
 }
 
 func TestGroupChatWithoutOwnerFailsClosed(t *testing.T) {
-	bot := &Bot{ChatID: -100, OwnerUserID: 0}
+	bot := bound(-100, 0)
 	if bot.isOwner(Chat{ID: -100, Type: "group"}, &User{ID: 7}) {
 		t.Fatalf("a group chat with no pinned owner must fail closed")
 	}
-	bot.OwnerUserID = 7
+	bot.Pair(-100, 7)
 	if !bot.isOwner(Chat{ID: -100, Type: "group"}, &User{ID: 7}) {
 		t.Fatalf("a pinned owner in a group should be allowed")
 	}

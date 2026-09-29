@@ -293,6 +293,35 @@ func TestProcessManagerCapsConcurrency(t *testing.T) {
 	}
 }
 
+// TestFinishedProcessesDoNotHoldTheCap covers a session that runs for a while:
+// the handle of a finished command is kept so its output can still be read, but
+// it must not count against the concurrency cap. Counting every handle ever
+// started made the manager refuse all further work once eight commands had
+// finished, which is a permanent failure with nothing running to stop.
+func TestFinishedProcessesDoNotHoldTheCap(t *testing.T) {
+	manager := newTestManager()
+	defer manager.Shutdown()
+
+	for index := 0; index < maxBackgroundProcesses+2; index++ {
+		process, err := manager.Start(context.Background(), quickCommand("done"), t.TempDir())
+		if err != nil {
+			t.Fatalf("start %d of a finished command: %v", index, err)
+		}
+		if !process.Wait(30 * time.Second) {
+			t.Fatalf("process %d did not exit", index)
+		}
+	}
+
+	if running := manager.Running(); running != 0 {
+		t.Fatalf("Running = %d, want 0", running)
+	}
+	process, err := manager.Start(context.Background(), longRunningCommand(), t.TempDir())
+	if err != nil {
+		t.Fatalf("nothing is running, so a new process must start: %v", err)
+	}
+	defer manager.Kill(process.ID)
+}
+
 func TestShutdownStopsEverything(t *testing.T) {
 	manager := newTestManager()
 

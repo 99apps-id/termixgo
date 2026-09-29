@@ -230,6 +230,76 @@ func TestRunApprovalSessionAllowanceSkipsSecondPrompt(t *testing.T) {
 	}
 }
 
+func TestRunContinuesPastTheStepBudgetWhileProgressing(t *testing.T) {
+	// An interactive turn is segmented: when a segment of MaxSteps still ends by
+	// asking for tools, the next segment runs. A small configured MaxSteps used to
+	// pause a working task mid-way, which the operator saw as the agent giving up
+	// while the context window was barely used.
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{callChunk("c1", "list_directory", `{"path":"."}`)},
+		{callChunk("c2", "list_directory", `{"path":"./"}`)},
+		{callChunk("c3", "list_directory", `{"path":"./."}`)},
+		{callChunk("c4", "list_directory", `{"path":"././"}`)},
+		{callChunk("c5", "list_directory", `{"path":"././."}`)},
+		{textChunk("done")},
+	}}
+	runner, _, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	runner.MaxSteps = 3
+	runner.TurnSegments = 3
+	session := NewSession(t.TempDir(), "test-model")
+
+	if err := runner.Run(context.Background(), session, "keep working"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	client.mu.Lock()
+	calls := client.calls
+	client.mu.Unlock()
+	if calls <= 3 {
+		t.Errorf("provider calls = %d, want the turn to continue past the 3-step segment", calls)
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	for _, event := range recorder.events {
+		if event.Kind == EventTurnEnd && event.StopReason != "stop" {
+			t.Errorf("stop reason = %q, want stop after the model answered", event.StopReason)
+		}
+	}
+}
+
+func TestRunStillPausesAtTheStepCeiling(t *testing.T) {
+	// The segment count is the absolute ceiling: a run that is always ready to
+	// dispatch another call still ends, so nothing loops forever.
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{callChunk("c1", "list_directory", `{"path":"."}`)},
+		{callChunk("c2", "list_directory", `{"path":"./"}`)},
+		{callChunk("c3", "list_directory", `{"path":"./."}`)},
+		{callChunk("c4", "list_directory", `{"path":"././"}`)},
+		{callChunk("c5", "list_directory", `{"path":"././."}`)},
+		{callChunk("c6", "list_directory", `{"path":"./././"}`)},
+	}}
+	runner, _, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	runner.MaxSteps = 2
+	runner.TurnSegments = 2
+	session := NewSession(t.TempDir(), "test-model")
+
+	if err := runner.Run(context.Background(), session, "never stop"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	client.mu.Lock()
+	calls := client.calls
+	client.mu.Unlock()
+	if calls > 4 {
+		t.Errorf("provider calls = %d, want the ceiling of 2 segments of 2 steps", calls)
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	for _, event := range recorder.events {
+		if event.Kind == EventTurnEnd && event.StopReason != "step-cap" {
+			t.Errorf("stop reason = %q, want step-cap at the ceiling", event.StopReason)
+		}
+	}
+}
+
 func TestRunStopsAtStepBudget(t *testing.T) {
 	// Every step asks for another tool call, and each call differs so the loop
 	// guard is not what ends the run: the step cap has to be.

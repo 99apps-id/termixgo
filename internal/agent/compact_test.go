@@ -38,6 +38,32 @@ func TestCompactKeepsTailAndNeverStartsWithToolResult(t *testing.T) {
 	}
 }
 
+// TestCompactNeverLeavesAToolResultAtTheHead covers the shape the floor used
+// to break: one assistant turn that asked for several tool calls. Dropping the
+// user message leaves [assistant, tool, tool, tool, tool], and a drop that
+// stops on the floor instead of on a legal head hands the provider a request
+// that starts with a tool result, which it rejects outright.
+func TestCompactNeverLeavesAToolResultAtTheHead(t *testing.T) {
+	tool := func() provider.Message {
+		return provider.Message{Role: provider.RoleTool, ToolID: "1", Name: "read_file", Content: strings.Repeat("t", 4000)}
+	}
+	messages := []provider.Message{
+		{Role: provider.RoleUser, Content: strings.Repeat("u", 400)},
+		{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "1", Name: "read_file", Arguments: "{}"}}},
+		tool(), tool(), tool(), tool(),
+	}
+	if EstimateMessages(messages) <= 100 {
+		t.Fatal("the fixture must exceed the budget")
+	}
+	trimmed := Compact(messages, 100)
+	if len(trimmed) == 0 {
+		t.Fatal("compaction returned no messages at all")
+	}
+	if trimmed[0].Role == provider.RoleTool {
+		t.Fatalf("compacted conversation starts with a %s message; the provider rejects that", trimmed[0].Role)
+	}
+}
+
 func TestCompactIsNoOpUnderBudget(t *testing.T) {
 	messages := []provider.Message{
 		{Role: provider.RoleUser, Content: "hello"},

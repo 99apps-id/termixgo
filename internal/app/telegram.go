@@ -86,7 +86,7 @@ func (a *App) applyPairingCode(code string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.bot != nil {
-		a.bot.PairingCode = code
+		a.bot.SetPairingCode(code)
 	}
 	if code != "" && a.cfg.Telegram.ChatID == 0 {
 		a.botStatus = "waiting for /pair"
@@ -134,9 +134,8 @@ func (a *App) StartTelegram() error {
 	a.mu.Unlock()
 
 	bot := telegram.New(token, a)
-	bot.ChatID = cfg.Telegram.ChatID
-	bot.OwnerUserID = cfg.Telegram.OwnerUserID
-	bot.PairingCode = cfg.Telegram.PairingCode
+	bot.Pair(cfg.Telegram.ChatID, cfg.Telegram.OwnerUserID)
+	bot.SetPairingCode(cfg.Telegram.PairingCode)
 	bot.Log = func(line string) {
 		a.mu.Lock()
 		a.botStatus = "error: " + line
@@ -168,7 +167,7 @@ func (a *App) StartTelegram() error {
 			return
 		}
 		a.mu.Lock()
-		if bot.ChatID != 0 {
+		if bot.Paired() {
 			a.botStatus = "paired"
 		} else {
 			a.botStatus = "waiting for /pair"
@@ -210,8 +209,7 @@ func (a *App) SetTelegramChat(chatID, ownerUserID int64) error {
 	if chatID != 0 {
 		a.mu.Lock()
 		if a.bot != nil {
-			a.bot.ChatID = chatID
-			a.bot.OwnerUserID = ownerUserID
+			a.bot.Pair(chatID, ownerUserID)
 			a.botStatus = "paired"
 		}
 		a.mu.Unlock()

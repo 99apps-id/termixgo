@@ -32,14 +32,17 @@ type Bot struct {
 	client *Client
 	agent  Agent
 
-	// ChatID is the paired chat; 0 means the bot is not paired yet.
-	ChatID int64
-	// OwnerUserID pins the allowed sender once known.
-	OwnerUserID int64
-	// PairingCode must be presented with /pair while unpaired.
-	PairingCode string
+	// pairMu guards the pairing state. Every update handler runs on its own
+	// goroutine while the app mirrors a new pairing onto the running bot, so an
+	// unguarded field here is read by one goroutine as another writes it, which
+	// is a data race the detector reports. The state is reached only through
+	// the methods below, so an unguarded access no longer compiles.
+	pairMu      sync.RWMutex
+	chatID      int64
+	ownerUserID int64
+	pairingCode string
 
-	// OnPaired persists the pairing.
+	// OnPaired persists the pairing. It runs on the handler goroutine.
 	OnPaired func(chatID, ownerUserID int64)
 	// Log receives diagnostic lines; nil discards them.
 	Log func(string)
@@ -59,6 +62,47 @@ type Bot struct {
 // New builds a bot for a token and agent.
 func New(token string, agent Agent) *Bot {
 	return &Bot{client: NewClient(token), agent: agent}
+}
+
+// Paired reports whether the bot is bound to a chat.
+func (b *Bot) Paired() bool {
+	b.pairMu.RLock()
+	defer b.pairMu.RUnlock()
+	return b.chatID != 0
+}
+
+// Pairing reports the paired chat and owner. A chat of 0 means unpaired.
+func (b *Bot) Pairing() (chatID, ownerUserID int64) {
+	b.pairMu.RLock()
+	defer b.pairMu.RUnlock()
+	return b.chatID, b.ownerUserID
+}
+
+// Pair binds the bot to a chat and its owner.
+func (b *Bot) Pair(chatID, ownerUserID int64) {
+	b.pairMu.Lock()
+	b.chatID = chatID
+	b.ownerUserID = ownerUserID
+	b.pairMu.Unlock()
+}
+
+// Unpair drops the pairing.
+func (b *Bot) Unpair() {
+	b.Pair(0, 0)
+}
+
+// PairingCode returns the code a /pair message must present.
+func (b *Bot) PairingCode() string {
+	b.pairMu.RLock()
+	defer b.pairMu.RUnlock()
+	return b.pairingCode
+}
+
+// SetPairingCode records the active pairing code.
+func (b *Bot) SetPairingCode(code string) {
+	b.pairMu.Lock()
+	b.pairingCode = code
+	b.pairMu.Unlock()
 }
 
 // tryStartRun reserves the single agent turn, reporting false when one is
@@ -203,7 +247,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 	chatID := message.Chat.ID
 	text := strings.TrimSpace(message.Text)
 
-	if b.ChatID == 0 {
+	if !b.Paired() {
 		// Unpaired: only /pair is accepted, which is what stops a stranger
 		// who finds the bot from running the agent.
 		command, argument := splitCommand(text)
@@ -228,8 +272,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 	case "pair":
 		b.reply(ctx, chatID, "Already paired. Use /unpair first to move to another chat.")
 	case "unpair":
-		b.ChatID = 0
-		b.OwnerUserID = 0
+		b.Unpair()
 		if b.OnPaired != nil {
 			b.OnPaired(0, 0)
 		}
@@ -315,36 +358,39 @@ func (b *Bot) runPrompt(ctx context.Context, chatID int64, prompt string) {
 }
 
 func (b *Bot) tryPair(ctx context.Context, message *Message, code string) {
-	if strings.TrimSpace(b.PairingCode) == "" {
+	expected := b.PairingCode()
+	if strings.TrimSpace(expected) == "" {
 		b.reply(ctx, message.Chat.ID, "No pairing code is active. Run /setup in Termixgo.")
 		return
 	}
-	if strings.TrimSpace(code) != strings.TrimSpace(b.PairingCode) {
+	if strings.TrimSpace(code) != strings.TrimSpace(expected) {
 		b.reply(ctx, message.Chat.ID, "Wrong pairing code.")
 		return
 	}
-	b.ChatID = message.Chat.ID
+	ownerUserID := int64(0)
 	if message.From != nil {
-		b.OwnerUserID = message.From.ID
+		ownerUserID = message.From.ID
 	}
+	b.Pair(message.Chat.ID, ownerUserID)
 	if b.OnPaired != nil {
-		b.OnPaired(b.ChatID, b.OwnerUserID)
+		b.OnPaired(message.Chat.ID, ownerUserID)
 	}
 	b.reply(ctx, message.Chat.ID, fmt.Sprintf("Paired. Send any message to run the agent.\n%s", helpText()))
 }
 
 // isOwner gates a message. A group chat with no pinned owner fails closed.
 func (b *Bot) isOwner(chat Chat, from *User) bool {
-	if b.ChatID == 0 {
+	pairedChat, owner := b.Pairing()
+	if pairedChat == 0 {
 		return false
 	}
-	if chat.ID != b.ChatID {
+	if chat.ID != pairedChat {
 		return false
 	}
-	if b.OwnerUserID == 0 {
+	if owner == 0 {
 		return chat.IsPrivate()
 	}
-	return from != nil && from.ID == b.OwnerUserID
+	return from != nil && from.ID == owner
 }
 
 func (b *Bot) reply(ctx context.Context, chatID int64, text string) {

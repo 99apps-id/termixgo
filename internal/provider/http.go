@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // httpClient is the shared plumbing: one tuned transport, one JSON POST, one
@@ -69,7 +70,7 @@ func (c *httpClient) statusError(response *http.Response) error {
 		}
 	}
 	if len(message) > 500 {
-		message = message[:500] + "..."
+		message = clipRunes(message, 500) + "..."
 	}
 	if message == "" {
 		message = http.StatusText(response.StatusCode)
@@ -89,6 +90,23 @@ func (c *httpClient) statusError(response *http.Response) error {
 // sseReader reads Server-Sent Events and yields each event's joined data.
 type sseReader struct {
 	scanner *bufio.Scanner
+}
+
+// clipRunes returns the first limit bytes of text, moved back to a rune
+// boundary.
+//
+// The provider's error body is free text and may be in any language, so a byte
+// slice at a fixed offset can land inside a multi-byte character and store
+// invalid UTF-8 that the terminal paints as a replacement glyph.
+func clipRunes(text string, limit int) string {
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut]
 }
 
 func newSSEReader(body io.Reader) *sseReader {

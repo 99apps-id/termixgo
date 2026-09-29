@@ -99,7 +99,7 @@ func (t *webSearchTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	}
 	output := strings.Join(lines, "\n\n")
 	if len(output) > 6000 {
-		output = output[:6000] + "\n... [truncated]"
+		output = clipBytes(output, 6000) + "\n... [truncated]"
 	}
 	return Result{Output: output}, nil
 }

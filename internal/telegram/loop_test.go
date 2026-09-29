@@ -388,8 +388,7 @@ func TestRunAdvancesTheOffsetAndHandlesUpdates(t *testing.T) {
 
 	bot := New("123:abc", agent)
 	bot.client = api.client()
-	bot.ChatID = 7
-	bot.OwnerUserID = 9
+	bot.Pair(7, 9)
 
 	ctx, stop := context.WithCancel(context.Background())
 	cancel = stop
@@ -462,8 +461,7 @@ func TestRunSkipsAReplayedUpdate(t *testing.T) {
 
 	bot := New("123:abc", agent)
 	bot.client = api.client()
-	bot.ChatID = 7
-	bot.OwnerUserID = 9
+	bot.Pair(7, 9)
 	bot.offset = 5
 
 	ctx, stop := context.WithCancel(context.Background())
@@ -521,8 +519,7 @@ func TestRunHandlesTheUpdateAtTheOffset(t *testing.T) {
 
 	bot := New("123:abc", agent)
 	bot.client = api.client()
-	bot.ChatID = 7
-	bot.OwnerUserID = 9
+	bot.Pair(7, 9)
 	bot.offset = 5
 
 	ctx, stop := context.WithCancel(context.Background())
@@ -589,7 +586,7 @@ func TestRunRetriesAfterAPollFailure(t *testing.T) {
 	var logged []string
 	bot := New("123:abc", &recordingAgent{status: "status line"})
 	bot.client = newClientAt("123:abc", server.URL)
-	bot.ChatID = 7
+	bot.Pair(7, 0)
 	bot.Log = func(line string) {
 		logMu.Lock()
 		logged = append(logged, line)
@@ -638,7 +635,7 @@ func TestRunStopsPromptlyOnCancellation(t *testing.T) {
 	api := newRecordingAPI(t)
 	bot := New("123:abc", &recordingAgent{})
 	bot.client = api.client()
-	bot.ChatID = 7
+	bot.Pair(7, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -690,8 +687,7 @@ func TestRunWaitsForHandlers(t *testing.T) {
 
 	bot := New("123:abc", agent)
 	bot.client = api.client()
-	bot.ChatID = 7
-	bot.OwnerUserID = 9
+	bot.Pair(7, 9)
 
 	ctx, stop := context.WithCancel(context.Background())
 	cancel = stop
@@ -723,8 +719,7 @@ func TestHandleUpdateRoutesBothKinds(t *testing.T) {
 	api := newRecordingAPI(t)
 	bot := New("123:abc", &recordingAgent{status: "status line"})
 	bot.client = api.client()
-	bot.ChatID = 7
-	bot.OwnerUserID = 9
+	bot.Pair(7, 9)
 
 	bot.handleUpdate(context.Background(), Update{
 		UpdateID: 1,
@@ -760,8 +755,7 @@ func TestHandleUpdateSurvivesAPanickingHandler(t *testing.T) {
 	// what a partially initialized bot looks like.
 	bot := New("123:abc", nil)
 	bot.client = api.client()
-	bot.ChatID = 7
-	bot.OwnerUserID = 9
+	bot.Pair(7, 9)
 
 	var logged []string
 	bot.Log = func(line string) { logged = append(logged, line) }
@@ -812,8 +806,7 @@ func TestHandleCallbackRejectsANonOwner(t *testing.T) {
 	api := newRecordingAPI(t)
 	bot := New("123:abc", &recordingAgent{})
 	bot.client = api.client()
-	bot.ChatID = 7
-	bot.OwnerUserID = 9
+	bot.Pair(7, 9)
 
 	bot.handleCallback(context.Background(), &CallbackQuery{
 		ID:      "cb-1",
@@ -834,8 +827,7 @@ func TestHandleCallbackAnswersTheOwner(t *testing.T) {
 	api := newRecordingAPI(t)
 	bot := New("123:abc", &recordingAgent{})
 	bot.client = api.client()
-	bot.ChatID = 7
-	bot.OwnerUserID = 9
+	bot.Pair(7, 9)
 
 	bot.handleCallback(context.Background(), &CallbackQuery{
 		ID:      "cb-1",

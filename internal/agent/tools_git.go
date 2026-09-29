@@ -39,7 +39,7 @@ func runGit(ctx context.Context, env *Env, args ...string) (string, error) {
 	err := command.Run()
 	output := strings.TrimRight(buffer.String(), "\n")
 	if len(output) > maxGitOutputChars {
-		output = output[:maxGitOutputChars] + "\n... [output truncated]"
+		output = clipBytes(output, maxGitOutputChars) + "\n... [output truncated]"
 	}
 	if runCtx.Err() == context.DeadlineExceeded {
 		return output, fmt.Errorf("git %s timed out after %s", strings.Join(args, " "), gitCommandTimeout)

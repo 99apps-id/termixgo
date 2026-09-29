@@ -110,7 +110,7 @@ func Shorten(text string, max int) string {
 		return collapsed
 	}
 	if max <= 1 {
-		return collapsed[:max]
+		return clipBytes(collapsed, max)
 	}
-	return collapsed[:max-1] + "..."
+	return clipBytes(collapsed, max-1) + "..."
 }

@@ -462,6 +462,31 @@ func TestArrowKeysMoveTheSlashCursor(t *testing.T) {
 	}
 }
 
+// TestSlashCursorResetsWhenMatchesChange proves Enter keeps working across
+// edits: with the cursor parked on the back row of "/model" (one match) and
+// the text changed to "/harness" (also one match), the highlight must return
+// to the command instead of silently closing the menu on Enter.
+func TestSlashCursorResetsWhenMatchesChange(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("/model")
+	model.updateSlashMatches()
+	if len(model.slashMatches) != 1 {
+		t.Fatalf("the fixture needs one match, got %+v", model.slashMatches)
+	}
+	model.slashCursor = len(model.slashMatches)
+
+	model.composer.SetValue("/harness")
+	model.updateSlashMatches()
+	if model.slashCursor != 0 {
+		t.Fatalf("a new match set should highlight the command, got cursor %d", model.slashCursor)
+	}
+
+	submitted := press(t, model, "enter")
+	if view := display(submitted); !strings.Contains(view, "Harness:") {
+		t.Errorf("Enter should have run /harness:\n%s", view)
+	}
+}
+
 // TestSlashBackRowClosesWithoutRunning proves the last menu row is a way
 // out: Enter or Tab there keeps the typed text and runs nothing.
 func TestSlashBackRowClosesWithoutRunning(t *testing.T) {

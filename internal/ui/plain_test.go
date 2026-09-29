@@ -130,6 +130,26 @@ func TestPlainInteractorApproval(t *testing.T) {
 	}
 }
 
+// TestPlainInteractorKeepsTheNextLine covers the reader lifecycle. A
+// bufio.Reader buffers ahead of the line it returns, so building a new one for
+// every question throws away whatever else arrived in the same read. Over a
+// pipe that is the operator's next request, which then never runs.
+func TestPlainInteractorKeepsTheNextLine(t *testing.T) {
+	var out bytes.Buffer
+	interactor := &plainInteractor{in: strings.NewReader("y\nrun the tests\n"), out: &out}
+
+	if got := interactor.Approve(agent.ApprovalRequest{Tool: "run_command"}); got != agent.DecisionAllowOnce {
+		t.Fatalf("approval = %v, want allow once", got)
+	}
+	answer, err := interactor.Ask("what next?", nil)
+	if err != nil {
+		t.Fatalf("the line after the approval was lost: %v", err)
+	}
+	if answer != "run the tests" {
+		t.Errorf("answer = %q, want the queued request", answer)
+	}
+}
+
 // TestPlainInteractorApprovalDefaultsToDenyOnEOF is the safe failure: a closed
 // stdin must not be read as consent.
 func TestPlainInteractorApprovalDefaultsToDenyOnEOF(t *testing.T) {

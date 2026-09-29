@@ -52,19 +52,19 @@ func (t *searchMemoryTool) Run(ctx context.Context, env *Env, args map[string]an
 		scope = "all"
 	}
 
-	// Try the FTS5 search store if available.
+	// Try the FTS5 search store if available. The scope goes into the query
+	// rather than filtering the results afterwards: the store returns the best
+	// twenty rows overall, so a scope whose matches all ranked lower would have
+	// looked like "no matches" even though the index held them.
 	if env.Search != nil {
-		results, err := env.Search.Search(query, 20)
+		results, err := env.Search.SearchScope(query, scope, 20)
 		if err == nil && len(results) > 0 {
 			var b strings.Builder
 			b.WriteString(fmt.Sprintf("FTS5 results for %q:\n\n", query))
 			for _, r := range results {
-				if scope != "all" && r.Scope != scope {
-					continue
-				}
 				b.WriteString(fmt.Sprintf("[%s] %s (%s)\n%s\n\n", r.Scope, r.Title, r.Path, r.Snippet))
 			}
-			return Result{Output: b.String()}, nil
+			return Result{Output: strings.TrimRight(b.String(), "\n")}, nil
 		}
 	}
 
@@ -682,7 +682,7 @@ func (t *webFetchTool) Run(ctx context.Context, env *Env, args map[string]any) (
 		text = htmlToText(text)
 	}
 	if len(text) > 20000 {
-		text = text[:20000] + "\n... [truncated]"
+		text = clipBytes(text, 20000) + "\n... [truncated]"
 	}
 	return Result{Output: text}, nil
 }

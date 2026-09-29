@@ -289,7 +289,7 @@ func renderMarkdown(text string, styles Styles, width int) string {
 			continue
 		}
 		if bullet, rest, ok := splitBullet(trimmed); ok {
-			wrapped := wrapPlain(rest, max(1, width-4))
+			wrapped := wrapInline(rest, max(1, width-4))
 			lines := strings.Split(wrapped, "\n")
 			for index, line := range lines {
 				if index == 0 {
@@ -300,7 +300,7 @@ func renderMarkdown(text string, styles Styles, width int) string {
 			}
 			continue
 		}
-		wrapped := wrapPlain(trimmed, width)
+		wrapped := wrapInline(trimmed, width)
 		for _, line := range strings.Split(wrapped, "\n") {
 			out = append(out, styleInline(line, styles))
 		}
@@ -369,6 +369,169 @@ func styleInlineCode(text string, styles Styles) string {
 		index++
 	}
 	return builder.String()
+}
+
+// wrapInline wraps a line that carries inline spans, keeping every `code` and
+// **bold** span whole.
+//
+// wrapPlain breaks at any space, including a space inside a span. A span split
+// across two lines then has no closing marker on the first line and no opening
+// one on the second, so styleInline cannot pair it and leaves the markers
+// literal: the operator sees a stray backtick at the end of one line and the
+// matching one at the start of the next. Spans are why this exists, so a whole
+// span is one unbreakable word here.
+func wrapInline(text string, width int) string {
+	if width < 8 {
+		width = 8
+	}
+	var out []string
+	for _, paragraph := range strings.Split(text, "\n") {
+		words := splitInlineWords(paragraph)
+		if len(words) == 0 {
+			out = append(out, "")
+			continue
+		}
+		current := ""
+		currentWidth := 0
+		for _, word := range words {
+			// A span wider than the line is split at its own spaces, and every
+			// piece is wrapped in the same markers so no line exceeds the
+			// terminal and no marker is left unpaired.
+			for _, piece := range splitWideSpan(word, width) {
+				pieceWidth := inlineWidth(piece)
+				switch {
+				case current == "":
+					current = piece
+					currentWidth = pieceWidth
+				case currentWidth+1+pieceWidth <= width:
+					current += " " + piece
+					currentWidth += 1 + pieceWidth
+				default:
+					out = append(out, current)
+					current = piece
+					currentWidth = pieceWidth
+				}
+			}
+		}
+		if current != "" {
+			out = append(out, current)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// splitInlineWords cuts a paragraph into words where the spaces inside a
+// complete span do not separate. Punctuation next to a span stays attached to
+// it, which is what keeps "(`src-tauri/`)" one token.
+func splitInlineWords(text string) []string {
+	var words []string
+	var current strings.Builder
+	flush := func() {
+		if current.Len() > 0 {
+			words = append(words, current.String())
+			current.Reset()
+		}
+	}
+	for index := 0; index < len(text); {
+		switch text[index] {
+		case ' ', '\t', '\r':
+			flush()
+			index++
+			continue
+		}
+		if span := completeSpan(text[index:]); span != "" {
+			current.WriteString(span)
+			index += len(span)
+			continue
+		}
+		current.WriteByte(text[index])
+		index++
+	}
+	flush()
+	return words
+}
+
+// completeSpan returns the whole span at the start of text, markers included,
+// or "" when no closed span begins there. An unclosed marker is deliberately
+// not a span, which is what keeps a lone ` or ** rendering as literal text.
+func completeSpan(text string) string {
+	switch {
+	case strings.HasPrefix(text, "`"):
+		if end := strings.Index(text[1:], "`"); end >= 0 {
+			return text[:end+2]
+		}
+	case strings.HasPrefix(text, "**"):
+		if end := strings.Index(text[2:], "**"); end >= 0 {
+			return text[:end+4]
+		}
+	}
+	return ""
+}
+
+// spanInner reports a span's text and whether the whole string is one span.
+func spanInner(text string) (string, bool) {
+	for _, marker := range []string{"`", "**"} {
+		if strings.HasPrefix(text, marker) && strings.HasSuffix(text, marker) && len(text) >= 2*len(marker) {
+			return text[len(marker) : len(text)-len(marker)], true
+		}
+	}
+	return "", false
+}
+
+// inlineWidth counts the columns a word occupies once styled, so the markers
+// a span carries do not count against the line budget.
+func inlineWidth(word string) int {
+	if inner, ok := spanInner(word); ok {
+		return len([]rune(inner))
+	}
+	return len([]rune(word))
+}
+
+// splitWideSpan breaks a span that is wider than a line at its own spaces,
+// re-wrapping each piece in the same markers. A word with no space to break at
+// is returned whole, matching wrapPlain's refusal to cut a word in half.
+func splitWideSpan(word string, width int) []string {
+	if inlineWidth(word) <= width {
+		return []string{word}
+	}
+	inner, ok := spanInner(word)
+	if !ok {
+		return []string{word}
+	}
+	marker := "`"
+	if strings.HasPrefix(word, "**") {
+		marker = "**"
+	}
+	room := width - 2*len(marker)
+	if room < 8 {
+		room = 8
+	}
+	pieces := splitInlineWords(inner)
+	if len(pieces) < 2 {
+		return []string{word}
+	}
+	var out []string
+	current := ""
+	currentWidth := 0
+	for _, piece := range pieces {
+		pieceWidth := inlineWidth(piece)
+		switch {
+		case current == "":
+			current = piece
+			currentWidth = pieceWidth
+		case currentWidth+1+pieceWidth <= room:
+			current += " " + piece
+			currentWidth += 1 + pieceWidth
+		default:
+			out = append(out, marker+current+marker)
+			current = piece
+			currentWidth = pieceWidth
+		}
+	}
+	if current != "" {
+		out = append(out, marker+current+marker)
+	}
+	return out
 }
 
 // wrapPlain word-wraps text, preserving explicit newlines and never splitting

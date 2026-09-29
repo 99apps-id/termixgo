@@ -205,8 +205,8 @@ func truncateOutput(text string, max int) string {
 		return strings.TrimRight(text, "\n")
 	}
 	half := max / 2
-	head := text[:half]
-	tail := text[len(text)-half:]
+	head := clipBytes(text, half)
+	tail := clipTailBytes(text, half)
 	return strings.TrimRight(head, "\n") + fmt.Sprintf("\n\n... [%d characters omitted] ...\n\n", len(text)-max) + strings.TrimLeft(tail, "\n")
 }
 

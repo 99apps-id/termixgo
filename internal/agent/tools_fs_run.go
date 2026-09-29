@@ -49,7 +49,7 @@ func (t *readFileTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	body := strings.Join(window, "\n")
 	truncatedByBytes := false
 	if len(body) > maxReadBytes {
-		body = body[:maxReadBytes]
+		body = clipBytes(body, maxReadBytes)
 		truncatedByBytes = true
 	}
 

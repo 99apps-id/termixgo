@@ -141,8 +141,7 @@ func TestSecondPromptIsRejectedWhileARunIsInFlight(t *testing.T) {
 	agent := newBlockingAgent()
 	bot := New("123:abc", agent)
 	bot.client = api.client()
-	bot.ChatID = 42
-	bot.OwnerUserID = 7
+	bot.Pair(42, 7)
 
 	first := make(chan struct{})
 	go func() {
@@ -178,8 +177,7 @@ func TestCommandsAreAnsweredWhileARunIsInFlight(t *testing.T) {
 	agent := newBlockingAgent()
 	bot := New("123:abc", agent)
 	bot.client = api.client()
-	bot.ChatID = 42
-	bot.OwnerUserID = 7
+	bot.Pair(42, 7)
 
 	done := make(chan struct{})
 	go func() {
@@ -208,7 +206,7 @@ func TestPairingRequiresTheActiveCode(t *testing.T) {
 	api := newFakeAPI(t)
 	bot := New("123:abc", newBlockingAgent())
 	bot.client = api.client()
-	bot.PairingCode = "123456"
+	bot.SetPairingCode("123456")
 
 	paired := make(chan struct{}, 1)
 	bot.OnPaired = func(chatID, ownerUserID int64) {
@@ -216,8 +214,8 @@ func TestPairingRequiresTheActiveCode(t *testing.T) {
 	}
 	// A wrong code must not pair.
 	bot.handleMessage(context.Background(), &Message{Chat: Chat{ID: 99, Type: "private"}, From: &User{ID: 7}, Text: "/pair 000000"})
-	if bot.ChatID != 0 {
-		t.Fatalf("a wrong code must not pair, chat is %d", bot.ChatID)
+	if chatID, _ := bot.Pairing(); chatID != 0 {
+		t.Fatalf("a wrong code must not pair, chat is %d", chatID)
 	}
 	if !api.contains("Wrong pairing code") {
 		t.Errorf("the refusal should say the code is wrong, got %v", api.messages())
@@ -230,8 +228,8 @@ func TestPairingRequiresTheActiveCode(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatalf("OnPaired was never called")
 	}
-	if bot.ChatID != 99 || bot.OwnerUserID != 7 {
-		t.Errorf("pairing landed as chat=%d owner=%d, want 99 and 7", bot.ChatID, bot.OwnerUserID)
+	if chatID, owner := bot.Pairing(); chatID != 99 || owner != 7 {
+		t.Errorf("pairing landed as chat=%d owner=%d, want 99 and 7", chatID, owner)
 	}
 }
 
@@ -251,8 +249,7 @@ func TestNonOwnerIsIgnored(t *testing.T) {
 	agent := newBlockingAgent()
 	bot := New("123:abc", agent)
 	bot.client = api.client()
-	bot.ChatID = 42
-	bot.OwnerUserID = 7
+	bot.Pair(42, 7)
 
 	bot.handleMessage(context.Background(), &Message{Chat: Chat{ID: 42, Type: "group"}, From: &User{ID: 999}, Text: "/status"})
 	if len(api.messages()) != 0 {
@@ -267,8 +264,7 @@ func TestUnknownCommandPointsAtHelp(t *testing.T) {
 	api := newFakeAPI(t)
 	bot := New("123:abc", newBlockingAgent())
 	bot.client = api.client()
-	bot.ChatID = 42
-	bot.OwnerUserID = 7
+	bot.Pair(42, 7)
 
 	bot.handleMessage(context.Background(), &Message{Chat: Chat{ID: 42, Type: "private"}, From: &User{ID: 7}, Text: "/nonsense"})
 	if !api.contains("/help") {

@@ -537,10 +537,9 @@ func (m *Model) slashMCP(args string) (tea.Model, tea.Cmd) {
 // firstLine clips an error to one readable transcript line.
 func firstLine(text string) string {
 	collapsed := strings.Join(strings.Fields(text), " ")
-	if len(collapsed) <= 160 {
-		return collapsed
-	}
-	return collapsed[:160] + "..."
+	// truncate is ANSI-aware and rune-aware, so a multi-byte character is
+	// never cut in half and the terminal is never fed invalid UTF-8.
+	return truncate(collapsed, 163)
 }
 
 func (m *Model) slashSkills(args string) (tea.Model, tea.Cmd) {

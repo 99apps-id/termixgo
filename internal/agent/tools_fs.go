@@ -81,7 +81,7 @@ func (t *readFileTool) DoneLabel(a map[string]any) string {
 	return "Read " + displayName(a)
 }
 func (t *readFileTool) Description() string {
-	return "Read a UTF-8 text file. Returns the content plus total line count. Use offset and limit for large files. Re-reading an unchanged file returns a short notice."
+	return "Read a UTF-8 text file. Returns the content plus total line count. Use offset and limit for large files."
 }
 func (t *readFileTool) Schema() map[string]any {
 	return object(map[string]any{
