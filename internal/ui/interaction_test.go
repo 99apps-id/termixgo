@@ -960,6 +960,115 @@ func TestEveryArgumentCommandOffersItsDocumentedValues(t *testing.T) {
 	}
 }
 
+// TestSlashCommandDuringATurnIsNotSentToTheModel is the regression this
+// carve-out exists for. The operator typed /cost and /harness while a turn was
+// running; both were handed to the model as steer prose, so the agent read the
+// literal text "/cost" and the operator never saw the answer.
+func TestSlashCommandDuringATurnIsNotSentToTheModel(t *testing.T) {
+	for _, name := range []string{"/cost", "/harness", "/status", "/plan", "/tools"} {
+		model := chatModel(t)
+		model.running = true
+		model.app.Steer("")   // ensure the steer queue starts empty
+		model.app.TakeSteer() // drain it
+		model.composer.SetValue(name)
+
+		ran := press(t, model, "enter")
+
+		if got := ran.app.SteerCount(); got != 0 {
+			t.Errorf("%s was steered to the model instead of running: %d queued", name, got)
+		}
+		if len(ran.queue) != 0 {
+			t.Errorf("%s should run at once, %d item(s) queued", name, len(ran.queue))
+		}
+		if len(ran.blocks) == 0 {
+			t.Errorf("%s printed nothing", name)
+		}
+	}
+}
+
+// TestFreeTextDuringATurnStillSteers keeps the other half of the behaviour:
+// prose typed mid-turn is a course correction and reaches the running agent.
+func TestFreeTextDuringATurnStillSteers(t *testing.T) {
+	if !shouldSteer("actually use the other parser", true) {
+		t.Errorf("free text should steer a running turn")
+	}
+	if shouldSteer("actually use the other parser", false) {
+		t.Errorf("free text should not steer when nothing is running")
+	}
+}
+
+// TestSlashCommandNeverSteersToTheModel is the decision table itself. A command
+// reaching the model as prose is the bug the operator hit.
+func TestSlashCommandNeverSteersToTheModel(t *testing.T) {
+	for _, command := range SlashCommands() {
+		if shouldSteer(command.Trigger, true) {
+			t.Errorf("%s would be sent to the model as prose", command.Trigger)
+		}
+		if shouldSteer(command.Trigger+" extra", true) {
+			t.Errorf("%s with an argument would be sent to the model as prose", command.Trigger)
+		}
+	}
+	// An unknown command is still a command: it must produce the unknown-command
+	// message rather than becoming a prompt.
+	if shouldSteer("/nonsense", true) {
+		t.Errorf("an unknown command must be queued, not steered")
+	}
+}
+
+// TestCommandWithWorkBehindItIsQueuedNotSteered covers a command that would
+// start its own turn: /new replaces the session, so it waits for the drain
+// instead of being sent to the model as prose.
+func TestCommandWithWorkBehindItIsQueuedNotSteered(t *testing.T) {
+	model := chatModel(t)
+	model.running = true
+	model.composer.SetValue("/new")
+
+	queued := press(t, model, "enter")
+
+	if got := queued.app.SteerCount(); got != 0 {
+		t.Errorf("/new must not be steered to the model, SteerCount = %d", got)
+	}
+	if len(queued.queue) != 1 {
+		t.Fatalf("queue = %d item(s), want /new waiting", len(queued.queue))
+	}
+	if queued.queue[0] != "/new" {
+		t.Errorf("queued %q, want /new", queued.queue[0])
+	}
+}
+
+// TestEveryCommandIsClassifiedAsLiveOrQueued guards the classification: a new
+// command must be a deliberate choice, not an accidental steer to the model.
+func TestEveryCommandIsClassifiedAsLiveOrQueued(t *testing.T) {
+	live := map[string]bool{}
+	for name := range liveSlashCommands {
+		live[name] = true
+	}
+	for _, command := range SlashCommands() {
+		name := strings.TrimPrefix(command.Trigger, "/")
+		if live[name] {
+			continue
+		}
+		// Not live means queued, which is a valid answer, but the set must not
+		// silently accept a command that can only work at once.
+		if name == "stop" || name == "exit" {
+			t.Errorf("%s must be live: queueing it defers it past the moment it is needed", name)
+		}
+	}
+}
+
+// TestExitDuringATurnStillQuits pins the control that cannot wait: queueing
+// /exit would leave the operator unable to quit.
+func TestExitDuringATurnStillQuits(t *testing.T) {
+	model := chatModel(t)
+	model.running = true
+	model.composer.SetValue("/exit")
+
+	_, cmd := model.Update(key("enter"))
+	if cmd == nil {
+		t.Fatalf("/exit during a turn should still return the quit command")
+	}
+}
+
 // TestUnknownSlashCommandNamesItself checks the failure path. A command that
 // does not exist must say so and point at help rather than do nothing.
 func TestUnknownSlashCommandNamesItself(t *testing.T) {
@@ -1259,16 +1368,41 @@ func TestEnterCompletesWithoutAMenuRefresh(t *testing.T) {
 	}
 }
 
-// TestSlashQueuesBehindARun pins the one-turn rule: a status command typed
-// mid-run waits in the queue instead of starting a second turn.
+// TestSlashQueuesBehindARun pins the one-turn rule: a command that starts its
+// own turn waits in the queue instead of starting a second one.
+//
+// /new is used rather than /status: a read-only command deliberately runs at
+// once during a turn, so queueing is only the rule for work that would collide.
 func TestSlashQueuesBehindARun(t *testing.T) {
 	model := chatModel(t)
 	model.running = true
-	model.composer.SetValue("/status")
+	model.composer.SetValue("/new")
 
 	queued := press(t, model, "enter")
-	if len(queued.queue) != 1 || queued.queue[0] != "/status" {
-		t.Fatalf("queue = %q, want the status command held", queued.queue)
+	if len(queued.queue) != 1 || queued.queue[0] != "/new" {
+		t.Fatalf("queue = %q, want the command held", queued.queue)
+	}
+}
+
+// TestReadOnlyCommandRunsDuringARun is the other half, and the bug the
+// operator reported: /cost and /harness typed mid-turn were handed to the model
+// as prose, so the operator never saw the answer.
+func TestReadOnlyCommandRunsDuringARun(t *testing.T) {
+	for _, command := range []string{"/cost", "/harness", "/status", "/plan"} {
+		model := chatModel(t)
+		model.running = true
+		model.composer.SetValue(command)
+
+		ran := press(t, model, "enter")
+		if len(ran.queue) != 0 {
+			t.Errorf("%s should run at once, got queue %q", command, ran.queue)
+		}
+		if ran.app.SteerCount() != 0 {
+			t.Errorf("%s was steered to the model", command)
+		}
+		if view := display(ran); strings.TrimSpace(view) == "" {
+			t.Errorf("%s printed nothing", command)
+		}
 	}
 }
 

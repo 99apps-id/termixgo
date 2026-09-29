@@ -480,16 +480,23 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if slashName, _, ok := ParseSlash(value); ok {
-			// Most slash commands typed mid-run queue behind the turn and
-			// run on drain, which keeps one turn in flight. Only the
-			// controls that must act on the live turn bypass the queue:
-			// /stop cancels it and /exit quits at once. Queueing those
-			// would defer them past the moment they are needed.
-			if m.running && (slashName == "stop" || slashName == "exit" || slashName == "quit") {
+			// Only free text can steer a running turn. A slash command is a
+			// local control, so sending it to the model as prose is wrong: the
+			// operator typed /cost and the agent read the literal text "/cost".
+			// A command that must act on the live turn runs at once, a read-only
+			// one runs at once because it cannot disturb the turn, and anything
+			// that starts work behind it is queued for the drain.
+			if m.running {
+				if liveSlashCommand(slashName) {
+					m.composer.SetValue("")
+					m.slashMatches = nil
+					m.mentionMatches = nil
+					return m.submit(value)
+				}
 				m.composer.SetValue("")
 				m.slashMatches = nil
 				m.mentionMatches = nil
-				return m.submit(value)
+				return m.enqueue(value)
 			}
 		}
 		if m.running {
@@ -703,7 +710,7 @@ func (m *Model) enqueue(value string) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 	}
-	if m.running && m.app.Running() {
+	if shouldSteer(value, m.running && m.app.Running()) {
 		m.app.Steer(value)
 	} else {
 		m.queue = append(m.queue, value)
@@ -711,14 +718,52 @@ func (m *Model) enqueue(value string) (tea.Model, tea.Cmd) {
 	m.composer.SetValue("")
 	m.slashMatches = nil
 	m.mentionMatches = nil
-	m.notice = fmt.Sprintf("Queued (%d). The agent picks it up at its next step.", m.queuedCount())
+	if len(m.queue) > 0 && m.queue[len(m.queue)-1] == value {
+		m.notice = fmt.Sprintf("Queued (%d). It runs when this turn ends.", m.queuedCount())
+	} else {
+		m.notice = fmt.Sprintf("Queued (%d). The agent picks it up at its next step.", m.queuedCount())
+	}
 	m.refresh()
 	return m, nil
+}
+
+// shouldSteer reports whether an input may be handed to the turn in flight.
+//
+// Only free text can steer a run: it is a course correction the model can act
+// on. A slash command is a local control, and handing it to the model made the
+// agent read the literal text "/cost" while the operator never saw the answer,
+// so a command is always queued and runs as a command when the turn ends.
+func shouldSteer(value string, turnRunning bool) bool {
+	if _, _, ok := ParseSlash(value); ok {
+		return false
+	}
+	return turnRunning
 }
 
 // queuedCount is everything still waiting: what the UI holds plus what the
 // live turn has been handed but not yet taken.
 func (m *Model) queuedCount() int { return len(m.queue) + m.app.SteerCount() }
+
+// liveSlashCommands are the commands that may run while a turn is in flight.
+//
+// Two groups belong here. The first is the controls that act on the live turn,
+// where queueing would defer them past the moment they are needed: /stop cancels
+// the run and /exit quits. The second is the informational and configuration
+// commands, which read app state or change what the NEXT turn does, so running
+// one cannot disturb the turn in flight.
+//
+// Everything else, such as /new or a command that starts its own turn, is queued
+// and runs when the turn ends. A command name that is not listed here is never
+// sent to the model as prose.
+var liveSlashCommands = map[string]bool{
+	"stop": true, "exit": true, "quit": true,
+	"help": true, "?": true, "status": true, "cost": true, "plan": true,
+	"tools": true, "harness": true, "trust": true, "approval": true,
+	"mcp": true, "skills": true, "memory": true, "ps": true,
+}
+
+// liveSlashCommand reports whether a command may run during a turn.
+func liveSlashCommand(name string) bool { return liveSlashCommands[name] }
 
 // submit dispatches either a slash command or an agent turn.
 func (m *Model) submit(value string) (tea.Model, tea.Cmd) {
@@ -963,17 +1008,44 @@ func logFrame(content string) {
 }
 
 // View implements tea.Model.
+//
+// The returned frame is clamped to the terminal. Bubble Tea drops the top lines
+// of a frame taller than the terminal and repositions the cursor relative to the
+// previous frame, so a single row too many shifts the whole screen: the operator
+// sees earlier lines in the wrong place, which reads as random and reversed text.
+// Every surface also bounds its own rows; this is the invariant that catches a
+// new one.
+//
+// The two guard messages bypass the clamp on purpose. "Loading" and "Terminal
+// too small" are the whole screen, and truncating the sizing hint would hide the
+// one sentence that says how to fix the window.
 func (m *Model) View() string {
 	if !m.ready {
 		return "Loading Termixgo..."
 	}
 	if m.width < m.limits.MinWidth || m.height < m.limits.MinHeight {
-		// Below the minimum there is nothing else on screen to protect, so the
-		// sentence is shown whole: it is the only thing that tells the operator
-		// how to fix the window.
 		return fmt.Sprintf("Terminal too small. Resize to at least %dx%d.", m.limits.MinWidth, m.limits.MinHeight)
 	}
+	return fitFrame(m.screen(), m.width, m.height)
+}
 
+// fitFrame truncates a rendered frame to the terminal box.
+func fitFrame(view string, width, height int) string {
+	if width <= 0 || height <= 0 {
+		return view
+	}
+	lines := strings.Split(view, "\n")
+	for index, line := range lines {
+		lines[index] = truncate(line, width)
+	}
+	if len(lines) > height {
+		lines = lines[len(lines)-height:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// screen renders the current mode.
+func (m *Model) screen() string {
 	if m.current == modeHelp {
 		return m.viewHelp()
 	}
@@ -1143,7 +1215,23 @@ func (m *Model) viewHints() string {
 func (m *Model) viewSlashMenu() string {
 	body := m.menuBodyWidth()
 	var rows []string
-	for index, command := range m.slashMatches {
+	total := len(m.slashMatches) + 1
+	start, end := windowRows(m.slashCursor, total, m.menuRowLimit())
+	if start > 0 {
+		rows = append(rows, truncate(m.styles.MenuDesc.Render(fmt.Sprintf("  ... %d above", start)), body))
+	}
+	for index := start; index < end && index < total; index++ {
+		// The last row is the way back to typing for operators who opened the
+		// menu by accident or navigated past their command.
+		if index == len(m.slashMatches) {
+			if index == m.slashCursor {
+				rows = append(rows, truncate(m.styles.MenuSelected.Render("> <- back")+"  "+m.styles.MenuDesc.Render("Return to typing"), body))
+			} else {
+				rows = append(rows, truncate("  "+m.styles.MenuDesc.Render("<- back  Return to typing"), body))
+			}
+			continue
+		}
+		command := m.slashMatches[index]
 		usage := command.Trigger
 		if command.Args != "" {
 			usage += " " + command.Args
@@ -1154,12 +1242,8 @@ func (m *Model) viewSlashMenu() string {
 		}
 		rows = append(rows, truncate("  "+m.styles.MenuKey.Render(usage)+"  "+m.styles.MenuDesc.Render(command.Summary), body))
 	}
-	// The last row is the way back to typing for operators who opened the
-	// menu by accident or navigated past their command.
-	if m.slashCursor == len(m.slashMatches) {
-		rows = append(rows, truncate(m.styles.MenuSelected.Render("> <- back")+"  "+m.styles.MenuDesc.Render("Return to typing"), body))
-	} else {
-		rows = append(rows, truncate("  "+m.styles.MenuDesc.Render("<- back  Return to typing"), body))
+	if end < total {
+		rows = append(rows, truncate(m.styles.MenuDesc.Render(fmt.Sprintf("  ... %d more (type to filter)", total-end)), body))
 	}
 	rows = append(rows, truncate(m.styles.Hint.Render("Up/Down move | Tab arguments | Enter run | Esc back"), body))
 	// No Width() here: the Menu style adds one column of padding on each side
@@ -1176,16 +1260,59 @@ func (m *Model) menuBodyWidth() int {
 	return max(1, m.width-2)
 }
 
+// maxMenuRows is the ceiling for a list overlay's visible rows.
+const maxMenuRows = 14
+
+// menuRowLimit is how many list rows this terminal can hold. It adapts to the
+// height so a tall window shows a long list, while a short one still fits:
+// the header, the status line, the hint row and the box frame keep their own.
+func (m *Model) menuRowLimit() int {
+	const furniture = 6 + 4
+	limit := m.height - furniture
+	if limit < 4 {
+		limit = 4
+	}
+	if limit > maxMenuRows {
+		limit = maxMenuRows
+	}
+	return limit
+}
+
+// windowRows returns the slice bounds for a list whose cursor must stay
+// visible, and whether the list was clipped.
+func windowRows(cursor, total, limit int) (start, end int) {
+	if total <= limit {
+		return 0, total
+	}
+	start = cursor - limit/2
+	if start < 0 {
+		start = 0
+	}
+	if start+limit > total {
+		start = total - limit
+	}
+	return start, start + limit
+}
+
 // viewMentionMenu lists the @file candidates under the composer. Tab takes
 // the highlighted file into the text.
 func (m *Model) viewMentionMenu() string {
 	var rows []string
-	for index, path := range m.mentionMatches {
+	total := len(m.mentionMatches)
+	start, end := windowRows(m.mentionCursor, total, m.menuRowLimit())
+	if start > 0 {
+		rows = append(rows, truncate(m.styles.MenuDesc.Render(fmt.Sprintf("  ... %d above", start)), m.menuBodyWidth()))
+	}
+	for index := start; index < end; index++ {
+		path := m.mentionMatches[index]
 		if index == m.mentionCursor {
 			rows = append(rows, truncate(m.styles.MenuSelected.Render("> @"+path), m.menuBodyWidth()))
 			continue
 		}
 		rows = append(rows, truncate("  "+m.styles.MenuKey.Render("@"+path), m.menuBodyWidth()))
+	}
+	if end < total {
+		rows = append(rows, truncate(m.styles.MenuDesc.Render(fmt.Sprintf("  ... %d more", total-end)), m.menuBodyWidth()))
 	}
 	rows = append(rows, m.styles.Hint.Render("Tab complete | Up/Down move | Esc cancel"))
 	// Rows are truncated to width-2 above so the Menu padding brings the block
@@ -1201,7 +1328,10 @@ func (m *Model) viewApproval() string {
 		m.styles.StatusValue.Render(request.Tool) + m.styles.Dim.Render(" ("+request.Risk+")"),
 		m.styles.Dim.Render(truncate(request.Detail, m.width-8)),
 	}
-	if diff := renderApprovalDiff(request.Diff, m.styles, m.width-8); diff != "" {
+	// The diff budget is whatever the terminal has left after the fixed rows
+	// and the options, so the dialog never grows the frame past the terminal.
+	diffLines := m.overlayRowBudget()
+	if diff := renderApprovalDiff(request.Diff, m.styles, m.width-8, diffLines); diff != "" {
 		body = append(body, "", diff)
 	}
 	body = append(body, "")
@@ -1217,15 +1347,38 @@ func (m *Model) viewApproval() string {
 	return m.styles.Box.Width(m.width - 6).Render(strings.Join(body, "\n"))
 }
 
+// overlayRowBudget is how many body rows an overlay may draw.
+//
+// The transcript and the frame furniture keep their rows, so an overlay takes
+// only what is left. Without this the approval dialog's diff and the question's
+// options made the frame taller than the terminal, and the renderer then dropped
+// the frame's top lines and shifted the cursor, which scrambles the screen.
+func (m *Model) overlayRowBudget() int {
+	// The Box style adds one row of padding on each side plus the border, and
+	// the header, status and hints keep their own rows.
+	const furniture = 2 + 2 + 1 + 3
+	budget := m.height - (composerHeight + furniture)
+	if budget < 3 {
+		budget = 3
+	}
+	if budget > 14 {
+		budget = 14
+	}
+	return budget
+}
+
 // renderApprovalDiff colours a unified preview for the approval dialog.
-// Lines are clipped to the width so a long file cannot break the box.
-func renderApprovalDiff(diff string, styles Styles, width int) string {
+// Lines are clipped to the width so a long file cannot break the box, and the
+// count is bounded so the dialog cannot grow past the terminal.
+func renderApprovalDiff(diff string, styles Styles, width, maxLines int) string {
 	diff = strings.TrimSpace(diff)
 	if diff == "" {
 		return ""
 	}
+	if maxLines < 1 {
+		maxLines = 1
+	}
 	lines := strings.Split(diff, "\n")
-	const maxLines = 14
 	shown := lines
 	truncated := false
 	if len(lines) > maxLines {
@@ -1258,8 +1411,15 @@ func (m *Model) viewAsk() string {
 	}
 	if len(m.pendingAsk.options) > 0 {
 		body = append(body, "")
-		for index, option := range m.pendingAsk.options {
+		options := m.pendingAsk.options
+		if len(options) > m.menuRowLimit() {
+			options = options[:m.menuRowLimit()]
+		}
+		for index, option := range options {
 			body = append(body, m.styles.MenuKey.Render(fmt.Sprintf("%d", index+1))+". "+option)
+		}
+		if len(m.pendingAsk.options) > len(options) {
+			body = append(body, m.styles.MenuDesc.Render(fmt.Sprintf("... %d more options", len(m.pendingAsk.options)-len(options))))
 		}
 	}
 	body = append(body, "", m.input.View(), m.styles.Hint.Render("Enter answer | Esc decline"))
@@ -1267,11 +1427,42 @@ func (m *Model) viewAsk() string {
 }
 
 func (m *Model) viewHelp() string {
-	lines := []string{
-		m.styles.BoxTitle.Render("Commands"),
-		"",
+	entries := SlashHelp()
+	// The box draws a border and one padding row on each side, so four rows of
+	// the terminal belong to the frame and the rest is body.
+	budget := m.height - 4
+	if budget < 6 {
+		budget = 6
 	}
-	for _, entry := range SlashHelp() {
+
+	header := []string{m.styles.BoxTitle.Render("Commands"), ""}
+	keys := []string{
+		"", m.styles.BoxTitle.Render("Keys"), "",
+		m.styles.MenuDesc.Render("  Enter send | Ctrl+J newline | Tab complete | PgUp/PgDn scroll"),
+		m.styles.MenuDesc.Render("  Esc stop or clear | Ctrl+O toggle details | Ctrl+C quit"),
+	}
+	trailer := []string{m.styles.Hint.Render(fmt.Sprintf("Press any key to close. %d commands in total.", len(entries)))}
+
+	// The key list is the part to drop on a short terminal: the commands are
+	// what the operator opened help for.
+	limit := budget - len(header) - len(keys) - len(trailer)
+	showKeys := limit >= 3
+	if !showKeys {
+		limit = budget - len(header) - len(trailer)
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > m.menuRowLimit() {
+		limit = m.menuRowLimit()
+	}
+
+	lines := append([]string{}, header...)
+	start, end := windowRows(0, len(entries), limit)
+	if start > 0 {
+		lines = append(lines, m.styles.MenuDesc.Render(fmt.Sprintf("  ... %d above", start)))
+	}
+	for _, entry := range entries[start:end] {
 		parts := strings.SplitN(entry, "\t", 2)
 		usage := parts[0]
 		summary := ""
@@ -1280,20 +1471,19 @@ func (m *Model) viewHelp() string {
 		}
 		lines = append(lines, m.styles.MenuKey.Render(fmt.Sprintf("  %-16s", usage))+m.styles.MenuDesc.Render(summary))
 	}
+	if end < len(entries) {
+		lines = append(lines, m.styles.MenuDesc.Render(fmt.Sprintf("  ... %d more, typed commands still work", len(entries)-end)))
+	}
 	if len(m.custom) > 0 {
 		lines = append(lines, "", m.styles.BoxTitle.Render("Custom"))
 		for _, item := range m.custom {
 			lines = append(lines, m.styles.MenuKey.Render(fmt.Sprintf("  %-16s", "/"+item.Name))+m.styles.MenuDesc.Render(item.Description))
 		}
-		lines = append(lines, m.styles.Hint.Render("  Add one at .termixgo/commands/<name>.md with $ARGUMENTS for the typed text."))
 	}
-	lines = append(lines, "",
-		m.styles.BoxTitle.Render("Keys"),
-		"",
-		m.styles.MenuDesc.Render("  Enter send | Ctrl+J newline | Tab complete | PgUp/PgDn scroll | Esc stop or clear | Ctrl+O toggle details | Ctrl+C quit"),
-		"",
-		m.styles.Hint.Render("Press any key to close."),
-	)
+	if showKeys {
+		lines = append(lines, keys...)
+	}
+	lines = append(lines, trailer...)
 	return m.styles.Box.Width(m.width - 4).Render(strings.Join(lines, "\n"))
 }
 
