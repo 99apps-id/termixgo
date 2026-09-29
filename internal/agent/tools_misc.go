@@ -19,6 +19,76 @@ import (
 	"github.com/99apps-id/termixgo/internal/skill"
 )
 
+// searchMemoryTool searches the agent memory and workspace using FTS5.
+type searchMemoryTool struct{}
+
+func (t *searchMemoryTool) Name() string      { return "search_memory" }
+func (t *searchMemoryTool) Aliases() []string { return []string{"fts_search", "memory_search"} }
+func (t *searchMemoryTool) Mutating() bool    { return false }
+func (t *searchMemoryTool) Risk() Risk        { return RiskEdit }
+func (t *searchMemoryTool) Label(a map[string]any) string {
+	return "Searching memory for " + Shorten(argString(a, "query"), 40)
+}
+func (t *searchMemoryTool) DoneLabel(a map[string]any) string {
+	return "Searched memory"
+}
+func (t *searchMemoryTool) Description() string {
+	return "Search the agent's learned memory, error journal, and indexed workspace files using full-text search."
+}
+func (t *searchMemoryTool) Schema() map[string]any {
+	return object(map[string]any{
+		"query": strProp("Full-text search query."),
+		"scope": strProp("Optional scope filter: memory, journal, workspace, or all."),
+	}, "query")
+}
+
+func (t *searchMemoryTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	query := strings.TrimSpace(argString(args, "query"))
+	if query == "" {
+		return Result{Output: "query is required", IsError: true}, nil
+	}
+	scope := strings.ToLower(strings.TrimSpace(argString(args, "scope")))
+	if scope == "" {
+		scope = "all"
+	}
+
+	// Try the FTS5 search store if available.
+	if env.Search != nil {
+		results, err := env.Search.Search(query, 20)
+		if err == nil && len(results) > 0 {
+			var b strings.Builder
+			b.WriteString(fmt.Sprintf("FTS5 results for %q:\n\n", query))
+			for _, r := range results {
+				if scope != "all" && r.Scope != scope {
+					continue
+				}
+				b.WriteString(fmt.Sprintf("[%s] %s (%s)\n%s\n\n", r.Scope, r.Title, r.Path, r.Snippet))
+			}
+			return Result{Output: b.String()}, nil
+		}
+	}
+
+	// Fallback: plain text search through memory and journal files.
+	var matches []string
+	mem := agent.NewMemory(env.Workspace)
+	block := mem.PromptBlock()
+	if block != "" && strings.Contains(strings.ToLower(block), strings.ToLower(query)) {
+		matches = append(matches, "[memory] "+block)
+	}
+	if env.Journal != nil {
+		for _, p := range env.Journal.Patterns() {
+			if strings.Contains(strings.ToLower(p.Error), strings.ToLower(query)) ||
+				strings.Contains(strings.ToLower(p.Tool), strings.ToLower(query)) {
+				matches = append(matches, fmt.Sprintf("[journal] %s x%d: %s (hint: %s)", p.Tool, p.Count, p.Error, p.Hint))
+			}
+		}
+	}
+	if len(matches) == 0 {
+		return Result{Output: fmt.Sprintf("No matches for %q in memory or journal.", query)}, nil
+	}
+	return Result{Output: strings.Join(matches, "\n\n")}, nil
+}
+
 // installSkillTool installs a skill from a git repository or local path.
 type installSkillTool struct{}
 

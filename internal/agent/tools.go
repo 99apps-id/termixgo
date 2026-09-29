@@ -57,6 +57,10 @@ type Env struct {
 	// Processes owns the background processes. It is shared across turns
 	// because a background process must outlive the turn that started it.
 	Processes *ProcessManager
+	// Search provides full-text search over memory, journal and workspace.
+	Search *search.Store
+	// Journal records recurring tool failures for self-correction.
+	Journal *ErrorJournal
 
 	Emit Emitter
 	// Approve blocks until the operator answers. Nil means deny.

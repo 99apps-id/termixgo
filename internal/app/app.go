@@ -105,6 +105,9 @@ type App struct {
 	// replaced rather than mutated on a reload, so a turn already in flight
 	// keeps the registry it started with.
 	mcp *mcp.Pool
+
+	// journal records recurring tool failures so the agent can learn from them.
+	journal *agent.ErrorJournal
 }
 
 // New loads the state for a workspace and prepares a session.
@@ -139,6 +142,10 @@ func New(workspace string) (*App, error) {
 		tools:     agent.DefaultRegistry(),
 		processes: agent.NewProcessManager(),
 		events:    make(chan agent.Event, eventBuffer),
+	}
+	journal, err := agent.NewErrorJournal(workspace)
+	if err == nil {
+		instance.journal = journal
 	}
 	// The manager outlives a turn, so its emitter is installed once here rather
 	// than being handed a per-run environment.
@@ -779,6 +786,7 @@ func (a *App) runTurn(ctx context.Context, input string) error {
 		CostKnown:     costKnown,
 		CostBudgetUSD: cfg.CostBudgetUSD,
 		Steer:         a.TakeSteer,
+		Journal:       a.journal,
 	}
 	session := a.currentSession()
 	if err := runner.Run(runCtx, session, input); err != nil {

@@ -49,6 +49,8 @@ type Runner struct {
 	CostBudgetUSD float64
 	// System, when set, replaces the assembled system prompt.
 	System string
+	// Journal records recurring tool failures so the loop can learn from them.
+	Journal *ErrorJournal
 	// Steer, when set, returns the operator messages typed while this turn is
 	// running. The loop folds them into the conversation at the next step
 	// boundary, which is what lets the operator change course without
@@ -215,6 +217,9 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 			before := r.todoSnapshot()
 			result := r.execute(ctx, call)
 			r.observeToolResult(&ledger, guard, call.Name, call.Arguments, result)
+			if result.IsError && r.Journal != nil {
+				r.Journal.Record(call.Name, call.Arguments, result.Output)
+			}
 			session.AddToolResult(call.ID, call.Name, result.Output)
 			if !result.IsError && taskJustCompleted(before, r.todoSnapshot()) {
 				pendingVerify = ledger.BuildVerifyNudge(nudges, false)
