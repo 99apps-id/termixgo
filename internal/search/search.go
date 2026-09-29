@@ -97,15 +97,37 @@ func (s *Store) Close() error {
 }
 
 // Index adds or replaces one document.
+//
+// A document is keyed by scope and path, so indexing the same file again
+// replaces it. That is not cosmetic: the workspace walk re-indexes every file on
+// each refresh and the memory tool re-indexes the memory files after every
+// write, so a plain INSERT made one file return once per refresh, pushed other
+// matches past the limit, and grew the database by a full copy of the workspace
+// each time.
+//
+// An empty body removes the document instead of storing nothing, so a file that
+// was emptied or truncated stops being reported as a match.
 func (s *Store) Index(scope, path, title, body string) error {
-	if strings.TrimSpace(body) == "" {
-		return nil
-	}
 	body = clampIndexBytes(body)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec(`INSERT INTO docs(scope, path, title, body) VALUES(?,?,?,?)`, scope, path, title, body)
-	return err
+	// The delete and the insert share one transaction: a reader must never see
+	// the document missing.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM docs WHERE scope = ? AND path = ?`, scope, path); err != nil {
+		return err
+	}
+	if strings.TrimSpace(body) == "" {
+		return tx.Commit()
+	}
+	if _, err := tx.Exec(`INSERT INTO docs(scope, path, title, body) VALUES(?,?,?,?)`, scope, path, title, body); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // clampIndexBytes caps a document at maxIndexBytes.

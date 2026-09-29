@@ -107,6 +107,13 @@ All notable changes to Termixgo are recorded here. The format follows
 - The opening screen follows a model or trust change. It was built once at
   startup, so an onboarding run that picked a model left the old name in the
   transcript next to a header showing the new one.
+- Model and tool text no longer reach the terminal with its control characters
+  intact. A raw escape sequence is a command the terminal obeys, so an SGR or a
+  cursor move that a model printed bolded random words and rewrote the frame
+  under the cursor, which looked like text cut and pasted from a neighbouring
+  line even though the stored session was clean. Escape sequences are stripped
+  (CSI, OSC and other escapes), a carriage return is dropped and a tab becomes a
+  space before any styling runs, in the transcript and in the plain printer.
 - Stopping a turn now stops the command it is running. `run_command` killed only
   the shell, so a grandchild such as `du` kept running and held the output pipe
   open; `Wait` never returned and `/stop` reported success while the turn stayed

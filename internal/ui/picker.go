@@ -84,7 +84,7 @@ func (m *Model) handlePickerKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "backspace":
 		if m.picker.filter != "" {
-			m.picker.filter = m.picker.filter[:len(m.picker.filter)-1]
+			m.picker.filter = trimLastRune(m.picker.filter)
 			m.picker.applyFilter()
 		}
 		return m, nil
