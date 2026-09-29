@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/99apps-id/termixgo/internal/agent"
 )
@@ -85,15 +86,33 @@ func renderBlock(item block, styles Styles, width int, showDetails bool) string 
 }
 
 func renderWelcomeBlock(item block, styles Styles, width int) string {
-	var builder strings.Builder
-	builder.WriteString(RenderBanner(styles))
-	builder.WriteString("\n")
-	builder.WriteString(styles.Subtitle.Render(item.text))
-	if item.toolLabel != "" {
-		builder.WriteString("\n")
-		builder.WriteString(item.toolLabel)
+	if width < 8 {
+		width = 8
 	}
-	return builder.String()
+	var lines []string
+	// The banner is fixed art, so it is clipped rather than wrapped. Without
+	// this the block keeps its own width at a narrow terminal, and a line wider
+	// than the terminal wraps and pushes the rest of the frame down.
+	for _, row := range strings.Split(RenderBanner(styles), "\n") {
+		lines = append(lines, truncate(row, width))
+	}
+	lines = append(lines, "")
+	// The info text wraps to the terminal so nothing is lost, and each line is
+	// rendered on its own so a style that pads cannot widen the block.
+	for _, paragraph := range strings.Split(item.text, "\n") {
+		wrapped := wrapPlain(paragraph, width)
+		if strings.TrimSpace(wrapped) == "" {
+			lines = append(lines, "")
+			continue
+		}
+		for _, line := range strings.Split(wrapped, "\n") {
+			lines = append(lines, truncate(styles.Subtitle.Render(line), width))
+		}
+	}
+	if item.toolLabel != "" {
+		lines = append(lines, truncate(item.toolLabel, width))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderUserBlock(item block, styles Styles, width int) string {
@@ -365,19 +384,44 @@ func wrapPlain(text string, width int) string {
 	return strings.Join(out, "\n")
 }
 
-// truncate clips a styled string to a display width.
+// truncate clips a string to a display width, preserving colour.
+//
+// It must be ANSI-aware: some callers hand it a string that is already styled,
+// and slicing one by rune cuts through an escape sequence. A terminal that meets
+// a broken sequence swallows the characters after it looking for the end, which
+// is exactly what makes the screen look scrambled even though the stored text is
+// intact. The tail is three dots to keep the historical output shape.
 func truncate(text string, width int) string {
-	if width <= 0 || lipgloss.Width(text) <= width {
-		return text
-	}
-	runes := []rune(text)
-	if len(runes) <= width {
+	// A non-positive width means "no limit" to the callers that pass one
+	// through unchecked, so the text is returned as-is rather than dropped.
+	if width <= 0 || ansi.StringWidth(text) <= width {
 		return text
 	}
 	if width <= 3 {
-		return string(runes[:width])
+		return ansi.Truncate(text, width, "")
 	}
-	return string(runes[:width-3]) + "..."
+	// ansi.Truncate counts the tail inside the target width, which is what the
+	// historical output shape ("abc...") expects.
+	return ansi.Truncate(text, width, "...")
+}
+
+// truncateLeft clips a string to a display width from the start, keeping the
+// tail. A path is the case it exists for: the last segments name the folder the
+// operator recognises, while the drive and the user directories do not.
+func truncateLeft(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	excess := ansi.StringWidth(text) - width
+	if excess <= 0 {
+		return text
+	}
+	if width <= 3 {
+		return ansi.TruncateLeft(text, excess, "")
+	}
+	// The prefix takes three columns of the target width, so three more
+	// characters have to come off the left than the excess alone.
+	return ansi.TruncateLeft(text, excess+3, "...")
 }
 
 func max(a, b int) int {

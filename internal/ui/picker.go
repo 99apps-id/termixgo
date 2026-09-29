@@ -133,16 +133,31 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 		m.setup.providerID = item.ID
 		m.setup.message = ""
 		m.setup.errText = ""
+		if provider.NeedsEndpoint(item.ID) {
+			// A provider with no default host cannot be reached at all until
+			// the operator says where its server lives.
+			m.current = modeSetup
+			m.setup.step = setupEndpoint
+			m.setup.message = fmt.Sprintf("Where does %s live?", item.Label)
+			m.input.SetValue("")
+			m.input.Placeholder = "https://your-server/v1"
+			m.input.EchoMode = textinput.EchoNormal
+			m.input.Focus()
+			m.refresh()
+			return m, textareaBlink()
+		}
 		if !providerNeedsKey(item.ID) {
 			// A local server needs no key: go straight to model selection.
 			m.setup.step = setupModel
 			m.openPicker(setupPickerTitle("Model"), "setup-model", setupModelItems(item.ID))
 			return m, nil
 		}
+		info, _ := provider.ByID(item.ID)
 		m.current = modeSetup
 		m.setup.step = setupKey
+		m.setup.message = fmt.Sprintf("Paste the %s API key.", info.Label)
 		m.input.SetValue("")
-		m.input.Placeholder = "API key"
+		m.input.Placeholder = keyPlaceholder(info, false)
 		m.input.EchoMode = textinput.EchoPassword
 		m.input.Focus()
 		m.refresh()

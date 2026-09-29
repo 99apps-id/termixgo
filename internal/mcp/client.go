@@ -362,9 +362,11 @@ func (c *Client) Call(ctx context.Context, name string, args map[string]any) (Ca
 // Closing stdin first gives the server the chance to exit on its own, which is
 // how a well-behaved one flushes its state. The process is then killed because
 // a server that ignores a closed stdin would outlive the session and hold its
-// port or its lock. Note that this kills the process, not a tree: a server
-// started through a launcher that spawns a child of its own can leave that
-// child behind. Closing stdin is what usually prevents it.
+// port or its lock. Wait then reaps it: without the call the process stays
+// unreaped for the life of the program, which leaks a handle and a pid on every
+// reload. Note that this kills the process, not a tree: a server started through
+// a launcher that spawns a child of its own can leave that child behind.
+// Closing stdin is what usually prevents it.
 func (c *Client) Close() {
 	c.mu.Lock()
 	if c.closed {
@@ -377,6 +379,9 @@ func (c *Client) Close() {
 	_ = c.stdin.Close()
 	if c.cmd != nil && c.cmd.Process != nil {
 		_ = c.cmd.Process.Kill()
+		// Wait reaps the process. It also closes the stdout pipe, which is what
+		// unblocks the reader goroutine if it is still waiting on it.
+		_ = c.cmd.Wait()
 	}
 }
 

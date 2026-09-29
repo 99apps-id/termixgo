@@ -74,6 +74,44 @@ func TestElidePreservesRoles(t *testing.T) {
 	}
 }
 
+// TestElideDoesNotMutateTheStoredMessage pins the aliasing contract: a Message
+// shares its ToolCalls slice with the session, so eliding one for a trimmed
+// request must not blank the arguments of the stored history. Writing through
+// the shared array would lose those arguments from the session file too.
+func TestElideDoesNotMutateTheStoredMessage(t *testing.T) {
+	original := provider.Message{
+		Role:      provider.RoleAssistant,
+		Content:   strings.Repeat("x", 2000),
+		ToolCalls: []provider.ToolCall{{ID: "1", Name: "read_file", Arguments: `{"path":"main.go"}`}},
+	}
+	messages := []provider.Message{
+		{Role: provider.RoleUser, Content: "hello"},
+		original,
+	}
+	elided := elide(messages[1])
+	if elided.ToolCalls[0].Arguments != "{}" {
+		t.Fatalf("the elided copy should collapse its arguments, got %q", elided.ToolCalls[0].Arguments)
+	}
+	if got := messages[1].ToolCalls[0].Arguments; got != `{"path":"main.go"}` {
+		t.Fatalf("the stored message was mutated: arguments = %q, want the original JSON", got)
+	}
+
+	// The whole compact path must preserve the source as well, since it is the
+	// session's own message list that is passed in.
+	session := NewSession("ws", "model")
+	session.AddUser("hello")
+	session.AddAssistant("calling", "", []provider.ToolCall{{ID: "1", Name: "read_file", Arguments: `{"path":"main.go"}`}})
+	session.AddToolResult("1", "read_file", "content")
+	for index := 0; index < 30; index++ {
+		session.AddUser("filler message with enough text to consume the token budget")
+		session.AddAssistant("acknowledged", "", nil)
+	}
+	_ = Compact(session.Messages(), 200)
+	if got := session.Messages()[1].ToolCalls[0].Arguments; got != `{"path":"main.go"}` {
+		t.Fatalf("Compact mutated the session history: arguments = %q", got)
+	}
+}
+
 func TestHistoryHint(t *testing.T) {
 	messages := []provider.Message{{Role: provider.RoleUser, Content: strings.Repeat("w", 520)}}
 	hint := HistoryHint(messages, 1000)

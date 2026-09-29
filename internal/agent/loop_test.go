@@ -259,6 +259,21 @@ func TestRunStopsAtStepBudget(t *testing.T) {
 	if stopReason != "step-cap" {
 		t.Errorf("stop reason = %q, want step-cap", stopReason)
 	}
+	// The pause has to tell the operator how to resume, or the turn looks like
+	// it simply gave up.
+	var notice string
+	recorder.mu.Lock()
+	for _, event := range recorder.events {
+		if event.Kind == EventNotice && strings.Contains(event.Text, "step") {
+			notice = event.Text
+		}
+	}
+	recorder.mu.Unlock()
+	for _, want := range []string{"continue", "Paused"} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("the step-cap notice should mention %q, got %q", want, notice)
+		}
+	}
 }
 
 func TestRunPropagatesStreamErrors(t *testing.T) {

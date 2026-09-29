@@ -94,8 +94,12 @@ type installSkillTool struct{}
 
 func (t *installSkillTool) Name() string      { return "install_skill" }
 func (t *installSkillTool) Aliases() []string { return []string{"add_skill"} }
-func (t *installSkillTool) Mutating() bool    { return false }
-func (t *installSkillTool) Risk() Risk        { return RiskEdit }
+// Mutating is true even though the tool only writes outside the workspace: it
+// copies files onto disk, so it must sit behind the approval policy like any
+// other write. Reporting false let it run unnoticed in plan mode and in an
+// untrusted folder.
+func (t *installSkillTool) Mutating() bool { return true }
+func (t *installSkillTool) Risk() Risk     { return RiskEdit }
 func (t *installSkillTool) Label(a map[string]any) string {
 	return "Installing skill " + Shorten(argString(a, "source"), 40)
 }
@@ -282,7 +286,8 @@ func skillInstallDir(env *Env, scope string) (string, error) {
 	return filepath.Join(home, "skills"), nil
 }
 
-// copyFile copies a file from src to dst.
+// copyFile copies a file from src to dst. The output is closed explicitly so a
+// write failure is reported rather than lost, which a deferred close would hide.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -293,9 +298,8 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	_, err = io.Copy(out, in)
-	if err != nil {
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
 		return err
 	}
 	return out.Close()
@@ -651,7 +655,7 @@ func (t *webFetchTool) Run(ctx context.Context, env *Env, args map[string]any) (
 		return Result{Output: "url must be an absolute http or https URL", IsError: true}, nil
 	}
 	if isBlockedHost(parsed.Hostname()) {
-		return Result{Output: "That host is not reachable from the agent (link-local or loopback metadata address).", IsError: true}, nil
+		return Result{Output: "That host is a link-local or cloud metadata address, which the agent does not fetch.", IsError: true}, nil
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -682,13 +686,20 @@ func (t *webFetchTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	return Result{Output: text}, nil
 }
 
-// isBlockedHost refuses the cloud metadata addresses, which are never the
-// documentation the model meant to read.
+// isBlockedHost refuses the cloud metadata addresses and the link-local range,
+// which are never the documentation the model meant to read.
+//
+// Loopback and the private ranges are deliberately allowed: a documentation
+// server running on the operator's own machine is a legitimate target, and the
+// project's own tests fetch from one. That does leave the tool able to reach a
+// service on the local network, which is recorded in the audit rather than
+// enforced here.
 func isBlockedHost(host string) bool {
-	if host == "169.254.169.254" || host == "metadata.google.internal" {
+	trimmed := strings.ToLower(strings.TrimSpace(host))
+	if trimmed == "169.254.169.254" || trimmed == "metadata.google.internal" {
 		return true
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLinkLocalUnicast() {
+	if ip := net.ParseIP(trimmed); ip != nil && ip.IsLinkLocalUnicast() {
 		return true
 	}
 	return false

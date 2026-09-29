@@ -18,6 +18,10 @@ type setupStep int
 
 const (
 	setupProvider setupStep = iota
+	// setupEndpoint asks where a provider's server lives. It only appears for a
+	// provider with no default host, whose address carries an account id or
+	// points at the operator's own machine.
+	setupEndpoint
 	setupKey
 	setupModel
 	setupCustomModel
@@ -95,6 +99,14 @@ func (m *Model) handleSetupKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case setupEndpoint:
+		if key.String() == "enter" {
+			return m.saveEndpoint()
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(key)
+		return m, cmd
+
 	case setupKey:
 		if key.String() == "enter" {
 			return m.saveProviderKey()
@@ -156,12 +168,51 @@ func (m *Model) handleSetupKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// saveEndpoint validates and stores the typed base URL, then offers the key
+// step. A self-hosted compatible server often wants a key even though the
+// catalogue cannot know it, so the key is always offered and an empty answer
+// means none.
+func (m *Model) saveEndpoint() (tea.Model, tea.Cmd) {
+	endpoint, err := provider.NormalizeBaseURL(m.input.Value())
+	if err != nil {
+		m.setup.errText = err.Error()
+		return m, nil
+	}
+	if err := m.app.SetBaseURL(m.setup.providerID, endpoint); err != nil {
+		m.setup.errText = err.Error()
+		return m, nil
+	}
+	info, _ := provider.ByID(m.setup.providerID)
+	m.input.SetValue("")
+	m.input.Blur()
+	m.setup.errText = ""
+	m.setup.summary = append(m.setup.summary, "endpoint: "+endpoint)
+	m.setup.step = setupKey
+	m.setup.message = fmt.Sprintf("Endpoint set for %s. Paste an API key, or press Enter to skip it.", info.Label)
+	m.input.Placeholder = keyPlaceholder(info, true)
+	m.input.EchoMode = textinput.EchoPassword
+	m.input.Focus()
+	m.current = modeSetup
+	return m, textareaBlink()
+}
+
 // saveProviderKey stores the typed API key and advances to model selection.
+// An empty answer is only allowed when the provider does not require one, so a
+// compatible server can be configured without a key.
 func (m *Model) saveProviderKey() (tea.Model, tea.Cmd) {
 	key := strings.TrimSpace(m.input.Value())
+	info, _ := provider.ByID(m.setup.providerID)
 	if key == "" {
-		m.setup.errText = "The API key is empty. Paste it and press Enter."
-		return m, nil
+		if info.NeedsKey {
+			m.setup.errText = "The API key is empty. Paste it and press Enter."
+			return m, nil
+		}
+		m.input.SetValue("")
+		m.input.Blur()
+		m.input.EchoMode = textinput.EchoNormal
+		m.setup.errText = ""
+		m.setup.message = fmt.Sprintf("Continuing for %s without a key.", info.Label)
+		return m.advanceToModel()
 	}
 	if err := m.app.Secrets().Set(secrets.ProviderKey(m.setup.providerID), key); err != nil {
 		m.setup.errText = "Could not store the key: " + err.Error()
@@ -171,22 +222,40 @@ func (m *Model) saveProviderKey() (tea.Model, tea.Cmd) {
 	m.input.Blur()
 	m.input.EchoMode = textinput.EchoNormal
 	m.setup.errText = ""
+	m.setup.message = fmt.Sprintf("Stored a key for %s.", info.Label)
+	return m.advanceToModel()
+}
 
-	info, _ := provider.ByID(m.setup.providerID)
+// advanceToModel moves past the key step: a provider with catalogue models
+// opens the picker, while one the catalogue cannot know asks for the id by hand.
+func (m *Model) advanceToModel() (tea.Model, tea.Cmd) {
 	items := setupModelItems(m.setup.providerID)
 	if len(items) == 0 {
 		m.setup.step = setupCustomModel
-		m.setup.message = fmt.Sprintf("Stored a key for %s. Type the model id to use.", info.Label)
 		m.input.Placeholder = "model-id"
+		m.input.EchoMode = textinput.EchoNormal
 		m.input.Focus()
+		m.current = modeSetup
 		return m, textareaBlink()
 	}
 	m.setup.step = setupModel
-	m.setup.message = fmt.Sprintf("Stored a key for %s. Pick the default model.", info.Label)
 	m.picker = picker{title: setupPickerTitle("Model"), action: "setup-model", items: items}
 	m.picker.applyFilter()
 	m.current = modePicker
 	return m, nil
+}
+
+// keyPlaceholder renders the hint for the key field. A provider that does not
+// require a key says so, because an invisible empty-Enter shortcut is not
+// something an operator can discover.
+func keyPlaceholder(info provider.Provider, optional bool) string {
+	if optional || !info.NeedsKey {
+		return "API key (Enter skips)"
+	}
+	if info.KeyPrefix != "" {
+		return "API key, usually starts with " + info.KeyPrefix
+	}
+	return "API key"
 }
 
 // saveCustomModel applies a hand-typed model id.
@@ -286,6 +355,9 @@ func (m *Model) viewSetup() string {
 	switch m.setup.step {
 	case setupProvider, setupModel:
 		body = append(body, m.styles.Dim.Render("Choose from the list."))
+	case setupEndpoint:
+		body = append(body, m.styles.Dim.Render("Type the server base URL. It is saved in the settings file and used for every request to this provider."))
+		body = append(body, "", m.input.View())
 	case setupKey:
 		body = append(body, m.styles.Dim.Render("Paste the API key. It is stored in ~/.termixgo/secrets.json with mode 0600 and never shown again."))
 		body = append(body, "", m.input.View())
@@ -319,7 +391,7 @@ func setupProgress(step setupStep) int {
 	switch step {
 	case setupProvider:
 		return 1
-	case setupKey, setupModel, setupCustomModel:
+	case setupEndpoint, setupKey, setupModel, setupCustomModel:
 		return 2
 	case setupTelegramAsk, setupTelegramToken, setupTelegramPair:
 		return 3

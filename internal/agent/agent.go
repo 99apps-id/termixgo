@@ -253,7 +253,11 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	if stopReason == "stop" {
 		// Only reached when the step budget was exhausted without a stop.
 		stopReason = "step-cap"
-		emit(Event{Kind: EventNotice, Text: fmt.Sprintf("Reached the step budget (%d). Reply to continue.", maxSteps)})
+		emit(Event{Kind: EventNotice, Text: fmt.Sprintf(
+			"Paused after %d steps: one turn is capped so a single reply cannot spend forever. "+
+				"Nothing is lost, the work so far stays in the transcript. "+
+				"Send \"continue\" to pick up exactly where it stopped, or set a larger maxSteps in the settings file "+
+				"(the /harness autonomous profile also grants a longer turn).", maxSteps)})
 	}
 	if stopReason == "aborted" {
 		emit(Event{Kind: EventNotice, Text: "Stopped."})

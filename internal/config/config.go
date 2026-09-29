@@ -146,7 +146,7 @@ func Default() Config {
 		ApprovalMode:  ApprovalAll,
 		ShowReasoning: true,
 		Language:      "en",
-		MaxSteps:      25,
+		MaxSteps:      100,
 		BaseURLs:      map[string]string{},
 	}
 }
@@ -211,8 +211,11 @@ func (c *Config) normalise() {
 	if !ValidApprovalMode(c.ApprovalMode) {
 		c.ApprovalMode = ApprovalAll
 	}
+	// A budget of zero or less means "unset", so it becomes the default. The
+	// budget only bounds one turn: a long task continues when the operator
+	// replies, and the loop guard and cost cap remain the real runaway stops.
 	if c.MaxSteps <= 0 {
-		c.MaxSteps = 25
+		c.MaxSteps = 100
 	}
 	if c.Language == "" {
 		c.Language = "en"

@@ -14,6 +14,25 @@ import (
 	"github.com/99apps-id/termixgo/internal/skill"
 )
 
+// TestInstallSkillIsSubjectToApproval pins the classification: install_skill
+// copies files onto disk, so it is a mutating tool. Reporting it as read-only
+// let it run unnoticed in plan mode and in an untrusted folder.
+func TestInstallSkillIsSubjectToApproval(t *testing.T) {
+	tool := &installSkillTool{}
+	if !tool.Mutating() {
+		t.Fatalf("install_skill writes files, so Mutating must be true")
+	}
+	if tool.Risk() != RiskEdit {
+		t.Errorf("risk = %q, want edit", tool.Risk())
+	}
+	// Plan mode blocks every mutating tool without asking, which is the
+	// guarantee that exploring a repository changes nothing.
+	plan := &ApprovalPolicy{Mode: ApprovalPlan}
+	if !plan.NeedsApproval(tool) {
+		t.Errorf("plan mode must gate install_skill")
+	}
+}
+
 // skillFixture writes two skills into the workspace and returns the loaded
 // list, so the skill tools are exercised against a real folder rather than a
 // hand-built slice.

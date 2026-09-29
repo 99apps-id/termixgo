@@ -483,8 +483,15 @@ func (a *App) UpdateConfig(change func(cfg *config.Config)) error {
 	return config.Save(cfg)
 }
 
-// Policy returns the live approval policy.
-func (a *App) Policy() *agent.ApprovalPolicy { return a.policy }
+// Policy returns the live approval policy. The pointer is shared with the
+// running turn on purpose: an "allow for this session" answer must be visible
+// to the loop immediately. The read takes the lock so it does not race with the
+// writer in AllowTool.
+func (a *App) Policy() *agent.ApprovalPolicy {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.policy
+}
 
 // AllowTool permanently allows a tool across sessions.
 func (a *App) AllowTool(name string) {
@@ -534,6 +541,25 @@ func (a *App) SetModelByQuery(query string) (provider.Model, error) {
 		return model, saveErr
 	}
 	return model, nil
+}
+
+// SetBaseURL stores a custom endpoint for a provider, so an OpenAI-compatible
+// server or an account-scoped URL has somewhere to point. The address is
+// validated before it is saved: a typo here fails every later request, and the
+// operator would have to go looking for the cause.
+func (a *App) SetBaseURL(providerID, rawURL string) error {
+	endpoint, err := provider.NormalizeBaseURL(rawURL)
+	if err != nil {
+		return err
+	}
+	a.mu.Lock()
+	if a.cfg.BaseURLs == nil {
+		a.cfg.BaseURLs = map[string]string{}
+	}
+	a.cfg.BaseURLs[providerID] = endpoint
+	cfg := a.cfg
+	a.mu.Unlock()
+	return config.Save(cfg)
 }
 
 // SetApprovalMode changes the approval policy.
@@ -655,6 +681,9 @@ func (a *App) env() *agent.Env {
 		Todos:       a.todos,
 		Trusted:     a.Trusted(),
 		Processes:   a.processes,
+		// The journal is shared with the runner, which records into it, and read
+		// back by search_memory, which is why the same store is passed here.
+		Journal:     a.journal,
 		Emit:        a.emit,
 		Approve:     a.approve,
 		Ask:         a.ask,
@@ -791,7 +820,7 @@ func (a *App) runTurn(ctx context.Context, input string) error {
 		Config:        cfg,
 		Env:           a.env(),
 		Tools:         a.tools,
-		Policy:        a.policy,
+		Policy:        a.Policy(),
 		MaxSteps:      cfg.MaxSteps,
 		Harness:       cfg.HarnessProfile,
 		ContextBudget: agent.HistoryBudget(window),

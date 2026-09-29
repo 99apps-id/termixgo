@@ -84,6 +84,12 @@ func Compact(messages []provider.Message, budgetTokens int) []provider.Message {
 
 // elide replaces a message's payload with a marker, keeping its role so the
 // sequence stays valid.
+//
+// A Message shares its ToolCalls and Images slices with the session that owns
+// it, so the tool-call slice is cloned before its arguments are blanked.
+// Writing through the shared backing array would rewrite the stored history:
+// the arguments of an old call would be lost from the session file, not just
+// from the request being trimmed.
 func elide(message provider.Message) provider.Message {
 	switch message.Role {
 	case provider.RoleTool:
@@ -91,8 +97,13 @@ func elide(message provider.Message) provider.Message {
 	case provider.RoleAssistant:
 		message.Content = clipText(message.Content)
 		message.Reasoning = ""
-		for index := range message.ToolCalls {
-			message.ToolCalls[index].Arguments = "{}"
+		if len(message.ToolCalls) > 0 {
+			cloned := make([]provider.ToolCall, len(message.ToolCalls))
+			copy(cloned, message.ToolCalls)
+			for index := range cloned {
+				cloned[index].Arguments = "{}"
+			}
+			message.ToolCalls = cloned
 		}
 	default:
 		message.Content = clipText(message.Content)

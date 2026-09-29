@@ -31,6 +31,24 @@ func TestHarnessBudgetNeverCollapsesToZero(t *testing.T) {
 	}
 }
 
+// TestDefaultStepBudgetIsGenerous pins the raised budget. The budget bounds one
+// turn rather than the task, so an unset value must resolve to the generous
+// default instead of a small number that pauses long work early.
+func TestDefaultStepBudgetIsGenerous(t *testing.T) {
+	if DefaultStepBudget != 100 {
+		t.Errorf("DefaultStepBudget = %d, want 100", DefaultStepBudget)
+	}
+	profile := GetHarnessProfile(DefaultHarnessProfile)
+	if got := ApplyHarnessToBudget(0, profile); got < DefaultStepBudget {
+		t.Errorf("an unset budget resolved to %d, want at least %d", got, DefaultStepBudget)
+	}
+	// The autonomous profile must not cap below the default either.
+	autonomous := GetHarnessProfile("autonomous")
+	if got := ApplyHarnessToBudget(DefaultStepBudget, autonomous); got < DefaultStepBudget {
+		t.Errorf("autonomous capped the default budget to %d", got)
+	}
+}
+
 // TestHarnessIDsLeadWithTheDefault keeps the command surfaces consistent: the
 // first id an operator sees is the one an empty config already uses.
 func TestHarnessIDsLeadWithTheDefault(t *testing.T) {

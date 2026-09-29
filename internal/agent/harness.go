@@ -22,6 +22,12 @@ type HarnessProfile struct {
 // DefaultHarnessProfile is critical: evidence first, frugal with context.
 const DefaultHarnessProfile = "critical"
 
+// DefaultStepBudget bounds one turn when nothing else is configured. It is
+// generous because the budget pauses a turn rather than ending a task: the
+// operator replies and the work continues, while the loop guard and the cost
+// cap stay the real stops for a run that goes nowhere.
+const DefaultStepBudget = 100
+
 // BuiltinHarnessProfiles ships the named profiles.
 var BuiltinHarnessProfiles = map[string]HarnessProfile{
 	"balanced": {
@@ -70,7 +76,7 @@ var BuiltinHarnessProfiles = map[string]HarnessProfile{
 			"- On error or timeout, diagnose, pivot to an alternative, and continue. Do not stop early.\n" +
 			"- Verify with inspection, test or lint before concluding.",
 		StepBudgetDelta: 25,
-		StepBudgetCap:   50,
+		StepBudgetCap:   100,
 	},
 	"critical": {
 		ID:          "critical",
@@ -204,10 +210,14 @@ func ApplyHarnessToTools(names []string, profile HarnessProfile) []string {
 // ApplyHarnessToBudget adjusts a base step budget by the profile delta,
 // capped when the profile sets a cap. The floor is 1 so a misconfigured
 // profile cannot produce an unbounded loop guard that never fires.
+//
+// An unset budget becomes DefaultStepBudget rather than a small number: the
+// budget bounds one turn, not the task, and a task that needs more simply
+// continues when the operator replies.
 func ApplyHarnessToBudget(base int, profile HarnessProfile) int {
 	budget := base
 	if budget <= 0 {
-		budget = 25
+		budget = DefaultStepBudget
 	}
 	budget += profile.StepBudgetDelta
 	if budget < 1 {

@@ -314,9 +314,21 @@ func TestViewRendersAtEveryCommonSize(t *testing.T) {
 			continue
 		}
 		// At a usable size the header names the folder, because losing it is
-		// what makes the operator unsure where the agent is working.
-		if !strings.Contains(view, model.app.Workspace()) {
-			t.Errorf("%dx%d lost the workspace from the header:\n%s", size[0], size[1], view)
+		// what makes the operator unsure where the agent is working. A path too
+		// long for the row is clipped from the left, so the folder name (the
+		// part that identifies the workspace) is what stays visible.
+		workspace := model.app.Workspace()
+		tail := workspace
+		if index := strings.LastIndexAny(workspace, `/\`); index >= 0 {
+			tail = workspace[index+1:]
+		}
+		if !strings.Contains(view, tail) {
+			t.Errorf("%dx%d lost the workspace folder from the header:\n%s", size[0], size[1], view)
+		}
+		// And no line may be wider than the terminal: a wrapped line shifts
+		// every row below it and pushes the composer off the frame.
+		if widest := widestLine(model.View()); widest > size[0] {
+			t.Errorf("%dx%d rendered a %d-column line, which wraps:\n%s", size[0], size[1], widest, view)
 		}
 	}
 }

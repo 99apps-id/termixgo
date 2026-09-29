@@ -10,8 +10,14 @@ import (
 
 // forceColor pins TrueColor for one test: without a terminal lipgloss emits
 // no escapes and frames would look identical.
+//
+// NO_COLOR is cleared as well: the sweep is disabled by that variable, so a
+// developer or CI shell that exports it would make every frame identical and
+// the animation test would fail for a reason that has nothing to do with the
+// code. The shimmer itself still honours NO_COLOR, and the test below pins that.
 func forceColor(t *testing.T) {
 	t.Helper()
+	t.Setenv("NO_COLOR", "")
 	previous := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })

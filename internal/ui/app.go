@@ -147,7 +147,24 @@ type Options struct {
 // composerHeight is the composer rows. Five fits a two-line prompt plus a
 // line of @file context without stealing the transcript, which owns the
 // rest of the window.
+// composerHeight is the composer rows. Five fits a two-line prompt plus a
+// hint without the box jumping as the text grows.
 const composerHeight = 5
+
+// composerPromptWidth is the columns the composer marker occupies. The
+// textarea is told this width so it reserves the room itself; adding the
+// marker after layout instead made every wrapped line two columns too long.
+const composerPromptWidth = 2
+
+// composerPrompt marks the first line and indents the rest, so a wrapped
+// message stays aligned under the marker instead of repeating it on every
+// visual line.
+func composerPrompt(line int) string {
+	if line == 0 {
+		return "> "
+	}
+	return "  "
+}
 
 // New builds the program model for an app.
 func New(application *app.App) *Model { return NewWithOptions(application, Options{}) }
@@ -161,6 +178,9 @@ func NewWithOptions(application *app.App, options Options) *Model {
 	composer.ShowLineNumbers = false
 	composer.CharLimit = 32000
 	composer.SetHeight(composerHeight)
+	// The marker is part of the textarea rather than painted over it, so it is
+	// counted when the text wraps.
+	composer.SetPromptFunc(composerPromptWidth, composerPrompt)
 	// Enter submits; ctrl+j and alt+enter insert a line break.
 	composer.KeyMap.InsertNewline.SetKeys("ctrl+j", "alt+enter")
 
@@ -849,7 +869,11 @@ func (m *Model) layout() {
 	}
 	m.viewport.Width = m.width
 	m.viewport.Height = transcriptHeight
-	m.composer.SetWidth(max(20, m.width-4))
+	// The border and padding are the textarea's own, so it reserves their
+	// width. SetWidth therefore takes the full terminal width and the rendered
+	// box is exactly that wide.
+	m.applyComposerStyle()
+	m.composer.SetWidth(m.width)
 	m.input.Width = max(20, m.width-8)
 	m.refresh()
 }
@@ -882,6 +906,7 @@ func (m *Model) maybeRefresh(streaming bool) {
 // new output; otherwise the view follows the bottom.
 func (m *Model) refresh() {
 	m.lastPaint = time.Now()
+	m.applyComposerStyle()
 	follow := m.viewport.AtBottom()
 	content := transcript(m.blocks, m.styles, m.viewport.Width, m.showDetails)
 	m.viewport.SetContent(content)
@@ -922,6 +947,9 @@ func (m *Model) View() string {
 		return "Loading Termixgo..."
 	}
 	if m.width < m.limits.MinWidth || m.height < m.limits.MinHeight {
+		// Below the minimum there is nothing else on screen to protect, so the
+		// sentence is shown whole: it is the only thing that tells the operator
+		// how to fix the window.
 		return fmt.Sprintf("Terminal too small. Resize to at least %dx%d.", m.limits.MinWidth, m.limits.MinHeight)
 	}
 
@@ -955,15 +983,35 @@ func (m *Model) View() string {
 }
 
 func (m *Model) viewHeader() string {
-	trust := m.styles.StatusWarn.Render("untrusted")
+	trustWord := "untrusted"
+	trustStyle := m.styles.StatusWarn
 	if m.app.Trusted() {
-		trust = m.styles.StatusTrust.Render("trusted")
+		trustWord = "trusted"
+		trustStyle = m.styles.StatusTrust
 	}
-	left := m.styles.StatusKey.Render("Termixgo ") + m.styles.StatusValue.Render(m.app.Workspace()) + " " + trust
-	right := m.styles.Dim.Render(fmt.Sprintf("%s / %s", m.app.ModelLabel(), m.app.CurrentModel().Provider))
+	label := "Termixgo "
+	workspace := m.app.Workspace()
+	right := fmt.Sprintf("%s / %s", m.app.ModelLabel(), m.app.CurrentModel().Provider)
+
+	// The header must never be wider than the terminal: a longer line wraps in
+	// the terminal and pushes the rest of the frame down, which is what made
+	// the screen look garbled. One column is held back so the two halves never
+	// touch.
+	available := max(1, m.width-1)
+	if lipgloss.Width(label)+lipgloss.Width(workspace)+1+lipgloss.Width(trustWord)+lipgloss.Width(right) > available {
+		// The status line repeats the model, so this is the half to drop.
+		right = ""
+	}
+	room := available - lipgloss.Width(right) - lipgloss.Width(label) - 1 - lipgloss.Width(trustWord)
+	if room < 0 {
+		room = 0
+	}
+	workspace = truncateLeft(workspace, room)
+	left := m.styles.StatusKey.Render(label) + m.styles.StatusValue.Render(workspace) + " " + trustStyle.Render(trustWord)
+
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
+	if gap < 0 {
+		gap = 0
 	}
 	return left + strings.Repeat(" ", gap) + right
 }
@@ -1013,7 +1061,9 @@ func (m *Model) viewStatus() string {
 	if m.notice != "" {
 		parts = append(parts, m.styles.Notice.Render(m.notice))
 	}
-	return strings.Join(parts, m.styles.Dim.Render(" | "))
+	// The status line is a summary, so a narrow terminal clips it rather than
+	// wrapping it; a wrapped line would push the composer off the frame.
+	return truncate(strings.Join(parts, m.styles.Dim.Render(" | ")), max(1, m.width))
 }
 
 func shortID(id string) string {
@@ -1024,27 +1074,41 @@ func shortID(id string) string {
 }
 
 func (m *Model) viewComposer() string {
-	style := m.styles.Composer
+	return m.composer.View()
+}
+
+// applyComposerStyle moves the composer's border between its idle and busy
+// colour. The border lives on the textarea's own base style so its width is
+// reserved when the text wraps; painting it afterwards is what made a wrapped
+// line spill onto the next row.
+func (m *Model) applyComposerStyle() {
+	base := m.styles.Composer
 	if m.running {
-		style = m.styles.ComposerBusy
+		base = m.styles.ComposerBusy
 	}
-	prefix := m.styles.Prompt.Render("> ")
-	body := m.composer.View()
-	return style.Width(m.width - 2).Render(prefix + body)
+	m.composer.FocusedStyle.Base = base
+	m.composer.BlurredStyle.Base = base
 }
 
 func (m *Model) viewHints() string {
+	text := ""
 	if m.running {
 		elapsed := time.Since(m.runStarted).Round(time.Second)
 		if count := m.queuedCount(); count > 0 {
-			return m.styles.Hint.Render(fmt.Sprintf(" %s working (%s) | %d queued | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C quit", m.spin.View(), elapsed, count))
+			text = fmt.Sprintf(" %s working (%s) | %d queued | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C quit", m.spin.View(), elapsed, count)
+		} else {
+			text = fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C quit", m.spin.View(), elapsed)
 		}
-		return m.styles.Hint.Render(fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C quit", m.spin.View(), elapsed))
+	} else {
+		text = " Enter send | Ctrl+J newline | / commands @ files | Tab complete | PgUp/PgDn scroll | Ctrl+O details | Ctrl+C quit"
 	}
-	return m.styles.Hint.Render(" Enter send | Ctrl+J newline | / commands @ files | Tab complete | PgUp/PgDn scroll | Ctrl+O details | Ctrl+C quit")
+	// A hint longer than the terminal would wrap and push the frame down, so it
+	// is clipped rather than allowed to reflow the whole screen.
+	return m.styles.Hint.Render(truncate(text, max(1, m.width)))
 }
 
 func (m *Model) viewSlashMenu() string {
+	body := m.menuBodyWidth()
 	var rows []string
 	for index, command := range m.slashMatches {
 		usage := command.Trigger
@@ -1052,20 +1116,31 @@ func (m *Model) viewSlashMenu() string {
 			usage += " " + command.Args
 		}
 		if index == m.slashCursor {
-			rows = append(rows, m.styles.MenuSelected.Render("> "+usage)+"  "+m.styles.MenuDesc.Render(command.Summary))
+			rows = append(rows, truncate(m.styles.MenuSelected.Render("> "+usage)+"  "+m.styles.MenuDesc.Render(command.Summary), body))
 			continue
 		}
-		rows = append(rows, "  "+m.styles.MenuKey.Render(usage)+"  "+m.styles.MenuDesc.Render(command.Summary))
+		rows = append(rows, truncate("  "+m.styles.MenuKey.Render(usage)+"  "+m.styles.MenuDesc.Render(command.Summary), body))
 	}
 	// The last row is the way back to typing for operators who opened the
 	// menu by accident or navigated past their command.
 	if m.slashCursor == len(m.slashMatches) {
-		rows = append(rows, m.styles.MenuSelected.Render("> <- back")+"  "+m.styles.MenuDesc.Render("Return to typing"))
+		rows = append(rows, truncate(m.styles.MenuSelected.Render("> <- back")+"  "+m.styles.MenuDesc.Render("Return to typing"), body))
 	} else {
-		rows = append(rows, "  "+m.styles.MenuDesc.Render("<- back  Return to typing"))
+		rows = append(rows, truncate("  "+m.styles.MenuDesc.Render("<- back  Return to typing"), body))
 	}
-	rows = append(rows, m.styles.Hint.Render("Up/Down move | Tab complete | Enter run | Esc back"))
+	rows = append(rows, truncate(m.styles.Hint.Render("Up/Down move | Tab complete | Enter run | Esc back"), body))
+	// No Width() here: the Menu style adds one column of padding on each side
+	// on top of whatever Width constrains, which wraps an exactly-sized row.
+	// Truncating every row to width-2 and letting the padding fill the rest is
+	// what keeps the padded block at the terminal width.
 	return m.styles.Menu.Render(strings.Join(rows, "\n"))
+}
+
+// menuBodyWidth is the content width a menu row may use. The Menu style adds
+// one column of padding on each side, so the content has to be two columns
+// narrower than the terminal or the padded block overflows and wraps.
+func (m *Model) menuBodyWidth() int {
+	return max(1, m.width-2)
 }
 
 // viewMentionMenu lists the @file candidates under the composer. Tab takes
@@ -1074,12 +1149,14 @@ func (m *Model) viewMentionMenu() string {
 	var rows []string
 	for index, path := range m.mentionMatches {
 		if index == m.mentionCursor {
-			rows = append(rows, m.styles.MenuSelected.Render("> @"+path))
+			rows = append(rows, truncate(m.styles.MenuSelected.Render("> @"+path), m.menuBodyWidth()))
 			continue
 		}
-		rows = append(rows, "  "+m.styles.MenuKey.Render("@"+path))
+		rows = append(rows, truncate("  "+m.styles.MenuKey.Render("@"+path), m.menuBodyWidth()))
 	}
 	rows = append(rows, m.styles.Hint.Render("Tab complete | Up/Down move | Esc cancel"))
+	// Rows are truncated to width-2 above so the Menu padding brings the block
+	// to the terminal width without wrapping.
 	return m.styles.Menu.Render(strings.Join(rows, "\n"))
 }
 
