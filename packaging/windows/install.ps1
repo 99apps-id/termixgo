@@ -27,6 +27,10 @@
     Skip the PATH change. Useful in a locked-down image where the PATH is
     managed elsewhere.
 
+.PARAMETER NoPause
+    Do not wait for a keypress at the end. The installer pauses by default so
+    a double-clicked run stays readable; pass this for silent scripted runs.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File install.ps1
 #>
@@ -34,13 +38,33 @@
 param(
     [string]$Source = $PSScriptRoot,
     [string]$Destination = "",
-    [switch]$NoPath
+    [switch]$NoPath,
+    [switch]$NoPause
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+# A double-clicked installer closes its window on exit, which hides the very
+# error the operator needs to read. Pausing keeps the window open; scripted
+# runs pass -NoPause instead.
+trap {
+    Write-Host ""
+    Write-Host "Installation failed: $($_.Exception.Message)"
+    Pause-AtEnd
+    exit 1
+}
+
 function Write-Step([string]$Text) { Write-Host "  $Text" }
+
+# Pause-AtEnd waits for a keypress unless -NoPause was given. The wait itself
+# never fails the install: without a console to read from there is nothing to
+# keep open for.
+function Pause-AtEnd {
+    if ($NoPause) { return }
+    try { Read-Host "Press Enter to close" | Out-Null }
+    catch { }
+}
 
 if (-not $Destination) {
     $Destination = Join-Path $env:LOCALAPPDATA "Programs\Termixgo"
@@ -63,7 +87,7 @@ Write-Host ""
 # worse than a refused one, so this stops before touching anything.
 $running = Get-Process -Name "termixgo" -ErrorAction SilentlyContinue
 if ($running) {
-    throw "Termixgo is running (pid $($running.Id -join ', ')). Quit it and run the installer again."
+    throw "Termixgo is running (pid $($running.Id -join ', ')). Close its window and run the installer again."
 }
 
 Write-Host "== install =="
@@ -160,3 +184,4 @@ Write-Host "  termixgo --help     every subcommand"
 Write-Host ""
 Write-Host "The first launch opens the onboarding wizard, which asks for a provider"
 Write-Host "key and a default model. Local models need no key."
+Pause-AtEnd
