@@ -205,11 +205,25 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, key
 // EditMessageText updates a message in place, which is how the progress card
 // avoids flooding the chat.
 func (c *Client) EditMessageText(ctx context.Context, chatID int64, messageID int64, text string) error {
+	return c.EditMessageTextWithKeyboard(ctx, chatID, messageID, text, nil)
+}
+
+// EditMessageTextWithKeyboard edits a message and replaces its inline keyboard
+// at the same time. A nil keyboard leaves the current markup untouched; an empty
+// keyboard removes the buttons, which is what a picker does once a choice is
+// made.
+func (c *Client) EditMessageTextWithKeyboard(ctx context.Context, chatID int64, messageID int64, text string, keyboard *InlineKeyboard) error {
 	payload := map[string]any{
 		"chat_id":                  chatID,
 		"message_id":               messageID,
 		"text":                     clampText(text),
 		"disable_web_page_preview": true,
+	}
+	if keyboard != nil {
+		if keyboard.InlineKeyboard == nil {
+			keyboard.InlineKeyboard = [][]InlineButton{}
+		}
+		payload["reply_markup"] = keyboard
 	}
 	return c.call(ctx, "editMessageText", payload, nil)
 }

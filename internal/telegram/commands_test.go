@@ -268,9 +268,9 @@ func TestOwnerCommands(t *testing.T) {
 			want: "Already paired",
 		},
 		{
-			name: "model without an argument reports",
+			name: "model without an argument opens the picker",
 			text: "/model",
-			want: "Model: test-model",
+			want: "Current model: test-model",
 		},
 		{
 			name: "model with an argument switches",

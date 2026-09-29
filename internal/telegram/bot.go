@@ -145,7 +145,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		{Command: "stop", Description: "Stop the running turn"},
 		{Command: "new", Description: "Start a new session"},
 		{Command: "status", Description: "Show status"},
-		{Command: "model", Description: "Show or switch the model"},
+		{Command: "model", Description: "Choose or switch the model"},
 		{Command: "unpair", Description: "Detach this chat"},
 		{Command: "help", Description: "List commands"},
 	}
@@ -240,7 +240,14 @@ func (b *Bot) handleCallback(ctx context.Context, query *CallbackQuery) {
 		_ = b.client.AnswerCallbackQuery(ctx, query.ID, "Not allowed.")
 		return
 	}
-	_ = b.client.AnswerCallbackQuery(ctx, query.ID, "")
+	switch {
+	case strings.HasPrefix(query.Data, modelProviderPrefix):
+		b.showProviderModels(ctx, query, strings.TrimPrefix(query.Data, modelProviderPrefix))
+	case strings.HasPrefix(query.Data, modelSelectPrefix):
+		b.selectModel(ctx, query, strings.TrimPrefix(query.Data, modelSelectPrefix))
+	default:
+		_ = b.client.AnswerCallbackQuery(ctx, query.ID, "")
+	}
 }
 
 func (b *Bot) handleMessage(ctx context.Context, message *Message) {
@@ -285,7 +292,9 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		b.reply(ctx, chatID, "Stopping the running turn.")
 	case "model":
 		if strings.TrimSpace(argument) == "" {
-			b.reply(ctx, chatID, "Model: "+b.agent.Model())
+			// Open the picker rather than only reporting the active model: the
+			// operator asked to choose one.
+			b.sendModelMenu(ctx, chatID)
 			return
 		}
 		updated, err := b.agent.SetModel(argument)
@@ -426,7 +435,7 @@ func helpText() string {
 		"/run <prompt>  run with a live progress card",
 		"/stop          stop the running turn",
 		"/new           start a new session",
-		"/model [id]    show or switch the model",
+		"/model [id]    choose a model, or switch by id",
 		"/status        show status",
 		"/unpair        detach this chat",
 		"/help          this list",
