@@ -233,6 +233,12 @@ func RunPlainWithContext(ctx context.Context, application *app.App, in io.Reader
 		if line == "" {
 			continue
 		}
+		// A bare exit or quit leaves, because that is how a REPL ends and the
+		// alternative is spending a model call on the word. The slash form still
+		// works; anything else is a prompt.
+		if strings.EqualFold(line, "exit") || strings.EqualFold(line, "quit") {
+			break
+		}
 		if name, args, ok := ParseSlash(line); ok {
 			quit, err := runPlainSlash(ctx, application, name, args, out)
 			if err != nil {

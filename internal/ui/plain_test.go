@@ -211,6 +211,25 @@ func TestParseIndex(t *testing.T) {
 
 // TestRunPlainWithContextHandlesSlashCommands drives the CI entry point the way
 // a pipeline would: commands in, output out, then EOF.
+// TestPlainReplEndsOnABareExitOrQuit keeps the word from becoming a prompt.
+// The REPL ends when the input runs out, but an operator ends it by typing
+// "exit", and without this that word was sent to the model as a request.
+func TestPlainReplEndsOnABareExitOrQuit(t *testing.T) {
+	for _, word := range []string{"exit", "quit", "EXIT", "Quit"} {
+		application := plainApp(t)
+		// No slash, and a line after it that must never be read.
+		input := strings.NewReader(word + "\nthis must not run\n")
+
+		var out bytes.Buffer
+		if err := RunPlainWithContext(context.Background(), application, input, &out); err != nil {
+			t.Fatalf("RunPlainWithContext(%q): %v", word, err)
+		}
+		if strings.Contains(out.String(), "this must not run") {
+			t.Errorf("%q did not end the REPL:\n%s", word, out.String())
+		}
+	}
+}
+
 func TestRunPlainWithContextHandlesSlashCommands(t *testing.T) {
 	application := plainApp(t)
 	input := strings.NewReader(strings.Join([]string{

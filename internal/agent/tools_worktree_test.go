@@ -99,3 +99,26 @@ func TestWorktreeOutsideGitFails(t *testing.T) {
 		t.Errorf("outside git the tool must report an error")
 	}
 }
+
+// TestSummarizeWorktreesIgnoresAPrefixLine keeps the listing alive when git
+// prints a modifier before any worktree, which is what a bare repository does.
+//
+// The summary appends the branch and the bare marker to the previous row, so a
+// modifier with no row before it has nothing to attach to. The guard is what
+// makes that a no-op instead of an index out of range.
+func TestSummarizeWorktreesIgnoresAPrefixLine(t *testing.T) {
+	// A branch line with no worktree line before it must not panic.
+	out := summarizeWorktrees("branch refs/heads/main\nworktree /tmp/repo\n")
+	if !strings.Contains(out, "/tmp/repo") {
+		t.Errorf("output missing the worktree path: %q", out)
+	}
+	if strings.Contains(out, "main") {
+		t.Errorf("the orphan branch line should be ignored, got %q", out)
+	}
+
+	// A bare worktree with no branch: the marker attaches to its own row.
+	out = summarizeWorktrees("worktree /tmp/bare\nbare\n")
+	if !strings.Contains(out, "[bare]") {
+		t.Errorf("output should mark the bare worktree: %q", out)
+	}
+}
