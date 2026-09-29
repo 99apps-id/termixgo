@@ -137,6 +137,30 @@ func (r *Registry) Lookup(name string) (Tool, bool) {
 	return tool, ok
 }
 
+// With returns a new registry holding this registry's tools plus the extras.
+//
+// A name that is already taken is skipped rather than replaced. The registry
+// indexes by name, so letting a contributed tool displace a built-in one would
+// be a silent hijack of that call; the qualified prefix an extension uses is
+// what stops the collision happening in the first place.
+func (r *Registry) With(extra ...Tool) *Registry {
+	combined := make([]Tool, 0, len(r.tools)+len(extra))
+	combined = append(combined, r.tools...)
+	taken := make(map[string]bool, len(r.tools)+len(extra))
+	for _, tool := range r.tools {
+		taken[strings.ToLower(tool.Name())] = true
+	}
+	for _, tool := range extra {
+		name := strings.ToLower(tool.Name())
+		if taken[name] {
+			continue
+		}
+		taken[name] = true
+		combined = append(combined, tool)
+	}
+	return NewRegistry(combined...)
+}
+
 // Tools returns the tools in registration order.
 func (r *Registry) Tools() []Tool { return r.tools }
 

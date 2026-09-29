@@ -66,6 +66,24 @@ type Telegram struct {
 	PairingCode string `json:"pairingCode,omitempty"`
 }
 
+// MCPServer configures one Model Context Protocol server for this install.
+//
+// A server that is listed is wanted by definition, so the flag is the
+// exception rather than the rule: Disabled parks a server without deleting the
+// command line, which is what an operator wants when a server is misbehaving
+// and they intend to bring it back.
+type MCPServer struct {
+	// Name labels the server and prefixes every tool it contributes.
+	Name string `json:"name"`
+	// Command is the executable to run. The server speaks the protocol on its
+	// stdio, so a command that prints a banner there will not work.
+	Command string            `json:"command"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	// Disabled keeps a server out of the session without removing it.
+	Disabled bool `json:"disabled,omitempty"`
+}
+
 // Config is the whole non-secret configuration.
 type Config struct {
 	Version int `json:"version"`
@@ -106,6 +124,11 @@ type Config struct {
 
 	// AlwaysAllowedTools are tools the operator answered "allow always" for.
 	AlwaysAllowedTools []string `json:"alwaysAllowedTools,omitempty"`
+
+	// MCPServers are the Model Context Protocol servers to start with a
+	// session. Each one contributes its tools to the agent, gated by the
+	// approval policy because they run in processes this program did not write.
+	MCPServers []MCPServer `json:"mcpServers,omitempty"`
 
 	RecentProjects []string `json:"recentProjects,omitempty"`
 	Telegram       Telegram `json:"telegram,omitempty"`
@@ -196,6 +219,26 @@ func (c *Config) normalise() {
 	if c.BaseURLs == nil {
 		c.BaseURLs = map[string]string{}
 	}
+	// A server with no command would start a process that cannot exist, so it
+	// is dropped rather than left to fail on every session start.
+	configured := make([]MCPServer, 0, len(c.MCPServers))
+	seen := map[string]bool{}
+	for _, server := range c.MCPServers {
+		server.Name = strings.TrimSpace(server.Name)
+		server.Command = strings.TrimSpace(server.Command)
+		if server.Name == "" || server.Command == "" {
+			continue
+		}
+		// Names have to be unique: the name is the prefix of every tool the
+		// server contributes, so two servers sharing one would make the second
+		// server's tools collide with the first's.
+		if seen[server.Name] {
+			continue
+		}
+		seen[server.Name] = true
+		configured = append(configured, server)
+	}
+	c.MCPServers = configured
 }
 
 // BaseURL returns the configured endpoint for a provider, or the fallback.

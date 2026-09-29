@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/skill"
 )
 
@@ -416,6 +417,11 @@ func TestWebFetchTruncatesALargePage(t *testing.T) {
 func TestInstallSkillFromLocalDirectory(t *testing.T) {
 	tool := &installSkillTool{}
 	env := testEnv(t)
+
+	// Use a temporary home so the installed skill cannot leak into other
+	// packages' Discover() calls.
+	userHome := t.TempDir()
+	t.Setenv(config.EnvHome, userHome)
 
 	skillDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: local-skill\ndescription: installed locally\n---\n\nbody"), 0o644); err != nil {

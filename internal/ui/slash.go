@@ -26,6 +26,7 @@ var slashCommands = []SlashCommand{
 	{Trigger: "/harness", Args: "[id]", Summary: "Show or change the agent harness"},
 	{Trigger: "/plan", Args: "", Summary: "Show the current task plan"},
 	{Trigger: "/tools", Args: "", Summary: "List the tools the agent can call"},
+	{Trigger: "/mcp", Args: "[reload]", Summary: "Show the MCP servers and their tools"},
 	{Trigger: "/skills", Args: "[reload]", Summary: "List loaded skills"},
 	{Trigger: "/memory", Args: "", Summary: "Show what the agent has learned"},
 	{Trigger: "/telegram", Args: "[setup|on|off|status|pair]", Summary: "Manage the Telegram companion"},

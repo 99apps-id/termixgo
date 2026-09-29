@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,6 +12,11 @@ import (
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/config"
 )
+
+// mcpReloadTimeout bounds a /mcp reload, so a server that hangs on its
+// handshake does not freeze the interface. It is longer than the app's own
+// startup budget because a reload also lists every server's tools.
+const mcpReloadTimeout = 30 * time.Second
 
 // initPrompt asks the model to write the project memory file.
 const initPrompt = "Analyse this repository and write a TERMIXGO.md at the workspace root. " +
@@ -83,6 +90,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "tools":
 		return m.slashTools()
+	case "mcp":
+		return m.slashMCP(args)
 	case "skills":
 		return m.slashSkills(args)
 	case "memory":
@@ -304,6 +313,68 @@ func (m *Model) slashTools() (tea.Model, tea.Cmd) {
 	m.blocks = append(m.blocks, block{kind: blockNotice, text: "Tools:\n" + strings.Join(lines, "\n")})
 	m.refresh()
 	return m, nil
+}
+
+// slashMCP reports the configured MCP servers and, on reload, reconnects them.
+//
+// The listing names a server that failed and the command it was given, because
+// that is what an operator needs to reproduce the failure by hand. A server
+// that is disabled is shown too, so a typo in the config does not look like
+// nothing at all.
+func (m *Model) slashMCP(args string) (tea.Model, tea.Cmd) {
+	trimmed := strings.TrimSpace(args)
+	if strings.EqualFold(trimmed, "reload") {
+		ctx, cancel := context.WithTimeout(context.Background(), mcpReloadTimeout)
+		defer cancel()
+		m.app.ReloadMCP(ctx)
+	}
+	if !strings.EqualFold(trimmed, "reload") && trimmed != "" {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /mcp [reload]"})
+		m.refresh()
+		return m, nil
+	}
+
+	status := m.app.MCPStatus()
+	if len(status) == 0 {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join([]string{
+			"No MCP servers are configured.",
+			"Add one to mcpServers in the settings file, for example:",
+			`  {"name": "files", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]}`,
+			"Then run /mcp reload.",
+		}, "\n")})
+		m.refresh()
+		return m, nil
+	}
+
+	var lines []string
+	for _, entry := range status {
+		switch {
+		case entry.Disabled:
+			lines = append(lines, fmt.Sprintf("  %-14s off       %s", entry.Name, entry.Command))
+		case entry.Err != nil:
+			lines = append(lines, fmt.Sprintf("  %-14s failed    %s", entry.Name, entry.Command))
+			lines = append(lines, "                 "+firstLine(entry.Err.Error()))
+			if entry.Stderr != "" {
+				lines = append(lines, "                 stderr: "+firstLine(entry.Stderr))
+			}
+		default:
+			lines = append(lines, fmt.Sprintf("  %-14s %-8s %d tool(s)  (%s)",
+				entry.Name, "ready", entry.ToolCount, entry.Command))
+		}
+	}
+	header := fmt.Sprintf("MCP servers (%d):", len(status))
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: header + "\n" + strings.Join(lines, "\n")})
+	m.refresh()
+	return m, nil
+}
+
+// firstLine clips an error to one readable transcript line.
+func firstLine(text string) string {
+	collapsed := strings.Join(strings.Fields(text), " ")
+	if len(collapsed) <= 160 {
+		return collapsed
+	}
+	return collapsed[:160] + "..."
 }
 
 func (m *Model) slashSkills(args string) (tea.Model, tea.Cmd) {

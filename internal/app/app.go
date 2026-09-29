@@ -11,9 +11,11 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/mcp"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/secrets"
 	"github.com/99apps-id/termixgo/internal/skill"
@@ -22,6 +24,11 @@ import (
 
 // eventBuffer is deep enough that a burst of tool output never blocks a run.
 const eventBuffer = 512
+
+// mcpConnectTimeout bounds the MCP handshake and tool listing together. A server
+// that hangs on startup must not stop the session from opening, so the whole
+// attempt is capped rather than each server separately.
+const mcpConnectTimeout = 20 * time.Second
 
 // ErrBusy reports that a turn is already in flight. Callers surface it rather
 // than queueing, so a second surface never appears to hang.
@@ -93,6 +100,11 @@ type App struct {
 	bot       *telegram.Bot
 	botCancel context.CancelFunc
 	botStatus string
+
+	// mcp owns the connected MCP servers and the tools they contribute. It is
+	// replaced rather than mutated on a reload, so a turn already in flight
+	// keeps the registry it started with.
+	mcp *mcp.Pool
 }
 
 // New loads the state for a workspace and prepares a session.
@@ -138,12 +150,115 @@ func New(workspace string) (*App, error) {
 	}
 	instance.session = agent.NewSession(workspace, "")
 
+	// MCP servers are connected before the first turn so the model sees their
+	// tools from the start. A server that fails is recorded and skipped: the
+	// operator should not lose a working session to a broken server.
+	instance.mcp = mcp.NewPool()
+	instance.connectMCP(context.Background())
+
 	if err := instance.restoreModel(); err != nil {
 		// A missing or unusable model is not fatal: the UI sends the operator
 		// to /setup, and every other feature still works.
 		instance.model = provider.Model{}
 	}
 	return instance, nil
+}
+
+// connectMCP starts the configured MCP servers and folds their tools into the
+// registry.
+//
+// It always builds a fresh registry from the built-ins, so a reload does not
+// accumulate the tools of the previous attempt.
+func (a *App) connectMCP(ctx context.Context) {
+	cfg := a.Config()
+	enabled := make([]mcp.Options, 0, len(cfg.MCPServers))
+	disabled := make([]mcp.Options, 0, len(cfg.MCPServers))
+	for _, server := range cfg.MCPServers {
+		options := mcp.Options{
+			Name:    server.Name,
+			Command: server.Command,
+			Args:    server.Args,
+			Env:     server.Env,
+			Dir:     a.workspace,
+		}
+		if server.Disabled {
+			disabled = append(disabled, options)
+			continue
+		}
+		enabled = append(enabled, options)
+	}
+
+	pool := mcp.NewPool()
+	// The handshake and the listing are bounded so a server that hangs cannot
+	// stop the session from starting.
+	connectCtx, cancel := context.WithTimeout(ctx, mcpConnectTimeout)
+	pool.Connect(connectCtx, disabled, enabled)
+	cancel()
+
+	contributions := make([]agent.Tool, 0, len(pool.Tools()))
+	for _, bound := range pool.Tools() {
+		contributions = append(contributions, agent.NewMCPTool(agent.MCPToolSpec{
+			Server:      bound.Server,
+			Name:        bound.Name,
+			RemoteName:  bound.Tool.Name,
+			Description: bound.Tool.Description,
+			Schema:      bound.Tool.InputSchema,
+			ReadOnly:    bound.Tool.Annotations != nil && bound.Tool.Annotations.ReadOnlyHint,
+			Call:        a.mcpCaller(bound.Name),
+		}))
+	}
+
+	a.mu.Lock()
+	previous := a.mcp
+	a.mcp = pool
+	a.tools = agent.DefaultRegistry().With(contributions...)
+	a.mu.Unlock()
+	if previous != nil {
+		previous.Close()
+	}
+}
+
+// mcpCaller binds a contributed tool name to the pool, so the tool holds no
+// reference to the pool itself and a reload cannot leave it calling a closed
+// one.
+func (a *App) mcpCaller(name string) func(ctx context.Context, args map[string]any) (string, bool, error) {
+	return func(ctx context.Context, args map[string]any) (string, bool, error) {
+		a.mu.Lock()
+		pool := a.mcp
+		a.mu.Unlock()
+		if pool == nil {
+			return "", false, errors.New("no MCP server is configured")
+		}
+		result, err := pool.Call(ctx, name, args)
+		if err != nil {
+			return "", false, err
+		}
+		return result.Text(), result.IsError, nil
+	}
+}
+
+// MCPStatus reports the configured MCP servers for the operator.
+func (a *App) MCPStatus() []mcp.ServerStatus {
+	a.mu.Lock()
+	pool := a.mcp
+	a.mu.Unlock()
+	if pool == nil {
+		return nil
+	}
+	return pool.Status()
+}
+
+// ReloadMCP reconnects every MCP server, which is what an operator does after
+// fixing a command line or installing the package a server was missing.
+func (a *App) ReloadMCP(ctx context.Context) error {
+	if a.Running() {
+		return errors.New("a turn is running; stop it before reloading MCP servers")
+	}
+	a.connectMCP(ctx)
+	if failures := a.mcp.Failures(); len(failures) > 0 {
+		return fmt.Errorf("%d MCP server(s) failed: %w", len(failures), failures[0].Err)
+	}
+	return nil
 }
 
 // restoreModel resolves the configured model and builds its client.
@@ -544,6 +659,13 @@ func (a *App) Shutdown() {
 	a.StopTelegram()
 	if a.processes != nil {
 		a.processes.Shutdown()
+	}
+	a.mu.Lock()
+	pool := a.mcp
+	a.mcp = nil
+	a.mu.Unlock()
+	if pool != nil {
+		pool.Close()
 	}
 }
 

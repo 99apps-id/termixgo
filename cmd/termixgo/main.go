@@ -12,12 +12,14 @@ import (
 	"os/signal"
 	"runtime"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/app"
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/mcp"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/secrets"
 	"github.com/99apps-id/termixgo/internal/ui"
@@ -74,6 +76,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runApproval(args[1:], stdout)
 	case "harness":
 		return runHarness(args[1:], stdout)
+	case "mcp":
+		return runMCP(args[1:], stdout)
 	case "secret":
 		return runSecret(args[1:], stdin, stdout)
 	case "telegram":
@@ -235,6 +239,93 @@ func runApproval(args []string, stdout io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "approval mode is now %s\n", mode)
 	return nil
+}
+
+// runMCP reports the configured MCP servers and the tools each one contributes.
+//
+// It connects for real rather than reading the config alone, because the
+// interesting failure is a server whose command is wrong or whose package is
+// missing, and only starting it shows that.
+func runMCP(args []string, stdout io.Writer) error {
+	if len(args) > 0 {
+		switch strings.TrimSpace(args[0]) {
+		case "list", "":
+		default:
+			return fmt.Errorf("usage: termixgo mcp [list]")
+		}
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if len(cfg.MCPServers) == 0 {
+		fmt.Fprintln(stdout, "No MCP servers are configured.")
+		fmt.Fprintln(stdout, "Add them to mcpServers in", config.FileName+", for example:")
+		fmt.Fprintln(stdout, `  {"name": "files", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]}`)
+		return nil
+	}
+
+	workspace, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	enabled := make([]mcp.Options, 0, len(cfg.MCPServers))
+	disabled := make([]mcp.Options, 0, len(cfg.MCPServers))
+	for _, server := range cfg.MCPServers {
+		options := mcp.Options{
+			Name:    server.Name,
+			Command: server.Command,
+			Args:    server.Args,
+			Env:     server.Env,
+			Dir:     workspace,
+		}
+		if server.Disabled {
+			disabled = append(disabled, options)
+			continue
+		}
+		enabled = append(enabled, options)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := mcp.NewPool()
+	defer pool.Close()
+	pool.Connect(ctx, disabled, enabled)
+
+	for _, entry := range pool.Status() {
+		switch {
+		case entry.Disabled:
+			fmt.Fprintf(stdout, "%s (off)\n", entry.Name)
+		case entry.Err != nil:
+			fmt.Fprintf(stdout, "%s (failed)\n", entry.Name)
+			fmt.Fprintf(stdout, "  command: %s\n", entry.Command)
+			fmt.Fprintf(stdout, "  error: %v\n", entry.Err)
+			if entry.Stderr != "" {
+				fmt.Fprintf(stdout, "  stderr: %s\n", strings.Join(strings.Fields(entry.Stderr), " "))
+			}
+		default:
+			fmt.Fprintf(stdout, "%s (ready, %d tool(s))\n", entry.Name, entry.ToolCount)
+		}
+	}
+	for _, bound := range pool.Tools() {
+		fmt.Fprintf(stdout, "  %-28s %s\n", bound.Name, firstSentence(bound.Tool.Description))
+	}
+
+	// A failure here is the whole point of the command, so it is reported as a
+	// non-zero exit rather than printed and swallowed.
+	if failures := pool.Failures(); len(failures) > 0 {
+		return fmt.Errorf("%d MCP server(s) failed to start", len(failures))
+	}
+	return nil
+}
+
+// firstSentence clips a tool description to one line for the listing.
+func firstSentence(text string) string {
+	collapsed := strings.Join(strings.Fields(text), " ")
+	if len(collapsed) <= 70 {
+		return collapsed
+	}
+	return collapsed[:70] + "..."
 }
 
 // runHarness shows or selects the agent harness profile.
@@ -461,6 +552,7 @@ Usage:
   termixgo trust [on|off]         Show or set folder trust for this directory
   termixgo approval [mode]        Show or set ask|edits|all
   termixgo harness [id]           Show or set the agent harness profile
+  termixgo mcp                    List the MCP servers and the tools they add
   termixgo secret <provider> [k]  Store a provider API key
   termixgo telegram [status|on|off]
   termixgo serve                  Run the Telegram assistant 24/7
