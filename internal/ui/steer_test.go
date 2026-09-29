@@ -71,8 +71,13 @@ func TestQueuedInputSteersALiveTurn(t *testing.T) {
 	if queued.composer.Value() != "" {
 		t.Errorf("the composer should be cleared, got %q", queued.composer.Value())
 	}
-	if !strings.Contains(queued.notice, "Queued (1)") {
+	if !strings.Contains(queued.notice, "Steering") {
 		t.Errorf("the operator should be told the message is armed, got %q", queued.notice)
+	}
+	// The steer is shown at once so the screen has a sign it was received; the
+	// agent folds it in only at its next step.
+	if last := queued.blocks[len(queued.blocks)-1]; last.kind != blockUser || last.text != "also check the tests" {
+		t.Errorf("the steer should appear as a user block, got %+v", last)
 	}
 
 	close(release)

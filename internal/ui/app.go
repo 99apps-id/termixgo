@@ -103,6 +103,11 @@ type Model struct {
 	// queues the composer text instead of refusing it, and each runDone
 	// starts the next queued input, so a steer message is never lost.
 	queue []string
+	// steerEcho holds steer texts already shown as a user block. The agent
+	// emits a "Steering: ..." notice when it folds the message in at its next
+	// step; that notice is dropped for an echoed steer so the message is not
+	// shown twice.
+	steerEcho []string
 
 	pendingApproval *agent.ApprovalRequest
 	approvalReply   chan agent.Decision
@@ -281,7 +286,11 @@ func (m *Model) refreshWelcome() {
 
 // Init implements tea.Model.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.spin.Tick, tea.SetWindowTitle(m.windowTitle()))
+	// The event channel gets exactly one reader for the whole program. Each
+	// eventMsg re-arms it, and startRun does not start another: two readers on
+	// one channel race, and the deltas of a turn are then applied out of order,
+	// which is what made the tail of an answer look scrambled.
+	return tea.Batch(textarea.Blink, m.spin.Tick, tea.SetWindowTitle(m.windowTitle()), waitForEvent(m.app.Events()))
 }
 
 // windowTitle is the terminal tab title. It mirrors the run state so the
@@ -340,6 +349,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case runDoneMsg:
 		m.running = false
+		// A steer the finished turn never folded in is drained into the queue
+		// below and runs as the next turn, so the echo list is done with.
+		m.steerEcho = nil
 		// A turn that ended while an approval or question was pending leaves
 		// those dialogs orphaned. Clear them and send the safe default on
 		// the reply channel so the goroutine that created it is never stuck.
@@ -750,21 +762,36 @@ func (m *Model) enqueue(value string) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 	}
-	if shouldSteer(value, m.running && m.app.Running()) {
-		m.app.Steer(value)
+	steered := shouldSteer(value, m.running && m.app.Running())
+	if steered {
+		m.recordSteer(value)
 	} else {
 		m.queue = append(m.queue, value)
 	}
 	m.composer.SetValue("")
 	m.slashMatches = nil
 	m.mentionMatches = nil
-	if len(m.queue) > 0 && m.queue[len(m.queue)-1] == value {
-		m.notice = fmt.Sprintf("Queued (%d). It runs when this turn ends.", m.queuedCount())
+	if steered {
+		m.notice = fmt.Sprintf("Steering the run. (%d waiting)", m.queuedCount())
 	} else {
-		m.notice = fmt.Sprintf("Queued (%d). The agent picks it up at its next step.", m.queuedCount())
+		m.notice = fmt.Sprintf("Queued (%d). It runs when this turn ends.", m.queuedCount())
 	}
 	m.refresh()
 	return m, nil
+}
+
+// recordSteer shows the operator's message at once and hands it to the running
+// turn. The agent folds it in at its next step, which may be seconds away, so
+// without this the screen gave no sign the message was received; the transcript
+// block is separated from the one above by the usual blank line.
+func (m *Model) recordSteer(value string) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return
+	}
+	m.app.Steer(trimmed)
+	m.steerEcho = append(m.steerEcho, trimmed)
+	m.blocks = append(m.blocks, block{kind: blockUser, text: trimmed})
 }
 
 // shouldSteer reports whether an input may be handed to the turn in flight.
@@ -830,7 +857,10 @@ func (m *Model) startRun(input string) (tea.Model, tea.Cmd) {
 			m.program.Send(runDoneMsg{err: err})
 		}
 	}()
-	return m, tea.Batch(m.spin.Tick, tick(), waitForEvent(application.Events()), tea.SetWindowTitle(m.windowTitle()))
+	// The single event reader from Init (re-armed by each eventMsg) keeps
+	// draining the channel; starting another here would make two readers fight
+	// over the stream and reorder its deltas.
+	return m, tea.Batch(m.spin.Tick, tick(), tea.SetWindowTitle(m.windowTitle()))
 }
 
 // waitForEvent reads one agent event off the channel.
@@ -907,6 +937,13 @@ func (m *Model) applyEvent(event agent.Event) {
 	case agent.EventPlan:
 		m.applyPlan(event.Plan)
 	case agent.EventNotice:
+		// A steer already shown as a user block is not repeated as a notice.
+		if steer, ok := strings.CutPrefix(event.Text, "Steering: "); ok {
+			if len(m.steerEcho) > 0 && strings.TrimSpace(steer) == m.steerEcho[0] {
+				m.steerEcho = m.steerEcho[1:]
+				return
+			}
+		}
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: event.Text})
 	case agent.EventError:
 		if event.Err != nil {

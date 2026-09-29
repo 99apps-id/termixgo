@@ -52,6 +52,33 @@ func TestNoBlockWrapsALongUnbreakableWord(t *testing.T) {
 	}
 }
 
+// TestDetailsOnNeverExceedsWidth covers the Ctrl+O path the operator flagged:
+// with details on the reasoning body and the tool timing are drawn too, so the
+// extra shapes must still fit. A long word, a wide glyph and a running tool are
+// all present with details on and off.
+func TestDetailsOnNeverExceedsWidth(t *testing.T) {
+	for _, size := range []struct{ width, height int }{
+		{80, 24}, {60, 18}, {50, 16},
+	} {
+		model := chatModel(t)
+		resize(model, size.width, size.height)
+		long := strings.Repeat("w", 400)
+		wide := strings.Repeat("日", 80)
+		model.blocks = append(model.blocks,
+			block{kind: blockThinking, running: true, reasoning: "reason " + long + " " + wide},
+			block{kind: blockTool, running: true, toolName: "read_file", toolLabel: long},
+			block{kind: blockAssistant, text: "```\n" + long + "\n```\nand " + long + " plus " + wide},
+		)
+		for _, details := range []bool{true, false} {
+			model.showDetails = details
+			model.refresh()
+			if got := widestDisplayLine(model.View()); got > size.width {
+				t.Errorf("details=%v at %dx%d: widest line is %d columns", details, size.width, size.height, got)
+			}
+		}
+	}
+}
+
 // TestHardSplitPreservesTheWord checks that splitting a word never drops,
 // duplicates or reorders a character; the pieces join back to the original.
 func TestHardSplitPreservesTheWord(t *testing.T) {
