@@ -28,9 +28,18 @@ everything the agent does printed as terminal output.
   command output behind it.
 - Optional Telegram companion, so you can keep a run going from your phone.
 
+## Screenshot
+
+![Termixgo running in a terminal on a Linux VPS](termixgo-vps.png)
+
+Termixgo running over SSH on a Linux VPS. The header names the workspace and the
+active model, the transcript shows the onboarding summary, and the status line
+keeps the context usage, the session id and the session spend in view.
+
 ## Table of contents
 
 - [Features](#features)
+- [Screenshot](#screenshot)
 - [Install](#install)
 - [Quick start](#quick-start)
 - [The terminal UI](#the-terminal-ui)
