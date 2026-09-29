@@ -60,12 +60,12 @@ func TestTerminalDetectionDistinguishesPipesFromFiles(t *testing.T) {
 func TestRenderToolBlockMarksRunningDoneAndFailed(t *testing.T) {
 	styles := NewStyles(DefaultPalette())
 
-	running := stripANSI(renderToolBlock(block{kind: blockTool, running: true, toolLabel: "Reading main.go"}, styles, 80))
+	running := stripANSI(renderToolBlock(block{kind: blockTool, running: true, toolLabel: "Reading main.go"}, styles, 80, true))
 	if !strings.Contains(running, "> Reading main.go") {
 		t.Errorf("running = %q, want a > marker", running)
 	}
 
-	done := stripANSI(renderToolBlock(block{kind: blockTool, toolOK: true, toolLabel: "Read main.go", toolMillis: 42}, styles, 80))
+	done := stripANSI(renderToolBlock(block{kind: blockTool, toolOK: true, toolLabel: "Read main.go", toolMillis: 42}, styles, 80, true))
 	if !strings.Contains(done, "+ Read main.go") {
 		t.Errorf("done = %q, want a + marker", done)
 	}
@@ -73,7 +73,7 @@ func TestRenderToolBlockMarksRunningDoneAndFailed(t *testing.T) {
 		t.Errorf("done = %q, want the elapsed time", done)
 	}
 
-	failed := stripANSI(renderToolBlock(block{kind: blockTool, toolOK: false, toolLabel: "Read main.go"}, styles, 80))
+	failed := stripANSI(renderToolBlock(block{kind: blockTool, toolOK: false, toolLabel: "Read main.go"}, styles, 80, true))
 	if !strings.Contains(failed, "x Read main.go") {
 		t.Errorf("failed = %q, want an x marker", failed)
 	}
@@ -83,7 +83,7 @@ func TestRenderToolBlockMarksRunningDoneAndFailed(t *testing.T) {
 	}
 
 	// A long label is clipped to the width so one path cannot break the layout.
-	long := stripANSI(renderToolBlock(block{kind: blockTool, toolOK: true, toolLabel: strings.Repeat("p", 200)}, styles, 40))
+	long := stripANSI(renderToolBlock(block{kind: blockTool, toolOK: true, toolLabel: strings.Repeat("p", 200)}, styles, 40, true))
 	if len([]rune(long)) > 42 {
 		t.Errorf("a long label was not clipped: %d runes", len([]rune(long)))
 	}
@@ -92,7 +92,7 @@ func TestRenderToolBlockMarksRunningDoneAndFailed(t *testing.T) {
 func TestRenderThinkingBlockTrimsALongReasoning(t *testing.T) {
 	styles := NewStyles(DefaultPalette())
 
-	running := stripANSI(renderThinkingBlock(block{kind: blockThinking, running: true, reasoning: "thinking now"}, styles, 80))
+	running := stripANSI(renderThinkingBlock(block{kind: blockThinking, running: true, reasoning: "thinking now"}, styles, 80, true))
 	if !strings.Contains(running, "Thinking...") {
 		t.Errorf("running = %q, want the live header", running)
 	}
@@ -100,19 +100,19 @@ func TestRenderThinkingBlockTrimsALongReasoning(t *testing.T) {
 		t.Errorf("running = %q, want the text", running)
 	}
 
-	timed := stripANSI(renderThinkingBlock(block{kind: blockThinking, reasoning: "considered", seconds: 7}, styles, 80))
+	timed := stripANSI(renderThinkingBlock(block{kind: blockThinking, reasoning: "considered", seconds: 7}, styles, 80, true))
 	if !strings.Contains(timed, "Reasoned for 7s") {
 		t.Errorf("timed = %q, want the duration", timed)
 	}
 
 	// No duration and not running: a bare header.
-	bare := stripANSI(renderThinkingBlock(block{kind: blockThinking, reasoning: "considered"}, styles, 80))
+	bare := stripANSI(renderThinkingBlock(block{kind: blockThinking, reasoning: "considered"}, styles, 80, true))
 	if !strings.Contains(bare, "Reasoned") || strings.Contains(bare, "for") {
 		t.Errorf("bare = %q, want a plain header", bare)
 	}
 
 	// No reasoning at all leaves the header alone rather than an empty block.
-	empty := stripANSI(renderThinkingBlock(block{kind: blockThinking}, styles, 80))
+	empty := stripANSI(renderThinkingBlock(block{kind: blockThinking}, styles, 80, true))
 	if !strings.Contains(empty, "Reasoned") {
 		t.Errorf("empty = %q", empty)
 	}
@@ -122,7 +122,7 @@ func TestRenderThinkingBlockTrimsALongReasoning(t *testing.T) {
 	for index := 0; index < 40; index++ {
 		lines = append(lines, "reasoning line")
 	}
-	trimmed := stripANSI(renderThinkingBlock(block{kind: blockThinking, reasoning: strings.Join(lines, "\n")}, styles, 60))
+	trimmed := stripANSI(renderThinkingBlock(block{kind: blockThinking, reasoning: strings.Join(lines, "\n")}, styles, 60, true))
 	if !strings.Contains(trimmed, "reasoning trimmed") {
 		t.Errorf("a long reasoning block should say it was trimmed:\n%s", trimmed)
 	}
@@ -426,15 +426,15 @@ func TestBlockErrorAndUserRenderTheirMarker(t *testing.T) {
 		t.Errorf("the prompt should appear once:\n%s", wrapped)
 	}
 
-	failure := stripANSI(renderBlock(block{kind: blockError, text: "boom"}, styles, width))
+	failure := stripANSI(renderBlock(block{kind: blockError, text: "boom"}, styles, width, true))
 	if !strings.Contains(failure, "boom") {
 		t.Errorf("error = %q", failure)
 	}
-	notice := stripANSI(renderBlock(block{kind: blockNotice, text: "a notice"}, styles, width))
+	notice := stripANSI(renderBlock(block{kind: blockNotice, text: "a notice"}, styles, width, true))
 	if !strings.Contains(notice, "a notice") {
 		t.Errorf("notice = %q", notice)
 	}
-	unknown := renderBlock(block{kind: blockKind(9999), text: "raw"}, styles, width)
+	unknown := renderBlock(block{kind: blockKind(9999), text: "raw"}, styles, width, true)
 	if unknown != "raw" {
 		t.Errorf("an unknown kind = %q, want the text unchanged", unknown)
 	}

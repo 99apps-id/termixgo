@@ -61,6 +61,8 @@ func key(name string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyDown}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
+	case "ctrl+o":
+		return tea.KeyMsg{Type: tea.KeyCtrlO}
 	case "backspace":
 		return tea.KeyMsg{Type: tea.KeyBackspace}
 	default:

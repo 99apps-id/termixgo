@@ -80,6 +80,10 @@ type Model struct {
 	running    bool
 	runStarted time.Time
 
+	// showDetails controls whether thinking, reasoning and tool process
+	// blocks are expanded or collapsed. Ctrl+O toggles the value.
+	showDetails bool
+
 	// queue holds operator inputs typed while a turn is running. Enter
 	// queues the composer text instead of refusing it, and each runDone
 	// starts the next queued input, so a steer message is never lost.
@@ -142,15 +146,16 @@ func NewWithOptions(application *app.App, options Options) *Model {
 	spin.Style = lipgloss.NewStyle().Foreground(styles.Palette.Accent2)
 
 	model := &Model{
-		app:      application,
-		styles:   styles,
-		limits:   DefaultLimits(),
-		viewport: viewport.New(80, 20),
-		composer: composer,
-		input:    field,
-		spin:     spin,
-		picker:   pickerList,
-		current:  modeChat,
+		app:         application,
+		styles:      styles,
+		limits:      DefaultLimits(),
+		viewport:    viewport.New(80, 20),
+		composer:    composer,
+		input:       field,
+		spin:        spin,
+		picker:      pickerList,
+		current:     modeChat,
+		showDetails: true,
 	}
 	application.SetInteractor(model)
 	model.welcome()
@@ -315,6 +320,15 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key.String() {
+	case "ctrl+o":
+		m.showDetails = !m.showDetails
+		if m.showDetails {
+			m.notice = "Details visible (Ctrl+O to hide)"
+		} else {
+			m.notice = "Details hidden (Ctrl+O to show)"
+		}
+		m.refresh()
+		return m, nil
 	case "esc":
 		if m.running {
 			m.app.Stop()
@@ -649,7 +663,7 @@ func (m *Model) layout() {
 
 // refresh re-renders the transcript into the viewport and keeps it scrolled.
 func (m *Model) refresh() {
-	content := transcript(m.blocks, m.styles, m.viewport.Width)
+	content := transcript(m.blocks, m.styles, m.viewport.Width, m.showDetails)
 	m.viewport.SetContent(content)
 	m.viewport.GotoBottom()
 }
@@ -761,11 +775,11 @@ func (m *Model) viewHints() string {
 	if m.running {
 		elapsed := time.Since(m.runStarted).Round(time.Second)
 		if count := m.queuedCount(); count > 0 {
-			return m.styles.Hint.Render(fmt.Sprintf(" %s working (%s) | %d queued | Enter steers the run | Esc stop | Ctrl+C quit", m.spin.View(), elapsed, count))
+			return m.styles.Hint.Render(fmt.Sprintf(" %s working (%s) | %d queued | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C quit", m.spin.View(), elapsed, count))
 		}
-		return m.styles.Hint.Render(fmt.Sprintf(" %s working (%s) | Enter steers the run | Esc stop | Ctrl+C quit", m.spin.View(), elapsed))
+		return m.styles.Hint.Render(fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C quit", m.spin.View(), elapsed))
 	}
-	return m.styles.Hint.Render(" Enter send | Ctrl+J newline | / commands | Tab complete | Ctrl+C quit")
+	return m.styles.Hint.Render(" Enter send | Ctrl+J newline | / commands | Tab complete | Ctrl+O details | Ctrl+C quit")
 }
 
 func (m *Model) viewSlashMenu() string {
@@ -833,7 +847,7 @@ func (m *Model) viewHelp() string {
 	lines = append(lines, "",
 		m.styles.BoxTitle.Render("Keys"),
 		"",
-		m.styles.MenuDesc.Render("  Enter send | Ctrl+J newline | Tab complete | Esc stop or clear | Ctrl+C quit"),
+		m.styles.MenuDesc.Render("  Enter send | Ctrl+J newline | Tab complete | Esc stop or clear | Ctrl+O toggle details | Ctrl+C quit"),
 		"",
 		m.styles.Hint.Render("Press any key to close."),
 	)

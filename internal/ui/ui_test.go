@@ -147,7 +147,7 @@ func TestTranscriptRendersEveryBlockKind(t *testing.T) {
 		{kind: blockNotice, text: "note"},
 		{kind: blockError, text: "boom"},
 	}
-	rendered := stripANSI(transcript(blocks, styles, 60))
+	rendered := stripANSI(transcript(blocks, styles, 60, true))
 	for _, want := range []string{"welcome", "do the thing", "Done.", "considering", "Read main.go", "boom", "note"} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("transcript is missing %q:\n%s", want, rendered)

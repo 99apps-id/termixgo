@@ -42,23 +42,26 @@ type block struct {
 	plan []agent.Todo
 }
 
-// transcript renders a sequence of blocks at a width.
-func transcript(blocks []block, styles Styles, width int) string {
+// transcript renders a sequence of blocks at a width. When showDetails is
+// false the thinking and tool blocks are collapsed to a single status line,
+// keeping the transcript focused on the conversation.
+func transcript(blocks []block, styles Styles, width int, showDetails bool) string {
 	if width < 24 {
 		width = 24
 	}
 	parts := make([]string, 0, len(blocks))
 	for _, item := range blocks {
-		rendered := renderBlock(item, styles, width)
+		rendered := renderBlock(item, styles, width, showDetails)
 		if strings.TrimSpace(rendered) == "" {
 			continue
 		}
 		parts = append(parts, rendered)
 	}
-	return strings.Join(parts, "\n")
+	// A blank line between blocks keeps the transcript readable.
+	return strings.Join(parts, "\n\n")
 }
 
-func renderBlock(item block, styles Styles, width int) string {
+func renderBlock(item block, styles Styles, width int, showDetails bool) string {
 	switch item.kind {
 	case blockWelcome:
 		return renderWelcomeBlock(item, styles, width)
@@ -67,9 +70,9 @@ func renderBlock(item block, styles Styles, width int) string {
 	case blockAssistant:
 		return renderAssistantBlock(item, styles, width)
 	case blockThinking:
-		return renderThinkingBlock(item, styles, width)
+		return renderThinkingBlock(item, styles, width, showDetails)
 	case blockTool:
-		return renderToolBlock(item, styles, width)
+		return renderToolBlock(item, styles, width, showDetails)
 	case blockPlan:
 		return renderPlanBlock(item, styles, width)
 	case blockNotice:
@@ -115,7 +118,7 @@ func renderAssistantBlock(item block, styles Styles, width int) string {
 	return indent(body, "  ")
 }
 
-func renderThinkingBlock(item block, styles Styles, width int) string {
+func renderThinkingBlock(item block, styles Styles, width int, showDetails bool) string {
 	header := ""
 	switch {
 	case item.running:
@@ -124,6 +127,9 @@ func renderThinkingBlock(item block, styles Styles, width int) string {
 		header = styles.Reasoned.Render(fmt.Sprintf("  Reasoned for %ds", item.seconds))
 	default:
 		header = styles.Reasoned.Render("  Reasoned")
+	}
+	if !showDetails {
+		return header
 	}
 	body := strings.TrimSpace(item.reasoning)
 	if body == "" {
@@ -142,7 +148,7 @@ func renderThinkingBlock(item block, styles Styles, width int) string {
 	return header + "\n" + strings.Join(rendered, "\n")
 }
 
-func renderToolBlock(item block, styles Styles, width int) string {
+func renderToolBlock(item block, styles Styles, width int, showDetails bool) string {
 	marker := "+"
 	style := styles.ToolDone
 	if item.running {
@@ -151,6 +157,10 @@ func renderToolBlock(item block, styles Styles, width int) string {
 	} else if !item.toolOK {
 		marker = "x"
 		style = styles.ToolError
+	}
+	if !showDetails {
+		// Compact: just the marker and tool label on one line.
+		return style.Render(truncate(fmt.Sprintf("  %s %s", marker, item.toolLabel), width))
 	}
 	line := fmt.Sprintf("  %s %s", marker, item.toolLabel)
 	if !item.running && item.toolMillis > 0 {
