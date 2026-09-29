@@ -101,10 +101,23 @@ func TestWrapPlainRespectsWidth(t *testing.T) {
 	}
 }
 
-func TestWrapPlainPreservesLongWords(t *testing.T) {
-	wrapped := wrapPlain("shortandveryveryverylongword", 10)
-	if !strings.Contains(wrapped, "shortandveryveryverylongword") {
-		t.Errorf("a word longer than the width must not be dropped: %q", wrapped)
+func TestWrapPlainHardSplitsLongWords(t *testing.T) {
+	// A word longer than the width is hard-split: every line fits, and the
+	// pieces join back to the original word with no character lost, added or
+	// reordered. Leaving it whole made the terminal wrap the line on its own and
+	// shift the frame, which is what looked scrambled.
+	const word = "shortandveryveryverylongword"
+	wrapped := wrapPlain(word, 10)
+	for _, line := range strings.Split(wrapped, "\n") {
+		if len([]rune(line)) > 10 {
+			t.Errorf("line %q exceeds the width", line)
+		}
+	}
+	if joined := strings.ReplaceAll(wrapped, "\n", ""); joined != word {
+		t.Errorf("split word joined = %q, want %q", joined, word)
+	}
+	if !strings.Contains(wrapped, "\n") {
+		t.Errorf("a word longer than the width should be split")
 	}
 }
 

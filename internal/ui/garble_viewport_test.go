@@ -31,24 +31,16 @@ func TestStyledOutputHasOnlyWholeEscapes(t *testing.T) {
 		if strings.Contains(stripped, "\x1b") {
 			t.Errorf("width %d holds a malformed escape:\n%q", width, rendered)
 		}
-		// Every word must survive with escapes present, in order. Code
-		// spans and bold markers are consumed by styling by design.
+		// Every character must survive with escapes present, in order. Code
+		// spans and bold markers are consumed by styling by design, and a word
+		// longer than the line is hard-split, so the comparison ignores
+		// whitespace: the non-space character stream must match exactly.
 		plain := strings.ReplaceAll(text, "`", "")
 		plain = strings.ReplaceAll(plain, "**", "")
-		want := strings.Fields(plain)
-		got := strings.Fields(stripped)
-		if len(got) < len(want) {
-			t.Errorf("width %d: %d words, want at least %d:\n%q", width, len(got), len(want), stripped)
-			continue
-		}
-		index := 0
-		for _, word := range got {
-			if index < len(want) && word == want[index] {
-				index++
-			}
-		}
-		if index != len(want) {
-			t.Errorf("width %d: words out of order or missing:\n%q", width, stripped)
+		want := strings.Join(strings.Fields(plain), "")
+		got := strings.Join(strings.Fields(stripped), "")
+		if got != want {
+			t.Errorf("width %d: character stream changed:\n got %q\nwant %q", width, got, want)
 		}
 	}
 }

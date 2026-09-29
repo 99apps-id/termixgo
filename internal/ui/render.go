@@ -408,22 +408,25 @@ func wrapInline(text string, width int) string {
 		current := ""
 		currentWidth := 0
 		for _, word := range words {
-			// A span wider than the line is split at its own spaces, and every
-			// piece is wrapped in the same markers so no line exceeds the
-			// terminal and no marker is left unpaired.
-			for _, piece := range splitWideSpan(word, width) {
-				pieceWidth := inlineWidth(piece)
+			// A word wider than the line is broken into tokens. A token marked
+			// glued continues the previous one with no space, which is how a
+			// long word or span is split without turning into two words.
+			for _, token := range splitInlineWord(word, width) {
+				tokenWidth := inlineWidth(token.text)
 				switch {
 				case current == "":
-					current = piece
-					currentWidth = pieceWidth
-				case currentWidth+1+pieceWidth <= width:
-					current += " " + piece
-					currentWidth += 1 + pieceWidth
+					current = token.text
+					currentWidth = tokenWidth
+				case token.glue && currentWidth+tokenWidth <= width:
+					current += token.text
+					currentWidth += tokenWidth
+				case !token.glue && currentWidth+1+tokenWidth <= width:
+					current += " " + token.text
+					currentWidth += 1 + tokenWidth
 				default:
 					out = append(out, current)
-					current = piece
-					currentWidth = pieceWidth
+					current = token.text
+					currentWidth = tokenWidth
 				}
 			}
 		}
@@ -432,6 +435,71 @@ func wrapInline(text string, width int) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// inlineToken is one piece of a word. glue means the piece continues the
+// previous one with no space, which is what a hard-split word or span needs.
+type inlineToken struct {
+	text string
+	glue bool
+}
+
+// splitInlineWord turns one word into tokens that each fit the width. A short
+// word is one token. A long word is hard-split, its later pieces glued. A span
+// wider than the line keeps its markers on every piece, so no line has an
+// unpaired marker and no line exceeds the terminal.
+func splitInlineWord(word string, width int) []inlineToken {
+	if inlineWidth(word) <= width {
+		return []inlineToken{{text: word}}
+	}
+	inner, ok := spanInner(word)
+	if !ok {
+		chunks := hardSplit(word, width)
+		tokens := make([]inlineToken, 0, len(chunks))
+		for index, chunk := range chunks {
+			tokens = append(tokens, inlineToken{text: chunk, glue: index > 0})
+		}
+		return tokens
+	}
+	marker := "`"
+	if strings.HasPrefix(word, "**") {
+		marker = "**"
+	}
+	room := width - 2*len(marker)
+	if room < 8 {
+		room = 8
+	}
+	tokens := make([]inlineToken, 0, 4)
+	var line strings.Builder
+	lineWidth := 0
+	flush := func() {
+		if line.Len() == 0 {
+			return
+		}
+		tokens = append(tokens, inlineToken{text: marker + line.String() + marker, glue: len(tokens) > 0})
+		line.Reset()
+		lineWidth = 0
+	}
+	for _, piece := range splitInlineWords(inner) {
+		for index, chunk := range hardSplit(piece, room) {
+			chunkWidth := inlineWidth(chunk)
+			switch {
+			case lineWidth == 0:
+				line.WriteString(chunk)
+				lineWidth = chunkWidth
+			case index == 0 && lineWidth+1+chunkWidth <= room:
+				line.WriteByte(' ')
+				line.WriteString(chunk)
+				lineWidth += 1 + chunkWidth
+			default:
+				flush()
+				line.WriteString(chunk)
+				lineWidth = chunkWidth
+			}
+		}
+	}
+	flush()
+	return tokens
 }
 
 // splitInlineWords cuts a paragraph into words where the spaces inside a
@@ -506,55 +574,10 @@ func inlineWidth(word string) int {
 	return ansi.StringWidth(word)
 }
 
-// splitWideSpan breaks a span that is wider than a line at its own spaces,
-// re-wrapping each piece in the same markers. A word with no space to break at
-// is returned whole, matching wrapPlain's refusal to cut a word in half.
-func splitWideSpan(word string, width int) []string {
-	if inlineWidth(word) <= width {
-		return []string{word}
-	}
-	inner, ok := spanInner(word)
-	if !ok {
-		return []string{word}
-	}
-	marker := "`"
-	if strings.HasPrefix(word, "**") {
-		marker = "**"
-	}
-	room := width - 2*len(marker)
-	if room < 8 {
-		room = 8
-	}
-	pieces := splitInlineWords(inner)
-	if len(pieces) < 2 {
-		return []string{word}
-	}
-	var out []string
-	current := ""
-	currentWidth := 0
-	for _, piece := range pieces {
-		pieceWidth := inlineWidth(piece)
-		switch {
-		case current == "":
-			current = piece
-			currentWidth = pieceWidth
-		case currentWidth+1+pieceWidth <= room:
-			current += " " + piece
-			currentWidth += 1 + pieceWidth
-		default:
-			out = append(out, marker+current+marker)
-			current = piece
-			currentWidth = pieceWidth
-		}
-	}
-	if current != "" {
-		out = append(out, marker+current+marker)
-	}
-	return out
-}
-
-// wrapPlain word-wraps text, preserving explicit newlines and never splitting
-// a word unless it is longer than the line.
+// wrapPlain word-wraps text, preserving explicit newlines. A word wider than
+// the line is hard-split at the column budget, because an over-wide line wraps
+// in the terminal and shifts every row below it, which is what made the frame
+// look scrambled.
 func wrapPlain(text string, width int) string {
 	if width < 8 {
 		width = 8
@@ -569,18 +592,22 @@ func wrapPlain(text string, width int) string {
 		current := ""
 		currentWidth := 0
 		for _, word := range words {
-			wordWidth := ansi.StringWidth(word)
-			switch {
-			case current == "":
-				current = word
-				currentWidth = wordWidth
-			case currentWidth+1+wordWidth <= width:
-				current += " " + word
-				currentWidth += 1 + wordWidth
-			default:
-				out = append(out, current)
-				current = word
-				currentWidth = wordWidth
+			// A long word is broken into fitting pieces; the pieces after the
+			// first continue the word, so they start a line with no space.
+			for index, piece := range hardSplit(word, width) {
+				pieceWidth := ansi.StringWidth(piece)
+				switch {
+				case current == "":
+					current = piece
+					currentWidth = pieceWidth
+				case index == 0 && currentWidth+1+pieceWidth <= width:
+					current += " " + piece
+					currentWidth += 1 + pieceWidth
+				default:
+					out = append(out, current)
+					current = piece
+					currentWidth = pieceWidth
+				}
 			}
 		}
 		if current != "" {
@@ -588,6 +615,36 @@ func wrapPlain(text string, width int) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// hardSplit breaks a string that is wider than the budget into pieces that each
+// fit, measured in display columns and never through a rune. It is the last line
+// of defence against a word with no space: a URL, a hash or a long identifier
+// would otherwise produce a line the terminal wraps on its own.
+func hardSplit(text string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	if ansi.StringWidth(text) <= width {
+		return []string{text}
+	}
+	pieces := make([]string, 0, 2)
+	var builder strings.Builder
+	current := 0
+	for _, r := range text {
+		runeWidth := ansi.StringWidth(string(r))
+		if current+runeWidth > width && builder.Len() > 0 {
+			pieces = append(pieces, builder.String())
+			builder.Reset()
+			current = 0
+		}
+		builder.WriteRune(r)
+		current += runeWidth
+	}
+	if builder.Len() > 0 {
+		pieces = append(pieces, builder.String())
+	}
+	return pieces
 }
 
 // truncate clips a string to a display width, preserving colour.
