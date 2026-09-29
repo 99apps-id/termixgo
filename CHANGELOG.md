@@ -122,6 +122,15 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Fixed
 
+- Gemini token usage is no longer counted once per chunk. The Google endpoint
+  repeats `usageMetadata` on every chunk with counters that cover the whole
+  request, and the run loop sums every usage event to show the running total, so
+  the same tokens were charged once per chunk: the context count and the
+  estimated spend read several times too high and a `costBudgetUsd` tripped
+  early. The client now emits the increase over what it has already reported, so
+  the summed total equals the final cumulative figure. Measured on a three chunk
+  answer whose real total was 10 prompt and 6 completion tokens, the old code
+  summed 30 and 13.
 - The screen no longer garbles a few turns into a session. A frame taller than
   the terminal made Bubble Tea drop its top lines and reposition the cursor
   relative to the previous frame, which shifts the whole screen: earlier lines
