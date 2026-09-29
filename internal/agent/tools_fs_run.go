@@ -65,11 +65,15 @@ func (t *readFileTool) Run(ctx context.Context, env *Env, args map[string]any) (
 
 func (t *listDirectoryTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	path := resolvePath(env, argString(args, "path", "dir", "directory"))
-	if err := checkWorkspacePath(env, path); err != nil {
-		return Result{Output: err.Error(), IsError: true}, nil
-	}
+	// The empty fallback comes first. resolvePath returns "" for an absent
+	// argument, and the workspace check rejects "" because it cannot be made
+	// relative to anything, so the check used to fail before the fallback could
+	// turn the empty path into the workspace root.
 	if path == "" {
 		path = env.Workspace
+	}
+	if err := checkWorkspacePath(env, path); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
 	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
@@ -145,6 +149,18 @@ func (t *createDirectoryTool) Run(ctx context.Context, env *Env, args map[string
 	return Result{Output: "Created " + displayPath(env, path)}, nil
 }
 
+// isWorkspaceRoot reports whether a resolved path is the workspace itself.
+//
+// Removing or renaming it is never what the model means, and one wrong call
+// would take the whole project with it: `delete_file` with "." used to remove
+// every file under the workspace and report success.
+func isWorkspaceRoot(env *Env, path string) bool {
+	if strings.TrimSpace(env.Workspace) == "" || strings.TrimSpace(path) == "" {
+		return false
+	}
+	return filepath.Clean(path) == filepath.Clean(env.Workspace)
+}
+
 func (t *deleteFileTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	raw := argString(args, "path", "file")
 	if raw == "" {
@@ -153,6 +169,12 @@ func (t *deleteFileTool) Run(ctx context.Context, env *Env, args map[string]any)
 	path := resolvePath(env, raw)
 	if err := checkWorkspacePath(env, path); err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	if isWorkspaceRoot(env, path) {
+		return Result{
+			Output:  "Refusing to delete the workspace root itself. Delete the files you mean inside it, or move them elsewhere first.",
+			IsError: true,
+		}, nil
 	}
 	if _, err := os.Stat(path); err != nil {
 		return Result{Output: openError(err, displayPath(env, path)), IsError: true}, nil
@@ -174,6 +196,14 @@ func (t *moveFileTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	}
 	if err := checkWorkspacePath(env, to); err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	// Moving the workspace root would take the session's working directory with
+	// it, so every later tool call would fail for a reason the model cannot see.
+	if isWorkspaceRoot(env, from) {
+		return Result{
+			Output:  "Refusing to move the workspace root itself. Move the files you mean inside it instead.",
+			IsError: true,
+		}, nil
 	}
 	if _, err := os.Stat(from); err != nil {
 		return Result{Output: openError(err, displayPath(env, from)), IsError: true}, nil

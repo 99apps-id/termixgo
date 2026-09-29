@@ -88,7 +88,10 @@ func (m *Memory) Remember(fact, scope string) error {
 	}
 	content := builder.String()
 	if len(content) > maxMemoryBytes {
-		content = content[len(content)-maxMemoryBytes:]
+		// clipTailBytes keeps the newest facts and lands on a rune boundary, so a
+		// multi-byte character is never cut in half even when the header search
+		// below finds no line to trim back to.
+		content = clipTailBytes(content, maxMemoryBytes)
 		if index := strings.Index(content, "\n- "); index >= 0 {
 			content = "# Termixgo memory\n\n" + strings.TrimPrefix(content[index:], "\n")
 		}
