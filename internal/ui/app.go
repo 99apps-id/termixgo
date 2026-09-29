@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -853,6 +854,15 @@ func (m *Model) layout() {
 	m.refresh()
 }
 
+// frameLogCap bounds the frame log: enough turns to compare against a
+// screenshot, small enough to never matter on disk.
+const frameLogCap = 300
+
+// frameLogPath is set from TERMIXGO_FRAMELOG. When present, every transcript
+// paint appends its plain text, so a garbled screen can be compared against
+// the exact bytes the program handed to the renderer.
+func frameLogPath() string { return strings.TrimSpace(os.Getenv("TERMIXGO_FRAMELOG")) }
+
 // paintMinInterval is the fastest the transcript repaints during a burst of
 // streamed deltas. Structural changes (tool boundaries, notices, errors)
 // always paint at once; only running text is paced.
@@ -878,6 +888,32 @@ func (m *Model) refresh() {
 	if follow {
 		m.viewport.GotoBottom()
 	}
+	logFrame(content)
+}
+
+// logFrame appends one painted transcript to the frame log when recording.
+// The counter caps the file; beyond it recording stops silently rather than
+// growing through a long session.
+func logFrame(content string) {
+	path := frameLogPath()
+	if path == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	var frames int
+	if err == nil {
+		frames = strings.Count(string(data), "\n--- frame ")
+	}
+	if frames >= frameLogCap {
+		return
+	}
+	entry := fmt.Sprintf("\n--- frame %d ---\n%s\n", frames+1, stripANSI(content))
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	_, _ = file.WriteString(entry)
 }
 
 // View implements tea.Model.
