@@ -382,7 +382,10 @@ func (m *Model) slashTrust(args string) (tea.Model, tea.Cmd) {
 		if m.app.Trusted() {
 			state = "trusted"
 		}
-		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("%s is %s.", m.app.Workspace(), state)})
+		// Name the next step: picking /trust from the menu and pressing
+		// Enter lands here, and without the tip the operator loops on the
+		// status line wondering why nothing changed.
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("%s is %s.\nChange it with /trust on or /trust off.", m.app.Workspace(), state)})
 	case "on", "yes", "true":
 		if err := m.app.SetTrust(true); err != nil {
 			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})

@@ -467,6 +467,7 @@ func runPlainSlash(ctx context.Context, application *app.App, name, args string,
 				state = "trusted"
 			}
 			fmt.Fprintf(out, "  folder is %s\n", state)
+			fmt.Fprintln(out, "  change it with /trust on|off")
 		default:
 			fmt.Fprintf(out, "  folder is %s\n", map[bool]string{true: "trusted", false: "untrusted"}[application.Trusted()])
 			return false, fmt.Errorf("usage: /trust [on|off]")
