@@ -148,7 +148,40 @@ func execute(ctx context.Context, env *Env, command, dir string, timeout time.Du
 	process.Stderr = &buffer
 	process.Stdin = strings.NewReader("")
 
-	err := process.Run()
+	// Group the command with everything it starts, so a cancel or a timeout
+	// stops the whole tree rather than only the shell. Killing the shell alone
+	// left a grandchild such as `du` running and holding the output pipe open,
+	// so Wait never returned and a stopped turn stayed stuck until the child
+	// finished on its own.
+	tree, treeErr := newProcessTree()
+	if treeErr == nil {
+		tree.prepare(process)
+		process.Cancel = func() error {
+			if err := tree.terminate(process); err == nil {
+				return nil
+			}
+			if process.Process != nil {
+				return process.Process.Kill()
+			}
+			return nil
+		}
+	}
+	// A grandchild that inherits the pipe keeps it open after the direct child
+	// is killed; WaitDelay bounds that wait so a stop is prompt.
+	process.WaitDelay = processWaitDelay
+
+	if err := process.Start(); err != nil {
+		if tree != nil {
+			tree.release()
+		}
+		return Result{Output: fmt.Sprintf("Could not start the command: %v", err), IsError: true}, nil
+	}
+	if tree != nil {
+		_ = tree.attach(process)
+		defer tree.release()
+	}
+
+	runErr := process.Wait()
 	output := truncateOutput(buffer.String(), maxOutputChars)
 	label := displayPath(env, dir)
 
@@ -161,13 +194,13 @@ func execute(ctx context.Context, env *Env, command, dir string, timeout time.Du
 	if ctx.Err() != nil {
 		return Result{Output: "Command cancelled.", IsError: true}, nil
 	}
-	if err != nil {
+	if runErr != nil {
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if errors.As(runErr, &exitErr) {
 			message := fmt.Sprintf("Command exited with code %d in %s\n%s", exitErr.ExitCode(), label, output)
 			return Result{Output: message, IsError: true}, nil
 		}
-		return Result{Output: fmt.Sprintf("Could not start the command: %v", err), IsError: true}, nil
+		return Result{Output: fmt.Sprintf("Could not run the command: %v", runErr), IsError: true}, nil
 	}
 	if strings.TrimSpace(output) == "" {
 		output = "(no output)"

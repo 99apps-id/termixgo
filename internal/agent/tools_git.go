@@ -35,6 +35,9 @@ func runGit(ctx context.Context, env *Env, args ...string) (string, error) {
 	command.Stdout = &buffer
 	command.Stderr = &buffer
 	command.Stdin = strings.NewReader("")
+	// A hook or credential helper that inherits the output pipe would keep
+	// Wait blocked after a cancel; bound that wait the same way run_command does.
+	command.WaitDelay = processWaitDelay
 
 	err := command.Run()
 	output := strings.TrimRight(buffer.String(), "\n")

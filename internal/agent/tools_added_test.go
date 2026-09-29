@@ -6,8 +6,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestGitHubToolsValidateArguments keeps a bad call from reaching the network:
@@ -62,6 +64,37 @@ func TestReadImageAttachesTheImage(t *testing.T) {
 	}
 	if escape, _ := (&readImageTool{}).Run(context.Background(), env, map[string]any{"path": "../escape.png"}); !escape.IsError {
 		t.Errorf("a path outside the workspace must be refused")
+	}
+}
+
+// TestExecuteCancelStopsTheProcessTree is the stuck-/stop guard: killing only
+// the shell left a grandchild such as `du` holding the output pipe, so Wait
+// never returned and a stopped turn stayed in progress. On POSIX the command is
+// grouped and the whole group is killed, so a cancel returns at once.
+func TestExecuteCancelStopsTheProcessTree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the process-group assertion is POSIX only")
+	}
+	env := testEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan Result, 1)
+	go func() {
+		result, _ := execute(ctx, env, "sleep 30 & echo started; wait", env.Workspace, 60*time.Second)
+		done <- result
+	}()
+
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+
+	select {
+	case result := <-done:
+		if !result.IsError || !strings.Contains(result.Output, "cancelled") {
+			t.Errorf("result = %+v, want a cancellation", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("execute did not return after cancel; the process tree was not killed")
 	}
 }
 

@@ -96,6 +96,11 @@ All notable changes to Termixgo are recorded here. The format follows
 - The opening screen follows a model or trust change. It was built once at
   startup, so an onboarding run that picked a model left the old name in the
   transcript next to a header showing the new one.
+- Stopping a turn now stops the command it is running. `run_command` killed only
+  the shell, so a grandchild such as `du` kept running and held the output pipe
+  open; `Wait` never returned and `/stop` reported success while the turn stayed
+  in progress. The command is now grouped with its children and the whole group
+  is killed on cancel and on timeout.
 
 ### Fixed
 
