@@ -107,6 +107,20 @@ All notable changes to Termixgo are recorded here. The format follows
 - The opening screen follows a model or trust change. It was built once at
   startup, so an onboarding run that picked a model left the old name in the
   transcript next to a header showing the new one.
+- A long word with no space to wrap at (a URL, a hash, a long identifier, or a
+  bold or code span wider than the line) is now hard-split at the column
+  budget, in display columns, so no rendered line is wider than the terminal.
+  Left whole, it made the terminal wrap the line on its own and shift every row
+  below, which is what made the tail of a long answer look scrambled.
+- The transcript has a single event reader again. `Init` armed one and
+  `startRun` armed a second, so after the first turn two goroutines read the same
+  stream channel and raced, applying a turn's deltas out of order: the start of
+  an answer read fine while the end was scrambled. The reader now starts once
+  and each event re-arms it.
+- A steer typed during a run is shown at once as a user block, separated from the
+  block above by a blank line, instead of waiting for the agent's next step. The
+  agent's later "Steering:" notice for the same text is dropped so it is not
+  shown twice.
 - Model and tool text no longer reach the terminal with its control characters
   intact. A raw escape sequence is a command the terminal obeys, so an SGR or a
   cursor move that a model printed bolded random words and rewrote the frame
