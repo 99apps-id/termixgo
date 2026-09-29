@@ -125,7 +125,6 @@ try {
             Pop-Location
         }
         Remove-Item $stage -Recurse -Force
-        }
         if ($LASTEXITCODE -ne 0) { throw "archive failed for $stem" }
         Write-Host ("  {0}" -f (Split-Path $archive -Leaf))
     }
