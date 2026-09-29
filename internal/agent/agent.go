@@ -98,8 +98,15 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	// A turn runs in segments of MaxSteps. A segment that was still doing work
 	// when its steps ran out continues into the next one instead of pausing, and
 	// the segment count is the absolute ceiling for the whole turn.
+	//
+	// A profile that sets an explicit step cap means that cap, not one segment's
+	// worth of it: the "shorter loop" profile exists to bound a turn, so letting
+	// it run four segments would make its label a lie.
 	totalSteps := 0
 	segments := r.TurnSegments
+	if profile.StepBudgetCap > 0 {
+		segments = 1
+	}
 	if segments < 1 {
 		segments = 1
 	}

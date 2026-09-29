@@ -300,6 +300,42 @@ func TestRunStillPausesAtTheStepCeiling(t *testing.T) {
 	}
 }
 
+// TestHarnessStepCapIsAHardCap pins that a profile which caps the loop means
+// that cap. The "shorter loop" profile exists to bound a turn, so segmenting it
+// would let one turn run four times its stated budget and make its label false.
+func TestHarnessStepCapIsAHardCap(t *testing.T) {
+	profile := BuiltinHarnessProfiles["shorter_loop"]
+	if profile.StepBudgetCap <= 0 {
+		t.Fatalf("the fixture profile should set a cap")
+	}
+	capped := ApplyHarnessToBudget(100, profile)
+
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{callChunk("c1", "list_directory", `{"path":"."}`)},
+		{callChunk("c2", "list_directory", `{"path":"./"}`)},
+		{callChunk("c3", "list_directory", `{"path":"./."}`)},
+		{callChunk("c4", "list_directory", `{"path":"././"}`)},
+		{callChunk("c5", "list_directory", `{"path":"././."}`)},
+		{callChunk("c6", "list_directory", `{"path":"./././"}`)},
+	}}
+	runner, _, _ := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	runner.Harness = "shorter_loop"
+	runner.MaxSteps = 100
+	// A segmented turn is what the cap must override.
+	runner.TurnSegments = 4
+	session := NewSession(t.TempDir(), "test-model")
+
+	if err := runner.Run(context.Background(), session, "keep going"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	client.mu.Lock()
+	calls := client.calls
+	client.mu.Unlock()
+	if calls > capped {
+		t.Errorf("provider calls = %d, want at most the profile cap of %d", calls, capped)
+	}
+}
+
 func TestRunStopsAtStepBudget(t *testing.T) {
 	// Every step asks for another tool call, and each call differs so the loop
 	// guard is not what ends the run: the step cap has to be.
