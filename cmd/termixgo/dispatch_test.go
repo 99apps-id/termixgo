@@ -390,3 +390,25 @@ func TestOrNoneSaysNoneForABlankValue(t *testing.T) {
 		t.Errorf("orNone = %q", got)
 	}
 }
+
+// ------------------------------------------------- the service command
+
+func TestServiceCommandRejectsMissingSubcommand(t *testing.T) {
+	_, _, err := runCLI(t, "service")
+	if err == nil {
+		t.Fatalf("missing subcommand must fail")
+	}
+	if !strings.Contains(err.Error(), "usage: termixgo service") {
+		t.Errorf("error = %q, want usage message", err.Error())
+	}
+}
+
+func TestServiceCommandRejectsUnknownSubcommand(t *testing.T) {
+	_, _, err := runCLI(t, "service", "nope")
+	if err == nil {
+		t.Fatalf("unknown subcommand must fail")
+	}
+	if !strings.Contains(err.Error(), "unknown service command") {
+		t.Errorf("error = %q, want unknown command error", err.Error())
+	}
+}

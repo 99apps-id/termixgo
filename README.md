@@ -107,6 +107,7 @@ Enter sends. `Ctrl+J` inserts a newline. `Tab` completes a slash command.
 | `/approval [ask\|edits\|all]` | when a tool waits for you |
 | `/plan` | show the current task plan |
 | `/tools` | list the tools the agent can call |
+| `/mcp [reload]` | show the MCP servers and the tools they add |
 | `/skills [reload]` | list loaded skills |
 | `/memory` | show what the agent has learned |
 | `/telegram [setup\|on\|off\|status\|pair]` | manage the companion bot |
@@ -128,6 +129,8 @@ Git: `git_status`, `git_diff`, `git_log`, `git_show`, `git_add`, `git_commit`,
 Planning: `todo_write`, `todo_read`.
 Knowledge: `remember`, `use_skill`, `find_skill`.
 Interaction: `ask_user`, `think`, `run_subagent`, `web_fetch`.
+MCP: every tool your configured servers publish, as
+`mcp_<server>__<tool>`.
 
 `run_command` is how the agent runs `biome`, `vitest`, `cargo clippy`,
 `pytest`, `golangci-lint` and anything else your project uses; the output is
@@ -164,6 +167,47 @@ the desktop build uses everywhere.
 - Skills: `.termixgo/skills/<name>/SKILL.md` in the project, or
   `~/.termixgo/skills/<name>/SKILL.md` globally. Only the short description
   enters the prompt; the body loads on demand.
+
+## MCP servers
+
+Termixgo is an MCP client over stdio. A server you configure contributes its
+tools to the agent, so a tool you already run becomes a tool the agent can call.
+
+```json
+{
+  "mcpServers": [
+    {
+      "name": "files",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    }
+  ]
+}
+```
+
+Add that to `~/.termixgo/config.json` and run `/mcp reload`. The server starts
+with the session and its tools appear as `mcp_<server>__<tool>`, so a name like
+`mcp_files__read_file` always says where the call went.
+
+- `/mcp` lists every configured server, whether it started, and how many tools
+  it added.
+- `termixgo mcp` does the same from a shell, and exits non-zero when a server
+  fails to start, which makes it usable in a check.
+- `disabled` parks a server without deleting its command line.
+
+Two things are worth knowing before you trust a server:
+
+- Every contributed tool is approval gated, and in an untrusted folder it asks
+  before it runs. A server can lower that by publishing a `readOnlyHint`, which
+  is treated as a claim rather than a guarantee: a tool that says nothing is
+  treated as one that can change things.
+- The protocol is on the server's stdio, so a server that prints a banner on
+  stdout will not work. Its stderr is kept and shown in the failure message,
+  which is usually what names the missing package.
+
+Only stdio transport is implemented, and only `initialize`, `tools/list` and
+`tools/call`. Resources, prompts and sampling are out of scope: the agent
+already has its own answer for each.
 
 ## Telegram companion
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"runtime"
 	"strings"
@@ -84,6 +85,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runTelegram(args[1:], stdout)
 	case "serve":
 		return runServe(stdout)
+	case "service":
+		return runService(args[1:], stdout)
 	case "doctor":
 		return runDoctor(stdout)
 	default:
@@ -474,6 +477,83 @@ func runServe(stdout io.Writer) error {
 	return nil
 }
 
+const serviceTaskName = "TermixgoAssistant"
+
+func runService(args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: termixgo service [install|uninstall|status]")
+	}
+	sub := strings.ToLower(strings.TrimSpace(args[0]))
+	switch sub {
+	case "install":
+		return serviceInstall(stdout)
+	case "uninstall":
+		return serviceUninstall(stdout)
+	case "status":
+		return serviceStatus(stdout)
+	default:
+		return fmt.Errorf("unknown service command %q; use install, uninstall, or status", sub)
+	}
+}
+
+func serviceInstall(stdout io.Writer) error {
+	binary, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("cannot resolve binary path: %v", err)
+	}
+	command := fmt.Sprintf(`"%s" serve`, binary)
+	cmd := exec.Command("schtasks.exe", []string{
+		"/Create",
+		"/TN", serviceTaskName,
+		"/TR", command,
+		"/SC", "ONSTART",
+		"/RU", "SYSTEM",
+		"/F",
+	}...)
+	cmd.Stdout = stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("install failed: %v", err)
+	}
+	fmt.Fprintf(stdout, "Service installed. Termixgo will start automatically after reboot.\n")
+	return nil
+}
+
+func serviceUninstall(stdout io.Writer) error {
+	cmd := exec.Command("schtasks.exe", []string{
+		"/Delete",
+		"/TN", serviceTaskName,
+		"/F",
+	}...)
+	cmd.Stdout = stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("uninstall failed: %v", err)
+	}
+	fmt.Fprintf(stdout, "Service uninstalled.\n")
+	return nil
+}
+
+func serviceStatus(stdout io.Writer) error {
+	cmd := exec.Command("schtasks.exe", []string{
+		"/Query",
+		"/TN", serviceTaskName,
+		"/FO", "LIST",
+		"/V",
+	}...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		text := string(output)
+		if strings.Contains(text, "does not exist") || strings.Contains(text, "not found") {
+			fmt.Fprintf(stdout, "Service is not installed.\n")
+			return nil
+		}
+		return fmt.Errorf("status check failed: %v\n%s", err, strings.TrimSpace(text))
+	}
+	fmt.Fprintf(stdout, "%s", output)
+	return nil
+}
+
 func runDoctor(stdout io.Writer) error {
 	fmt.Fprintf(stdout, "%s (%s/%s)\n\n", version.Full(), runtime.GOOS, runtime.GOARCH)
 	home, err := config.Home()
@@ -556,6 +636,8 @@ Usage:
   termixgo secret <provider> [k]  Store a provider API key
   termixgo telegram [status|on|off]
   termixgo serve                  Run the Telegram assistant 24/7
+  termixgo service [install|uninstall|status]
+                                  Manage auto-start after reboot
   termixgo doctor                 Inspect configuration and provider keys
   termixgo version                Print the version
   termixgo help                   Show this help

@@ -47,6 +47,7 @@ internal/app        shared state: config, provider client, session, Telegram bri
 internal/agent      the tool-calling run loop, tools, prompt, compaction, memory
 internal/provider   BYOK clients: OpenAI-compatible, Anthropic, Google
 internal/config     ~/.termixgo config.json, defaults and folder trust
+internal/mcp        MCP client: stdio JSON-RPC, tool listing and dispatch
 internal/secrets    0600 secret store for API keys and the bot token
 internal/skill      SKILL.md discovery and parsing
 internal/telegram   Bot API client and the long-polling companion bot
@@ -114,6 +115,14 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   model, and unknown. `Model.CostModel` returns both the price and whether it
   is known, so a zero next to a local model is never confused with "unpriced
   and therefore unbudgetable".
+- An MCP server is a process this program did not write, so it is trusted no
+  further than its protocol. Its tools are always prefixed `mcp_`, which is what
+  makes a hijack of a built-in name impossible: the registry indexes by name, so
+  an unprefixed contribution could take over a `write_file` call. Its read-only
+  hint may lower the gate and never raise it, so a tool that claims nothing is
+  treated as one that can change things. Connecting is best effort and the
+  handshake is bounded: one broken server must not cost the operator the session
+  or the other servers.
 
 ## Checks
 
