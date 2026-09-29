@@ -37,14 +37,16 @@ func (a *App) recordToolResult(name string, ok bool) {
 	}
 }
 
-// ToolStats returns the live ledger ordered by calls, then name. The slice is
-// a copy: callers cannot disturb the running turn.
+// ToolStats returns the live ledger ordered by calls, then name. The slice
+// and every element are copies so callers cannot observe a partially updated
+// value while a run is appending to the backing map.
 func (a *App) ToolStats() []ToolStat {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	stats := make([]ToolStat, 0, len(a.toolCalls))
 	for _, stat := range a.toolCalls {
-		stats = append(stats, *stat)
+		item := *stat
+		stats = append(stats, item)
 	}
 	sort.Slice(stats, func(i, j int) bool {
 		if stats[i].Calls != stats[j].Calls {
