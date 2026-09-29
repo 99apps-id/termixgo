@@ -673,14 +673,14 @@ func (a *App) TakeSteer() []string {
 // env builds the per-run tool environment.
 func (a *App) env() *agent.Env {
 	return &agent.Env{
-		Workspace:   a.workspace,
-		Config:      a.Config(),
-		Secrets:     a.store,
-		Skills:      a.Skills(),
-		Memory:      a.memory,
-		Todos:       a.todos,
-		Trusted:     a.Trusted(),
-		Processes:   a.processes,
+		Workspace: a.workspace,
+		Config:    a.Config(),
+		Secrets:   a.store,
+		Skills:    a.Skills(),
+		Memory:    a.memory,
+		Todos:     a.todos,
+		Trusted:   a.Trusted(),
+		Processes: a.processes,
 		// The journal is shared with the runner, which records into it, and read
 		// back by search_memory, which is why the same store is passed here.
 		Journal:     a.journal,

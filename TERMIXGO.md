@@ -36,8 +36,12 @@ truth for Termixgo.
 - Comments explain why, never what. If a line needs a "what" comment, rename
   things instead.
 - Errors are values that name the thing that failed and the next action.
-- Prefer the standard library. The only third-party dependencies are
-  `bubbletea`, `bubbles`, `lipgloss`, `golang.org/x/term` and `yaml.v3`.
+- Prefer the standard library. The direct dependencies are `bubbletea`,
+  `bubbles`, `lipgloss`, `golang.org/x/term`, `golang.org/x/sys` and
+  `yaml.v3`, plus `modernc.org/sqlite` for the full-text index behind
+  `search_memory`. That one is pure Go, so it keeps the build cgo-free, and it
+  is the single largest transitive tree in the module: weigh it against the
+  memory budget before adding anything that pulls in more.
 
 ## Layout
 
@@ -49,6 +53,7 @@ internal/provider   BYOK clients: OpenAI-compatible, Anthropic, Google
 internal/config     ~/.termixgo config.json, defaults and folder trust
 internal/mcp        MCP client: stdio JSON-RPC, tool listing and dispatch
 internal/secrets    0600 secret store for API keys and the bot token
+internal/search     SQLite full-text index over memory, journal and workspace
 internal/skill      SKILL.md discovery and parsing
 internal/telegram   Bot API client and the long-polling companion bot
 internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback

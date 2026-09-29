@@ -94,6 +94,7 @@ type installSkillTool struct{}
 
 func (t *installSkillTool) Name() string      { return "install_skill" }
 func (t *installSkillTool) Aliases() []string { return []string{"add_skill"} }
+
 // Mutating is true even though the tool only writes outside the workspace: it
 // copies files onto disk, so it must sit behind the approval policy like any
 // other write. Reporting false let it run unnoticed in plan mode and in an

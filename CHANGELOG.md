@@ -12,7 +12,8 @@ All notable changes to Termixgo are recorded here. The format follows
   approval; `termixgo trust on` or `/trust on` makes it trusted.
 - Approval policy with three modes: `ask`, `edits`, `all`.
 - Onboarding wizard, run automatically on first launch or with `/setup`:
-  provider, API key, default model, optional Telegram bot.
+  provider, server endpoint when the provider has no fixed host, API key,
+  default model, optional Telegram bot.
 - Slash commands: `/model`, `/setup`, `/help`, `/new`, `/sessions`, `/stop`,
   `/status`, `/trust`, `/approval`, `/plan`, `/tools`, `/skills`, `/memory`,
   `/telegram`, `/init`, `/cost`, `/exit`.
@@ -21,6 +22,10 @@ All notable changes to Termixgo are recorded here. The format follows
 - The tool set: filesystem, search, exact-match editing, command execution,
   project check detection, todos, learned memory, skills, questions,
   subagents and web fetch.
+- `search_memory`: SQLite FTS5 full-text search over learned memory, the error
+  journal and indexed workspace files, with `memory`, `journal` and `workspace`
+  scopes. This is the one feature that carries a bundled database engine, a
+  pure-Go build of SQLite, so the binary stays cgo-free.
 - Telegram companion bot with pairing, owner pinning and per-command handling.
 - Plain (non-TTY) mode so `termixgo run` composes with pipes and CI.
 - Per-model context budgets, retry with backoff, a stream stall watchdog and a
