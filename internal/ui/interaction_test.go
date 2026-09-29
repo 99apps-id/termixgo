@@ -825,3 +825,86 @@ func TestInitWithoutAModelExplainsSetup(t *testing.T) {
 		t.Errorf("/init without a model must not start a run")
 	}
 }
+
+// ---------------------------------------------------------------- Ctrl+O toggle
+
+// TestCtrlOTogglesDetailVisibility covers the toggle that controls whether
+// thinking/reasoning and tool blocks show their full content or a compact line.
+func TestCtrlOTogglesDetailVisibility(t *testing.T) {
+	model := chatModel(t)
+	if !model.showDetails {
+		t.Fatalf("details should be visible by default")
+	}
+
+	// Press Ctrl+O to hide details.
+	hidden := press(t, model, "ctrl+o")
+	if hidden.showDetails {
+		t.Errorf("Ctrl+O should hide details")
+	}
+	if !strings.Contains(hidden.notice, "hidden") {
+		t.Errorf("the notice should say details are hidden, got %q", hidden.notice)
+	}
+
+	// Press Ctrl+O again to show details.
+	shown := press(t, hidden, "ctrl+o")
+	if !shown.showDetails {
+		t.Errorf("a second Ctrl+O should show details")
+	}
+	if !strings.Contains(shown.notice, "visible") {
+		t.Errorf("the notice should say details are visible, got %q", shown.notice)
+	}
+}
+
+// TestHiddenDetailsCollapsesThinkingAndTool verifies that the transcript omits
+// the reasoning body and the tool timing when details are hidden.
+func TestHiddenDetailsCollapsesThinkingAndTool(t *testing.T) {
+	model := chatModel(t)
+
+	model.applyEvent(agent.Event{Kind: agent.EventThinking, Text: "deep thought"})
+	model.applyEvent(agent.Event{Kind: agent.EventReasoned, Text: "deep thought", ToolMillis: 5000})
+	model.applyEvent(agent.Event{Kind: agent.EventToolStart, ToolName: "read_file", ToolLabel: "Reading main.go"})
+	model.applyEvent(agent.Event{Kind: agent.EventToolEnd, ToolName: "read_file", ToolLabel: "Read main.go", ToolOK: true, ToolMillis: 42})
+	model.applyEvent(agent.Event{Kind: agent.EventText, Text: "Here is the answer."})
+
+	// With details visible, the reasoning body and timing appear.
+	model.showDetails = true
+	expanded := display(model)
+	if !strings.Contains(expanded, "deep thought") {
+		t.Errorf("expanded view should contain the reasoning body:\n%s", expanded)
+	}
+	if !strings.Contains(expanded, "42ms") {
+		t.Errorf("expanded view should contain the tool timing:\n%s", expanded)
+	}
+
+	// With details hidden, only the headers remain.
+	model.showDetails = false
+	collapsed := display(model)
+	if !strings.Contains(collapsed, "Reasoned") {
+		t.Errorf("collapsed view should still show the header:\n%s", collapsed)
+	}
+	if strings.Contains(collapsed, "deep thought") {
+		t.Errorf("collapsed view should not contain the reasoning body:\n%s", collapsed)
+	}
+	if strings.Contains(collapsed, "42ms") {
+		t.Errorf("collapsed view should not contain the tool timing:\n%s", collapsed)
+	}
+	// The assistant answer must always be visible regardless of the toggle.
+	if !strings.Contains(collapsed, "Here is the answer") {
+		t.Errorf("the assistant text should always be visible:\n%s", collapsed)
+	}
+}
+
+// TestTranscriptBlocksAreSeparatedByBlankLines verifies that the output has
+// visual spacing between blocks so they do not jam together.
+func TestTranscriptBlocksAreSeparatedByBlankLines(t *testing.T) {
+	styles := NewStyles(DefaultPalette())
+	blocks := []block{
+		{kind: blockUser, text: "hello"},
+		{kind: blockAssistant, text: "world"},
+	}
+	rendered := transcript(blocks, styles, 80, true)
+	// The two blocks must be separated by at least one blank line.
+	if !strings.Contains(rendered, "\n\n") {
+		t.Errorf("blocks should be separated by a blank line:\n%q", rendered)
+	}
+}

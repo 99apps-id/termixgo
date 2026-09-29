@@ -348,6 +348,14 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if value == "" {
 			return m, nil
 		}
+		// Accept the highlighted slash completion: typing "/stat" and
+		// pressing Enter must run /status, not report an unknown command.
+		// Text with arguments is already explicit and passes through.
+		if !m.running && !strings.Contains(value, " ") && strings.HasPrefix(value, "/") && len(m.slashMatches) > 0 {
+			if cursor := m.slashCursor; cursor >= 0 && cursor < len(m.slashMatches) && m.slashMatches[cursor].Trigger != value {
+				value = m.slashMatches[cursor].Trigger
+			}
+		}
 		if m.running {
 			return m.enqueue(value)
 		}

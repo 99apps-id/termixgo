@@ -162,11 +162,18 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 		// Compact: just the marker and tool label on one line.
 		return style.Render(truncate(fmt.Sprintf("  %s %s", marker, item.toolLabel), width))
 	}
-	line := fmt.Sprintf("  %s %s", marker, item.toolLabel)
+	// Clip the label before styling: truncate counts runes, so slicing the
+	// styled line here used to cut the timing suffix mid-escape and print
+	// garbage. The suffix is computed first and kept whole.
+	timing := ""
 	if !item.running && item.toolMillis > 0 {
-		line += styles.Dim.Render(fmt.Sprintf(" (%dms)", item.toolMillis))
+		timing = fmt.Sprintf(" (%dms)", item.toolMillis)
 	}
-	return style.Render(truncate(line, width))
+	room := width - lipgloss.Width(timing)
+	if room < 0 {
+		room = 0
+	}
+	return style.Render(truncate(fmt.Sprintf("  %s %s", marker, item.toolLabel), room) + styles.Dim.Render(timing))
 }
 
 func renderPlanBlock(item block, styles Styles, width int) string {
