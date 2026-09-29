@@ -326,6 +326,8 @@ func splitBullet(line string) (string, string, bool) {
 }
 
 // styleInline applies `code` and **bold** inside one already-wrapped line.
+// Code spans win over bold: a ** pair spanning backticks still renders the
+// code inside instead of printing the markers literally.
 func styleInline(line string, styles Styles) string {
 	if line == "" {
 		return ""
@@ -341,12 +343,29 @@ func styleInline(line string, styles Styles) string {
 		}
 		if strings.HasPrefix(line[index:], "**") {
 			if end := strings.Index(line[index+2:], "**"); end >= 0 {
-				builder.WriteString(styles.Heading.Render(line[index+2 : index+2+end]))
+				builder.WriteString(styles.Heading.Render(styleInlineCode(line[index+2:index+2+end], styles)))
 				index += end + 4
 				continue
 			}
 		}
 		builder.WriteByte(line[index])
+		index++
+	}
+	return builder.String()
+}
+
+// styleInlineCode renders only `code` spans, for text already inside bold.
+func styleInlineCode(text string, styles Styles) string {
+	var builder strings.Builder
+	for index := 0; index < len(text); {
+		if text[index] == '`' {
+			if end := strings.Index(text[index+1:], "`"); end >= 0 {
+				builder.WriteString(styles.Code.Render(text[index+1 : index+1+end]))
+				index += end + 2
+				continue
+			}
+		}
+		builder.WriteByte(text[index])
 		index++
 	}
 	return builder.String()

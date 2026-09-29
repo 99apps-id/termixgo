@@ -842,6 +842,10 @@ func TestStyleInlineRendersCodeAndBold(t *testing.T) {
 	if got := stripANSI(styleInline("run `go test` then **commit**", styles)); got != "run go test then commit" {
 		t.Errorf("mixed = %q", got)
 	}
+	// A code span inside bold renders instead of leaking its backticks.
+	if got := stripANSI(styleInline("**Stack (dari `package.json`):**", styles)); got != "Stack (dari package.json):" {
+		t.Errorf("nested = %q", got)
+	}
 	if got := styleInline("", styles); got != "" {
 		t.Errorf("an empty line = %q", got)
 	}
