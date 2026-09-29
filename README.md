@@ -22,6 +22,25 @@ everything the agent does is printed as terminal output.
   the command output behind it.
 - Optional Telegram companion so you can keep a run going from your phone.
 
+## Install
+
+Windows: run `Termixgo-<version>-windows-amd64-setup.exe` from the release.
+It installs to `%LOCALAPPDATA%\Programs\Termixgo`, adds it to the user PATH
+and registers an uninstaller. Afterwards `termixgo` works from any folder;
+open a new terminal first so it picks up the PATH change.
+
+Linux (including a VPS, no root needed):
+
+```sh
+tar xzf termixgo-<version>-linux-amd64.tar.gz
+cd termixgo-<version>-linux-amd64 && ./install.sh
+exec "$SHELL" -l
+```
+
+The script installs to `~/.local/bin` and adds it to the PATH in
+`~/.bashrc` (or `~/.zshrc`, fish config). Afterwards `termixgo` works from
+any folder.
+
 ## Build
 
 Requires Go 1.26 or newer.

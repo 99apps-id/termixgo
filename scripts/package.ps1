@@ -105,9 +105,19 @@ try {
             & 7z a -tzip -bso0 -bsp0 $archive $item.Path (Join-Path $root "LICENSE") (Join-Path $root "NOTICE") (Join-Path $root "README.md") | Out-Null
         } else {
             $archive = Join-Path $dist "$stem.tar.gz"
-            # tar with an explicit list keeps the mode bits, which is what lets
-            # the binary stay executable after extraction.
-            & tar -czf $archive -C (Split-Path $item.Path -Parent) $item.Name -C $root LICENSE NOTICE README.md
+            # The tarball carries canonical names: the binary is `termixgo`
+            # and the installer sits beside it, so the VPS flow is extract
+            # and run with nothing to rename or hunt for.
+            $stage = Join-Path $dist "tarball-stage"
+            if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+            New-Item -ItemType Directory -Path $stage | Out-Null
+            Copy-Item $item.Path (Join-Path $stage "termixgo") -Force
+            Copy-Item (Join-Path $root "packaging\linux\install.sh") $stage -Force
+            foreach ($doc in @("LICENSE", "NOTICE", "README.md")) {
+                Copy-Item (Join-Path $root $doc) $stage -Force
+            }
+            & tar -czf $archive -C $stage termixgo install.sh LICENSE NOTICE README.md
+            Remove-Item $stage -Recurse -Force
         }
         if ($LASTEXITCODE -ne 0) { throw "archive failed for $stem" }
         Write-Host ("  {0}" -f (Split-Path $archive -Leaf))
