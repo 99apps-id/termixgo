@@ -322,6 +322,28 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case runDoneMsg:
 		m.running = false
+		// A turn that ended while an approval or question was pending leaves
+		// those dialogs orphaned. Clear them and send the safe default on
+		// the reply channel so the goroutine that created it is never stuck.
+		if m.pendingApproval != nil {
+			if m.approvalReply != nil {
+				select {
+				case m.approvalReply <- agent.DecisionDeny:
+				default:
+				}
+			}
+			m.pendingApproval = nil
+			m.approvalReply = nil
+		}
+		if m.pendingAsk != nil {
+			if m.pendingAsk.reply != nil {
+				select {
+				case m.pendingAsk.reply <- "":
+				default:
+				}
+			}
+			m.pendingAsk = nil
+		}
 		if typed.err != nil {
 			m.blocks = append(m.blocks, block{kind: blockError, text: typed.err.Error()})
 		}

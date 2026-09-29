@@ -50,9 +50,85 @@ All notable changes to Termixgo are recorded here. The format follows
 - Git tools: `git_status`, `git_diff`, `git_log`, `git_show`, `git_add`,
   `git_commit`, `git_branch` and `git_restore`. Git runs with explicit
   arguments rather than a shell, and `git_restore` refuses a pathless revert.
+- A slash command whose argument is a fixed set offers those values as a menu.
+  `Tab` on `/trust` in the composer, or `/trust ` and `Enter`, lists the choices
+  with a line on what each one does. Choosing a value runs the command; a value
+  that only starts an argument, such as `delete` for `/sessions`, fills the
+  composer and waits for the rest. Before this the menu only printed the current
+  state, so an operator who reached a command through the menu had to know its
+  arguments from memory.
+- An interactive turn continues into the next step segment while the previous
+  one was still dispatching tools, so a small `maxSteps` no longer pauses a task
+  that is making progress. The loop guard and the cost cap stay the inner stops
+  and the segment count is the outer ceiling; a subagent keeps a hard budget.
+- `search_memory` is registered and the full-text index behind it is opened, so
+  the tool is reachable and the index is used. It was written, documented and
+  tested but never added to the registry, so the model could not call it and
+  every search fell back to a substring scan over memory and the journal.
 
 ### Fixed
 
+- The screen no longer garbles a few turns into a session. A frame taller than
+  the terminal made Bubble Tea drop its top lines and reposition the cursor
+  relative to the previous frame, which shifts the whole screen: earlier lines
+  appeared in the wrong place, which read as random and reversed text. Every
+  list overlay is now windowed, the approval diff takes only the rows the
+  terminal has left, and `View` clamps the frame as a last line of defence. The
+  measurement that found it: at 100x30 the slash menu drew 46 rows and the
+  approval dialog 36.
+- A slash command typed during a turn is no longer handed to the model as prose.
+  `/cost` and `/harness` reached the agent as the literal text "/cost", so the
+  operator never saw the answer. Read-only commands and the live controls run at
+  once; work that would collide, such as `/new`, is queued and runs as a command
+  when the turn ends.
+- `delete_file` with "." resolved to the workspace root and removed every file
+  in it, then reported success. One confused call could take the whole project.
+  It now refuses the root, as does `move_file`, which would otherwise take the
+  session's working directory with it.
+- `list_directory` with no path failed with a raw "Rel: can't make relative to"
+  error. The workspace check rejects an empty path, and it ran before the
+  fallback substituted the workspace root, so the documented default was dead.
+- A finished background process no longer counts against the concurrency cap.
+  The handle of a completed command is kept so its output stays readable, but
+  counting every handle ever started made the manager refuse all further work
+  once eight commands had finished, with nothing running left to stop.
+- Every string bound now lands on a rune boundary. A byte slice at a fixed
+  offset could cut a multi-byte character, and the terminal then paints a
+  replacement glyph: the read window, the raw command output, a git log, the
+  FTS5 snippet, a remembered fact, and an MCP server's stderr all had it. The
+  Telegram body had it too, where the consequence is worse than a glyph: the
+  Bot API rejects a body that is not valid UTF-8, so a message holding an emoji
+  at the cut was never delivered at all.
+- The token count and the session spend are no longer the first things dropped
+  from the status line. That line is a single clipped row, and both figures sat
+  behind the session id and the approval label, so a long task name pushed them
+  off exactly while a run was busy. The vitals are placed last and kept; the
+  spend is shown from the start, and an unpriced model reads "cost n/a" rather
+  than a zero that looks like a free session.
+- Typing `exit` or `quit` in plain mode now ends the REPL. The word was sent to
+  the model as a prompt, which spent a call on it.
+- A checkpoint no longer stashes the state directory. `.termixgo` was included
+  as untracked content, so a later `stash apply` collided with the live search
+  index and a rewind failed with "could not restore untracked files".
+- A harness profile that caps the loop means that cap again. Segmenting the turn
+  had quietly let the "shorter loop" profile run four times its stated budget.
+- An approval or question dialog left pending when a turn ends is cleared, and
+  the safe default is sent on its reply channel, so the agent goroutine waiting
+  on it is never stuck.
+- The error journal's compaction reports a failed write instead of silently
+  leaving the journal truncated: the flush, the close and the rename all had
+  their errors discarded.
+- A Telegram answer with no text no longer sends an empty message, which the Bot
+  API rejects.
+- The workspace index refresh always clears its in-progress flag, so a panic
+  during a walk cannot leave the index permanently refusing to refresh.
+- A one-shot `termixgo run` releases the search index and the MCP servers on the
+  way out. It opened them and never closed them, so the handles outlived the
+  command.
+- Tests that build an app register its shutdown, and three that inferred the
+  working directory now move to a temp one first. Both were writing state, and
+  on Windows an open index made a temp directory impossible to remove, so the
+  test failed in its own cleanup.
 - `termixgo -p` no longer loses its output. The event drain was stopped with a
   deferred close as soon as the turn returned, which could fire before the
   printer goroutine had run once. A one-shot run printed nothing at all, and a

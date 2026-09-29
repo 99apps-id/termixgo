@@ -124,7 +124,8 @@ Enter sends. `Ctrl+J` inserts a newline. `Tab` completes a slash command.
 | `/stop` | stop the running turn |
 | `/status` | workspace, model, plan and token status |
 | `/trust [on\|off]` | show or change folder trust |
-| `/approval [ask\|edits\|all]` | when a tool waits for you |
+| `/approval [ask\|edits\|all\|plan]` | when a tool waits for you |
+| `/harness [id]` | how hard the agent plans and verifies, and how long a turn may run |
 | `/plan` | show the current task plan |
 | `/tools` | list the tools the agent can call |
 | `/mcp [reload]` | show the MCP servers and the tools they add |
@@ -134,21 +135,35 @@ Enter sends. `Ctrl+J` inserts a newline. `Tab` completes a slash command.
 | `/init` | generate a `TERMIXGO.md` for the project |
 | `/cost` | token usage and estimated spend for this session |
 | `/ps [kill <handle>]` | list background processes, or stop one |
+| `/checkpoint [list\|<message>]` | save a working-tree snapshot you can come back to |
+| `/rewind [ref]` | restore the newest checkpoint, undoing later edits |
+| `/worktree [list\|add\|remove]` | git worktrees, for a second task in parallel |
 | `/exit` | quit |
+
+A command with a fixed set of arguments offers them as a menu. Press `Tab` on
+`/trust` in the composer, or type `/trust ` and `Enter`, and the choices are
+listed with what each one does. A value that only starts an argument, such as
+`delete` for `/sessions`, fills the composer and waits for the rest.
+
+Slash commands are local: they never reach the model as text, so `/cost` while a
+turn is running reports the spend instead of asking the agent about it.
 
 ## Tools the agent can call
 
-Filesystem: `read_file`, `write_file`, `edit`, `multi_edit`,
-`create_directory`, `delete_file`, `move_file`, `list_directory`.
-Search: `grep`, `glob`.
+Filesystem: `read_file`, `write_file`, `create_directory`, `delete_file`,
+`move_file`, `list_directory`.
+Search: `grep`, `glob`, `search_memory` (full-text over learned memory, the
+error journal and the workspace, backed by SQLite FTS5).
+Editing: `edit`, `multi_edit` (exact strings, applied atomically), `apply_patch`.
 Execution: `run_command`, `run_checks` (detects the project's own test, lint,
 typecheck and build commands for Go, Rust, Node, Python and Make projects).
 Background: `run_background`, `run_logs`, `run_wait`, `run_list`, `run_kill`.
 Git: `git_status`, `git_diff`, `git_log`, `git_show`, `git_add`, `git_commit`,
-`git_branch`, `git_restore`.
+`git_branch`, `git_restore`, `git_worktree`.
+Snapshots: `checkpoint`, `rewind`.
 Planning: `todo_write`, `todo_read`.
-Knowledge: `remember`, `use_skill`, `find_skill`.
-Interaction: `ask_user`, `think`, `run_subagent`, `web_fetch`.
+Knowledge: `remember`, `use_skill`, `find_skill`, `install_skill`.
+Interaction: `ask_user`, `think`, `run_subagent`, `web_fetch`, `web_search`.
 MCP: every tool your configured servers publish, as
 `mcp_<server>__<tool>`.
 
@@ -329,7 +344,7 @@ public issue.
 | `~/.termixgo/secrets.json` | provider keys and the bot token, owner-only |
 | `~/.termixgo/sessions/*.json` | saved conversations, owner-only |
 | `~/.termixgo/memory.md` | global learned memory |
-| `<workspace>/.termixgo/` | project memory and skills |
+| `<workspace>/.termixgo/` | project memory, skills, the error journal and the search index |
 
 Set `TERMIXGO_HOME` to move the state directory, which is useful for tests and
 throwaway profiles.

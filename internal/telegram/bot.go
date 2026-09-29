@@ -354,6 +354,9 @@ func (b *Bot) runPrompt(ctx context.Context, chatID int64, prompt string) {
 		b.reply(ctx, chatID, "Run failed: "+runErr.Error())
 		return
 	}
+	if strings.TrimSpace(answer) == "" {
+		answer = "(no output)"
+	}
 	b.reply(ctx, chatID, answer)
 }
 

@@ -256,12 +256,14 @@ func (s *Store) refreshWorkspace() {
 	s.indexing = true
 	s.mu.Unlock()
 
-	s.indexWorkspace()
+	defer func() {
+		s.mu.Lock()
+		s.indexing = false
+		s.indexedAt = time.Now()
+		s.mu.Unlock()
+	}()
 
-	s.mu.Lock()
-	s.indexing = false
-	s.indexedAt = time.Now()
-	s.mu.Unlock()
+	s.indexWorkspace()
 }
 
 // indexWorkspace walks the root and indexes the text files it finds. The caller

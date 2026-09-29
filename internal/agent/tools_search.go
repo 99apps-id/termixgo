@@ -121,6 +121,9 @@ func (t *grepTool) Run(ctx context.Context, env *Env, args map[string]any) (Resu
 			}
 			hits = append(hits, hit{path: relativeSlash(env, path), line: lineNumber, text: Shorten(line, 200)})
 		}
+		// scanner.Err() is deliberately not returned here: a single file
+		// with a line longer than 512KB (common in minified bundles)
+		// should not abort the search of every other file.
 		return nil
 	})
 	if err != nil && err != context.Canceled && err != context.DeadlineExceeded {

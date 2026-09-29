@@ -169,13 +169,27 @@ func (j *ErrorJournal) append(entry journalEntry) error {
 		}
 		name := f2.Name()
 		w := bufio.NewWriter(f2)
+		var writeErr error
 		for _, e := range trim {
 			data, _ := json.Marshal(e)
-			_, _ = w.Write(append(data, '\n'))
+			if _, writeErr = w.Write(append(data, '\n')); writeErr != nil {
+				break
+			}
 		}
-		_ = w.Flush()
-		_ = f2.Close()
-		_ = os.Rename(name, j.path)
+		if writeErr == nil {
+			writeErr = w.Flush()
+		}
+		if closeErr := f2.Close(); writeErr == nil {
+			writeErr = closeErr
+		}
+		if writeErr != nil {
+			_ = os.Remove(name)
+			return writeErr
+		}
+		if err := os.Rename(name, j.path); err != nil {
+			_ = os.Remove(name)
+			return err
+		}
 	}
 	return nil
 }

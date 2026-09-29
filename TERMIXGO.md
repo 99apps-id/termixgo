@@ -71,7 +71,25 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   budget.
 - Any string bound in `internal/agent` goes through `clipBytes` or
   `clipTailBytes`. A byte slice at a fixed offset can land inside a multi-byte
-  character, and the terminal then paints a replacement glyph.
+  character, and the terminal then paints a replacement glyph. The same rule
+  holds for a Telegram body, where the consequence is worse: the Bot API rejects
+  a body that is not valid UTF-8, so the message is never delivered.
+- The TUI frame must fit the terminal box. Bubble Tea drops the top lines of a
+  taller frame and moves the cursor relative to the previous frame, so one row
+  too many shifts the whole screen and the operator reads earlier lines in the
+  wrong place. Every list overlay is windowed, the approval diff takes only the
+  rows left over, and `View` clamps as a last line of defence. The status line is
+  built in two groups for the same reason: the token count and the spend are
+  placed last and kept, and the identity parts are dropped to make room.
+- A slash command is a local control and is never handed to the model as text.
+  Read-only commands and the ones that act on the live turn run while a turn is
+  in flight; a command that would start work, such as `/new`, is queued and runs
+  as a command when the turn ends.
+- `search_memory` is backed by the FTS5 store in `internal/search`, which the app
+  opens at `<workspace>/.termixgo/search.db`. The database is state, not content:
+  the workspace walk skips that directory, and a checkpoint stash excludes it.
+  The index has no timer; it refreshes before a search, so an idle session pays
+  nothing.
 - The approval decision is taken before a mutating tool runs, through
   `Env.Approve`. The desktop build has no gates; Termixgo adds real ones, so
   trust and `ApprovalMode` must be honoured.
