@@ -227,7 +227,7 @@ func indent(text, prefix string) string {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		lines[index] = prefix + line
+		lines[index] = prefix + strings.TrimRight(line, " \t\r")
 	}
 	return strings.Join(lines, "\n")
 }
@@ -243,7 +243,7 @@ func renderMarkdown(text string, styles Styles, width int) string {
 	var out []string
 	inCode := false
 	for _, raw := range strings.Split(text, "\n") {
-		trimmed := strings.TrimRight(raw, " \t")
+		trimmed := strings.TrimRight(raw, " \t\r")
 		if strings.HasPrefix(strings.TrimSpace(trimmed), "```") {
 			inCode = !inCode
 			continue
