@@ -16,6 +16,7 @@ import (
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/app"
+	"github.com/99apps-id/termixgo/internal/command"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/version"
@@ -71,6 +72,18 @@ type Model struct {
 	slashMatches []SlashCommand
 	slashCursor  int
 
+	// mentionMatches holds the @file candidates for the token being typed.
+	// Tab accepts the highlighted one; Enter leaves the text alone.
+	mentionMatches []string
+	mentionCursor  int
+	mentionAt      int
+
+	// custom holds user-defined slash commands from
+	// .termixgo/commands/*.md. It refreshes on a TTL so a new file
+	// appears in the menu without restarting the program.
+	custom   []command.Command
+	customAt time.Time
+
 	current mode
 	picker  picker
 	setup   setupState
@@ -91,7 +104,10 @@ type Model struct {
 
 	pendingApproval *agent.ApprovalRequest
 	approvalReply   chan agent.Decision
-	pendingAsk      *askRequestMsg
+	// approvalCursor is the highlighted approval option. Arrow keys move it
+	// and Enter confirms it, so the operator is not limited to letter keys.
+	approvalCursor int
+	pendingAsk     *askRequestMsg
 }
 
 // Limits bundles size thresholds used by the layout and the setup wizard.
@@ -158,6 +174,7 @@ func NewWithOptions(application *app.App, options Options) *Model {
 		showDetails: true,
 	}
 	application.SetInteractor(model)
+	_ = model.reloadCustomCommands()
 	model.welcome()
 	if options.StartSetup || application.NeedsSetup() {
 		model.startSetup()
@@ -269,6 +286,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		request := typed.request
 		m.pendingApproval = &request
 		m.approvalReply = typed.reply
+		m.approvalCursor = 0
 		m.refresh()
 		return m, nil
 
@@ -341,6 +359,7 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.composer.SetValue("")
 		m.slashMatches = nil
+		m.mentionMatches = nil
 		m.refresh()
 		return m, nil
 	case "enter":
@@ -351,9 +370,34 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Accept the highlighted slash completion: typing "/stat" and
 		// pressing Enter must run /status, not report an unknown command.
 		// Text with arguments is already explicit and passes through.
-		if !m.running && !strings.Contains(value, " ") && strings.HasPrefix(value, "/") && len(m.slashMatches) > 0 {
-			if cursor := m.slashCursor; cursor >= 0 && cursor < len(m.slashMatches) && m.slashMatches[cursor].Trigger != value {
-				value = m.slashMatches[cursor].Trigger
+		// The menu cache can be stale on the very first Enter, so fall back
+		// to a fresh match instead of trusting it blindly.
+		if !strings.Contains(value, " ") && strings.HasPrefix(value, "/") {
+			matches := m.slashMatches
+			if len(matches) == 0 {
+				matches = MatchSlash(value)
+			}
+			if len(matches) > 0 {
+				cursor := m.slashCursor
+				if cursor < 0 || cursor >= len(matches) {
+					cursor = 0
+				}
+				if matches[cursor].Trigger != value {
+					value = matches[cursor].Trigger
+				}
+			}
+		}
+		if slashName, _, ok := ParseSlash(value); ok {
+			// Most slash commands typed mid-run queue behind the turn and
+			// run on drain, which keeps one turn in flight. Only the
+			// controls that must act on the live turn bypass the queue:
+			// /stop cancels it and /exit quits at once. Queueing those
+			// would defer them past the moment they are needed.
+			if m.running && (slashName == "stop" || slashName == "exit" || slashName == "quit") {
+				m.composer.SetValue("")
+				m.slashMatches = nil
+				m.mentionMatches = nil
+				return m.submit(value)
 			}
 		}
 		if m.running {
@@ -361,18 +405,37 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.composer.SetValue("")
 		m.slashMatches = nil
+		m.mentionMatches = nil
 		return m.submit(value)
 	case "up":
+		if len(m.mentionMatches) > 0 {
+			m.mentionCursor = (m.mentionCursor - 1 + len(m.mentionMatches)) % len(m.mentionMatches)
+			return m, nil
+		}
 		if len(m.slashMatches) > 0 {
 			m.slashCursor = (m.slashCursor - 1 + len(m.slashMatches)) % len(m.slashMatches)
 			return m, nil
 		}
 	case "down":
+		if len(m.mentionMatches) > 0 {
+			m.mentionCursor = (m.mentionCursor + 1) % len(m.mentionMatches)
+			return m, nil
+		}
 		if len(m.slashMatches) > 0 {
 			m.slashCursor = (m.slashCursor + 1) % len(m.slashMatches)
 			return m, nil
 		}
 	case "tab":
+		if len(m.mentionMatches) > 0 {
+			cursor := m.mentionCursor
+			if cursor < 0 || cursor >= len(m.mentionMatches) {
+				cursor = 0
+			}
+			m.composer.SetValue(applyMentionCompletion(m.composer.Value(), m.mentionMatches[cursor], m.mentionAt))
+			m.mentionMatches = nil
+			m.updateSlashMatches()
+			return m, nil
+		}
 		if len(m.slashMatches) > 0 {
 			m.composer.SetValue(m.slashMatches[m.slashCursor].Trigger + " ")
 			m.slashMatches = nil
@@ -387,12 +450,40 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// approvalOptions is the arrow-navigable list in the approval dialog, in
+// display order. The index doubles as the cursor value.
+var approvalOptions = []struct {
+	key      string
+	label    string
+	decision agent.Decision
+}{
+	{"y", "allow once", agent.DecisionAllowOnce},
+	{"s", "allow session", agent.DecisionAllowSession},
+	{"a", "always", agent.DecisionAllowAlways},
+	{"n", "deny", agent.DecisionDeny},
+}
+
 func (m *Model) handleApprovalKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	reply := m.approvalReply
+	switch key.String() {
+	case "up", "ctrl+p":
+		m.approvalCursor = (m.approvalCursor - 1 + len(approvalOptions)) % len(approvalOptions)
+		m.refresh()
+		return m, nil
+	case "down", "ctrl+n":
+		m.approvalCursor = (m.approvalCursor + 1) % len(approvalOptions)
+		m.refresh()
+		return m, nil
+	case "enter":
+		cursor := m.approvalCursor
+		if cursor < 0 || cursor >= len(approvalOptions) {
+			cursor = 0
+		}
+		return m.answerApproval(approvalOptions[cursor].decision)
+	}
 	decision := agent.DecisionDeny
 	answered := true
 	switch strings.ToLower(key.String()) {
-	case "y", "enter":
+	case "y":
 		decision = agent.DecisionAllowOnce
 	case "s":
 		decision = agent.DecisionAllowSession
@@ -406,6 +497,13 @@ func (m *Model) handleApprovalKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !answered {
 		return m, nil
 	}
+	return m.answerApproval(decision)
+}
+
+// answerApproval delivers one approval decision to the waiting turn and
+// records it in the transcript.
+func (m *Model) answerApproval(decision agent.Decision) (tea.Model, tea.Cmd) {
+	reply := m.approvalReply
 	tool := ""
 	if m.pendingApproval != nil {
 		tool = m.pendingApproval.Tool
@@ -490,6 +588,7 @@ func (m *Model) enqueue(value string) (tea.Model, tea.Cmd) {
 	}
 	m.composer.SetValue("")
 	m.slashMatches = nil
+	m.mentionMatches = nil
 	m.notice = fmt.Sprintf("Queued (%d). The agent picks it up at its next step.", m.queuedCount())
 	m.refresh()
 	return m, nil
@@ -507,7 +606,9 @@ func (m *Model) submit(value string) (tea.Model, tea.Cmd) {
 	return m.startRun(value)
 }
 
-// startRun begins an agent turn and starts pumping events.
+// startRun begins an agent turn and starts pumping events. @file mentions
+// stay as typed in the transcript while the turn itself receives the file
+// contents, so the operator reads what they wrote and the model reads more.
 func (m *Model) startRun(input string) (tea.Model, tea.Cmd) {
 	m.blocks = append(m.blocks, block{kind: blockUser, text: input})
 	m.running = true
@@ -515,8 +616,9 @@ func (m *Model) startRun(input string) (tea.Model, tea.Cmd) {
 	m.refresh()
 
 	application := m.app
+	prompt := ExpandMentions(application.Workspace(), input)
 	go func() {
-		err := application.RunTurn(context.Background(), input)
+		err := application.RunTurn(context.Background(), prompt)
 		if m.program != nil {
 			m.program.Send(runDoneMsg{err: err})
 		}
@@ -706,6 +808,8 @@ func (m *Model) View() string {
 		sections = append(sections, m.viewAsk())
 	} else if len(m.slashMatches) > 0 {
 		sections = append(sections, m.viewSlashMenu())
+	} else if len(m.mentionMatches) > 0 {
+		sections = append(sections, m.viewMentionMenu())
 	} else {
 		sections = append(sections, m.viewComposer(), m.viewHints())
 	}
@@ -787,7 +891,7 @@ func (m *Model) viewHints() string {
 		}
 		return m.styles.Hint.Render(fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C quit", m.spin.View(), elapsed))
 	}
-	return m.styles.Hint.Render(" Enter send | Ctrl+J newline | / commands | Tab complete | Ctrl+O details | Ctrl+C quit")
+	return m.styles.Hint.Render(" Enter send | Ctrl+J newline | / commands @ files | Tab complete | Ctrl+O details | Ctrl+C quit")
 }
 
 func (m *Model) viewSlashMenu() string {
@@ -806,6 +910,21 @@ func (m *Model) viewSlashMenu() string {
 	return m.styles.Menu.Render(strings.Join(rows, "\n"))
 }
 
+// viewMentionMenu lists the @file candidates under the composer. Tab takes
+// the highlighted file into the text.
+func (m *Model) viewMentionMenu() string {
+	var rows []string
+	for index, path := range m.mentionMatches {
+		if index == m.mentionCursor {
+			rows = append(rows, m.styles.MenuSelected.Render("> @"+path))
+			continue
+		}
+		rows = append(rows, "  "+m.styles.MenuKey.Render("@"+path))
+	}
+	rows = append(rows, m.styles.Hint.Render("Tab complete | Up/Down move | Esc cancel"))
+	return m.styles.Menu.Render(strings.Join(rows, "\n"))
+}
+
 func (m *Model) viewApproval() string {
 	request := m.pendingApproval
 	body := []string{
@@ -813,13 +932,54 @@ func (m *Model) viewApproval() string {
 		"",
 		m.styles.StatusValue.Render(request.Tool) + m.styles.Dim.Render(" ("+request.Risk+")"),
 		m.styles.Dim.Render(truncate(request.Detail, m.width-8)),
-		"",
-		m.styles.MenuKey.Render("y") + " allow once   " +
-			m.styles.MenuKey.Render("s") + " allow session   " +
-			m.styles.MenuKey.Render("a") + " always   " +
-			m.styles.MenuKey.Render("n") + " deny",
 	}
+	if diff := renderApprovalDiff(request.Diff, m.styles, m.width-8); diff != "" {
+		body = append(body, "", diff)
+	}
+	body = append(body, "")
+	for index, option := range approvalOptions {
+		row := m.styles.MenuKey.Render(option.key) + " " + option.label
+		if index == m.approvalCursor {
+			body = append(body, m.styles.MenuSelected.Render("> "+row))
+			continue
+		}
+		body = append(body, "  "+row)
+	}
+	body = append(body, "", m.styles.Hint.Render("Up/Down move | Enter select | Esc deny"))
 	return m.styles.Box.Width(m.width - 6).Render(strings.Join(body, "\n"))
+}
+
+// renderApprovalDiff colours a unified preview for the approval dialog.
+// Lines are clipped to the width so a long file cannot break the box.
+func renderApprovalDiff(diff string, styles Styles, width int) string {
+	diff = strings.TrimSpace(diff)
+	if diff == "" {
+		return ""
+	}
+	lines := strings.Split(diff, "\n")
+	const maxLines = 14
+	shown := lines
+	truncated := false
+	if len(lines) > maxLines {
+		shown = lines[:maxLines]
+		truncated = true
+	}
+	var out []string
+	for _, line := range shown {
+		line = truncate(line, max(1, width))
+		switch {
+		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+			out = append(out, styles.ToolDone.Render(line))
+		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+			out = append(out, styles.ToolError.Render(line))
+		default:
+			out = append(out, styles.Dim.Render(line))
+		}
+	}
+	if truncated {
+		out = append(out, styles.Dim.Render(fmt.Sprintf("... (%d more lines)", len(lines)-maxLines)))
+	}
+	return strings.Join(out, "\n")
 }
 
 func (m *Model) viewAsk() string {
@@ -852,6 +1012,13 @@ func (m *Model) viewHelp() string {
 		}
 		lines = append(lines, m.styles.MenuKey.Render(fmt.Sprintf("  %-16s", usage))+m.styles.MenuDesc.Render(summary))
 	}
+	if len(m.custom) > 0 {
+		lines = append(lines, "", m.styles.BoxTitle.Render("Custom"))
+		for _, item := range m.custom {
+			lines = append(lines, m.styles.MenuKey.Render(fmt.Sprintf("  %-16s", "/"+item.Name))+m.styles.MenuDesc.Render(item.Description))
+		}
+		lines = append(lines, m.styles.Hint.Render("  Add one at .termixgo/commands/<name>.md with $ARGUMENTS for the typed text."))
+	}
 	lines = append(lines, "",
 		m.styles.BoxTitle.Render("Keys"),
 		"",
@@ -862,9 +1029,53 @@ func (m *Model) viewHelp() string {
 	return m.styles.Box.Width(m.width - 4).Render(strings.Join(lines, "\n"))
 }
 
+// customTTL bounds how often the command files are re-read. Discovery hits
+// the disk, so the menu reuses the cache within the window and a new file
+// still appears seconds later without a restart.
+const customTTL = 10 * time.Second
+
+// ensureCustomCommands refreshes the user-defined slash commands when the
+// cache is stale. Failures keep the previous set: a broken file must not
+// hide the commands that still parse.
+func (m *Model) ensureCustomCommands() {
+	if !m.customAt.IsZero() && time.Since(m.customAt) < customTTL {
+		return
+	}
+	_ = m.reloadCustomCommands()
+}
+
+// reloadCustomCommands re-reads the command files now.
+func (m *Model) reloadCustomCommands() error {
+	commands, err := command.Discover(m.app.Workspace())
+	if err != nil {
+		return err
+	}
+	m.custom = commands
+	m.customAt = time.Now()
+	return nil
+}
+
+// matchCustom returns the user-defined commands matching a typed prefix.
+func (m *Model) matchCustom(input string) []SlashCommand {
+	trimmed := strings.TrimSpace(input)
+	if !strings.HasPrefix(trimmed, "/") || strings.ContainsAny(trimmed, " \n\t") {
+		return nil
+	}
+	var matches []SlashCommand
+	for _, item := range m.custom {
+		trigger := "/" + item.Name
+		if strings.HasPrefix(trigger, strings.ToLower(trimmed)) {
+			matches = append(matches, SlashCommand{Trigger: trigger, Summary: item.Description})
+		}
+	}
+	return matches
+}
+
 // updateSlashMatches recomputes the inline command menu.
 func (m *Model) updateSlashMatches() {
+	m.ensureCustomCommands()
 	matches := MatchSlash(m.composer.Value())
+	matches = append(matches, m.matchCustom(m.composer.Value())...)
 	if len(matches) != len(m.slashMatches) {
 		m.slashCursor = 0
 	}
@@ -872,6 +1083,26 @@ func (m *Model) updateSlashMatches() {
 		m.slashCursor = 0
 	}
 	m.slashMatches = matches
+	m.updateMentionMatches()
+}
+
+// updateMentionMatches recomputes the @file menu from the token being typed.
+func (m *Model) updateMentionMatches() {
+	token, at, ok := parseMention(m.composer.Value())
+	if !ok {
+		m.mentionMatches = nil
+		m.mentionCursor = 0
+		return
+	}
+	matches := mentionCandidates(m.app.Workspace(), token, mentionMatchCap)
+	if len(matches) != len(m.mentionMatches) {
+		m.mentionCursor = 0
+	}
+	if m.mentionCursor >= len(matches) {
+		m.mentionCursor = 0
+	}
+	m.mentionMatches = matches
+	m.mentionAt = at
 }
 
 // approvalTimeout bounds how long the agent goroutine waits for the operator.

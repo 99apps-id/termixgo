@@ -117,6 +117,10 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 		}
 		return m, m.enterChat()
 	case "session":
+		if m.running {
+			m.blocks = append(m.blocks, block{kind: blockError, text: "Wait for the current turn to finish before resuming a session."})
+			return m, m.enterChat()
+		}
 		session, err := agent.LoadSession(item.ID)
 		if err != nil {
 			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})

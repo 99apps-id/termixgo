@@ -108,6 +108,11 @@ type App struct {
 
 	// journal records recurring tool failures so the agent can learn from them.
 	journal *agent.ErrorJournal
+
+	// toolCalls ledgers finished tool calls for /cost. It lives beside usage
+	// because money comes from the price table while the shape of a turn
+	// comes from here.
+	toolCalls map[string]*ToolStat
 }
 
 // New loads the state for a workspace and prepares a session.
@@ -680,6 +685,9 @@ func (a *App) emit(event agent.Event) {
 	if event.Kind == agent.EventUsage {
 		a.AddUsage(event.Usage)
 	}
+	if event.Kind == agent.EventToolEnd {
+		a.recordToolResult(event.ToolName, event.ToolOK)
+	}
 	switch event.Kind {
 	case agent.EventUsage, agent.EventTurnEnd:
 		// Every usage event carries the run's running total, so assigning is
@@ -770,6 +778,11 @@ func (a *App) runTurn(ctx context.Context, input string) error {
 		a.running = false
 		a.mu.Unlock()
 	}()
+
+	// A best-effort snapshot before the turn, so a bad edit can be undone
+	// with /rewind. It never fails the turn: outside git, or when git is
+	// slow, the turn simply runs without a new checkpoint.
+	agent.AutoCheckpoint(runCtx, a.workspace)
 
 	cfg := a.Config()
 	runner := &agent.Runner{

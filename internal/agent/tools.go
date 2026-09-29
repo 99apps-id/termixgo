@@ -103,6 +103,7 @@ func DefaultRegistry() *Registry {
 		&writeFileTool{},
 		&editTool{},
 		&multiEditTool{},
+		&applyPatchTool{},
 		&createDirectoryTool{},
 		&deleteFileTool{},
 		&moveFileTool{},
@@ -123,6 +124,7 @@ func DefaultRegistry() *Registry {
 		&installSkillTool{},
 		&askUserTool{},
 		&webFetchTool{},
+		&webSearchTool{},
 		&thinkTool{},
 		&subagentTool{},
 		&gitStatusTool{},
@@ -133,6 +135,9 @@ func DefaultRegistry() *Registry {
 		&gitCommitTool{},
 		&gitBranchTool{},
 		&gitRestoreTool{},
+		&gitWorktreeTool{},
+		&checkpointTool{},
+		&rewindTool{},
 	)
 }
 

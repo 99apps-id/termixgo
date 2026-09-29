@@ -88,6 +88,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runServe(stdout)
 	case "service":
 		return runService(args[1:], stdout)
+	case "completion":
+		return runCompletion(args[1:], stdout)
 	case "doctor":
 		return runDoctor(stdout)
 	default:
@@ -826,9 +828,10 @@ Usage:
   termixgo models [--provider id] List the model catalogue
   termixgo model [id]             Show or set the default model
   termixgo trust [on|off]         Show or set folder trust for this directory
-  termixgo approval [mode]        Show or set ask|edits|all
+  termixgo approval [mode]        Show or set ask|edits|all|plan
   termixgo harness [id]           Show or set the agent harness profile
   termixgo mcp                    List the MCP servers and the tools they add
+  termixgo completion [shell]     Print shell completion (bash|zsh|fish|powershell)
   termixgo secret <provider> [k]  Store a provider API key
   termixgo telegram [status|on|off]
   termixgo serve                  Run the Telegram assistant 24/7

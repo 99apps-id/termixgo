@@ -10,6 +10,7 @@ import (
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/app"
+	customcmd "github.com/99apps-id/termixgo/internal/command"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/version"
 )
@@ -121,8 +122,17 @@ type plainInteractor struct {
 }
 
 func (i *plainInteractor) Approve(request agent.ApprovalRequest) agent.Decision {
-	fmt.Fprintf(i.out, "\nApproval needed: %s (%s)\n  %s\n[y] once  [s] session  [a] always  [n] deny: ",
-		request.Tool, request.Risk, request.Detail)
+	fmt.Fprintf(i.out, "\nApproval needed: %s (%s)\n  %s\n", request.Tool, request.Risk, request.Detail)
+	if diff := strings.TrimSpace(request.Diff); diff != "" {
+		lines := strings.Split(diff, "\n")
+		if len(lines) > 20 {
+			lines = append(lines[:20], fmt.Sprintf("... (%d more lines)", len(lines)-20))
+		}
+		for _, line := range lines {
+			fmt.Fprintf(i.out, "  %s\n", line)
+		}
+	}
+	fmt.Fprint(i.out, "[y] once  [s] session  [a] always  [n] deny: ")
 	reader := bufio.NewReader(i.in)
 	line, err := reader.ReadString('\n')
 	if err != nil {
@@ -206,7 +216,7 @@ func RunPlainWithContext(ctx context.Context, application *app.App, in io.Reader
 			continue
 		}
 		if name, args, ok := ParseSlash(line); ok {
-			quit, err := runPlainSlash(application, name, args, out)
+			quit, err := runPlainSlash(ctx, application, name, args, out)
 			if err != nil {
 				fmt.Fprintln(out, printer.color(ansiRed, "error: "+err.Error()))
 			}
@@ -215,7 +225,7 @@ func RunPlainWithContext(ctx context.Context, application *app.App, in io.Reader
 			}
 			continue
 		}
-		if err := application.RunTurn(ctx, line); err != nil {
+		if err := application.RunTurn(ctx, ExpandMentions(application.Workspace(), line)); err != nil {
 			fmt.Fprintln(out, printer.color(ansiRed, "error: "+err.Error()))
 		}
 		fmt.Fprintln(out)
@@ -267,7 +277,7 @@ func RunOnceWithContext(ctx context.Context, application *app.App, prompt string
 	printer := newPlainPrinter(out, isTerminalWriter(out))
 	application.SetInteractor(&plainInteractor{in: os.Stdin, out: out})
 	stop := drainEvents(application, printer)
-	err := application.RunTurn(ctx, prompt)
+	err := application.RunTurn(ctx, ExpandMentions(application.Workspace(), prompt))
 	// Stopping first waits for the printer, so the answer is fully written and
 	// the recorded failure is safe to read.
 	stop()
@@ -311,12 +321,15 @@ func orNone(value string) string {
 	return value
 }
 
-// runPlainSlash handles the subset of commands that make sense without a TUI.
-func runPlainSlash(application *app.App, name, args string, out io.Writer) (bool, error) {
+// runPlainSlash handles slash commands without a TUI. Read-only commands
+// print the same state the TUI shows, so a slash that works on screen also
+// works over a pipe. Anything that needs a picker lists instead of opening
+// one, because there is no overlay to open.
+func runPlainSlash(ctx context.Context, application *app.App, name, args string, out io.Writer) (bool, error) {
 	switch name {
 	case "exit", "quit":
 		return true, nil
-	case "help":
+	case "help", "?":
 		for _, entry := range SlashHelp() {
 			parts := strings.SplitN(entry, "\t", 2)
 			summary := ""
@@ -338,6 +351,83 @@ func runPlainSlash(application *app.App, name, args string, out io.Writer) (bool
 	case "new":
 		application.NewSession()
 		fmt.Fprintln(out, "  started a new session")
+	case "sessions":
+		fields := strings.Fields(args)
+		if len(fields) == 0 {
+			sessions, err := agent.ListSessions()
+			if err != nil {
+				return false, err
+			}
+			if len(sessions) == 0 {
+				fmt.Fprintln(out, "  no saved sessions yet")
+				return false, nil
+			}
+			fmt.Fprintf(out, "  %d saved session(s):\n", len(sessions))
+			for _, session := range sessions {
+				title := strings.TrimSpace(session.Title)
+				if title == "" {
+					title = "(untitled)"
+				}
+				fmt.Fprintf(out, "    %s  %s  %d turn(s)  %s\n", session.ID, title, session.Turns, session.UpdatedAt.Format("2006-01-02 15:04"))
+			}
+			return false, nil
+		}
+		switch strings.ToLower(fields[0]) {
+		case "list":
+			sessions, err := agent.ListSessions()
+			if err != nil {
+				return false, err
+			}
+			fmt.Fprintln(out, formatSessionList(sessions))
+			return false, nil
+		case "search":
+			sessions, err := agent.SearchSessions(strings.TrimSpace(strings.TrimPrefix(args, fields[0])))
+			if err != nil {
+				return false, err
+			}
+			fmt.Fprintln(out, formatSessionList(sessions))
+			return false, nil
+		case "rename":
+			if len(fields) < 3 {
+				return false, fmt.Errorf("usage: /sessions rename <id> <title>")
+			}
+			summary, err := agent.RenameSession(fields[1], strings.Join(fields[2:], " "))
+			if err != nil {
+				return false, err
+			}
+			fmt.Fprintf(out, "  renamed %s to %q\n", summary.ID, summary.Title)
+			return false, nil
+		case "delete", "rm":
+			if len(fields) < 2 {
+				return false, fmt.Errorf("usage: /sessions delete <id>")
+			}
+			if err := agent.DeleteSession(fields[1]); err != nil {
+				return false, err
+			}
+			if strings.EqualFold(application.Session().ID(), fields[1]) {
+				application.NewSession()
+			}
+			fmt.Fprintf(out, "  deleted %s\n", fields[1])
+			return false, nil
+		case "export":
+			if len(fields) < 2 {
+				return false, fmt.Errorf("usage: /sessions export <id>")
+			}
+			document, err := agent.ExportSession(fields[1])
+			if err != nil {
+				return false, err
+			}
+			fmt.Fprintln(out, document)
+			return false, nil
+		default:
+			// A bare id resumes nothing in plain mode; point at search.
+			sessions, err := agent.SearchSessions(args)
+			if err != nil {
+				return false, err
+			}
+			fmt.Fprintln(out, formatSessionList(sessions))
+			return false, nil
+		}
 	case "stop":
 		application.Stop()
 		fmt.Fprintln(out, "  stopping")
@@ -352,24 +442,34 @@ func runPlainSlash(application *app.App, name, args string, out io.Writer) (bool
 		}
 		fmt.Fprintf(out, "  tokens: %d in, %d out, %d total\n", usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
 		fmt.Fprintf(out, "  estimated spend: %s\n", spend)
+		for _, stat := range application.ToolStats() {
+			if stat.Errors > 0 {
+				fmt.Fprintf(out, "    %-16s %d call(s), %d failed\n", stat.Name, stat.Calls, stat.Errors)
+				continue
+			}
+			fmt.Fprintf(out, "    %-16s %d call(s)\n", stat.Name, stat.Calls)
+		}
 	case "trust":
 		switch strings.ToLower(strings.TrimSpace(args)) {
-		case "on", "yes":
+		case "on", "yes", "true":
 			if err := application.SetTrust(true); err != nil {
 				return false, err
 			}
 			fmt.Fprintln(out, "  folder is now trusted")
-		case "off", "no":
+		case "off", "no", "false":
 			if err := application.SetTrust(false); err != nil {
 				return false, err
 			}
 			fmt.Fprintln(out, "  folder is now untrusted")
-		default:
+		case "":
 			state := "untrusted"
 			if application.Trusted() {
 				state = "trusted"
 			}
 			fmt.Fprintf(out, "  folder is %s\n", state)
+		default:
+			fmt.Fprintf(out, "  folder is %s\n", map[bool]string{true: "trusted", false: "untrusted"}[application.Trusted()])
+			return false, fmt.Errorf("usage: /trust [on|off]")
 		}
 	case "approval":
 		if strings.TrimSpace(args) == "" {
@@ -384,6 +484,212 @@ func runPlainSlash(application *app.App, name, args string, out io.Writer) (bool
 			return false, err
 		}
 		fmt.Fprintf(out, "  approval mode is now %s\n", mode)
+	case "harness":
+		trimmed := strings.TrimSpace(args)
+		if trimmed == "" {
+			active := application.HarnessProfile()
+			fmt.Fprintf(out, "  harness: %s (%s)\n", active.Label, active.ID)
+			for _, profile := range agent.HarnessProfiles() {
+				marker := "  "
+				if profile.ID == active.ID {
+					marker = "> "
+				}
+				fmt.Fprintf(out, "    %s%-14s %s\n", marker, profile.ID, profile.Description)
+			}
+			return false, nil
+		}
+		profile, err := application.SetHarnessProfile(trimmed)
+		if err != nil {
+			return false, err
+		}
+		fmt.Fprintf(out, "  harness is now %s\n", profile.Label)
+	case "plan":
+		items := application.Todos().Items()
+		if len(items) == 0 {
+			fmt.Fprintln(out, "  plan is empty")
+			return false, nil
+		}
+		done := 0
+		for _, item := range items {
+			if item.Status == "completed" {
+				done++
+			}
+		}
+		fmt.Fprintf(out, "  plan (%d/%d):\n", done, len(items))
+		for _, item := range items {
+			mark := "[ ]"
+			switch item.Status {
+			case "in_progress":
+				mark = "[>]"
+			case "completed":
+				mark = "[x]"
+			}
+			fmt.Fprintf(out, "    %s %s\n", mark, item.Title)
+		}
+	case "tools":
+		entries := application.Tools().Catalog()
+		fmt.Fprintf(out, "  tools (%d):\n", len(entries))
+		for _, entry := range entries {
+			marker := "read"
+			if entry.Mutating {
+				marker = "write"
+			}
+			fmt.Fprintf(out, "    %-16s %-6s %s\n", entry.Name, marker, entry.Description)
+		}
+	case "mcp":
+		trimmed := strings.TrimSpace(args)
+		if strings.EqualFold(trimmed, "reload") {
+			reloadCtx, cancel := context.WithTimeout(ctx, mcpReloadTimeout)
+			defer cancel()
+			application.ReloadMCP(reloadCtx)
+		} else if trimmed != "" {
+			return false, fmt.Errorf("usage: /mcp [reload]")
+		}
+		status := application.MCPStatus()
+		if len(status) == 0 {
+			fmt.Fprintln(out, "  no MCP servers are configured")
+			return false, nil
+		}
+		fmt.Fprintf(out, "  MCP servers (%d):\n", len(status))
+		for _, entry := range status {
+			switch {
+			case entry.Disabled:
+				fmt.Fprintf(out, "    %-14s off       %s\n", entry.Name, entry.Command)
+			case entry.Err != nil:
+				fmt.Fprintf(out, "    %-14s failed    %s\n", entry.Name, entry.Command)
+				fmt.Fprintf(out, "                   %s\n", firstLine(entry.Err.Error()))
+			default:
+				fmt.Fprintf(out, "    %-14s ready     %d tool(s)  (%s)\n", entry.Name, entry.ToolCount, entry.Command)
+			}
+		}
+	case "skills":
+		if strings.EqualFold(strings.TrimSpace(args), "reload") {
+			application.ReloadSkills()
+		}
+		skills := application.Skills()
+		if len(skills) == 0 {
+			fmt.Fprintln(out, "  no skills found")
+			return false, nil
+		}
+		fmt.Fprintf(out, "  skills (%d):\n", len(skills))
+		for _, item := range skills {
+			fmt.Fprintf(out, "    %-20s %-8s %s\n", item.Name, item.Scope, item.Description)
+		}
+	case "memory":
+		project, global := agent.NewMemory(application.Workspace()).Read()
+		if len(project) == 0 && len(global) == 0 {
+			fmt.Fprintln(out, "  nothing learned yet")
+			return false, nil
+		}
+		fmt.Fprintln(out, "  learned memory:")
+		for _, fact := range global {
+			fmt.Fprintf(out, "    [global] %s\n", fact)
+		}
+		for _, fact := range project {
+			fmt.Fprintf(out, "    [project] %s\n", fact)
+		}
+	case "telegram":
+		sub := strings.ToLower(strings.TrimSpace(args))
+		switch sub {
+		case "", "status":
+			fmt.Fprintf(out, "  telegram: %s\n", application.TelegramStatus())
+		case "on":
+			if err := application.SetTelegramEnabled(true); err != nil {
+				return false, err
+			}
+			fmt.Fprintln(out, "  telegram bot is running")
+		case "off":
+			if err := application.SetTelegramEnabled(false); err != nil {
+				return false, err
+			}
+			fmt.Fprintln(out, "  telegram bot stopped")
+		case "pair":
+			code, err := application.EnsurePairingCode()
+			if err != nil {
+				return false, err
+			}
+			_ = application.StartTelegram()
+			fmt.Fprintf(out, "  pairing code: %s\n", code)
+		case "setup":
+			fmt.Fprintln(out, "  run the interactive UI to connect the Telegram companion bot,")
+			fmt.Fprintln(out, "  or set the token with: termixgo secret telegram <token>")
+		default:
+			return false, fmt.Errorf("usage: /telegram [status|on|off|setup|pair]")
+		}
+	case "init":
+		if !application.HasModel() {
+			return false, fmt.Errorf("pick a model first with /setup")
+		}
+		if err := application.RunTurn(ctx, initPrompt); err != nil {
+			return false, err
+		}
+		fmt.Fprintln(out)
+	case "worktree":
+		fields := strings.Fields(args)
+		action := "list"
+		if len(fields) > 0 {
+			action = fields[0]
+		}
+		tool, ok := application.Tools().Lookup("git_worktree")
+		if !ok {
+			return false, fmt.Errorf("the worktree tool is not available")
+		}
+		callArgs := map[string]any{"action": action}
+		if len(fields) > 1 {
+			callArgs["path"] = strings.Join(fields[1:], " ")
+		}
+		if strings.EqualFold(action, "add") && len(fields) > 2 {
+			callArgs["path"] = fields[1]
+			callArgs["branch"] = strings.Join(fields[2:], " ")
+		}
+		result, err := tool.Run(ctx, &agent.Env{Workspace: application.Workspace()}, callArgs)
+		if err != nil {
+			return false, err
+		}
+		if result.IsError {
+			return false, fmt.Errorf("%s", result.Output)
+		}
+		fmt.Fprintf(out, "  %s\n", result.Output)
+		return false, nil
+	case "checkpoint":
+		trimmed := strings.TrimSpace(args)
+		if strings.EqualFold(trimmed, "list") {
+			checkpoints, err := agent.ListCheckpoints(ctx, application.Workspace())
+			if err != nil {
+				return false, err
+			}
+			if len(checkpoints) == 0 {
+				fmt.Fprintln(out, "  no checkpoints yet")
+				return false, nil
+			}
+			fmt.Fprintf(out, "  checkpoints (%d):\n", len(checkpoints))
+			for _, item := range checkpoints {
+				fmt.Fprintf(out, "    %s  %s\n", item.Ref, item.Message)
+			}
+			return false, nil
+		}
+		checkpoint, err := agent.CreateCheckpoint(ctx, application.Workspace(), trimmed)
+		if err != nil {
+			return false, err
+		}
+		if checkpoint.Ref == "" {
+			fmt.Fprintln(out, "  nothing to save: the working tree is clean")
+			return false, nil
+		}
+		fmt.Fprintf(out, "  checkpoint %s saved\n", checkpoint.Ref)
+	case "rewind":
+		trimmed := strings.TrimSpace(args)
+		var checkpoint agent.Checkpoint
+		var err error
+		if trimmed == "" {
+			checkpoint, err = agent.RewindToLatest(ctx, application.Workspace())
+		} else {
+			checkpoint, err = agent.RewindToCheckpoint(ctx, application.Workspace(), trimmed)
+		}
+		if err != nil {
+			return false, err
+		}
+		fmt.Fprintf(out, "  restored %s\n", checkpoint.Ref)
 	case "ps":
 		manager := application.Processes()
 		if manager == nil {
@@ -419,7 +725,17 @@ func runPlainSlash(application *app.App, name, args string, out io.Writer) (bool
 		fmt.Fprintln(out, "  Run the interactive UI (termixgo with no arguments) to use the setup wizard,")
 		fmt.Fprintln(out, "  or set a key from the shell: termixgo secret <provider> <key>")
 	default:
-		fmt.Fprintf(out, "  /%s is not available in plain mode. Try /help.\n", name)
+		item, err := customcmd.Load(application.Workspace(), name)
+		if err != nil {
+			return false, fmt.Errorf("unknown command /%s. Try /help", name)
+		}
+		if !application.HasModel() {
+			return false, fmt.Errorf("pick a model first with /setup")
+		}
+		if err := application.RunTurn(ctx, item.Expand(args)); err != nil {
+			return false, err
+		}
+		fmt.Fprintln(out)
 	}
 	return false, nil
 }

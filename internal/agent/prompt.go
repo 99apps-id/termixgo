@@ -33,6 +33,9 @@ func BuildSystem(env *Env, model string) string {
 	fmt.Fprintf(&builder, "- Workspace root: %s\n", env.Workspace)
 	fmt.Fprintf(&builder, "- Platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Fprintf(&builder, "- Folder trust: %s\n", trusted)
+	if config.ApprovalMode(env.Config.ApprovalMode) == config.ApprovalPlan {
+		builder.WriteString("- Plan mode is ON: investigate, read, search and record the plan with todo_write, but never call a mutating tool. Mutating calls are blocked automatically, so do not retry one that was refused.")
+	}
 	if strings.TrimSpace(model) != "" {
 		fmt.Fprintf(&builder, "- Model: %s\n", model)
 	}
@@ -135,6 +138,8 @@ func ApprovalModeOrDefault(cfg config.Config) ApprovalMode {
 		return ApprovalAsk
 	case config.ApprovalEdits:
 		return ApprovalEdits
+	case config.ApprovalPlan:
+		return ApprovalPlan
 	default:
 		return ApprovalAll
 	}

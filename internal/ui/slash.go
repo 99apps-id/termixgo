@@ -18,11 +18,11 @@ var slashCommands = []SlashCommand{
 	{Trigger: "/setup", Args: "", Summary: "Onboarding: provider key, skills, Telegram"},
 	{Trigger: "/help", Args: "", Summary: "List every command and key binding"},
 	{Trigger: "/new", Args: "", Summary: "Start a new session"},
-	{Trigger: "/sessions", Args: "", Summary: "List and resume recent sessions"},
+	{Trigger: "/sessions", Args: "[list|search|rename|delete|export]", Summary: "List, find, rename, delete or export sessions"},
 	{Trigger: "/stop", Args: "", Summary: "Stop the running turn"},
 	{Trigger: "/status", Args: "", Summary: "Show workspace, model and token status"},
 	{Trigger: "/trust", Args: "[on|off]", Summary: "Show or change folder trust"},
-	{Trigger: "/approval", Args: "[ask|edits|all]", Summary: "Show or change the approval policy"},
+	{Trigger: "/approval", Args: "[ask|edits|all|plan]", Summary: "Show or change the approval policy"},
 	{Trigger: "/harness", Args: "[id]", Summary: "Show or change the agent harness"},
 	{Trigger: "/plan", Args: "", Summary: "Show the current task plan"},
 	{Trigger: "/tools", Args: "", Summary: "List the tools the agent can call"},
@@ -33,6 +33,9 @@ var slashCommands = []SlashCommand{
 	{Trigger: "/init", Args: "", Summary: "Generate a TERMIXGO.md for this project"},
 	{Trigger: "/cost", Args: "", Summary: "Show token usage for this session"},
 	{Trigger: "/ps", Args: "[kill <handle>]", Summary: "List background processes, or stop one"},
+	{Trigger: "/checkpoint", Args: "[message|list]", Summary: "Save or list working-tree checkpoints"},
+	{Trigger: "/rewind", Args: "[ref]", Summary: "Restore the newest checkpoint, undoing later edits"},
+	{Trigger: "/worktree", Args: "[list|add|remove]", Summary: "List, add or remove git worktrees for parallel tasks"},
 	{Trigger: "/exit", Args: "", Summary: "Quit Termixgo"},
 }
 

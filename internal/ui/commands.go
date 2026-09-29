@@ -10,6 +10,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/99apps-id/termixgo/internal/agent"
+	"github.com/99apps-id/termixgo/internal/app"
+	customcmd "github.com/99apps-id/termixgo/internal/command"
 	"github.com/99apps-id/termixgo/internal/config"
 )
 
@@ -43,7 +45,7 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 	case "sessions":
-		return m.slashSessions()
+		return m.slashSessions(args)
 	case "stop":
 		m.app.Stop()
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Stopping the running turn."})
@@ -72,8 +74,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf(
-			"Tokens: %d in, %d out, %d total.\nEstimated spend: %s (%s).\nPrices are published list values, an estimate not a bill. Set a cap with costBudgetUsd in config, and override a price with modelPricing.",
-			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, spend, budget)})
+			"Tokens: %d in, %d out, %d total.\nEstimated spend: %s (%s).\nPrices are published list values, an estimate not a bill. Set a cap with costBudgetUsd in config, and override a price with modelPricing.%s",
+			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, spend, budget, formatToolStats(m.app.ToolStats()))})
 		m.refresh()
 		return m, nil
 	case "ps":
@@ -96,6 +98,12 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashSkills(args)
 	case "memory":
 		return m.slashMemory()
+	case "checkpoint":
+		return m.slashCheckpoint(args)
+	case "rewind":
+		return m.slashRewind(args)
+	case "worktree":
+		return m.slashWorktree(args)
 	case "telegram":
 		return m.slashTelegram(args)
 	case "init":
@@ -106,10 +114,26 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		}
 		return m.startRun(initPrompt)
 	default:
+		return m.runCustom(name, args)
+	}
+}
+
+// runCustom runs a user-defined slash command from .termixgo/commands. The
+// file body becomes the turn prompt with the typed arguments applied, so
+// /review <paths> reads like a built-in that the operator wrote themselves.
+func (m *Model) runCustom(name, args string) (tea.Model, tea.Cmd) {
+	item, err := customcmd.Load(m.app.Workspace(), name)
+	if err != nil {
 		m.blocks = append(m.blocks, block{kind: blockError, text: fmt.Sprintf("Unknown command /%s. Try /help.", name)})
 		m.refresh()
 		return m, nil
 	}
+	if !m.app.HasModel() {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Pick a model first with /setup."})
+		m.refresh()
+		return m, nil
+	}
+	return m.startRun(item.Expand(args))
 }
 
 func (m *Model) slashModel(args string) (tea.Model, tea.Cmd) {
@@ -136,7 +160,22 @@ func (m *Model) slashModel(args string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) slashSessions() (tea.Model, tea.Cmd) {
+func (m *Model) slashSessions(args string) (tea.Model, tea.Cmd) {
+	fields := strings.Fields(args)
+	if len(fields) > 0 {
+		switch strings.ToLower(fields[0]) {
+		case "search":
+			return m.slashSessionsSearch(strings.TrimSpace(strings.TrimPrefix(args, fields[0])))
+		case "rename":
+			return m.slashSessionsRename(fields[1:])
+		case "delete", "rm":
+			return m.slashSessionsDelete(fields[1:])
+		case "export":
+			return m.slashSessionsExport(fields[1:])
+		case "list":
+			return m.slashSessionsList()
+		}
+	}
 	sessions, err := agent.ListSessions()
 	if err != nil {
 		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
@@ -165,11 +204,132 @@ func (m *Model) slashSessions() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// slashSessionsList prints the saved sessions as text, for operators who
+// want to copy an id without opening the picker.
+func (m *Model) slashSessionsList() (tea.Model, tea.Cmd) {
+	sessions, err := agent.ListSessions()
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		m.refresh()
+		return m, nil
+	}
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: formatSessionList(sessions)})
+	m.refresh()
+	return m, nil
+}
+
+func (m *Model) slashSessionsSearch(query string) (tea.Model, tea.Cmd) {
+	sessions, err := agent.SearchSessions(query)
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		m.refresh()
+		return m, nil
+	}
+	if len(sessions) == 0 {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("No sessions match %q.", strings.TrimSpace(query))})
+		m.refresh()
+		return m, nil
+	}
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: formatSessionList(sessions)})
+	m.refresh()
+	return m, nil
+}
+
+func (m *Model) slashSessionsRename(fields []string) (tea.Model, tea.Cmd) {
+	if len(fields) < 2 {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /sessions rename <id> <title>"})
+		m.refresh()
+		return m, nil
+	}
+	summary, err := agent.RenameSession(fields[0], strings.Join(fields[1:], " "))
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		m.refresh()
+		return m, nil
+	}
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Renamed session %s to %q.", shortID(summary.ID), summary.Title)})
+	m.refresh()
+	return m, nil
+}
+
+func (m *Model) slashSessionsDelete(fields []string) (tea.Model, tea.Cmd) {
+	if len(fields) < 1 {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /sessions delete <id>"})
+		m.refresh()
+		return m, nil
+	}
+	id := fields[0]
+	if err := agent.DeleteSession(id); err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		m.refresh()
+		return m, nil
+	}
+	// Deleting the live session would leave the next turn saving into a file
+	// the operator just removed, so start fresh instead.
+	if strings.EqualFold(m.app.Session().ID(), id) {
+		m.app.NewSession()
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Deleted the current session and started a new one."})
+	} else {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Deleted session %s.", shortID(id))})
+	}
+	m.refresh()
+	return m, nil
+}
+
+func (m *Model) slashSessionsExport(fields []string) (tea.Model, tea.Cmd) {
+	if len(fields) < 1 {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /sessions export <id>"})
+		m.refresh()
+		return m, nil
+	}
+	document, err := agent.ExportSession(fields[0])
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		m.refresh()
+		return m, nil
+	}
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: document})
+	m.refresh()
+	return m, nil
+}
+
+func formatSessionList(sessions []agent.SessionSummary) string {
+	if len(sessions) == 0 {
+		return "No saved sessions yet."
+	}
+	lines := []string{fmt.Sprintf("Sessions (%d):", len(sessions))}
+	for _, session := range sessions {
+		title := strings.TrimSpace(session.Title)
+		if title == "" {
+			title = "(untitled)"
+		}
+		lines = append(lines, fmt.Sprintf("  %s  %s  %d turn(s)  %s", session.ID, title, session.Turns, session.UpdatedAt.Format("2006-01-02 15:04")))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // slashProcesses lists the background processes, or stops one when asked.
 //
 // The operator needs this independently of the agent: a dev server the model
 // started is still their machine's process, and they should be able to see and
 // stop it without asking.
+// formatToolStats renders the per-tool call ledger for /cost. An empty
+// ledger adds nothing: a session with no tool calls yet shows just tokens.
+func formatToolStats(stats []app.ToolStat) string {
+	if len(stats) == 0 {
+		return ""
+	}
+	var lines []string
+	for _, stat := range stats {
+		if stat.Errors > 0 {
+			lines = append(lines, fmt.Sprintf("  %-16s %d call(s), %d failed", stat.Name, stat.Calls, stat.Errors))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("  %-16s %d call(s)", stat.Name, stat.Calls))
+	}
+	return "\nTools:\n" + strings.Join(lines, "\n")
+}
+
 func (m *Model) slashProcesses(args string) (tea.Model, tea.Cmd) {
 	manager := m.app.Processes()
 	if manager == nil {
@@ -263,6 +423,9 @@ func (m *Model) slashApproval(args string) (tea.Model, tea.Cmd) {
 	note := "Approval mode is now " + string(mode) + "."
 	if mode == config.ApprovalAll {
 		note += " Nothing waits for confirmation."
+	}
+	if mode == config.ApprovalPlan {
+		note += " Mutating tools are blocked: the agent can only read and plan."
 	}
 	m.blocks = append(m.blocks, block{kind: blockNotice, text: note})
 	m.refresh()
@@ -411,6 +574,103 @@ func (m *Model) slashMemory() (tea.Model, tea.Cmd) {
 		lines = append(lines, "  [project] "+fact)
 	}
 	m.blocks = append(m.blocks, block{kind: blockNotice, text: "Learned memory:\n" + strings.Join(lines, "\n")})
+	m.refresh()
+	return m, nil
+}
+
+func (m *Model) slashCheckpoint(args string) (tea.Model, tea.Cmd) {
+	trimmed := strings.TrimSpace(args)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if strings.EqualFold(trimmed, "list") {
+		checkpoints, err := agent.ListCheckpoints(ctx, m.app.Workspace())
+		if err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		} else if len(checkpoints) == 0 {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "No checkpoints yet. Run /checkpoint to save one."})
+		} else {
+			lines := []string{fmt.Sprintf("Checkpoints (%d):", len(checkpoints))}
+			for _, item := range checkpoints {
+				label := item.Ref
+				if strings.TrimSpace(item.Message) != "" {
+					label += "  " + item.Message
+				}
+				lines = append(lines, "  "+label)
+			}
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
+		}
+		m.refresh()
+		return m, nil
+	}
+	checkpoint, err := agent.CreateCheckpoint(ctx, m.app.Workspace(), trimmed)
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+	} else if checkpoint.Ref == "" {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Nothing to save: the working tree is clean."})
+	} else {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Checkpoint %s saved. Restore it with /rewind.", checkpoint.Ref)})
+	}
+	m.refresh()
+	return m, nil
+}
+
+func (m *Model) slashRewind(args string) (tea.Model, tea.Cmd) {
+	trimmed := strings.TrimSpace(args)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	var checkpoint agent.Checkpoint
+	var err error
+	if trimmed == "" {
+		checkpoint, err = agent.RewindToLatest(ctx, m.app.Workspace())
+	} else {
+		checkpoint, err = agent.RewindToCheckpoint(ctx, m.app.Workspace(), trimmed)
+	}
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+	} else {
+		message := strings.TrimSpace(checkpoint.Message)
+		if message == "" {
+			message = checkpoint.Ref
+		}
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Restored %s (%s). Later edits to tracked files were discarded.", checkpoint.Ref, message)})
+	}
+	m.refresh()
+	return m, nil
+}
+
+// slashWorktree runs git worktree operations for the operator: a parallel
+// task gets its own checkout instead of colliding in the current tree.
+func (m *Model) slashWorktree(args string) (tea.Model, tea.Cmd) {
+	fields := strings.Fields(args)
+	action := "list"
+	if len(fields) > 0 {
+		action = strings.ToLower(fields[0])
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	tool, ok := m.app.Tools().Lookup("git_worktree")
+	if !ok {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "The worktree tool is not available."})
+		m.refresh()
+		return m, nil
+	}
+	callArgs := map[string]any{"action": action}
+	if len(fields) > 1 {
+		callArgs["path"] = strings.Join(fields[1:], " ")
+	}
+	// /worktree add <path> <branch> carries the branch as the last word.
+	if action == "add" && len(fields) > 2 {
+		callArgs["path"] = fields[1]
+		callArgs["branch"] = strings.Join(fields[2:], " ")
+	}
+	result, err := tool.Run(ctx, &agent.Env{Workspace: m.app.Workspace()}, callArgs)
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+	} else if result.IsError {
+		m.blocks = append(m.blocks, block{kind: blockError, text: result.Output})
+	} else {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: result.Output})
+	}
 	m.refresh()
 	return m, nil
 }

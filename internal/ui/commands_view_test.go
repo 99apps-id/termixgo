@@ -413,9 +413,9 @@ func TestSlashTelegramStatusReflectsThePairing(t *testing.T) {
 
 // ------------------------------------------------- the plain-mode subset
 
-// TestRunPlainSlashHandlesEveryBranch walks the CI-facing command set. Only a
-// subset makes sense without a TUI, and an unavailable one has to say so
-// rather than doing nothing.
+// TestRunPlainSlashHandlesEveryBranch walks the CI-facing command set. Plain
+// mode mirrors the TUI catalogue: anything that needs a picker lists instead
+// of opening one, because there is no overlay to open.
 //
 // Each case builds its own app: several of these commands change persisted
 // state, and sharing one app would make the cases order dependent.
@@ -430,27 +430,34 @@ func TestRunPlainSlashHandlesEveryBranch(t *testing.T) {
 		{name: "exit", command: "exit", quit: true},
 		{name: "quit is an alias", command: "quit", quit: true},
 		{name: "help", command: "help", want: "/model"},
+		{name: "? is a help alias", command: "?", want: "/model"},
 		{name: "model reports", command: "model", want: "model: "},
 		{name: "model switches", command: "model", args: "llama3.2:latest", want: "model is now"},
 		{name: "new", command: "new", want: "started a new session"},
+		{name: "sessions lists", command: "sessions", want: "session"},
 		{name: "stop", command: "stop", want: "stopping"},
 		{name: "status", command: "status", want: "workspace:"},
 		{name: "cost", command: "cost", want: "tokens:"},
 		{name: "trust reports", command: "trust", want: "folder is untrusted"},
 		{name: "trust on", command: "trust", args: "on", want: "trusted"},
 		{name: "trust off", command: "trust", args: "off", want: "untrusted"},
-		{name: "trust with an unknown argument reports", command: "trust", args: "sideways", want: "untrusted"},
 		{name: "approval reports", command: "approval", want: "approval mode: all"},
 		{name: "approval sets", command: "approval", args: "ask", want: "approval mode is now ask"},
+		{name: "harness reports", command: "harness", want: "harness:"},
+		{name: "plan reports", command: "plan", want: "plan"},
+		{name: "tools lists", command: "tools", want: "tools ("},
+		{name: "mcp reports", command: "mcp", want: "MCP"},
+		{name: "skills reports", command: "skills", want: "skill"},
+		{name: "memory reports", command: "memory", want: "learned"},
+		{name: "telegram reports", command: "telegram", want: "telegram:"},
 		{name: "ps with nothing running", command: "ps", want: "no background processes"},
 		{name: "setup explains", command: "setup", want: "setup wizard"},
-		{name: "an unavailable command says so", command: "tools", want: "not available in plain mode"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			model := chatModel(t)
 			var out bytes.Buffer
-			quit, err := runPlainSlash(model.app, testCase.command, testCase.args, &out)
+			quit, err := runPlainSlash(context.Background(), model.app, testCase.command, testCase.args, &out)
 			if err != nil {
 				t.Fatalf("runPlainSlash: %v", err)
 			}
@@ -473,7 +480,7 @@ func TestRunPlainSlashHandlesEveryBranch(t *testing.T) {
 func TestRunPlainSlashTrustRoundTrip(t *testing.T) {
 	model := chatModel(t)
 
-	if _, err := runPlainSlash(model.app, "trust", "on", &bytes.Buffer{}); err != nil {
+	if _, err := runPlainSlash(context.Background(), model.app, "trust", "on", &bytes.Buffer{}); err != nil {
 		t.Fatalf("trust on: %v", err)
 	}
 	if !model.app.Trusted() {
@@ -487,7 +494,7 @@ func TestRunPlainSlashTrustRoundTrip(t *testing.T) {
 		t.Errorf("trust was not persisted")
 	}
 
-	if _, err := runPlainSlash(model.app, "trust", "off", &bytes.Buffer{}); err != nil {
+	if _, err := runPlainSlash(context.Background(), model.app, "trust", "off", &bytes.Buffer{}); err != nil {
 		t.Fatalf("trust off: %v", err)
 	}
 	if model.app.Trusted() {
@@ -498,16 +505,28 @@ func TestRunPlainSlashTrustRoundTrip(t *testing.T) {
 func TestRunPlainSlashReportsFailures(t *testing.T) {
 	model := chatModel(t)
 
-	if _, err := runPlainSlash(model.app, "model", "anthropic:claude-sonnet-4-5", &bytes.Buffer{}); err == nil {
+	if _, err := runPlainSlash(context.Background(), model.app, "model", "anthropic:claude-sonnet-4-5", &bytes.Buffer{}); err == nil {
 		t.Errorf("selecting a model without a key must report an error")
 	}
-	if _, err := runPlainSlash(model.app, "approval", "sometimes", &bytes.Buffer{}); err == nil {
+	if _, err := runPlainSlash(context.Background(), model.app, "approval", "sometimes", &bytes.Buffer{}); err == nil {
 		t.Errorf("an invalid approval mode must report an error")
 	}
-	if _, err := runPlainSlash(model.app, "ps", "kill", &bytes.Buffer{}); err == nil {
+	if _, err := runPlainSlash(context.Background(), model.app, "trust", "sideways", &bytes.Buffer{}); err == nil {
+		t.Errorf("an invalid trust argument must report an error")
+	}
+	if _, err := runPlainSlash(context.Background(), model.app, "mcp", "sideways", &bytes.Buffer{}); err == nil {
+		t.Errorf("an invalid mcp argument must report an error")
+	}
+	if _, err := runPlainSlash(context.Background(), model.app, "telegram", "sideways", &bytes.Buffer{}); err == nil {
+		t.Errorf("an invalid telegram argument must report an error")
+	}
+	if _, err := runPlainSlash(context.Background(), model.app, "nonsense", "", &bytes.Buffer{}); err == nil {
+		t.Errorf("an unknown command must report an error")
+	}
+	if _, err := runPlainSlash(context.Background(), model.app, "ps", "kill", &bytes.Buffer{}); err == nil {
 		t.Errorf("killing without a handle must report an error")
 	}
-	if _, err := runPlainSlash(model.app, "ps", "kill proc-999", &bytes.Buffer{}); err == nil {
+	if _, err := runPlainSlash(context.Background(), model.app, "ps", "kill proc-999", &bytes.Buffer{}); err == nil {
 		t.Errorf("killing an unknown handle must report an error")
 	}
 }
@@ -521,7 +540,7 @@ func TestRunPlainSlashPSListsAndKills(t *testing.T) {
 	defer model.app.Processes().Shutdown()
 
 	var out bytes.Buffer
-	if _, err := runPlainSlash(model.app, "ps", "", &out); err != nil {
+	if _, err := runPlainSlash(context.Background(), model.app, "ps", "", &out); err != nil {
 		t.Fatalf("runPlainSlash: %v", err)
 	}
 	if !strings.Contains(out.String(), process.ID) {
@@ -529,7 +548,7 @@ func TestRunPlainSlashPSListsAndKills(t *testing.T) {
 	}
 
 	out.Reset()
-	if _, err := runPlainSlash(model.app, "ps", "kill "+process.ID, &out); err != nil {
+	if _, err := runPlainSlash(context.Background(), model.app, "ps", "kill "+process.ID, &out); err != nil {
 		t.Fatalf("runPlainSlash: %v", err)
 	}
 	if !strings.Contains(out.String(), process.ID) {
@@ -542,7 +561,7 @@ func TestRunPlainSlashPSListsAndKills(t *testing.T) {
 func TestRunPlainSlashCostSeparatesKnownFromUnknown(t *testing.T) {
 	model := chatModel(t)
 	var out bytes.Buffer
-	if _, err := runPlainSlash(model.app, "cost", "", &out); err != nil {
+	if _, err := runPlainSlash(context.Background(), model.app, "cost", "", &out); err != nil {
 		t.Fatalf("runPlainSlash: %v", err)
 	}
 	got := out.String()
@@ -555,8 +574,149 @@ func TestRunPlainSlashCostSeparatesKnownFromUnknown(t *testing.T) {
 	}
 }
 
-// TestSubmitStartsARunForPlainText is the other half of the Enter fork: text
-// that is not a command becomes a turn, with the operator's line echoed into
+// TestSessionsSubcommandsRoundTrip walks rename, search, export and delete
+// through the TUI dispatcher against saved sessions.
+func TestSessionsSubcommandsRoundTrip(t *testing.T) {
+	model := chatModel(t)
+	if err := model.app.Session().Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	id := model.app.Session().ID()
+
+	next, _ := model.runSlash("sessions", "rename "+id+" my feature")
+	if view := display(next.(*Model)); !strings.Contains(view, "my feature") {
+		t.Fatalf("rename should confirm the title:\n%s", view)
+	}
+
+	searched, _ := model.runSlash("sessions", "search feature")
+	if view := display(searched.(*Model)); !strings.Contains(view, "my feature") {
+		t.Errorf("search should find the renamed session:\n%s", view)
+	}
+
+	exported, _ := model.runSlash("sessions", "export "+id)
+	if view := display(exported.(*Model)); !strings.Contains(view, "turn(s)") {
+		t.Errorf("export should render the session:\n%s", view)
+	}
+
+	deleted, _ := model.runSlash("sessions", "delete "+id)
+	final := deleted.(*Model)
+	if view := display(final); !strings.Contains(view, "Deleted") {
+		t.Errorf("delete should confirm:\n%s", view)
+	}
+	if final.app.Session().ID() == id {
+		t.Errorf("deleting the live session should start a new one")
+	}
+}
+
+// TestSessionsSubcommandUsage pins the usage errors so a half-typed
+// subcommand explains itself instead of stalling.
+func TestSessionsSubcommandUsage(t *testing.T) {
+	model := chatModel(t)
+	for _, args := range []string{"rename only-id", "delete", "export"} {
+		next, _ := model.runSlash("sessions", args)
+		if view := display(next.(*Model)); !strings.Contains(view, "Usage:") {
+			t.Errorf("/sessions %q should show usage:\n%s", args, view)
+		}
+	}
+}
+
+// TestRunPlainSessionsSubcommands mirrors the TUI coverage over a pipe.
+func TestRunPlainSessionsSubcommands(t *testing.T) {
+	model := chatModel(t)
+	if err := model.app.Session().Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	id := model.app.Session().ID()
+
+	var out bytes.Buffer
+	if _, err := runPlainSlash(context.Background(), model.app, "sessions", "rename "+id+" plain title", &out); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if !strings.Contains(out.String(), "plain title") {
+		t.Errorf("rename output = %q", out.String())
+	}
+
+	out.Reset()
+	if _, err := runPlainSlash(context.Background(), model.app, "sessions", "search plain", &out); err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if !strings.Contains(out.String(), "plain title") {
+		t.Errorf("search output = %q", out.String())
+	}
+
+	out.Reset()
+	if _, err := runPlainSlash(context.Background(), model.app, "sessions", "export "+id, &out); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if !strings.Contains(out.String(), "turn(s)") {
+		t.Errorf("export output = %q", out.String())
+	}
+
+	out.Reset()
+	if _, err := runPlainSlash(context.Background(), model.app, "sessions", "delete "+id, &out); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+}
+
+// TestCostShowsToolBreakdown is the operator-facing half of the ledger: the
+// tools behind the turn appear under the token totals.
+func TestCostShowsToolBreakdown(t *testing.T) {
+	model := chatModel(t)
+	model.applyEvent(agent.Event{Kind: agent.EventToolStart, ToolName: "read_file", ToolLabel: "Reading main.go"})
+	model.applyEvent(agent.Event{Kind: agent.EventToolEnd, ToolName: "read_file", ToolLabel: "Read main.go", ToolOK: true, ToolMillis: 8})
+
+	_, output := runSlash(t, model, "/cost")
+	if !strings.Contains(output, "Tokens:") {
+		t.Errorf("cost should keep its totals:\n%s", output)
+	}
+}
+
+// TestFormatToolStatsRendersCallsAndFailures pins the ledger lines.
+func TestFormatToolStatsRendersCallsAndFailures(t *testing.T) {
+	if got := formatToolStats(nil); got != "" {
+		t.Errorf("an empty ledger should add nothing, got %q", got)
+	}
+	got := formatToolStats([]app.ToolStat{{Name: "read_file", Calls: 3}, {Name: "run_command", Calls: 1, Errors: 1}})
+	for _, want := range []string{"Tools:", "read_file", "3 call(s)", "run_command", "1 failed"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("ledger is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestApprovalDiffRendersChangedLines proves the approval dialog shows the
+// file preview instead of only the one-line detail.
+func TestApprovalDiffRendersChangedLines(t *testing.T) {
+	model := chatModel(t)
+	resize(model, 100, 30)
+	model.pendingApproval = &agent.ApprovalRequest{
+		Tool: "edit", Risk: "edit", Detail: "Editing main.go",
+		Diff: "--- main.go\n+++ main.go\n-func A() {}\n+func A() int {}",
+	}
+	view := stripANSI(model.View())
+	for _, want := range []string{"Approval needed", "edit", "-func A() {}", "+func A() int {}"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the approval view is missing %q:\n%s", want, view)
+		}
+	}
+}
+
+// TestApprovalWithoutDiffFallsBack keeps tools without a preview on the old
+// layout: tool, risk and detail only.
+func TestApprovalWithoutDiffFallsBack(t *testing.T) {
+	model := chatModel(t)
+	resize(model, 100, 30)
+	model.pendingApproval = &agent.ApprovalRequest{Tool: "run_command", Risk: "command", Detail: "Running go test"}
+	view := stripANSI(model.View())
+	if !strings.Contains(view, "Running go test") {
+		t.Errorf("the detail should render:\n%s", view)
+	}
+	if strings.Contains(view, "+++") || strings.Contains(view, "--- ") {
+		t.Errorf("no diff markers should appear:\n%s", view)
+	}
+}
+
+// TestSubmitStartsARunForPlainText is the other half of the Enter fork: text// that is not a command becomes a turn, with the operator's line echoed into
 // the transcript and the event pump started.
 func TestSubmitStartsARunForPlainText(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -894,4 +1054,80 @@ func writeProbeSkill(t *testing.T, model *Model) {
 		t.Fatalf("write: %v", err)
 	}
 	model.app.ReloadSkills()
+}
+
+// writeProbeCommand adds one project command file so the menu and dispatch
+// have something custom to show.
+func writeProbeCommand(t *testing.T, model *Model) {
+	t.Helper()
+	dir := filepath.Join(model.app.Workspace(), ".termixgo", "commands")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	document := "---\ndescription: Review the change\n---\n\nReview $ARGUMENTS carefully.\n"
+	if err := os.WriteFile(filepath.Join(dir, "review.md"), []byte(document), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := model.reloadCustomCommands(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+}
+
+// TestCustomCommandAppearsInMenu proves a command file joins the inline menu
+// next to the built-ins.
+func TestCustomCommandAppearsInMenu(t *testing.T) {
+	model := chatModel(t)
+	writeProbeCommand(t, model)
+	model.composer.SetValue("/rev")
+	model.updateSlashMatches()
+	found := false
+	for _, match := range model.slashMatches {
+		if match.Trigger == "/review" {
+			found = true
+			if !strings.Contains(match.Summary, "Review the change") {
+				t.Errorf("summary = %q", match.Summary)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the menu should offer /review, got %+v", model.slashMatches)
+	}
+}
+
+// TestCustomCommandRunsAsTurn proves dispatch: the file body becomes the run
+// prompt with the typed arguments applied.
+func TestCustomCommandRunsAsTurn(t *testing.T) {
+	model := chatModel(t)
+	writeProbeCommand(t, model)
+
+	next, _ := model.runSlash("review", "the diff")
+	started, ok := next.(*Model)
+	if !ok {
+		t.Fatalf("runSlash returned %T", next)
+	}
+	if !started.running {
+		t.Fatalf("a custom command should start a turn")
+	}
+	last := started.blocks[len(started.blocks)-1]
+	if last.kind != blockUser {
+		t.Fatalf("last block = %+v, want the echoed prompt", last)
+	}
+	if !strings.Contains(last.text, "Review the diff carefully.") {
+		t.Errorf("prompt = %q, want the expanded body", last.text)
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	for model.app.Running() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestCustomCommandHelpListsTheFile proves /help shows the custom section so
+// a command file is discoverable without typing its prefix.
+func TestCustomCommandHelpListsTheFile(t *testing.T) {
+	model := chatModel(t)
+	writeProbeCommand(t, model)
+	if view := stripANSI(model.viewHelp()); !strings.Contains(view, "/review") {
+		t.Errorf("the help view should list the custom command:\n%s", view)
+	}
 }

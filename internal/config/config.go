@@ -23,10 +23,14 @@ const (
 	// ApprovalAll runs everything without waiting. It is what makes a
 	// trusted folder feel like a normal agent session.
 	ApprovalAll ApprovalMode = "all"
+	// ApprovalPlan blocks every mutating tool without asking. The model can
+	// read, search and plan, which suits exploring a repository before any
+	// change is allowed.
+	ApprovalPlan ApprovalMode = "plan"
 )
 
 // ApprovalModes is the accepted set, in escalation order.
-var ApprovalModes = []ApprovalMode{ApprovalAsk, ApprovalEdits, ApprovalAll}
+var ApprovalModes = []ApprovalMode{ApprovalAsk, ApprovalEdits, ApprovalAll, ApprovalPlan}
 
 // ValidApprovalMode reports whether the mode is one this build accepts.
 func ValidApprovalMode(mode ApprovalMode) bool {
@@ -55,7 +59,7 @@ func ParseApprovalMode(raw string) (ApprovalMode, error) {
 	if len(matches) == 1 {
 		return matches[0], nil
 	}
-	return "", fmt.Errorf("approval mode must be one of ask, edits, all")
+	return "", fmt.Errorf("approval mode must be one of ask, edits, all, plan")
 }
 
 // Telegram is the companion bot pairing, minus the token, which is a secret.

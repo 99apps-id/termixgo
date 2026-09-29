@@ -122,7 +122,7 @@ func renderThinkingBlock(item block, styles Styles, width int, showDetails bool)
 	header := ""
 	switch {
 	case item.running:
-		header = styles.Thinking.Render("  Thinking...")
+		header = shimmerLine("  Thinking...", styles)
 	case item.seconds > 0:
 		header = styles.Reasoned.Render(fmt.Sprintf("  Reasoned for %ds", item.seconds))
 	default:
@@ -160,7 +160,11 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 	}
 	if !showDetails {
 		// Compact: just the marker and tool label on one line.
-		return style.Render(truncate(fmt.Sprintf("  %s %s", marker, item.toolLabel), width))
+		line := truncate(fmt.Sprintf("  %s %s", marker, item.toolLabel), width)
+		if item.running {
+			return shimmerTool(line, styles)
+		}
+		return style.Render(line)
 	}
 	// Clip the label before styling: truncate counts runes, so slicing the
 	// styled line here used to cut the timing suffix mid-escape and print
@@ -173,7 +177,11 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 	if room < 0 {
 		room = 0
 	}
-	return style.Render(truncate(fmt.Sprintf("  %s %s", marker, item.toolLabel), room) + styles.Dim.Render(timing))
+	line := truncate(fmt.Sprintf("  %s %s", marker, item.toolLabel), room)
+	if item.running {
+		return shimmerTool(line, styles)
+	}
+	return style.Render(line + styles.Dim.Render(timing))
 }
 
 func renderPlanBlock(item block, styles Styles, width int) string {

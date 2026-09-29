@@ -399,6 +399,17 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 	emit := r.emit
 	emit(Event{Kind: EventToolStart, ToolName: tool.Name(), ToolLabel: startLabel, ToolArgs: Shorten(call.Arguments, 240)})
 
+	// Plan mode blocks mutating tools outright instead of asking. Prompting
+	// on every write would defeat the mode: the operator chose it to explore
+	// without changing anything, so the denial names the way back.
+	if r.Policy != nil && r.Policy.Mode == ApprovalPlan && tool.Mutating() {
+		emit(Event{Kind: EventToolEnd, ToolName: tool.Name(), ToolLabel: tool.DoneLabel(args), ToolResult: "blocked by plan mode", ToolOK: false})
+		return Result{
+			Output:  "Plan mode is on: read-only investigation is allowed, but this mutating tool call was blocked. Switch back with /approval ask to allow changes.",
+			IsError: true,
+		}
+	}
+
 	if r.needsApprovalFor(tool) {
 		decision := DecisionDeny
 		if r.Env.Approve != nil {
@@ -406,6 +417,7 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 				Tool:   tool.Name(),
 				Detail: startLabel,
 				Risk:   string(tool.Risk()),
+				Diff:   PreviewToolDiff(r.Env, tool.Name(), args),
 			})
 		}
 		if !decision.Allowed() {

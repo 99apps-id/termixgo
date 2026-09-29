@@ -24,6 +24,9 @@ type ApprovalRequest struct {
 	Tool   string
 	Detail string
 	Risk   string
+	// Diff previews the file change for edit-like tools. It is empty for
+	// anything else, and the dialog falls back to the one-line detail.
+	Diff string
 	// Respond delivers the decision. It must be called exactly once.
 	Respond func(Decision)
 }
@@ -46,6 +49,9 @@ const (
 	ApprovalAsk   ApprovalMode = "ask"
 	ApprovalEdits ApprovalMode = "edits"
 	ApprovalAll   ApprovalMode = "all"
+	// ApprovalPlan blocks every mutating tool without asking. The runner
+	// enforces it before the approval handshake, so no prompt is shown.
+	ApprovalPlan ApprovalMode = "plan"
 )
 
 // NeedsApproval reports whether a call must wait.
@@ -61,6 +67,8 @@ func (p ApprovalPolicy) NeedsApproval(tool Tool) bool {
 	case ApprovalAll:
 		return false
 	case ApprovalAsk:
+		return true
+	case ApprovalPlan:
 		return true
 	case ApprovalEdits:
 		// File edits run; commands and anything outside the workspace wait.

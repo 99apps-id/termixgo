@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -500,6 +502,80 @@ func TestApprovalKeysMapToDecisions(t *testing.T) {
 	}
 }
 
+// TestApprovalArrowsSelectOptions proves the dialog is navigable without
+// letter keys: down twice plus Enter lands on "always".
+func TestApprovalArrowsSelectOptions(t *testing.T) {
+	model := chatModel(t)
+	reply := make(chan agent.Decision, 1)
+	model.pendingApproval = &agent.ApprovalRequest{Tool: "run_command", Risk: "command", Detail: "Running tests"}
+	model.approvalReply = reply
+
+	moved := press(t, model, "down")
+	if moved.approvalCursor != 1 {
+		t.Fatalf("down should highlight the second option, got %d", moved.approvalCursor)
+	}
+	if moved.pendingApproval == nil {
+		t.Fatalf("moving must keep the request pending")
+	}
+	moved = press(t, moved, "down")
+	answered, _ := moved.Update(key("enter"))
+	final := answered.(*Model)
+
+	select {
+	case got := <-reply:
+		if got != agent.DecisionAllowAlways {
+			t.Errorf("down down enter produced %v, want always", got)
+		}
+	default:
+		t.Errorf("enter did not answer the request")
+	}
+	if final.pendingApproval != nil {
+		t.Errorf("enter should clear the pending request")
+	}
+	if view := display(final); !strings.Contains(view, "always allowed") {
+		t.Errorf("the transcript should record the decision:\n%s", view)
+	}
+}
+
+// TestApprovalArrowsWrapAround keeps navigation endless: up from the top
+// lands on deny, and Enter there denies.
+func TestApprovalArrowsWrapAround(t *testing.T) {
+	model := chatModel(t)
+	reply := make(chan agent.Decision, 1)
+	model.pendingApproval = &agent.ApprovalRequest{Tool: "run_command"}
+	model.approvalReply = reply
+
+	moved := press(t, model, "up")
+	if moved.approvalCursor != len(approvalOptions)-1 {
+		t.Fatalf("up from the top should wrap, got %d", moved.approvalCursor)
+	}
+	answered, _ := moved.Update(key("enter"))
+	select {
+	case got := <-reply:
+		_ = answered
+		if got != agent.DecisionDeny {
+			t.Errorf("wrapped enter produced %v, want deny", got)
+		}
+	default:
+		t.Errorf("enter did not answer the request")
+	}
+}
+
+// TestApprovalViewMarksTheHighlight pins the visual: the cursor row carries
+// the marker while the key hints stay visible.
+func TestApprovalViewMarksTheHighlight(t *testing.T) {
+	model := chatModel(t)
+	resize(model, 100, 30)
+	model.pendingApproval = &agent.ApprovalRequest{Tool: "run_command", Risk: "command", Detail: "Running tests"}
+	model.approvalCursor = 1
+	view := stripANSI(model.View())
+	for _, want := range []string{"Approval needed", "allow session", "Enter select"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the approval view is missing %q:\n%s", want, view)
+		}
+	}
+}
+
 // TestUnknownApprovalKeyKeepsAsking is the safe failure: a stray keypress must
 // not be read as consent.
 func TestUnknownApprovalKeyKeepsAsking(t *testing.T) {
@@ -906,5 +982,162 @@ func TestTranscriptBlocksAreSeparatedByBlankLines(t *testing.T) {
 	// The two blocks must be separated by at least one blank line.
 	if !strings.Contains(rendered, "\n\n") {
 		t.Errorf("blocks should be separated by a blank line:\n%q", rendered)
+	}
+}
+
+// TestEnterCompletesWithoutAMenuRefresh covers the stale-cache trap: the
+// inline menu is only refreshed on keystrokes, so the very first Enter after
+// a programmatic set must still resolve "/stat" to /status via a fresh match.
+func TestEnterCompletesWithoutAMenuRefresh(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("/stat")
+	model.slashMatches = nil
+	model.slashCursor = 0
+
+	submitted := press(t, model, "enter")
+	if view := display(submitted); strings.Contains(view, "Unknown command") {
+		t.Errorf("Enter should resolve the completion even with a stale menu:\n%s", view)
+	} else if !strings.Contains(view, "workspace:") {
+		t.Errorf("Enter should have run /status:\n%s", view)
+	}
+}
+
+// TestSlashQueuesBehindARun pins the one-turn rule: a status command typed
+// mid-run waits in the queue instead of starting a second turn.
+func TestSlashQueuesBehindARun(t *testing.T) {
+	model := chatModel(t)
+	model.running = true
+	model.composer.SetValue("/status")
+
+	queued := press(t, model, "enter")
+	if len(queued.queue) != 1 || queued.queue[0] != "/status" {
+		t.Fatalf("queue = %q, want the status command held", queued.queue)
+	}
+}
+
+// TestStopActsOnTheLiveTurn proves the exception: /stop must cancel now,
+// not queue behind the turn it is meant to stop.
+func TestStopActsOnTheLiveTurn(t *testing.T) {
+	model := chatModel(t)
+	model.running = true
+	model.composer.SetValue("/stop")
+
+	next, _ := model.Update(key("enter"))
+	updated := next.(*Model)
+	if len(updated.queue) != 0 {
+		t.Errorf("queue = %q, want /stop to act immediately", updated.queue)
+	}
+	if view := display(updated); !strings.Contains(view, "Stopping") {
+		t.Errorf("/stop should acknowledge the stop:\n%s", view)
+	}
+}
+
+// TestExitQuitsEvenWhileRunning proves quit bypasses the steer queue too:
+// a full queue must not trap the operator in the program.
+func TestExitQuitsEvenWhileRunning(t *testing.T) {
+	model := chatModel(t)
+	model.running = true
+	model.queue = []string{"held steer"}
+	model.composer.SetValue("/exit")
+
+	_, cmd := model.Update(key("enter"))
+	if cmd == nil {
+		t.Fatalf("exit should return a command")
+	}
+	if message := cmd(); message == nil {
+		t.Fatalf("exit command returned no message")
+	}
+}
+
+// TestCheckpointSlashRoundTrip proves the undo contract end to end: save a
+// checkpoint through the slash handler, break a file, rewind through the
+// slash handler, and see the checkpoint content come back.
+func TestCheckpointSlashRoundTrip(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	model := chatModel(t)
+	workspace := model.app.Workspace()
+	runGit := func(args ...string) {
+		t.Helper()
+		command := exec.Command("git", args...)
+		command.Dir = workspace
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+	}
+	runGit("init", "-q")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "test")
+	runGit("commit", "--allow-empty", "-qm", "init")
+	if err := os.WriteFile(workspace+"/notes.txt", []byte("v2\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	next, _ := model.runSlash("checkpoint", "before breakage")
+	saved := next.(*Model)
+	if view := display(saved); !strings.Contains(view, "Checkpoint") {
+		t.Fatalf("checkpoint should confirm the save:\n%s", view)
+	}
+
+	if err := os.WriteFile(workspace+"/notes.txt", []byte("broken\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	next, _ = saved.runSlash("rewind", "")
+	restored := next.(*Model)
+	if view := display(restored); !strings.Contains(view, "Restored") {
+		t.Fatalf("rewind should confirm the restore:\n%s", view)
+	}
+	data, err := os.ReadFile(workspace + "/notes.txt")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if strings.ReplaceAll(string(data), "\r\n", "\n") != "v2\n" {
+		t.Errorf("after rewind the file = %q, want v2", data)
+	}
+}
+
+// TestCheckpointSlashOutsideGitExplainsItself pins the failure message: the
+// command needs a repository and must say so instead of stalling.
+func TestCheckpointSlashOutsideGitExplainsItself(t *testing.T) {
+	model := chatModel(t)
+	next, _ := model.runSlash("checkpoint", "")
+	if view := display(next.(*Model)); !strings.Contains(view, "not a git repository") {
+		t.Errorf("outside git the command should explain itself:\n%s", view)
+	}
+}
+
+// TestWorktreeSlashLists proves /worktree reaches the git tool: inside a
+// repository the listing names the checkout.
+func TestWorktreeSlashLists(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	model := chatModel(t)
+	workspace := model.app.Workspace()
+	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "t@e.com"}, {"config", "user.name", "t"}, {"commit", "--allow-empty", "-qm", "init"}} {
+		command := exec.Command("git", args...)
+		command.Dir = workspace
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+	}
+	next, _ := model.runSlash("worktree", "list")
+	if view := display(next.(*Model)); !strings.Contains(view, "Worktrees") {
+		t.Errorf("/worktree list should name the checkout:\n%s", view)
+	}
+}
+
+// TestApprovalPlanSwitchesToReadOnly pins the plan mode half of /approval:
+// selecting it reports the block, and the app carries the mode forward.
+func TestApprovalPlanSwitchesToReadOnly(t *testing.T) {
+	model := chatModel(t)
+	next, _ := model.runSlash("approval", "plan")
+	final := next.(*Model)
+	if view := display(final); !strings.Contains(view, "blocked") {
+		t.Errorf("/approval plan should explain the block:\n%s", view)
+	}
+	if got := string(final.app.Config().ApprovalMode); got != "plan" {
+		t.Errorf("approval mode = %q, want plan", got)
 	}
 }
