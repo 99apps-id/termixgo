@@ -80,8 +80,11 @@ func readProjectMemory(workspace string) string {
 			continue
 		}
 		text := strings.TrimSpace(string(data))
+		// clipBytes, not a raw slice: the cap is bytes and the memory file is
+		// UTF-8, so a fixed offset can land inside a multi-byte character and
+		// put half a rune at the end of the system prompt.
 		if len(text) > projectMemoryCap {
-			text = text[:projectMemoryCap] + "\n... [truncated]"
+			text = clipBytes(text, projectMemoryCap) + "\n... [truncated]"
 		}
 		return text
 	}

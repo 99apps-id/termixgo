@@ -383,6 +383,15 @@ func (m *Model) viewSetup() string {
 		body = append(body, "", m.styles.Error.Render(m.setup.errText))
 	}
 	body = append(body, "", m.styles.Hint.Render("Esc cancels"))
+	// The box wraps at its Width minus the horizontal padding, so a line wider
+	// than that wraps and grows the page past the terminal; the rendering then
+	// drops the top rows and shifts everything. Clip first, then bound the row
+	// count as a second guard.
+	width := max(1, m.width-8)
+	for index := range body {
+		body[index] = truncate(body[index], width)
+	}
+	body = fitRows(body, m.height-4, m.styles.Dim)
 	return m.styles.Box.Width(m.width - 4).Render(strings.Join(body, "\n"))
 }
 

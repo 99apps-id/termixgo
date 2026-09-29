@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -87,6 +88,67 @@ func TestSetModelRequiresAKeyThenBuildsClient(t *testing.T) {
 	reloaded, _ := config.Load()
 	if reloaded.DefaultModel != "claude-sonnet-4-5" {
 		t.Errorf("the model choice was not persisted, got %q", reloaded.DefaultModel)
+	}
+}
+
+// TestModelErrorNamesTheMissingKey is the serve fix: a configured model whose
+// key is missing used to fail a Telegram run with a bare "no model is
+// configured" while /model showed the id. The real reason must be kept.
+func TestModelErrorNamesTheMissingKey(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	cfg := config.Default()
+	cfg.DefaultModel = "stepfun:step-3.7-flash"
+	if err := config.Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	application, err := newApp(t, t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if application.HasModel() {
+		t.Fatalf("no client should be built without a key")
+	}
+	problem := application.ModelError()
+	if problem == nil {
+		t.Fatalf("a configured model with no key must record the reason")
+	}
+	if !strings.Contains(problem.Error(), "StepFun") {
+		t.Errorf("the reason should name the provider, got %q", problem.Error())
+	}
+
+	_, runErr := application.RunPrompt(context.Background(), "hello", nil)
+	if !errors.Is(runErr, ErrNoModel) {
+		t.Fatalf("run error = %v, want ErrNoModel", runErr)
+	}
+	if !strings.Contains(runErr.Error(), problem.Error()) {
+		t.Errorf("the run error should carry the cause, got %v", runErr)
+	}
+	if !strings.Contains(application.Status(), "model problem:") {
+		t.Errorf("/status should report the model problem:\n%s", application.Status())
+	}
+}
+
+// TestGuessProviderPrefersAConfiguredEndpoint covers an unknown model id on a
+// custom OpenAI-compatible endpoint: without this it fell through to a keyed
+// provider and reported a missing key.
+func TestGuessProviderPrefersAConfiguredEndpoint(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	cfg := config.Default()
+	cfg.BaseURLs["openai-compatible"] = "https://my-server/v1"
+	cfg.DefaultModel = "my-local-model"
+	if err := config.Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	application, err := newApp(t, t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if !application.HasModel() {
+		t.Fatalf("openai-compatible needs no key, so a client should be built: %v", application.ModelError())
+	}
+	if got := application.CurrentModel().Provider; got != "openai-compatible" {
+		t.Errorf("provider = %q, want openai-compatible", got)
 	}
 }
 

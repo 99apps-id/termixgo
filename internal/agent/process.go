@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Bounds on managed background processes. A dev server is meant to outlive a
@@ -410,8 +411,15 @@ func (r *ringBuffer) Write(p []byte) (int, error) {
 	r.written += int64(len(p))
 	r.data = append(r.data, p...)
 	if len(r.data) > r.max {
-		// Keep the tail: for a failing command the reason is at the end.
-		r.data = append([]byte(nil), r.data[len(r.data)-r.max:]...)
+		// Keep the tail: for a failing command the reason is at the end. The
+		// cut is moved forward to a rune boundary so the kept buffer never
+		// starts with the trailing bytes of a multi-byte character, which
+		// would surface as a replacement glyph in run_logs.
+		start := len(r.data) - r.max
+		for start < len(r.data) && !utf8.RuneStart(r.data[start]) {
+			start++
+		}
+		r.data = append([]byte(nil), r.data[start:]...)
 	}
 	return len(p), nil
 }

@@ -114,13 +114,22 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 	case "cost":
 		usage := m.app.Usage()
 		howMuch, known := m.app.Cost()
+		plan, planBilled := m.app.CurrentModel().Plan()
 		spend := "cost unknown for this model"
-		if known {
+		switch {
+		case planBilled:
+			spend = fmt.Sprintf("covered by the %s, billed in %s rather than dollars", plan.Name, plan.CreditUnit)
+		case known:
 			spend = fmt.Sprintf("about $%.4f", howMuch)
 		}
 		budget := "no budget set"
 		limit := m.appConfig().CostBudgetUSD
-		if limit > 0 {
+		switch {
+		case planBilled:
+			// A dollar cap cannot see credits, so claiming one applies would be
+			// a false sense of protection.
+			budget = "a dollar budget does not apply to a plan subscription"
+		case limit > 0:
 			budget = fmt.Sprintf("budget $%.2f", limit)
 			// A cap with no price behind it can never fire, and saying so here
 			// is the difference between a measured spend and a false sense of
@@ -129,9 +138,13 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 				budget += ", which cannot be enforced until this model has a price"
 			}
 		}
+		tail := "Prices are published list values, an estimate not a bill. Set a cap with costBudgetUsd in config, and override a price with modelPricing."
+		if planBilled {
+			tail = fmt.Sprintf("The %s is a prepaid quota: the plan's own console reports the %s used. A costBudgetUsd cap applies only to pay-as-you-go models.", plan.Name, plan.CreditUnit)
+		}
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf(
-			"Tokens: %d in, %d out, %d total.\nEstimated spend: %s (%s).\nPrices are published list values, an estimate not a bill. Set a cap with costBudgetUsd in config, and override a price with modelPricing.%s",
-			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, spend, budget, formatToolStats(m.app.ToolStats()))})
+			"Tokens: %d in, %d out, %d total.\nEstimated spend: %s (%s).\n%s%s",
+			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, spend, budget, tail, formatToolStats(m.app.ToolStats()))})
 		m.refresh()
 		return m, nil
 	case "ps":

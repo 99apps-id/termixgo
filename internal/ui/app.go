@@ -838,15 +838,21 @@ func (m *Model) applyEvent(event agent.Event) {
 		}
 		m.blocks = append(m.blocks, block{kind: blockThinking, running: true, text: event.Text, reasoning: event.Text})
 	case agent.EventReasoned:
-		if last := m.lastBlock(); last != nil && last.kind == blockThinking {
-			last.running = false
-			last.seconds = event.ToolMillis / 1000
+		// The closing event arrives after the whole stream, so answer text has
+		// already started and the thinking block is no longer the last one. It
+		// is found by scanning back for the open block instead: checking only
+		// the tail appended a duplicate thinking block below the answer, which
+		// is what read as the reasoning and the reply being swapped.
+		if target := m.lastOpenThinking(); target != nil {
+			target.running = false
+			target.finalized = true
+			target.seconds = event.ToolMillis / 1000
 			if strings.TrimSpace(event.Text) != "" {
-				last.reasoning = event.Text
+				target.reasoning = event.Text
 			}
 			return
 		}
-		m.blocks = append(m.blocks, block{kind: blockThinking, reasoning: event.Text, seconds: event.ToolMillis / 1000})
+		m.blocks = append(m.blocks, block{kind: blockThinking, finalized: true, reasoning: event.Text, seconds: event.ToolMillis / 1000})
 	case agent.EventText:
 		closeOpenThinking(m.blocks)
 		if last := m.lastBlock(); last != nil && last.kind == blockAssistant {
@@ -912,6 +918,20 @@ func (m *Model) lastBlock() *block {
 		return nil
 	}
 	return &m.blocks[len(m.blocks)-1]
+}
+
+// lastOpenThinking finds the most recent thinking block that the closing
+// EventReasoned has not finalized yet. The block is not necessarily the last
+// one: answer text is streamed before the closing event, so the answer block
+// sits on top of it by then.
+func (m *Model) lastOpenThinking() *block {
+	for index := len(m.blocks) - 1; index >= 0; index-- {
+		item := &m.blocks[index]
+		if item.kind == blockThinking && !item.finalized {
+			return item
+		}
+	}
+	return nil
 }
 
 func (m *Model) lastRunningTool(name string) *block {
@@ -1066,6 +1086,32 @@ func fitFrame(view string, width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
+// fitRows caps rendered body lines to max, keeping the head and the tail and
+// naming how many rows were dropped.
+//
+// A screen taller than the terminal makes the renderer drop its top lines and
+// reposition the cursor, which shifts every row. Truncating the text to the box
+// width stops rows from wrapping in the first place; this is the second guard,
+// for a screen whose content is simply longer than the terminal.
+func fitRows(lines []string, max int, marker lipgloss.Style) []string {
+	if max < 1 || len(lines) <= max {
+		return lines
+	}
+	if max == 1 {
+		return lines[:1]
+	}
+	head := 1
+	tail := max - head - 1
+	if tail < 1 {
+		return lines[:max]
+	}
+	kept := make([]string, 0, max)
+	kept = append(kept, lines[:head]...)
+	kept = append(kept, marker.Render(fmt.Sprintf("  ... %d lines hidden", len(lines)-head-tail)))
+	kept = append(kept, lines[len(lines)-tail:]...)
+	return kept
+}
+
 // screen renders the current mode.
 func (m *Model) screen() string {
 	if m.current == modeHelp {
@@ -1078,23 +1124,79 @@ func (m *Model) screen() string {
 		return m.viewPicker()
 	}
 
-	sections := []string{
-		m.viewHeader(),
-		m.viewport.View(),
-		m.viewStatus(),
+	// An overlay replaces the composer and the hints, so it has to take its
+	// rows from the transcript. Drawing a full-height transcript and then the
+	// menu made the frame taller than the terminal, and the renderer then
+	// dropped its top lines, which is what shifted the whole screen.
+	overlay := ""
+	switch {
+	case m.pendingApproval != nil:
+		overlay = m.viewApproval()
+	case m.pendingAsk != nil:
+		overlay = m.viewAsk()
+	case len(m.slashMatches) > 0:
+		overlay = m.viewSlashMenu()
+	case len(m.mentionMatches) > 0:
+		overlay = m.viewMentionMenu()
 	}
-	if m.pendingApproval != nil {
-		sections = append(sections, m.viewApproval())
-	} else if m.pendingAsk != nil {
-		sections = append(sections, m.viewAsk())
-	} else if len(m.slashMatches) > 0 {
-		sections = append(sections, m.viewSlashMenu())
-	} else if len(m.mentionMatches) > 0 {
-		sections = append(sections, m.viewMentionMenu())
+
+	// A dialog is modal: at the minimum terminal height there is no room to
+	// also show transcript rows, so it may use all of them. A menu leaves a
+	// few transcript rows visible, because the operator is still reading while
+	// typing the command.
+	minTranscript := 3
+	if m.pendingApproval != nil || m.pendingAsk != nil {
+		minTranscript = 0
+	}
+
+	sections := []string{m.viewHeader()}
+	// An empty transcript section still writes a blank row when joined, so it
+	// is left out when a tall dialog claims every row.
+	if transcript := m.transcriptView(overlay, minTranscript); transcript != "" {
+		sections = append(sections, transcript)
+	}
+	sections = append(sections, m.viewStatus())
+	if overlay != "" {
+		sections = append(sections, overlay)
 	} else {
 		sections = append(sections, m.viewComposer(), m.viewHints())
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+// transcriptView renders the transcript at a height that leaves room for an
+// overlay. The frame is the header, the transcript, the status line and then
+// either the composer and hints or the overlay, so the overlay's rows have to
+// come off the transcript. The viewport itself is not resized: a copy is
+// rendered shorter, so scroll state and the follow-the-bottom behaviour are
+// untouched.
+func (m *Model) transcriptView(overlay string, minRows int) string {
+	height := m.viewport.Height
+	if overlay != "" {
+		// Header, status line and one spare row.
+		room := m.height - 3 - lipgloss.Height(overlay)
+		if room < minRows {
+			room = minRows
+		}
+		if room < 0 {
+			room = 0
+		}
+		if room < height {
+			height = room
+		}
+	}
+	if height >= m.viewport.Height {
+		return m.viewport.View()
+	}
+	if height <= 0 {
+		return ""
+	}
+	shrunk := m.viewport
+	shrunk.Height = height
+	if m.viewport.AtBottom() {
+		shrunk.GotoBottom()
+	}
+	return shrunk.View()
 }
 
 func (m *Model) viewHeader() string {
@@ -1146,7 +1248,11 @@ func (m *Model) viewStatus() string {
 		// Over budget is the one spend figure that should shout.
 		costStyle = m.styles.StatusWarn
 	}
-	if known {
+	if plan, planBilled := m.app.CurrentModel().Plan(); planBilled && !known {
+		// A plan is a prepaid quota, not a dollar rate; naming the credit unit
+		// is more useful than "cost n/a".
+		vitals = append(vitals, costStyle.Render("plan "+plan.CreditUnit))
+	} else if known {
 		vitals = append(vitals, costStyle.Render(fmt.Sprintf("$%.4f", spend)))
 	} else {
 		// A model with no price cannot be budgeted, and saying so is better than
@@ -1393,17 +1499,33 @@ func (m *Model) viewMentionMenu() string {
 
 func (m *Model) viewApproval() string {
 	request := m.pendingApproval
-	body := []string{
+	// The dialog owns the whole area between the header and the status line,
+	// so its budget is the terminal minus those two rows.
+	available := m.modalRowBudget()
+
+	width := m.dialogTextWidth()
+	header := []string{
 		m.styles.BoxTitle.Render("Approval needed"),
-		"",
 		m.styles.StatusValue.Render(request.Tool) + m.styles.Dim.Render(" ("+request.Risk+")"),
-		m.styles.Dim.Render(truncate(request.Detail, m.width-8)),
+		m.styles.Dim.Render(truncate(request.Detail, width)),
 	}
-	// The diff budget is whatever the terminal has left after the fixed rows
-	// and the options, so the dialog never grows the frame past the terminal.
-	diffLines := m.overlayRowBudget()
-	if diff := renderApprovalDiff(request.Diff, m.styles, m.width-8, diffLines); diff != "" {
-		body = append(body, "", diff)
+	// Rows the box always draws: border(2) + padding(2), the header, the blank
+	// before the options, the options and the hint. The diff gets the rest.
+	fixed := 4 + len(header) + 1 + len(approvalOptions) + 1
+	diffRoom := available - fixed
+	if diffRoom < 3 {
+		// Showing a diff needs a blank line, at least one content line and the
+		// "... N more lines" marker. Less room than that shows nothing.
+		diffRoom = 0
+	}
+
+	body := append([]string{}, header...)
+	if diffRoom > 0 {
+		// The blank line and the truncation marker take two of the rows, so
+		// the diff itself can never be taller than the budget.
+		if diff := renderApprovalDiff(request.Diff, m.styles, width, diffRoom-2); diff != "" {
+			body = append(body, "", diff)
+		}
 	}
 	body = append(body, "")
 	for index, option := range approvalOptions {
@@ -1414,29 +1536,25 @@ func (m *Model) viewApproval() string {
 		}
 		body = append(body, "  "+row)
 	}
-	body = append(body, "", m.styles.Hint.Render("Up/Down move | Enter select | Esc deny"))
+	body = append(body, m.styles.Hint.Render("Up/Down move | Enter select | Esc deny"))
 	return m.styles.Box.Width(m.width - 6).Render(strings.Join(body, "\n"))
 }
 
-// overlayRowBudget is how many body rows an overlay may draw.
-//
-// The transcript and the frame furniture keep their rows, so an overlay takes
-// only what is left. Without this the approval dialog's diff and the question's
-// options made the frame taller than the terminal, and the renderer then dropped
-// the frame's top lines and shifted the cursor, which scrambles the screen.
-func (m *Model) overlayRowBudget() int {
-	// The Box style adds one row of padding on each side plus the border, and
-	// the header, status and hints keep their own rows.
-	const furniture = 2 + 2 + 1 + 3
-	budget := m.height - (composerHeight + furniture)
-	if budget < 3 {
-		budget = 3
-	}
-	if budget > 14 {
-		budget = 14
+// modalRowBudget is how many rows a modal dialog may draw. It takes the whole
+// area under the header and above the status line, because at the minimum
+// terminal height there is no room to also draw transcript rows.
+func (m *Model) modalRowBudget() int {
+	budget := m.height - 2
+	if budget < 6 {
+		budget = 6
 	}
 	return budget
 }
+
+// dialogTextWidth is the usable text width inside a Box.Width(m.width-6).
+// The box wraps at its Width minus the horizontal padding, so a line wider
+// than this wraps and adds a row the row budget did not count.
+func (m *Model) dialogTextWidth() int { return max(1, m.width-10) }
 
 // renderApprovalDiff colours a unified preview for the approval dialog.
 // Lines are clipped to the width so a long file cannot break the box, and the
@@ -1475,22 +1593,37 @@ func renderApprovalDiff(diff string, styles Styles, width, maxLines int) string 
 }
 
 func (m *Model) viewAsk() string {
+	available := m.modalRowBudget()
+	width := m.dialogTextWidth()
 	body := []string{
 		m.styles.BoxTitle.Render("The agent has a question"),
-		"",
-		m.styles.StatusValue.Render(m.pendingAsk.question),
+		m.styles.StatusValue.Render(truncate(m.pendingAsk.question, width)),
 	}
-	if len(m.pendingAsk.options) > 0 {
-		body = append(body, "")
+	// Border(2) + padding(2), the title and question, the blank before the
+	// options, the blank before the input, the input and the hint.
+	const fixed = 4 + 2 + 1 + 1 + 1 + 1
+	optionRoom := available - fixed
+	if optionRoom < 0 {
+		optionRoom = 0
+	}
+	if len(m.pendingAsk.options) > 0 && optionRoom > 0 {
 		options := m.pendingAsk.options
-		if len(options) > m.menuRowLimit() {
-			options = options[:m.menuRowLimit()]
+		hidden := 0
+		if len(options) > optionRoom {
+			// Reserve one row for the "... N more options" line.
+			shown := optionRoom - 1
+			if shown < 1 {
+				shown = 1
+			}
+			hidden = len(options) - shown
+			options = options[:shown]
 		}
+		body = append(body, "")
 		for index, option := range options {
-			body = append(body, m.styles.MenuKey.Render(fmt.Sprintf("%d", index+1))+". "+option)
+			body = append(body, m.styles.MenuKey.Render(fmt.Sprintf("%d", index+1))+". "+truncate(option, max(1, width-4)))
 		}
-		if len(m.pendingAsk.options) > len(options) {
-			body = append(body, m.styles.MenuDesc.Render(fmt.Sprintf("... %d more options", len(m.pendingAsk.options)-len(options))))
+		if hidden > 0 {
+			body = append(body, m.styles.MenuDesc.Render(fmt.Sprintf("... %d more options", hidden)))
 		}
 	}
 	body = append(body, "", m.input.View(), m.styles.Hint.Render("Enter answer | Esc decline"))
@@ -1555,6 +1688,11 @@ func (m *Model) viewHelp() string {
 		lines = append(lines, keys...)
 	}
 	lines = append(lines, trailer...)
+	width := max(1, m.width-8)
+	for index := range lines {
+		lines[index] = truncate(lines[index], width)
+	}
+	lines = fitRows(lines, budget, m.styles.Dim)
 	return m.styles.Box.Width(m.width - 4).Render(strings.Join(lines, "\n"))
 }
 

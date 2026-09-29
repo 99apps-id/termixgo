@@ -94,6 +94,90 @@ func TestFindModelResolvesIdLabelAndSubstring(t *testing.T) {
 	}
 }
 
+// TestPlanProvidersHaveTheirOwnHost pins the two plan endpoints as first-class
+// providers, so an operator does not have to hand-configure an OpenAI
+// compatible endpoint for them.
+func TestPlanProvidersHaveTheirOwnHost(t *testing.T) {
+	want := map[string]string{
+		"stepfun-plan":    "https://api.stepfun.ai/step_plan/v1",
+		"qwen-token-plan": "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1",
+	}
+	for id, base := range want {
+		info, ok := ByID(id)
+		if !ok {
+			t.Fatalf("provider %q is missing", id)
+		}
+		if info.DefaultBaseURL != base {
+			t.Errorf("%s base URL = %q, want %q", id, info.DefaultBaseURL, base)
+		}
+		if info.Kind != KindOpenAI {
+			t.Errorf("%s kind = %q, want openai", id, info.Kind)
+		}
+		if NeedsEndpoint(id) {
+			t.Errorf("%s should have a default endpoint", id)
+		}
+		if got := DefaultBaseURL(id); got != base {
+			t.Errorf("DefaultBaseURL(%s) = %q, want %q", id, got, base)
+		}
+		if models := ModelsFor(id); len(models) == 0 {
+			t.Errorf("%s has no catalogue models", id)
+		}
+	}
+}
+
+// TestQwenTokenPlanListsThePlannedModels pins the model list the operator
+// asked for, so a catalogue edit cannot quietly drop one.
+func TestQwenTokenPlanListsThePlannedModels(t *testing.T) {
+	want := []string{
+		"qwen3.8-max", "qwen3.8-27b", "qwen3.7-max",
+		"qwen3.8-flash", "qwen3.6-flash",
+		"deepseek-v4.1-flash",
+		"deepseek-v4-pro-0813", "deepseek-v4-pro",
+		"deepseek-v4-flash-0731",
+		"glm-5.3", "glm-5.2",
+	}
+	models := ModelsFor("qwen-token-plan")
+	have := make(map[string]bool, len(models))
+	for _, model := range models {
+		have[model.WireID()] = true
+	}
+	for _, id := range want {
+		if !have[id] {
+			t.Errorf("qwen-token-plan is missing model %q", id)
+		}
+	}
+}
+
+// TestPlanModelIdsResolveWithoutAmbiguity keeps the host-prefixed ids unique:
+// two catalogue entries sharing an id would make ModelByID pick one silently.
+func TestPlanModelIdsResolveWithoutAmbiguity(t *testing.T) {
+	seen := map[string]bool{}
+	for _, model := range Models() {
+		if seen[model.ID] {
+			t.Errorf("duplicate catalogue id %q", model.ID)
+		}
+		seen[model.ID] = true
+	}
+	for _, id := range []string{
+		"stepfun-plan/step-3.7-flash",
+		"qwen-token-plan/qwen3.8-max",
+	} {
+		model, ok := ModelByID(id)
+		if !ok {
+			t.Fatalf("ModelByID(%q) failed", id)
+		}
+		if model.WireID() == "" {
+			t.Errorf("%s has an empty wire id", id)
+		}
+		if model.Window() <= 0 {
+			t.Errorf("%s reported no context window", id)
+		}
+	}
+	if model, ok := ModelFromQuery("stepfun-plan:step-3.7-flash"); !ok || model.Provider != "stepfun-plan" {
+		t.Errorf("provider-qualified plan model did not resolve: %+v ok=%v", model, ok)
+	}
+}
+
 func TestProvidersRequiringKeySortedAndConsistent(t *testing.T) {
 	providers := ProvidersRequiringKey()
 	if len(providers) == 0 {

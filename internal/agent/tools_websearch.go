@@ -4,19 +4,31 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
 
-// webSearchEndpoint is the keyless instant-answer API. It is a variable so
-// tests can point it at a local server instead of the network.
+// webSearchHTMLEndpoint is the keyless results page. DuckDuckGo's instant
+// answer API only knows topics it has a card for, so a normal query such as an
+// error message returns nothing; the HTML page is the actual search. It is a
+// variable so tests can point it at a local server instead of the network.
+var webSearchHTMLEndpoint = "https://html.duckduckgo.com/html/"
+
+// webSearchEndpoint is the keyless instant-answer API, kept as a fallback for
+// the queries the HTML page refuses (it serves a bot check now and then).
 var webSearchEndpoint = "https://api.duckduckgo.com/"
 
-// webSearchTimeout bounds one search. Discovery should be quick; the fetch
-// tool remains for reading whatever the search finds.
+// webSearchUserAgent identifies the tool. DuckDuckGo's HTML page answers a
+// browser-like agent and rejects some empty ones, so the header is explicit.
+const webSearchUserAgent = "Mozilla/5.0 (compatible; Termixgo/0.1; +https://github.com/99apps-id/termixgo)"
+
+// webSearchTimeout bounds one search attempt. Discovery should be quick; the
+// fetch tool remains for reading whatever the search finds.
 const webSearchTimeout = 15 * time.Second
 
 // webSearchTool searches the web and returns titles, URLs and snippets. It
@@ -43,6 +55,226 @@ func (t *webSearchTool) Schema() map[string]any {
 	}, "query")
 }
 
+// searchResult is one hit, ready to render.
+type searchResult struct {
+	title   string
+	url     string
+	snippet string
+}
+
+// line is the display form handed to the model: title, URL and snippet, each
+// on its own line so a URL is never glued to the words around it.
+func (r searchResult) line() string {
+	parts := []string{r.title}
+	if strings.TrimSpace(r.url) != "" {
+		parts = append(parts, strings.TrimSpace(r.url))
+	}
+	if strings.TrimSpace(r.snippet) != "" {
+		parts = append(parts, strings.TrimSpace(r.snippet))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (t *webSearchTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	query := strings.TrimSpace(argString(args, "query"))
+	if query == "" {
+		return Result{Output: "query is required", IsError: true}, nil
+	}
+	count := argInt(args, "count", 5, 1, 10)
+
+	requestCtx, cancel := context.WithTimeout(ctx, webSearchTimeout)
+	defer cancel()
+
+	results, lastErr := searchWeb(requestCtx, query)
+	if len(results) == 0 {
+		if lastErr != nil {
+			return searchFailure(query, lastErr), nil
+		}
+		return Result{Output: fmt.Sprintf("No results for %q.", query)}, nil
+	}
+	if len(results) > count {
+		results = results[:count]
+	}
+
+	lines := make([]string, 0, len(results))
+	for _, result := range results {
+		lines = append(lines, result.line())
+	}
+	output := strings.Join(lines, "\n\n")
+	if len(output) > 6000 {
+		output = clipBytes(output, 6000) + "\n... [truncated]"
+	}
+	return Result{Output: output}, nil
+}
+
+// searchWeb tries the HTML results page first and falls back to the instant
+// answer API. Both are DuckDuckGo, so a dead network fails both and the error
+// is reported once with an offline hint.
+func searchWeb(ctx context.Context, query string) ([]searchResult, error) {
+	results, htmlErr := searchDuckDuckGoHTML(ctx, query)
+	if len(results) > 0 {
+		return results, nil
+	}
+	fallback, jsonErr := searchInstantAnswer(ctx, query)
+	if len(fallback) > 0 {
+		return fallback, nil
+	}
+	if htmlErr == nil {
+		return nil, jsonErr
+	}
+	return nil, htmlErr
+}
+
+// searchFailure renders a failed search. A DNS or connectivity failure is
+// named as such so the model stops retrying web tools and continues with what
+// it has, which is the failure that left it stuck before.
+func searchFailure(query string, err error) Result {
+	if isNetworkUnreachable(err) {
+		return Result{
+			Output:  fmt.Sprintf("search failed for %q: %v\nHint: the machine is offline or DNS could not resolve the search host. Do not retry web_search or web_fetch; continue with local repository files, documentation and tools.", query, err),
+			IsError: true,
+		}
+	}
+	return Result{Output: fmt.Sprintf("search failed for %q: %v", query, err), IsError: true}
+}
+
+// ------------------------------------------------------------------ HTML page
+
+var (
+	// ddgResultBlock opens one search result. Splitting on it is more robust
+	// than one giant regex: a malformed block cannot swallow the ones after it.
+	ddgResultBlock  = regexp.MustCompile(`(?is)<div[^>]*class="[^"]*result[^"]*web-result[^"]*"[^>]*>`)
+	ddgAnchor       = regexp.MustCompile(`(?is)<a\b([^>]*)>(.*?)</a>`)
+	ddgSnippetBlock = regexp.MustCompile(`(?is)<(?:a|td|div)\b([^>]*)>(.*?)</(?:a|td|div)>`)
+	ddgAttribute    = regexp.MustCompile(`(?i)([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*"([^"]*)"`)
+)
+
+func searchDuckDuckGoHTML(ctx context.Context, query string) ([]searchResult, error) {
+	endpoint := strings.TrimSpace(webSearchHTMLEndpoint)
+	if endpoint == "" {
+		return nil, nil
+	}
+	body, err := fetchSearchPage(ctx, endpoint, query)
+	if err != nil {
+		return nil, err
+	}
+	return parseDuckDuckGoHTML(body), nil
+}
+
+// parseDuckDuckGoHTML is deliberately structural and pure: a markup change
+// degrades to "no results" rather than an error.
+func parseDuckDuckGoHTML(body string) []searchResult {
+	blocks := splitResultBlocks(body)
+	if len(blocks) == 0 {
+		blocks = []string{body}
+	}
+	var results []searchResult
+	for _, block := range blocks {
+		title, href, ok := firstResultAnchor(block)
+		if !ok {
+			continue
+		}
+		link := decodeDuckDuckGoURL(href)
+		if !strings.HasPrefix(link, "http://") && !strings.HasPrefix(link, "https://") {
+			continue
+		}
+		results = append(results, searchResult{
+			title:   title,
+			url:     link,
+			snippet: firstResultSnippet(block),
+		})
+		if len(results) >= 10 {
+			break
+		}
+	}
+	return results
+}
+
+func splitResultBlocks(body string) []string {
+	marks := ddgResultBlock.FindAllStringIndex(body, -1)
+	if len(marks) == 0 {
+		return nil
+	}
+	blocks := make([]string, 0, len(marks))
+	for index, mark := range marks {
+		end := len(body)
+		if index+1 < len(marks) {
+			end = marks[index+1][0]
+		}
+		blocks = append(blocks, body[mark[1]:end])
+	}
+	return blocks
+}
+
+func firstResultAnchor(block string) (string, string, bool) {
+	for _, match := range ddgAnchor.FindAllStringSubmatch(block, -1) {
+		attrs, inner := match[1], match[2]
+		if !strings.Contains(strings.ToLower(attributeValue(attrs, "class")), "result__a") {
+			continue
+		}
+		href := attributeValue(attrs, "href")
+		title := cleanHTMLText(inner)
+		if title == "" || href == "" {
+			continue
+		}
+		return title, href, true
+	}
+	return "", "", false
+}
+
+func firstResultSnippet(block string) string {
+	for _, match := range ddgSnippetBlock.FindAllStringSubmatch(block, -1) {
+		attrs, inner := match[1], match[2]
+		if !strings.Contains(strings.ToLower(attributeValue(attrs, "class")), "result__snippet") {
+			continue
+		}
+		if text := cleanHTMLText(inner); text != "" {
+			return Shorten(text, 400)
+		}
+	}
+	return ""
+}
+
+// decodeDuckDuckGoURL unwraps the //duckduckgo.com/l/?uddg=<url> redirect a
+// result link carries, and passes an already plain URL through untouched.
+func decodeDuckDuckGoURL(href string) string {
+	raw := strings.TrimSpace(href)
+	if strings.HasPrefix(raw, "//") {
+		raw = "https:" + raw
+	}
+	if !strings.Contains(raw, "uddg=") {
+		return raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	if target := parsed.Query().Get("uddg"); target != "" {
+		return target
+	}
+	return raw
+}
+
+func attributeValue(attrs, name string) string {
+	want := strings.ToLower(name)
+	for _, match := range ddgAttribute.FindAllStringSubmatch(attrs, -1) {
+		if strings.ToLower(match[1]) == want {
+			return html.UnescapeString(match[2])
+		}
+	}
+	return ""
+}
+
+// cleanHTMLText strips tags from a fragment and decodes its entities.
+func cleanHTMLText(fragment string) string {
+	fragment = tagPattern.ReplaceAllString(fragment, " ")
+	fragment = html.UnescapeString(fragment)
+	fragment = strings.ReplaceAll(fragment, "\u00a0", " ")
+	return strings.TrimSpace(strings.Join(strings.Fields(fragment), " "))
+}
+
+// --------------------------------------------------------- instant answer API
+
 type webSearchTopic struct {
 	Text     string           `json:"Text"`
 	FirstURL string           `json:"FirstURL"`
@@ -55,77 +287,101 @@ type webSearchResponse struct {
 	Related      []webSearchTopic `json:"RelatedTopics"`
 }
 
-func (t *webSearchTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
-	query := strings.TrimSpace(argString(args, "query"))
-	if query == "" {
-		return Result{Output: "query is required", IsError: true}, nil
+func searchInstantAnswer(ctx context.Context, query string) ([]searchResult, error) {
+	endpoint := strings.TrimSpace(webSearchEndpoint)
+	if endpoint == "" {
+		return nil, nil
 	}
-	count := argInt(args, "count", 5, 1, 10)
-
-	endpoint := strings.TrimRight(strings.TrimSpace(webSearchEndpoint), "/")
-	link := fmt.Sprintf("%s/?q=%s&format=json&no_html=1&skip_disambig=1", endpoint, url.QueryEscape(query))
-	requestCtx, cancel := context.WithTimeout(ctx, webSearchTimeout)
-	defer cancel()
-	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, link, nil)
+	body, err := fetchSearchPage(ctx, endpoint, query)
 	if err != nil {
-		return Result{Output: err.Error(), IsError: true}, nil
-	}
-	request.Header.Set("User-Agent", "Termixgo/0.1 (+https://github.com/99apps-id/termixgo)")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return Result{Output: fmt.Sprintf("search failed: %v", err), IsError: true}, nil
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return Result{Output: fmt.Sprintf("search returned %s", response.Status), IsError: true}, nil
-	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, 1024*1024))
-	if err != nil {
-		return Result{Output: fmt.Sprintf("read search: %v", err), IsError: true}, nil
+		return nil, err
 	}
 	var parsed webSearchResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return Result{Output: fmt.Sprintf("read search: %v", err), IsError: true}, nil
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		return nil, fmt.Errorf("read search: %v", err)
 	}
-	lines := flattenSearchTopics(parsed.Related, count)
-	if strings.TrimSpace(parsed.AbstractText) != "" && len(lines) < count {
-		lines = append([]string{searchLine(parsed.AbstractText, parsed.AbstractURL)}, lines...)
+	var results []searchResult
+	if strings.TrimSpace(parsed.AbstractText) != "" {
+		results = append(results, searchResult{title: parsed.AbstractText, url: parsed.AbstractURL})
 	}
-	if len(lines) == 0 {
-		return Result{Output: fmt.Sprintf("No results for %q.", query)}, nil
-	}
-	if len(lines) > count {
-		lines = lines[:count]
-	}
-	output := strings.Join(lines, "\n\n")
-	if len(output) > 6000 {
-		output = clipBytes(output, 6000) + "\n... [truncated]"
-	}
-	return Result{Output: output}, nil
+	results = append(results, flattenSearchTopics(parsed.Related)...)
+	return results, nil
 }
 
-func flattenSearchTopics(topics []webSearchTopic, count int) []string {
-	var lines []string
+func flattenSearchTopics(topics []webSearchTopic) []searchResult {
+	var results []searchResult
 	for _, topic := range topics {
-		if len(lines) >= count {
-			break
-		}
 		if len(topic.Topics) > 0 {
-			lines = append(lines, flattenSearchTopics(topic.Topics, count-len(lines))...)
+			results = append(results, flattenSearchTopics(topic.Topics)...)
 			continue
 		}
 		if strings.TrimSpace(topic.Text) == "" {
 			continue
 		}
-		lines = append(lines, searchLine(topic.Text, topic.FirstURL))
+		results = append(results, searchResult{title: topic.Text, url: topic.FirstURL})
 	}
-	return lines
+	return results
 }
 
-func searchLine(text, link string) string {
-	text = strings.TrimSpace(text)
-	if strings.TrimSpace(link) == "" {
-		return text
+// ----------------------------------------------------------------- transport
+
+// fetchSearchPage issues one bounded GET and returns the body as text.
+func fetchSearchPage(ctx context.Context, endpoint, query string) (string, error) {
+	link := appendQuery(endpoint, "q", query)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
+	if err != nil {
+		return "", err
 	}
-	return fmt.Sprintf("%s\n%s", text, strings.TrimSpace(link))
+	request.Header.Set("User-Agent", webSearchUserAgent)
+	request.Header.Set("Accept", "text/html,application/json;q=0.9,*/*;q=0.5")
+	request.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", fmt.Errorf("search returned %s", response.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 2*1024*1024))
+	if err != nil {
+		return "", fmt.Errorf("read search: %v", err)
+	}
+	return string(body), nil
+}
+
+// appendQuery adds a query parameter without losing an existing query string.
+func appendQuery(endpoint, key, value string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	separator := "?"
+	if strings.Contains(trimmed, "?") {
+		separator = "&"
+	}
+	return trimmed + separator + key + "=" + url.QueryEscape(value)
+}
+
+// isNetworkUnreachable reports whether an error is a DNS or connectivity
+// failure, the case where retrying another URL fails the same way.
+func isNetworkUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	lowered := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"no such host",
+		"getaddrinfo",
+		"temporary failure in name resolution",
+		"server misbehaving",
+		"network is unreachable",
+		"no route to host",
+		"connection refused",
+		"connection reset",
+		"i/o timeout",
+		"context deadline exceeded",
+	} {
+		if strings.Contains(lowered, needle) {
+			return true
+		}
+	}
+	return false
 }

@@ -65,6 +65,34 @@ All notable changes to Termixgo are recorded here. The format follows
   the tool is reachable and the index is used. It was written, documented and
   tested but never added to the registry, so the model could not call it and
   every search fell back to a substring scan over memory and the journal.
+- Two plan endpoints are first-class providers instead of a hand-configured
+  OpenAI-compatible endpoint: StepFun Plan
+  (`https://api.stepfun.ai/step_plan/v1`) and Qwen Cloud Token Plan
+  (`https://token-plan.maas.qwencloudapi.com/compatible-mode/v1`), each with its
+  own catalogue models. The token plan lists Qwen3.8 Max, Qwen3.8 27B, Qwen3.7
+  Max, Qwen3.8 Flash, Qwen3.6 Flash, DeepSeek V4.1 Flash, DeepSeek V4 Pro (and
+  the pinned 0813 build), DeepSeek V4 Flash 0731, GLM 5.3 and GLM 5.2. Their ids
+  are host-prefixed so a catalogue entry never collides with the vendor's own.
+- `termixgo endpoint [provider url]` shows or sets a provider's custom base URL
+  from the terminal, which is what a self-hosted or account-scoped server needs
+  when the address was set in another application.
+- GitHub pull requests through the `gh` CLI: create, view, list, review, comment
+  and merge. A mutating call is gated by the approval policy, and the arguments
+  go through argv rather than a shell, exactly like the git tools.
+- Orchestration pipelines: `orchestrate` runs the steps in
+  `.termixgo/pipelines/<id>.json` as subagents in dependency order, with parallel
+  steps and `{{step.field}}` interpolation, and `list_pipelines` names them.
+- `read_image` attaches a local png, jpg, gif, webp or bmp to the conversation so
+  a vision model can see a screenshot, mockup or chart. The images ride on a user
+  message after the tool results, because providers accept them there and not on
+  a tool message.
+- `find_tools` searches the toolset by keyword and loads the match for the rest
+  of the turn. `toolSearchEnabled` in the config keeps the ecosystem tools
+  (GitHub, pipelines, images, skills, memory, web) out of every request and
+  loads them on demand, which trims the tool schema a large toolset sends every
+  step.
+- A call to a tool that does not exist now answers with near matches and, when
+  tool search is on, how to discover one, instead of a bare name-not-found.
 
 ### Fixed
 
@@ -157,6 +185,60 @@ All notable changes to Termixgo are recorded here. The format follows
   checks the evidence that matches the platform. This was found by cloning the
   repository inside WSL and running the suite there, which is now documented in
   `CONTRIBUTING.md`.
+- The transcript no longer swaps the answer and the reasoning. The closing
+  reasoning event arrives after the whole stream, so by then the answer text is
+  on top of the thinking block; matching only the last block appended a second,
+  duplicated reasoning block below the answer, which read as the two being
+  reversed.
+- Wrapping now measures display columns, not runes. A wide glyph such as a CJK
+  character or an emoji is one rune but two cells, so a line measured short,
+  overflowed the terminal and wrapped, shifting every row below it. The
+  assistant, user, reasoning and menu renderers all went through it.
+- A menu or a dialog no longer grows the frame past the terminal. The slash and
+  at-file menus, the approval dialog and the question dialog kept a full-height
+  transcript and then drew themselves under it, so the frame was up to seven
+  rows too tall on a common window; the clamp hid it by dropping the top rows,
+  which moved the whole screen. The overlay now takes its rows from the
+  transcript, a dialog is modal, and the help, setup and picker screens clip
+  their text and bound their rows so the raw frame fits before the clamp.
+- Model prices are corrected against each vendor's published rate table. The
+  DeepSeek figures were the largest gap (the current standard cache-miss rate is
+  $1.32/$3.96 for V4 Pro and $0.30/$1.20 for Flash, not the old figures), and
+  Moonshot Kimi, Zhipu GLM, Alibaba Qwen, DeepInfra, SiliconFlow, Novita,
+  Hugging Face, Vercel and Groq carried smaller drift. `TestVerifiedVendorRates`
+  pins the figures read from each vendor page. Vendors whose pricing page is
+  JavaScript-only (Baidu, Volcengine) keep their previous estimate.
+- A plan subscription is no longer given a dollar rate. Qwen Cloud Token Plan
+  and StepFun Step Plan are billed in credits, so their models report no dollar
+  price, `/cost` says the plan bills in credits and that a `costBudgetUsd` cap
+  does not apply, and the status line reads "plan Credits" instead of
+  "cost n/a". Qwen publishes no per-model credit rate (the rate is dynamic), so
+  none is invented; the Credit Pack gives one credit a $0.00075 marginal value.
+- DeepSeek's current wire name is sent: `deepseek-v4.1-flash` now carries
+  `APIID deepseek-flash`, which is the id the vendor documents, while the
+  stable catalogue id is unchanged.
+- `termixgo serve` reports why the assistant has no usable model instead of
+  letting every Telegram message fail with a bare "no model is configured". A
+  configured model id whose key or endpoint is missing is named, `/status` shows
+  the problem, and the run error carries the cause. The CLI keeps its own
+  settings, so a custom endpoint set in the desktop app is not shared with it.
+- An unknown model id now prefers a configured OpenAI-compatible endpoint over
+  a keyed vendor, so the endpoint's model no longer fails with a missing-key
+  error.
+- `web_fetch` no longer merges adjacent HTML blocks: a plain tag strip made
+  `<h1>Guide</h1><p>Use it</p>` read as "GuideUse it". Blocks break into lines
+  and entities, including numeric and named ones, are decoded. A DNS or
+  connectivity failure is reported as offline with a hint not to retry.
+- `web_search` now scrapes DuckDuckGo's HTML results page, which is the actual
+  search, instead of the instant-answer API that returns nothing for a normal
+  query. It falls back to the instant answer when the markup yields nothing, and
+  a DNS failure names the host and tells the model to stop retrying.
+- Two string bounds land on a rune boundary: the project memory that reaches the
+  system prompt and a renamed session title. A fixed byte offset could cut a
+  multi-byte character in half and put an invalid sequence in the prompt or the
+  session file.
+- The background-output ring buffer no longer cuts a UTF-8 rune when it trims to
+  its cap, which surfaced as a replacement glyph in `run_logs`.
 
 ### Build
 

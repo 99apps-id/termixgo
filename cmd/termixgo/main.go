@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -72,6 +73,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runModels(args[1:], stdout)
 	case "model":
 		return runModel(args[1:], stdout)
+	case "endpoint":
+		return runEndpoint(args[1:], stdout)
 	case "trust":
 		return runTrust(args[1:], stdout)
 	case "approval":
@@ -193,6 +196,51 @@ func runModel(args []string, stdout io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "default model is now %s\n", cfg.DefaultModel)
+	return nil
+}
+
+// runEndpoint reads or sets a provider's base URL. A custom OpenAI-compatible
+// server has no default host, so the CLI needs its address explicitly: the
+// address set in the desktop app is not shared with this binary.
+func runEndpoint(args []string, stdout io.Writer) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if len(args) == 0 {
+		if len(cfg.BaseURLs) == 0 {
+			fmt.Fprintln(stdout, "no custom endpoints are set")
+			return nil
+		}
+		ids := make([]string, 0, len(cfg.BaseURLs))
+		for id := range cfg.BaseURLs {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			fmt.Fprintf(stdout, "%s %s\n", id, cfg.BaseURLs[id])
+		}
+		return nil
+	}
+	if len(args) < 2 {
+		return fmt.Errorf("usage: termixgo endpoint <provider> <url>")
+	}
+	providerID := strings.ToLower(strings.TrimSpace(args[0]))
+	if _, ok := provider.ByID(providerID); !ok {
+		return fmt.Errorf("unknown provider %q", providerID)
+	}
+	endpoint, err := provider.NormalizeBaseURL(strings.Join(args[1:], " "))
+	if err != nil {
+		return err
+	}
+	if cfg.BaseURLs == nil {
+		cfg.BaseURLs = map[string]string{}
+	}
+	cfg.BaseURLs[providerID] = endpoint
+	if err := config.Save(cfg); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "%s endpoint is now %s\n", providerID, endpoint)
 	return nil
 }
 
@@ -466,6 +514,17 @@ func runServe(stdout io.Writer) error {
 		return err
 	}
 	defer application.Shutdown()
+
+	// Fail before pairing rather than on every message with a bare "no model
+	// is configured". The label can name a configured model while its key or
+	// endpoint is missing, which is the confusing case this names.
+	if !application.HasModel() {
+		problem := application.ModelError()
+		if problem == nil {
+			problem = app.ErrNoModel
+		}
+		return fmt.Errorf("the assistant has no usable model: %v\nSet it up for this CLI, which keeps its own settings:\n  termixgo endpoint <provider> <url>\n  termixgo secret <provider>\n  termixgo model <provider>:<model-id>\nA custom endpoint set in the Termigo app is not shared with this binary", problem)
+	}
 
 	if err := application.StartTelegram(); err != nil {
 		return err
@@ -831,6 +890,8 @@ Usage:
   termixgo run "<prompt>"         Run one prompt and stream the answer
   termixgo models [--provider id] List the model catalogue
   termixgo model [id]             Show or set the default model
+  termixgo endpoint [provider url]
+                                  Show or set a provider's custom base URL
   termixgo trust [on|off]         Show or set folder trust for this directory
   termixgo approval [mode]        Show or set ask|edits|all|plan
   termixgo harness [id]           Show or set the agent harness profile

@@ -32,6 +32,10 @@ type block struct {
 	reasoning string
 	seconds   int64
 	running   bool
+	// finalized marks a thinking block whose closing EventReasoned has already
+	// landed. The closing event arrives after the answer text has started, so
+	// it can no longer find the block by looking at the tail of the transcript.
+	finalized bool
 
 	toolName   string
 	toolLabel  string
@@ -480,11 +484,16 @@ func spanInner(text string) (string, bool) {
 
 // inlineWidth counts the columns a word occupies once styled, so the markers
 // a span carries do not count against the line budget.
+//
+// The count is display columns, not runes: a wide glyph such as a CJK
+// character or an emoji occupies two cells, and wrapping by rune count let a
+// line measure short, overflow the terminal and wrap, which is what shifted
+// the whole frame. ansi.StringWidth is the same measurement truncate uses.
 func inlineWidth(word string) int {
 	if inner, ok := spanInner(word); ok {
-		return len([]rune(inner))
+		return ansi.StringWidth(inner)
 	}
-	return len([]rune(word))
+	return ansi.StringWidth(word)
 }
 
 // splitWideSpan breaks a span that is wider than a line at its own spaces,
@@ -548,15 +557,20 @@ func wrapPlain(text string, width int) string {
 			continue
 		}
 		current := ""
+		currentWidth := 0
 		for _, word := range words {
+			wordWidth := ansi.StringWidth(word)
 			switch {
 			case current == "":
 				current = word
-			case len([]rune(current))+1+len([]rune(word)) <= width:
+				currentWidth = wordWidth
+			case currentWidth+1+wordWidth <= width:
 				current += " " + word
+				currentWidth += 1 + wordWidth
 			default:
 				out = append(out, current)
 				current = word
+				currentWidth = wordWidth
 			}
 		}
 		if current != "" {

@@ -191,7 +191,10 @@ func (m *Model) viewPicker() string {
 	if m.picker.filter != "" {
 		body = append(body, m.styles.Dim.Render("filter: "+m.picker.filter))
 	}
-	const windowSize = 14
+	// The list adapts to the window: the header, the hint and the box frame
+	// keep their rows and the rest belongs to the items, so a list screen never
+	// grows past the terminal and shifts the frame.
+	windowSize := m.menuRowLimit()
 	start := 0
 	if m.picker.cursor >= windowSize {
 		start = m.picker.cursor - windowSize + 1
@@ -219,6 +222,13 @@ func (m *Model) viewPicker() string {
 		body = append(body, m.styles.Dim.Render("  No matches."))
 	}
 	body = append(body, "", m.styles.Hint.Render("Type to filter | Up/Down move | Enter select | Esc cancel"))
+	// Clip to the box's wrap width before rendering, and bound the rows as a
+	// second guard, so the frame stays inside the terminal.
+	width := max(1, m.width-8)
+	for index := range body {
+		body[index] = truncate(body[index], width)
+	}
+	body = fitRows(body, m.height-4, m.styles.Dim)
 	return m.styles.Box.Width(m.width - 4).Render(strings.Join(body, "\n"))
 }
 

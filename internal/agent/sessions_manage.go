@@ -19,8 +19,10 @@ func (s *Session) SetTitle(title string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	trimmed := strings.TrimSpace(title)
+	// clipBytes keeps the cut on a rune boundary: a title is UTF-8 text and a
+	// raw slice at the cap could leave half a multi-byte character behind.
 	if len(trimmed) > titleCap {
-		trimmed = trimmed[:titleCap]
+		trimmed = clipBytes(trimmed, titleCap)
 	}
 	s.title = trimmed
 	s.updatedAt = time.Now()

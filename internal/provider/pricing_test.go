@@ -27,7 +27,10 @@ func TestPricingIsKnownForCataloguedModels(t *testing.T) {
 	// means a cost budget would silently never fire for it.
 	missing := []string{}
 	for _, model := range Models() {
-		if model.Free() || model.PriceVaries() {
+		// A local model is genuinely free, a router has no list price, and a
+		// plan model bills in credits: none of the three can carry a dollar
+		// rate, so none is a gap in the table.
+		if model.Free() || model.PriceVaries() || model.PlanBilled() {
 			continue
 		}
 		if !model.Pricing().Known() {
@@ -36,6 +39,80 @@ func TestPricingIsKnownForCataloguedModels(t *testing.T) {
 	}
 	if len(missing) > 0 {
 		t.Errorf("%d catalogue models have no recorded price: %v", len(missing), missing)
+	}
+}
+
+// TestPlanModelsBillInCredits pins the plan billing contract: a plan model has
+// no dollar price, names its credit unit, and is not counted as a gap in the
+// dollar table by TestPricingIsKnownForCataloguedModels.
+func TestPlanModelsBillInCredits(t *testing.T) {
+	plans := 0
+	for _, model := range Models() {
+		info, ok := model.Plan()
+		if !ok {
+			continue
+		}
+		plans++
+		if info.Name == "" || info.CreditUnit == "" {
+			t.Errorf("%s plan is missing its name or credit unit", model.ID)
+		}
+		if model.Pricing().Known() {
+			t.Errorf("%s bills in credits, so it must not carry a dollar price", model.ID)
+		}
+		if _, known := model.CostModel(nil); known {
+			t.Errorf("%s must report an unknown dollar price", model.ID)
+		}
+	}
+	if plans == 0 {
+		t.Fatalf("no plan models are catalogued, so this test proves nothing")
+	}
+	if info, ok := (Model{Provider: "qwen-token-plan"}).Plan(); !ok || info.USDPerCredit <= 0 {
+		t.Errorf("the Qwen credit pack gives a credit value, got %+v ok=%v", info, ok)
+	}
+	// An operator override still wins, so a plan can be approximated in dollars
+	// when the operator knows the rate.
+	override := map[string]Pricing{"qwen-token-plan/qwen3.8-max": {1, 2}}
+	if _, known := (Model{ID: "qwen-token-plan/qwen3.8-max", Provider: "qwen-token-plan"}).CostModel(override); !known {
+		t.Errorf("a modelPricing override should still price a plan model")
+	}
+}
+
+// TestVerifiedVendorRates pins the rates read from each vendor's own pricing
+// page, so a later edit cannot quietly drift back to an old figure. Each entry
+// names the vendor page it was taken from in the comment above the table.
+func TestVerifiedVendorRates(t *testing.T) {
+	cases := map[string]Pricing{
+		// DeepSeek (peak/standard cache-miss rate).
+		"deepseek-v4-pro":     {1.32, 3.96},
+		"deepseek-v4.1-flash": {0.30, 1.20},
+		"deepseek-v4-flash":   {0.30, 1.20},
+		// Moonshot. Zhipu. Qwen.
+		"kimi-k2.7-code": {0.95, 4.00},
+		"kimi-k2.6":      {0.95, 4.00},
+		"glm-5.3":        {1.40, 4.40},
+		"qwen3.8-27b":    {0.50, 3.00},
+		"qwen3.7-max":    {2.50, 7.50},
+		// Third-party hosts.
+		"deepinfra/kimi-k3":           {2.85, 14.25},
+		"deepinfra/qwen3.8-27b":       {0.20, 2.50},
+		"siliconflow/deepseek-v4-pro": {1.50, 3.14},
+		"novita/deepseek-v4-pro":      {1.60, 3.20},
+		"huggingface/glm-5.3":         {1.40, 4.40},
+		"vercel/minimax-m3":           {0.24, 0.96},
+		"sambanova/minimax-m2.7":      {0.60, 2.40},
+		// Fast hosts.
+		"openai/gpt-oss-120b": {0.15, 0.75},
+		"openai/gpt-oss-20b":  {0.10, 0.50},
+	}
+	for id, want := range cases {
+		model, ok := ModelByID(id)
+		if !ok {
+			t.Errorf("%s is not in the catalogue", id)
+			continue
+		}
+		if got := model.Pricing(); got != want {
+			t.Errorf("%s price = %+v, want %+v", id, got, want)
+		}
 	}
 }
 

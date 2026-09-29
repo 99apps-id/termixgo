@@ -9,11 +9,15 @@ import (
 	"testing"
 )
 
+// searchServer points both search endpoints at one test server so a run never
+// reaches the network. The HTML page is tried first, so the payload is the
+// instant-answer JSON an HTML scrape cannot read; every test therefore also
+// exercises the fallback path.
 func searchServer(t *testing.T, payload string, status int) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Query().Get("format") != "json" {
-			t.Errorf("format = %q, want json", request.URL.Query().Get("format"))
+		if request.URL.Query().Get("q") == "" {
+			t.Errorf("the query parameter is missing from %s", request.URL.Path)
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(status)
@@ -22,7 +26,32 @@ func searchServer(t *testing.T, payload string, status int) *httptest.Server {
 	t.Cleanup(func() {
 		server.Close()
 		webSearchEndpoint = "https://api.duckduckgo.com/"
+		webSearchHTMLEndpoint = "https://html.duckduckgo.com/html/"
 	})
+	webSearchEndpoint = server.URL + "/"
+	webSearchHTMLEndpoint = server.URL + "/"
+	return server
+}
+
+// htmlSearchServer serves one fixed markup for the HTML endpoint and an empty
+// JSON body for the fallback, so a parse result can only come from the HTML.
+func htmlSearchServer(t *testing.T, markup string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/" {
+			writer.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(writer, markup)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(writer, `{"AbstractText":"","RelatedTopics":[]}`)
+	}))
+	t.Cleanup(func() {
+		server.Close()
+		webSearchEndpoint = "https://api.duckduckgo.com/"
+		webSearchHTMLEndpoint = "https://html.duckduckgo.com/html/"
+	})
+	webSearchHTMLEndpoint = server.URL + "/"
 	webSearchEndpoint = server.URL + "/"
 	return server
 }
@@ -76,6 +105,58 @@ func TestWebSearchReportsServerErrors(t *testing.T) {
 	result, _ := tool.Run(context.Background(), &Env{}, map[string]any{"query": "x"})
 	if !result.IsError {
 		t.Errorf("a bad status must report an error")
+	}
+}
+
+// TestWebSearchParsesDuckDuckGoHTML covers the real backend: the result page
+// markup becomes title, URL and snippet, and the redirect wrapper is unwrapped.
+func TestWebSearchParsesDuckDuckGoHTML(t *testing.T) {
+	htmlSearchServer(t, `<html><body>
+		<div class="result results_links results_links_deep web-result">
+			<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgo.dev%2Fdoc%2Fgo1.26&amp;rut=abc">Go 1.26 <b>release</b> notes</a>
+			<a class="result__snippet" href="x">The latest Go release adds generics to the standard library.</a>
+		</div>
+		<div class="result results_links results_links_deep web-result">
+			<a rel="nofollow" class="result__a" href="https://pkg.go.dev/">Package index</a>
+			<a class="result__snippet" href="y">Browse the standard library.</a>
+		</div>
+	</body></html>`)
+
+	tool := &webSearchTool{}
+	result, err := tool.Run(context.Background(), &Env{}, map[string]any{"query": "go 1.26"})
+	if err != nil || result.IsError {
+		t.Fatalf("Run: err=%v result=%+v", err, result)
+	}
+	for _, want := range []string{
+		"Go 1.26 release notes",
+		"https://go.dev/doc/go1.26",
+		"The latest Go release adds generics to the standard library.",
+		"https://pkg.go.dev/",
+	} {
+		if !strings.Contains(result.Output, want) {
+			t.Errorf("output is missing %q:\n%s", want, result.Output)
+		}
+	}
+	if strings.Contains(result.Output, "uddg=") || strings.Contains(result.Output, "//duckduckgo.com/l/") {
+		t.Errorf("the redirect wrapper should be unwrapped:\n%s", result.Output)
+	}
+}
+
+// TestWebSearchOfflineHintTellsTheModelToStop covers the failure the operator
+// hit: a DNS failure must be named as offline so the agent stops retrying.
+func TestWebSearchOfflineHintTellsTheModelToStop(t *testing.T) {
+	result := searchFailure("go 1.26", fmt.Errorf("dial tcp: lookup html.duckduckgo.com: no such host"))
+	if !result.IsError {
+		t.Fatalf("a DNS failure must be an error result")
+	}
+	if !strings.Contains(result.Output, "offline") || !strings.Contains(result.Output, "Do not retry") {
+		t.Errorf("output = %q, want the offline hint", result.Output)
+	}
+	if !isNetworkUnreachable(fmt.Errorf("dial tcp: lookup x: no such host")) {
+		t.Errorf("no such host must read as unreachable")
+	}
+	if isNetworkUnreachable(fmt.Errorf("search returned 502 Bad Gateway")) {
+		t.Errorf("an HTTP status is not a network failure")
 	}
 }
 

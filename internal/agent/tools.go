@@ -24,6 +24,9 @@ type Result struct {
 	IsError bool
 	// Plan, when set, replaces the plan and triggers a plan event.
 	Plan []Todo
+	// Images, when set, are attached to the conversation so a vision model can
+	// see them. read_image is the only producer.
+	Images []provider.Image
 }
 
 // Tool is one capability offered to the model.
@@ -73,6 +76,13 @@ type Env struct {
 	// RunSubagent is injected by the app; nil disables the subagent tool.
 	// The type names a SubagentType; empty means the general worker.
 	RunSubagent func(ctx context.Context, subType, prompt string) (string, error)
+
+	// ToolIndex lists every tool a run may load, so find_tools can search them
+	// by keyword. It is set by the runner for the duration of one turn.
+	ToolIndex []ToolIndexEntry
+	// DiscoverTools marks tool names available for the next step. It is nil
+	// when tool search is off, in which case every tool is already visible.
+	DiscoverTools func(names []string)
 }
 
 // Registry indexes tools by name and alias.
@@ -126,6 +136,16 @@ func DefaultRegistry() *Registry {
 		&askUserTool{},
 		&webFetchTool{},
 		&webSearchTool{},
+		&readImageTool{},
+		&findToolsTool{},
+		&orchestrateTool{},
+		&listPipelinesTool{},
+		&githubCreatePRTool{},
+		&githubGetPRTool{},
+		&githubListPRsTool{},
+		&githubReviewPRTool{},
+		&githubCommentPRTool{},
+		&githubMergePRTool{},
 		&thinkTool{},
 		&subagentTool{},
 		&gitStatusTool{},

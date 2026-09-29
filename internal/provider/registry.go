@@ -86,6 +86,10 @@ var contextWindows = map[string]int{
 	"step-3.7-flash": 262144,
 	"step-3.5-flash": 262144,
 
+	// The same StepFun models served through the plan endpoint.
+	"stepfun-plan/step-3.7-flash": 262144,
+	"stepfun-plan/step-3.5-flash": 262144,
+
 	"kimi-k3":        1048576,
 	"kimi-k2.7-code": 262144,
 	"kimi-k2.6":      262144,
@@ -100,6 +104,19 @@ var contextWindows = map[string]int{
 	"qwen3.8-max": 1000000,
 	"qwen3.8-27b": 1000000,
 	"qwen3.7-max": 1000000,
+
+	// The models served through the Qwen Cloud token plan endpoint.
+	"qwen-token-plan/qwen3.8-max":            1000000,
+	"qwen-token-plan/qwen3.8-27b":            1000000,
+	"qwen-token-plan/qwen3.7-max":            1000000,
+	"qwen-token-plan/qwen3.8-flash":          1000000,
+	"qwen-token-plan/qwen3.6-flash":          1000000,
+	"qwen-token-plan/deepseek-v4.1-flash":    1048576,
+	"qwen-token-plan/deepseek-v4-pro-0813":   1048576,
+	"qwen-token-plan/deepseek-v4-pro":        1048576,
+	"qwen-token-plan/deepseek-v4-flash-0731": 1048576,
+	"qwen-token-plan/glm-5.3":                1310720,
+	"qwen-token-plan/glm-5.2":                1310720,
 
 	"ernie-4.5-300b-a47b":   131072,
 	"doubao-seed-2-1-pro":   262144,
@@ -140,17 +157,20 @@ var contextWindows = map[string]int{
 
 // providerContextWindows is the fallback per provider.
 var providerContextWindows = map[string]int{
-	"openai":     400000,
-	"anthropic":  200000,
-	"google":     1048576,
-	"deepseek":   128000,
-	"groq":       131072,
-	"xai":        131072,
-	"cerebras":   131072,
-	"mistral":    131072,
-	"openrouter": 131072,
-	"qwen":       131072,
-	"zhipu":      131072,
+	"openai":          400000,
+	"anthropic":       200000,
+	"google":          1048576,
+	"deepseek":        128000,
+	"groq":            131072,
+	"xai":             131072,
+	"cerebras":        131072,
+	"mistral":         131072,
+	"openrouter":      131072,
+	"qwen":            131072,
+	"qwen-token-plan": 131072,
+	"stepfun":         262144,
+	"stepfun-plan":    262144,
+	"zhipu":           131072,
 	// A local server usually runs a quantised model with a small window.
 	"ollama":            32768,
 	"lmstudio":          32768,
@@ -202,10 +222,12 @@ func Providers() []Provider {
 		// first so the wizard's default order is also a sensible one.
 		{ID: "deepseek", Label: "DeepSeek", Kind: KindOpenAI, DefaultBaseURL: "https://api.deepseek.com/v1", ConsoleURL: "https://platform.deepseek.com/api_keys", NeedsKey: true, KeyPrefix: "sk-", EnvKeys: []string{"DEEPSEEK_API_KEY"}},
 		{ID: "stepfun", Label: "StepFun", Kind: KindOpenAI, DefaultBaseURL: "https://api.stepfun.com/v1", ConsoleURL: "https://platform.stepfun.com/interface-key", NeedsKey: true, EnvKeys: []string{"STEPFUN_API_KEY", "STEPFUN_CN_API_KEY"}},
+		{ID: "stepfun-plan", Label: "StepFun Plan", Kind: KindOpenAI, DefaultBaseURL: "https://api.stepfun.ai/step_plan/v1", ConsoleURL: "https://platform.stepfun.com/interface-key", NeedsKey: true, EnvKeys: []string{"STEPFUN_PLAN_API_KEY"}},
 		{ID: "moonshot", Label: "Moonshot Kimi", Kind: KindOpenAI, DefaultBaseURL: "https://api.moonshot.cn/v1", ConsoleURL: "https://platform.moonshot.cn/console/api-keys", NeedsKey: true, KeyPrefix: "sk-", EnvKeys: []string{"MOONSHOT_API_KEY", "KIMI_API_KEY"}},
 		{ID: "minimax", Label: "MiniMax", Kind: KindOpenAI, DefaultBaseURL: "https://api.minimax.io/v1", ConsoleURL: "https://platform.minimax.io/user-center/basic-information/interface-key", NeedsKey: true, EnvKeys: []string{"MINIMAX_API_KEY"}},
 		{ID: "zhipu", Label: "Zhipu GLM", Kind: KindOpenAI, DefaultBaseURL: "https://open.bigmodel.cn/api/paas/v4", ConsoleURL: "https://z.ai/model-api", NeedsKey: true, EnvKeys: []string{"ZHIPU_API_KEY", "GLM_API_KEY"}},
 		{ID: "qwen", Label: "Alibaba Qwen", Kind: KindOpenAI, DefaultBaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", ConsoleURL: "https://bailian.console.aliyun.com/", NeedsKey: true, EnvKeys: []string{"DASHSCOPE_API_KEY", "QWEN_API_KEY"}},
+		{ID: "qwen-token-plan", Label: "Qwen Cloud Token Plan", Kind: KindOpenAI, DefaultBaseURL: "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1", ConsoleURL: "https://bailian.console.aliyun.com/", NeedsKey: true, EnvKeys: []string{"QWEN_TOKEN_PLAN_API_KEY"}},
 		{ID: "mistral", Label: "Mistral", Kind: KindOpenAI, DefaultBaseURL: "https://api.mistral.ai/v1", ConsoleURL: "https://console.mistral.ai/api-keys/", NeedsKey: true, EnvKeys: []string{"MISTRAL_API_KEY"}},
 		{ID: "baidu", Label: "Baidu Qianfan", Kind: KindOpenAI, DefaultBaseURL: "https://qianfan.baidubce.com/v2", ConsoleURL: "https://console.bce.baidu.com/iam/#/iam/apikey/list", NeedsKey: true, EnvKeys: []string{"QIANFAN_API_KEY", "BAIDU_API_KEY"}},
 		{ID: "volcengine", Label: "Volcengine Ark (Doubao)", Kind: KindOpenAI, DefaultBaseURL: "https://ark.cn-beijing.volces.com/api/v3", ConsoleURL: "https://console.volcengine.com/ark", NeedsKey: true, EnvKeys: []string{"ARK_API_KEY", "VOLCENGINE_API_KEY"}},
@@ -320,12 +342,18 @@ func Models() []Model {
 
 		// DeepSeek. Pro is the large MoE, Flash the cheap one.
 		{ID: "deepseek-v4-pro", Provider: "deepseek", Label: "DeepSeek V4 Pro", Description: "Large MoE for advanced reasoning and coding.", Tags: []string{"reasoning", "tools", "coding"}},
-		{ID: "deepseek-v4.1-flash", Provider: "deepseek", Label: "DeepSeek V4.1 Flash", Description: "Sparse MoE, cheap and fast.", Tags: []string{"fast", "tools", "coding"}},
+		{ID: "deepseek-v4.1-flash", Provider: "deepseek", Label: "DeepSeek V4.1 Flash", APIID: "deepseek-flash", Description: "Sparse MoE, cheap and fast.", Tags: []string{"fast", "tools", "coding"}},
 		{ID: "deepseek-v4-flash", Provider: "deepseek", Label: "DeepSeek V4 Flash", Description: "Cheapest DeepSeek tier.", Tags: []string{"fast", "coding"}},
 
 		// StepFun. Three point seven Flash is the current efficient model.
 		{ID: "step-3.7-flash", Provider: "stepfun", Label: "Step 3.7 Flash", Description: "Multimodal MoE for agentic coding.", Tags: []string{"tools", "vision", "coding"}},
 		{ID: "step-3.5-flash", Provider: "stepfun", Label: "Step 3.5 Flash", Description: "Previous efficient generation.", Tags: []string{"fast", "tools"}},
+
+		// StepFun Plan. The same models through the plan endpoint, so the plan
+		// is a provider of its own rather than a hand-configured custom
+		// endpoint. The host prefix keeps the id unique.
+		{ID: "stepfun-plan/step-3.7-flash", Provider: "stepfun-plan", Label: "Step 3.7 Flash (Plan)", APIID: "step-3.7-flash", Description: "Step 3.7 Flash on the StepFun plan endpoint.", Tags: []string{"tools", "coding"}},
+		{ID: "stepfun-plan/step-3.5-flash", Provider: "stepfun-plan", Label: "Step 3.5 Flash (Plan)", APIID: "step-3.5-flash", Description: "Step 3.5 Flash on the StepFun plan endpoint.", Tags: []string{"fast", "tools"}},
 
 		// Moonshot. K3 is the open-weight flagship.
 		{ID: "kimi-k3", Provider: "moonshot", Label: "Kimi K3", Description: "Open-weight multimodal reasoning at scale.", Tags: []string{"reasoning", "tools", "coding"}},
@@ -345,6 +373,21 @@ func Models() []Model {
 		{ID: "qwen3.8-max", Provider: "qwen", Label: "Qwen3.8 Max", Description: "Flagship MoE, text image and video.", Tags: []string{"reasoning", "tools", "vision"}},
 		{ID: "qwen3.8-27b", Provider: "qwen", Label: "Qwen3.8 27B", Description: "Open-weight dense vision-language model.", Tags: []string{"tools", "vision"}},
 		{ID: "qwen3.7-max", Provider: "qwen", Label: "Qwen3.7 Max", Description: "Previous flagship.", Tags: []string{"tools"}},
+
+		// Qwen Cloud Token Plan. The plan bundles Qwen, DeepSeek and GLM
+		// models behind one endpoint, so each entry carries the host prefix and
+		// the wire id the plan expects.
+		{ID: "qwen-token-plan/qwen3.8-max", Provider: "qwen-token-plan", Label: "Qwen3.8 Max (Token Plan)", APIID: "qwen3.8-max", Description: "Qwen3.8 Max on the Qwen Cloud token plan.", Tags: []string{"reasoning", "tools", "vision"}},
+		{ID: "qwen-token-plan/qwen3.8-27b", Provider: "qwen-token-plan", Label: "Qwen3.8 27B (Token Plan)", APIID: "qwen3.8-27b", Description: "Qwen3.8 27B on the Qwen Cloud token plan.", Tags: []string{"tools", "vision"}},
+		{ID: "qwen-token-plan/qwen3.7-max", Provider: "qwen-token-plan", Label: "Qwen3.7 Max (Token Plan)", APIID: "qwen3.7-max", Description: "Qwen3.7 Max on the Qwen Cloud token plan.", Tags: []string{"tools"}},
+		{ID: "qwen-token-plan/qwen3.8-flash", Provider: "qwen-token-plan", Label: "Qwen3.8 Flash (Token Plan)", APIID: "qwen3.8-flash", Description: "Fast Qwen3.8 tier on the Qwen Cloud token plan.", Tags: []string{"fast", "tools", "coding"}},
+		{ID: "qwen-token-plan/qwen3.6-flash", Provider: "qwen-token-plan", Label: "Qwen3.6 Flash (Token Plan)", APIID: "qwen3.6-flash", Description: "Efficient Qwen3.6 tier on the Qwen Cloud token plan.", Tags: []string{"fast", "tools"}},
+		{ID: "qwen-token-plan/deepseek-v4.1-flash", Provider: "qwen-token-plan", Label: "DeepSeek V4.1 Flash (Token Plan)", APIID: "deepseek-v4.1-flash", Description: "Sparse MoE on the Qwen Cloud token plan.", Tags: []string{"fast", "tools", "coding"}},
+		{ID: "qwen-token-plan/deepseek-v4-pro-0813", Provider: "qwen-token-plan", Label: "DeepSeek V4 Pro 0813 (Token Plan)", APIID: "deepseek-v4-pro-0813", Description: "Pinned DeepSeek V4 Pro build on the Qwen Cloud token plan.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "qwen-token-plan/deepseek-v4-pro", Provider: "qwen-token-plan", Label: "DeepSeek V4 Pro (Token Plan)", APIID: "deepseek-v4-pro", Description: "DeepSeek V4 Pro on the Qwen Cloud token plan.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "qwen-token-plan/deepseek-v4-flash-0731", Provider: "qwen-token-plan", Label: "DeepSeek V4 Flash 0731 (Token Plan)", APIID: "deepseek-v4-flash-0731", Description: "Pinned DeepSeek V4 Flash build on the Qwen Cloud token plan.", Tags: []string{"fast", "coding"}},
+		{ID: "qwen-token-plan/glm-5.3", Provider: "qwen-token-plan", Label: "GLM 5.3 (Token Plan)", APIID: "glm-5.3", Description: "Zhipu GLM 5.3 on the Qwen Cloud token plan.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "qwen-token-plan/glm-5.2", Provider: "qwen-token-plan", Label: "GLM 5.2 (Token Plan)", APIID: "glm-5.2", Description: "Zhipu GLM 5.2 on the Qwen Cloud token plan.", Tags: []string{"tools", "coding"}},
 
 		// Mistral. Large 3 and Devstral are the ones that matter here.
 		{ID: "mistral-large-2512", Provider: "mistral", Label: "Mistral Large 3", Description: "Most capable Mistral.", Tags: []string{"tools", "coding"}},

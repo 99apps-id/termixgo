@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -647,10 +648,13 @@ func (t *webFetchTool) Schema() map[string]any {
 
 // RE2 has no backreferences, so each container tag is spelled out.
 var (
-	scriptBlock = regexp.MustCompile(`(?is)<script[^>]*>.*?</script\s*>|<style[^>]*>.*?</style\s*>|<noscript[^>]*>.*?</noscript\s*>`)
-	tagPattern  = regexp.MustCompile(`(?s)<[^>]*>`)
-	spaceRun    = regexp.MustCompile(`[ \t\r\f\v]+`)
-	blankRun    = regexp.MustCompile(`\n{3,}`)
+	scriptBlock  = regexp.MustCompile(`(?is)<script\b.*?</script\s*>|<style\b.*?</style\s*>|<noscript\b.*?</noscript\s*>|<template\b.*?</template\s*>`)
+	commentBlock = regexp.MustCompile(`(?s)<!--.*?-->`)
+	// blockBreak marks where text continues on a new line, so two blocks such
+	// as <h1>Guide</h1><p>Body</p> do not run together into "GuideBody".
+	blockBreak = regexp.MustCompile(`(?is)</(?:p|div|section|article|li|tr|h[1-6]|blockquote|pre|ul|ol|table|header|footer|nav|aside|figure|figcaption|details|summary)\s*>|<br\s*/?>`)
+	tagPattern = regexp.MustCompile(`(?s)<[^>]*>`)
+	spaceRun   = regexp.MustCompile(`[ \t\r\f\v]+`)
 )
 
 func (t *webFetchTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
@@ -671,6 +675,12 @@ func (t *webFetchTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	request.Header.Set("User-Agent", "Termixgo/0.1 (+https://github.com/99apps-id/termixgo)")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
+		if isNetworkUnreachable(err) {
+			return Result{
+				Output:  fmt.Sprintf("fetch failed: %v\nHint: the machine is offline or the host could not be resolved. Do not keep retrying web_fetch or web_search; continue with local files and tools.", err),
+				IsError: true,
+			}, nil
+		}
 		return Result{Output: fmt.Sprintf("fetch failed: %v", err), IsError: true}, nil
 	}
 	defer response.Body.Close()
@@ -682,7 +692,7 @@ func (t *webFetchTool) Run(ctx context.Context, env *Env, args map[string]any) (
 		return Result{Output: fmt.Sprintf("read body: %v", err), IsError: true}, nil
 	}
 	text := string(body)
-	if strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "html") {
+	if looksLikeHtml(response.Header.Get("Content-Type"), text) {
 		text = htmlToText(text)
 	}
 	if len(text) > 20000 {
@@ -710,13 +720,37 @@ func isBlockedHost(host string) bool {
 	return false
 }
 
-func htmlToText(html string) string {
-	stripped := scriptBlock.ReplaceAllString(html, " ")
-	stripped = tagPattern.ReplaceAllString(stripped, "")
-	stripped = strings.NewReplacer("&nbsp;", " ", "&amp;", "&", "&lt;", "<", "&gt;", ">", "&quot;", "\"", "&#39;", "'").Replace(stripped)
-	stripped = spaceRun.ReplaceAllString(stripped, " ")
-	stripped = blankRun.ReplaceAllString(stripped, "\n\n")
-	return strings.TrimSpace(stripped)
+// htmlToText reduces a page to readable text.
+//
+// The document is split on block boundaries first and each piece is flattened
+// on its own. A plain tag strip leaves the tags empty, so adjacent blocks such
+// as <h1>Guide</h1><p>Use it</p> merged into "GuideUse it"; splitting first
+// keeps the boundary and lets whitespace collapse the way HTML treats it.
+func htmlToText(raw string) string {
+	cleaned := scriptBlock.ReplaceAllString(raw, " ")
+	cleaned = commentBlock.ReplaceAllString(cleaned, " ")
+	chunks := blockBreak.Split(cleaned, -1)
+	lines := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		text := tagPattern.ReplaceAllString(chunk, " ")
+		text = html.UnescapeString(text)
+		text = strings.ReplaceAll(text, "\u00a0", " ")
+		text = spaceRun.ReplaceAllString(text, " ")
+		if trimmed := strings.TrimSpace(text); trimmed != "" {
+			lines = append(lines, trimmed)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// looksLikeHtml reports whether a body should be reduced to text, from its
+// content type or, when that is missing, from the document itself.
+func looksLikeHtml(contentType, body string) bool {
+	if strings.Contains(strings.ToLower(contentType), "html") {
+		return true
+	}
+	trimmed := strings.ToLower(strings.TrimSpace(body))
+	return strings.HasPrefix(trimmed, "<!doctype html") || strings.HasPrefix(trimmed, "<html")
 }
 
 func parseTodos(value any) ([]Todo, error) {

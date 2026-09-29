@@ -110,6 +110,12 @@ type Config struct {
 	// HarnessProfile selects the agent harness. Empty means critical.
 	HarnessProfile string `json:"harnessProfile,omitempty"`
 
+	// ToolSearch keeps the ecosystem tools (GitHub, pipelines, images, skills,
+	// memory, web) out of every request and loads them on demand through
+	// find_tools. It trades one discovery round trip for a smaller tool schema
+	// on every step, which matters with a large toolset.
+	ToolSearchEnabled bool `json:"toolSearchEnabled,omitempty"`
+
 	// BaseURLs overrides provider endpoints, keyed by provider id. Local
 	// providers (ollama, lmstudio) read it too.
 	BaseURLs map[string]string `json:"baseUrls,omitempty"`

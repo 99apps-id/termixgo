@@ -96,6 +96,7 @@ func readOnlyTools() *Registry {
 		&listDirectoryTool{},
 		&grepTool{},
 		&globTool{},
+		&readImageTool{},
 		&findSkillTool{},
 		&useSkillTool{},
 		&thinkTool{},

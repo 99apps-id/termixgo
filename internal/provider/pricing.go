@@ -60,10 +60,13 @@ var pricingTable = map[string]Pricing{
 	"grok-4.5":       {2.00, 6.00},
 	"grok-build-0.1": {1.00, 2.00},
 
-	// DeepSeek.
-	"deepseek-v4-pro":     {0.78, 1.57},
-	"deepseek-v4.1-flash": {0.30, 1.20},
-	"deepseek-v4-flash":   {0.06, 0.14},
+	// DeepSeek. The published table has an off-peak rate at half price; the
+	// peak (standard) rate is recorded, so a budget errs high.
+	"deepseek-v4-pro":        {1.32, 3.96},
+	"deepseek-v4-pro-0813":   {1.32, 3.96},
+	"deepseek-v4.1-flash":    {0.30, 1.20},
+	"deepseek-v4-flash":      {0.30, 1.20},
+	"deepseek-v4-flash-0731": {0.30, 1.20},
 
 	// StepFun.
 	"step-3.7-flash": {0.20, 1.15},
@@ -71,22 +74,25 @@ var pricingTable = map[string]Pricing{
 
 	// Moonshot.
 	"kimi-k3":        {3.00, 15.00},
-	"kimi-k2.7-code": {0.66, 3.30},
-	"kimi-k2.6":      {0.65, 3.41},
+	"kimi-k2.7-code": {0.95, 4.00},
+	"kimi-k2.6":      {0.95, 4.00},
 
 	// MiniMax.
 	"minimax-m3":   {0.30, 1.20},
 	"minimax-m2.7": {0.30, 1.20},
 
 	// Zhipu.
-	"glm-5.3":       {0.60, 4.40},
+	"glm-5.3":       {1.40, 4.40},
 	"glm-5.3-flash": {0.15, 0.50},
+	"glm-5.2":       {0.40, 2.00},
 	"glm-4.7":       {0.60, 2.20},
 
 	// Alibaba Qwen.
-	"qwen3.8-max": {2.00, 6.00},
-	"qwen3.8-27b": {0.42, 3.00},
-	"qwen3.7-max": {1.48, 4.43},
+	"qwen3.8-max":   {2.00, 6.00},
+	"qwen3.8-27b":   {0.50, 3.00},
+	"qwen3.8-flash": {0.30, 1.20},
+	"qwen3.7-max":   {2.50, 7.50},
+	"qwen3.6-flash": {0.20, 0.80},
 
 	// Mistral.
 	"mistral-large-2512": {0.50, 1.50},
@@ -102,8 +108,8 @@ var pricingTable = map[string]Pricing{
 	"doubao-seed-2-1-turbo": {0.30, 1.50},
 
 	// Fast inference hosts.
-	"openai/gpt-oss-120b":     {0.15, 0.60},
-	"openai/gpt-oss-20b":      {0.08, 0.30},
+	"openai/gpt-oss-120b":     {0.15, 0.75},
+	"openai/gpt-oss-20b":      {0.10, 0.50},
 	"llama-3.3-70b-versatile": {0.59, 0.79},
 	"qwen/qwen3.8-27b":        {0.80, 4.00},
 	"gpt-oss-120b":            {0.35, 0.75},
@@ -112,32 +118,76 @@ var pricingTable = map[string]Pricing{
 	// Third-party hosts of open weights.
 	"together/kimi-k3":            {3.00, 15.00},
 	"together/qwen3.8-27b":        {0.42, 3.00},
-	"deepinfra/kimi-k3":           {2.50, 12.50},
-	"deepinfra/qwen3.8-27b":       {0.30, 2.40},
+	"deepinfra/kimi-k3":           {2.85, 14.25},
+	"deepinfra/qwen3.8-27b":       {0.20, 2.50},
 	"fireworks/deepseek-v4-pro":   {0.90, 3.60},
 	"fireworks/kimi-k3":           {3.00, 15.00},
-	"siliconflow/deepseek-v4-pro": {0.78, 1.57},
-	"novita/deepseek-v4-pro":      {0.80, 1.60},
+	"siliconflow/deepseek-v4-pro": {1.50, 3.14},
+	"novita/deepseek-v4-pro":      {1.60, 3.20},
 	"nvidia/kimi-k3":              {3.00, 15.00},
 	"nebius/kimi-k3":              {2.80, 14.00},
-	"sambanova/minimax-m2.7":      {0.30, 1.20},
+	"sambanova/minimax-m2.7":      {0.60, 2.40},
 	"hyperbolic/qwen3.8-27b":      {0.40, 2.50},
-	"huggingface/glm-5.3":         {0.60, 4.40},
-	"vercel/minimax-m3":           {0.30, 1.20},
+	"huggingface/glm-5.3":         {1.40, 4.40},
+	"vercel/minimax-m3":           {0.24, 0.96},
 	"github/gpt-6-astra":          {10.00, 50.00},
 
 	// Aggregators.
 	"anthropic/claude-opus-5.5": {4.00, 20.00},
 	"openai/gpt-6-astra":        {10.00, 50.00},
 	"moonshotai/kimi-k3":        {3.00, 15.00},
-	"z-ai/glm-5.3":              {0.60, 4.40},
+	"z-ai/glm-5.3":              {1.40, 4.40},
 	"qwen/qwen3.8-max":          {2.00, 6.00},
-	"deepseek/deepseek-v4-pro":  {0.78, 1.57},
+	"deepseek/deepseek-v4-pro":  {0.94, 1.87},
 
 	// Search and enterprise endpoints.
 	"sonar-pro":              {3.00, 15.00},
 	"sonar-deep-research":    {2.00, 8.00},
 	"command-a-plus-05-2026": {2.50, 10.00},
+}
+
+// PlanInfo describes a subscription that bills in credits rather than in
+// dollars per token. A plan model has no dollar price: the operator has already
+// paid for a quota, so the marginal dollar cost of a token is not recorded.
+type PlanInfo struct {
+	// Name is the product name shown to the operator.
+	Name string
+	// CreditUnit is the unit the plan deducts, such as "Credits".
+	CreditUnit string
+	// USDPerCredit is the marginal value of one credit, taken from the plan's
+	// Credit Pack price. It is zero when the vendor does not publish one, which
+	// means a credit cannot be converted to dollars at all.
+	USDPerCredit float64
+}
+
+// planProviders are the subscriptions that bill in credits. Their models are
+// deliberately absent from the dollar table: a plan is a prepaid quota, and a
+// per-token dollar figure is money the operator never pays.
+//
+// Sources:
+//   - Qwen Cloud Token Plan, https://docs.qwencloud.com/token-plan/overview and
+//     /token-plan/personal/token-plan-personal-overview. A Credit Pack is $15
+//     for 20,000 Credits. Per-request Credits are dynamic, so no per-model rate
+//     is published; the quota alone (Lite 11,500 to Pro 180,000 per month) is.
+//   - StepFun Step Plan, https://platform.stepfun.ai/step-plan. Mini 400M,
+//     Plus 1,600M, Pro 8,000M and Max 40,000M credits per month; no credit pack
+//     price is published.
+var planProviders = map[string]PlanInfo{
+	"qwen-token-plan": {Name: "Qwen Cloud Token Plan", CreditUnit: "Credits", USDPerCredit: 15.0 / 20000.0},
+	"stepfun-plan":    {Name: "StepFun Step Plan", CreditUnit: "M Credits"},
+}
+
+// Plan returns the subscription a model is served under, when its provider
+// bills in credits instead of dollars.
+func (m Model) Plan() (PlanInfo, bool) {
+	info, ok := planProviders[m.Provider]
+	return info, ok
+}
+
+// PlanBilled reports whether the model is served under a credit subscription.
+func (m Model) PlanBilled() bool {
+	_, ok := planProviders[m.Provider]
+	return ok
 }
 
 // Local providers run on the operator's own hardware, so their marginal cost
@@ -177,6 +227,11 @@ func (m Model) PricingWith(overrides map[string]Pricing) Pricing {
 		if price, ok := overrides[wire]; ok && price.Known() {
 			return price
 		}
+	}
+	// A subscription plan bills in credits, not dollars per token, so its
+	// models have no dollar price unless the operator set an override above.
+	if m.PlanBilled() {
+		return Pricing{}
 	}
 	// A local server has no vendor price. Its wire name can collide with a
 	// cloud model of the same name, and billing someone for tokens their own

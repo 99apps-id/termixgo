@@ -242,6 +242,23 @@ func (s *Session) AddToolResult(id, name, output string) {
 	s.updatedAt = time.Now()
 }
 
+// AddImages appends a user turn carrying image attachments. Providers accept
+// images on a user message but not on a tool message, so a tool that produced an
+// image (read_image) follows its tool result with this call.
+func (s *Session) AddImages(text string, images []provider.Image) {
+	if len(images) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.messages = append(s.messages, provider.Message{
+		Role:    provider.RoleUser,
+		Content: text,
+		Images:  images,
+	})
+	s.updatedAt = time.Now()
+}
+
 // Reset clears the conversation but keeps the identity.
 func (s *Session) Reset() {
 	s.mu.Lock()

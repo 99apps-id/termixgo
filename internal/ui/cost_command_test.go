@@ -38,6 +38,43 @@ func unpricedModel(t *testing.T) *Model {
 	return model
 }
 
+// TestCostCommandExplainsPlanCredits covers a subscription model: it is priced
+// in credits, not dollars, so /cost must say so and must not report a dollar
+// figure or a dollar budget that cannot apply.
+func TestCostCommandExplainsPlanCredits(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+
+	cfg := config.Default()
+	cfg.DefaultModel = "qwen-token-plan:qwen3.8-max"
+	cfg.ApprovalMode = config.ApprovalAll
+	cfg.CostBudgetUSD = 1.00
+	if err := config.Save(cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	application := testApp(t)
+	if err := application.Secrets().Set(secrets.ProviderKey("qwen-token-plan"), "sk-sp-test"); err != nil {
+		t.Fatalf("store key: %v", err)
+	}
+	if _, err := application.SetModelByQuery("qwen-token-plan:qwen3.8-max"); err != nil {
+		t.Fatalf("SetModelByQuery: %v", err)
+	}
+	model := New(application)
+	resize(model, 120, 40)
+
+	next, _ := model.runSlash("cost", "")
+	view := allText(next.(*Model))
+
+	if !strings.Contains(view, "billed in Credits") {
+		t.Errorf("/cost should say the plan bills in credits:\n%s", view)
+	}
+	if strings.Contains(view, "about $") {
+		t.Errorf("/cost must not invent a dollar figure for a plan model:\n%s", view)
+	}
+	if !strings.Contains(view, "dollar budget does not apply") {
+		t.Errorf("/cost should say a dollar cap does not apply:\n%s", view)
+	}
+}
+
 // TestCostCommandCallsOutAnUnenforceableBudget is the honesty guard in the TUI.
 //
 // The operator set a cap and the model has no price, so the cap can never fire.

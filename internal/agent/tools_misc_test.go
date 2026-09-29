@@ -389,6 +389,33 @@ func TestWebFetchStripsHTMLAndReportsStatus(t *testing.T) {
 	}
 }
 
+// TestHTMLToTextKeepsBlockBoundaries is the reason htmlToText splits on block
+// tags before stripping them: a plain strip made <h1>Guide</h1><p>Use it</p>
+// read as "GuideUse it", which merges words from different blocks.
+func TestHTMLToTextKeepsBlockBoundaries(t *testing.T) {
+	page := `<html><body>
+		<h1>Guide</h1>
+		<p>Use &amp; enjoy. It costs &#36;5 and a &mdash; no &copy; needed.</p>
+		<ul><li>first</li><li>second</li></ul>
+		<p>line<br>break</p>
+	</body></html>`
+	text := htmlToText(page)
+	for _, want := range []string{"Guide", "Use & enjoy.", "first", "second", "line", "break"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text is missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "GuideUse") {
+		t.Errorf("adjacent blocks merged:\n%s", text)
+	}
+	if !strings.Contains(text, "$5") {
+		t.Errorf("numeric entities should decode:\n%s", text)
+	}
+	if strings.Contains(text, "&mdash;") || strings.Contains(text, "&copy;") {
+		t.Errorf("named entities should decode:\n%s", text)
+	}
+}
+
 func TestWebFetchReportsAnUnreachableHost(t *testing.T) {
 	tool := &webFetchTool{}
 	env := testEnv(t)

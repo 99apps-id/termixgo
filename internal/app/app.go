@@ -75,8 +75,12 @@ type App struct {
 	client    provider.Client
 	model     provider.Model
 	wireModel string
-	policy    *agent.ApprovalPolicy
-	usage     provider.Usage
+	// modelErr is why the configured model has no usable client. Without it the
+	// only symptom was ErrNoModel, which read as "nothing is configured" even
+	// when a model id was set but its key or endpoint was missing.
+	modelErr error
+	policy   *agent.ApprovalPolicy
+	usage    provider.Usage
 	// pricing is the resolved rate for the current model, and costKnown says
 	// whether it is a real figure. Both are resolved when the model is chosen
 	// rather than after the first usage event, so /cost is consistent from the
@@ -186,8 +190,10 @@ func New(workspace string) (*App, error) {
 
 	if err := instance.restoreModel(); err != nil {
 		// A missing or unusable model is not fatal: the UI sends the operator
-		// to /setup, and every other feature still works.
+		// to /setup, and every other feature still works. The reason is kept so
+		// the bot and `serve` can name it instead of a bare ErrNoModel.
 		instance.model = provider.Model{}
+		instance.modelErr = err
 	}
 	return instance, nil
 }
@@ -308,6 +314,13 @@ func (a *App) guessProvider(modelID string) string {
 	if index := strings.Index(modelID, ":"); index > 0 {
 		return modelID[:index]
 	}
+	// A custom endpoint is configured by base URL, not by a catalog entry or a
+	// key, so an unknown model id belongs to it when one is set. Without this
+	// the id fell through to a key-based provider and the run failed with a
+	// missing-key error even though the endpoint was configured.
+	if endpoint := strings.TrimSpace(a.cfg.BaseURLs["openai-compatible"]); endpoint != "" {
+		return "openai-compatible"
+	}
 	for _, candidate := range provider.Providers() {
 		if candidate.NeedsKey && provider.HasKey(a.store, candidate.ID) {
 			return candidate.ID
@@ -320,13 +333,16 @@ func (a *App) guessProvider(modelID string) string {
 func (a *App) applyModel(model provider.Model) error {
 	info, ok := provider.ByID(model.Provider)
 	if !ok {
-		return fmt.Errorf("unknown provider %q", model.Provider)
+		a.modelErr = fmt.Errorf("unknown provider %q", model.Provider)
+		return a.modelErr
 	}
 	if info.NeedsKey && !provider.HasKey(a.store, info.ID) {
-		return fmt.Errorf("no API key for %s yet; run /setup", info.Label)
+		a.modelErr = fmt.Errorf("no API key for %s yet; run /setup", info.Label)
+		return a.modelErr
 	}
 	client, err := provider.NewClient(info.ID, provider.BaseURLFor(a.cfg, info.ID), provider.ResolverFor(a.store))
 	if err != nil {
+		a.modelErr = err
 		return err
 	}
 	a.client = client
@@ -336,6 +352,7 @@ func (a *App) applyModel(model provider.Model) error {
 	if a.session != nil {
 		a.session.SetModel(model.ID)
 	}
+	a.modelErr = nil
 	return nil
 }
 
@@ -813,8 +830,14 @@ func (a *App) runTurn(ctx context.Context, input string) error {
 	window := a.model.Window()
 	price := a.pricing
 	costKnown := a.costKnown
+	modelErr := a.modelErr
 	if client == nil {
 		a.mu.Unlock()
+		if modelErr != nil {
+			// Name the actual cause: a bare ErrNoModel read as "nothing is
+			// configured" while /model was showing a configured id.
+			return fmt.Errorf("%w: %v", ErrNoModel, modelErr)
+		}
 		return ErrNoModel
 	}
 	a.running = true
@@ -857,6 +880,7 @@ func (a *App) runTurn(ctx context.Context, input string) error {
 		CostBudgetUSD: cfg.CostBudgetUSD,
 		Steer:         a.TakeSteer,
 		Journal:       a.journal,
+		ToolSearch:    cfg.ToolSearchEnabled,
 	}
 	session := a.currentSession()
 	if err := runner.Run(runCtx, session, input); err != nil {
@@ -916,14 +940,23 @@ func (a *App) Status() string {
 	if a.Trusted() {
 		trust = "trusted"
 	}
+	model := a.CurrentModel()
 	lines := []string{
 		fmt.Sprintf("workspace: %s (%s)", a.workspace, trust),
-		fmt.Sprintf("model: %s (%s)", orNone(a.ModelLabel()), orNone(a.CurrentModel().Provider)),
+		fmt.Sprintf("model: %s (%s)", orNone(a.ModelLabel()), orNone(model.Provider)),
+	}
+	if plan, ok := model.Plan(); ok {
+		lines = append(lines, fmt.Sprintf("billing: %s (%s, not dollars)", plan.Name, plan.CreditUnit))
+	}
+	lines = append(lines,
 		fmt.Sprintf("approval: %s", a.Config().ApprovalMode),
 		fmt.Sprintf("context: %s", a.contextUsage()),
 		fmt.Sprintf("session: %s, %d turn(s)", session.ID(), session.Turns()),
 		fmt.Sprintf("plan: %d/%d complete", done, total),
 		fmt.Sprintf("tokens: %d in, %d out", usage.PromptTokens, usage.CompletionTokens),
+	)
+	if err := a.ModelError(); err != nil {
+		lines = append(lines, "model problem: "+err.Error())
 	}
 	if a.botStatus != "" {
 		lines = append(lines, "telegram: "+a.botStatus)
@@ -938,6 +971,15 @@ func (a *App) HasModel() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.client != nil
+}
+
+// ModelError reports why the configured model has no usable client. It is nil
+// when the model is ready. The label can name a model while this is set: the
+// id is configured, but its key or endpoint is missing.
+func (a *App) ModelError() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.modelErr
 }
 
 // ContextUsage renders how much of the model's window the conversation is

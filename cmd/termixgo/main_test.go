@@ -148,6 +148,43 @@ func TestModelWithoutConfigurationSaysSo(t *testing.T) {
 	}
 }
 
+func TestEndpointCommandRoundTrip(t *testing.T) {
+	withState(t)
+
+	stdout, _, err := runCLI(t, "endpoint")
+	if err != nil {
+		t.Fatalf("endpoint list: %v", err)
+	}
+	if !strings.Contains(stdout, "no custom endpoints") {
+		t.Errorf("a fresh config should have no endpoints, got %q", stdout)
+	}
+
+	if _, _, err := runCLI(t, "endpoint", "openai-compatible", "https://my-server/v1/"); err != nil {
+		t.Fatalf("endpoint set: %v", err)
+	}
+	stdout, _, err = runCLI(t, "endpoint")
+	if err != nil {
+		t.Fatalf("endpoint get: %v", err)
+	}
+	if !strings.Contains(stdout, "openai-compatible https://my-server/v1") {
+		t.Errorf("endpoint list = %q", stdout)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := loaded.BaseURLs["openai-compatible"]; got != "https://my-server/v1" {
+		t.Errorf("BaseURLs = %q, want the trailing slash removed", got)
+	}
+
+	if _, _, err := runCLI(t, "endpoint", "openai-compatible"); err == nil {
+		t.Errorf("a missing URL must be an error")
+	}
+	if _, _, err := runCLI(t, "endpoint", "not-a-provider", "https://x/v1"); err == nil {
+		t.Errorf("an unknown provider must be an error")
+	}
+}
+
 func TestApprovalCommandValidatesTheMode(t *testing.T) {
 	withState(t)
 

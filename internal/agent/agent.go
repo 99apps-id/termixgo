@@ -71,6 +71,10 @@ type Runner struct {
 	// boundary, which is what lets the operator change course without
 	// aborting the turn. Nil means steering is unavailable.
 	Steer func() []string
+	// ToolSearch loads the ecosystem tools on demand instead of sending every
+	// schema on every step. The core loop and find_tools stay visible; a tool
+	// the model discovers stays visible for the rest of the turn.
+	ToolSearch bool
 }
 
 // Run executes one operator turn to completion.
@@ -82,6 +86,22 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	// schemas the model sees and the registry the calls are resolved against in
 	// agreement.
 	r.Tools = RegistryForProfile(r.Tools, profile)
+
+	// Tool search installs the discovery hooks on a per-turn copy of the
+	// environment, so the search index and the discovered set cannot leak into
+	// another turn or a subagent.
+	discovered := map[string]bool{}
+	if r.ToolSearch && r.Env != nil {
+		cloned := *r.Env
+		cloned.ToolIndex = buildToolIndex(r.Tools.Tools(), toolSearchAlwaysOn)
+		cloned.DiscoverTools = func(names []string) {
+			for _, name := range names {
+				discovered[strings.ToLower(name)] = true
+			}
+		}
+		r.Env = &cloned
+	}
+
 	ledger := NewVerifyLedger()
 	guard := &loopGuard{}
 	nudges := 0
@@ -141,7 +161,7 @@ runLoop:
 				Model:    r.Model,
 				System:   r.system(session),
 				Messages: compactForModel(session.Messages(), r.ContextBudget),
-				Tools:    r.Tools.Definitions(),
+				Tools:    r.stepTools(discovered).Definitions(),
 			}
 
 			var answer strings.Builder
@@ -236,6 +256,7 @@ runLoop:
 			// A task that moves to completed is the boundary verification belongs to:
 			// the next task would otherwise build on a change nobody checked.
 			pendingVerify := ""
+			var pendingImages []provider.Image
 			for index, call := range calls {
 				if ctx.Err() != nil {
 					stopReason = "aborted"
@@ -255,6 +276,9 @@ runLoop:
 					r.Journal.Record(call.Name, call.Arguments, result.Output)
 				}
 				session.AddToolResult(call.ID, call.Name, result.Output)
+				if len(result.Images) > 0 {
+					pendingImages = append(pendingImages, result.Images...)
+				}
 				if !result.IsError && taskJustCompleted(before, r.todoSnapshot()) {
 					pendingVerify = ledger.BuildVerifyNudge(nudges, false)
 				}
@@ -269,6 +293,12 @@ runLoop:
 					answerSkippedCalls(session, calls[index+1:], "the turn was stopped")
 					break
 				}
+			}
+			// Images from a tool in this batch go on one user message after all
+			// the tool results, so every provider keeps the results adjacent to
+			// the assistant call that requested them.
+			if len(pendingImages) > 0 {
+				session.AddImages("Image data read by the tools above is attached for you to see.", pendingImages)
 			}
 			if stopReason == "loop-guard" || stopReason == "aborted" {
 				break runLoop
@@ -382,7 +412,11 @@ func (r *Runner) system(session *Session) string {
 	if strings.TrimSpace(r.System) != "" {
 		return r.System
 	}
-	return ApplyHarnessToSystem(BuildSystem(r.Env, r.Model), GetHarnessProfile(r.Harness))
+	prompt := ApplyHarnessToSystem(BuildSystem(r.Env, r.Model), GetHarnessProfile(r.Harness))
+	if r.ToolSearch {
+		prompt += "\n\n" + toolSearchHint
+	}
+	return prompt
 }
 
 // observeToolResult folds one finished tool call into the verify ledger.
@@ -443,7 +477,7 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 	tool, ok := r.Tools.Lookup(call.Name)
 	if !ok {
 		return Result{
-			Output:  fmt.Sprintf("There is no tool named %q. Available tools: %s", call.Name, r.toolNames()),
+			Output:  unknownToolMessage(call.Name, r.toolNamesList(), r.ToolSearch),
 			IsError: true,
 		}
 	}
@@ -521,11 +555,32 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 }
 
 func (r *Runner) toolNames() string {
+	return strings.Join(r.toolNamesList(), ", ")
+}
+
+func (r *Runner) toolNamesList() []string {
 	names := make([]string, 0, len(r.Tools.Tools()))
 	for _, tool := range r.Tools.Tools() {
 		names = append(names, tool.Name())
 	}
-	return strings.Join(names, ", ")
+	return names
+}
+
+// stepTools is the registry offered for one step. Without tool search it is the
+// full allowlist. With it, only the always-on loop and the tools the model has
+// discovered are advertised; every tool stays callable, so a discovered name
+// never fails to resolve.
+func (r *Runner) stepTools(discovered map[string]bool) *Registry {
+	if !r.ToolSearch {
+		return r.Tools
+	}
+	tools := make([]Tool, 0, len(r.Tools.Tools()))
+	for _, tool := range r.Tools.Tools() {
+		if toolSearchAlwaysOn[strings.ToLower(tool.Name())] || discovered[strings.ToLower(tool.Name())] {
+			tools = append(tools, tool)
+		}
+	}
+	return NewRegistry(tools...)
 }
 
 func (r *Runner) emit(event Event) {

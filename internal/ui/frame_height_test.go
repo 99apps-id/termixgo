@@ -90,6 +90,90 @@ func TestFrameNeverExceedsTheTerminalHeight(t *testing.T) {
 	}
 }
 
+// TestOverlayFrameFitsBeforeTheClamp is the stronger guard: the overlay states
+// must fit the terminal before fitFrame is applied. Clamping is a last line of
+// defence, and a frame that only fits because of it still shifts the screen:
+// the clamp drops the top rows, so every visible line moves up.
+func TestOverlayFrameFitsBeforeTheClamp(t *testing.T) {
+	sizes := []struct{ width, height int }{
+		{120, 40}, {100, 30}, {80, 24}, {60, 18}, {50, 16},
+		{50, 24}, {54, 20},
+	}
+	for _, size := range sizes {
+		name := fmt.Sprintf("%dx%d", size.width, size.height)
+
+		menu := chatModel(t)
+		resize(menu, size.width, size.height)
+		menu.blocks = append(menu.blocks, block{kind: blockAssistant, text: strings.Repeat("chatter ", 200)})
+		menu.refresh()
+		menu.composer.SetValue("/")
+		menu.updateSlashMatches()
+		if got := frameHeight(menu.screen()); got > size.height {
+			t.Errorf("slash menu at %s raw frame is %d rows", name, got)
+		}
+
+		approval := chatModel(t)
+		resize(approval, size.width, size.height)
+		approval.blocks = append(approval.blocks, block{kind: blockAssistant, text: strings.Repeat("chatter ", 200)})
+		approval.refresh()
+		approval.pendingApproval = &agent.ApprovalRequest{
+			Tool: "edit", Risk: "edit", Detail: "Editing main.go",
+			Diff: "--- a.go\n+++ a.go\n-" + strings.Repeat("x", 200) + "\n+" + strings.Repeat("y", 200),
+		}
+		if got := frameHeight(approval.screen()); got > size.height {
+			t.Errorf("approval at %s raw frame is %d rows", name, got)
+		}
+
+		ask := chatModel(t)
+		resize(ask, size.width, size.height)
+		ask.blocks = append(ask.blocks, block{kind: blockAssistant, text: strings.Repeat("chatter ", 200)})
+		ask.refresh()
+		ask.pendingAsk = &askRequestMsg{
+			question: "which port should the server listen on?",
+			options:  []string{"3000", "8080", "9000", "10000", "11000", "12000"},
+		}
+		if got := frameHeight(ask.screen()); got > size.height {
+			t.Errorf("ask at %s raw frame is %d rows", name, got)
+		}
+	}
+}
+
+// TestFullScreenModesFitBeforeTheClamp covers the modes that replace the whole
+// frame: help, the setup wizard and the picker. Each one must fit the terminal
+// on its own, or the clamp shifts the top of the screen.
+func TestFullScreenModesFitBeforeTheClamp(t *testing.T) {
+	sizes := []struct{ width, height int }{
+		{120, 40}, {100, 30}, {80, 24}, {60, 18}, {50, 16},
+	}
+	for _, size := range sizes {
+		name := fmt.Sprintf("%dx%d", size.width, size.height)
+
+		help := chatModel(t)
+		resize(help, size.width, size.height)
+		help.current = modeHelp
+		if got := frameHeight(help.screen()); got > size.height {
+			t.Errorf("help at %s raw frame is %d rows", name, got)
+		}
+
+		setup := chatModel(t)
+		resize(setup, size.width, size.height)
+		setup.startSetup()
+		setup.current = modeSetup
+		setup.setup.step = setupKey
+		setup.setup.message = "Paste the API key. It is stored in ~/.termixgo/secrets.json with mode 0600 and never shown again."
+		if got := frameHeight(setup.screen()); got > size.height {
+			t.Errorf("setup at %s raw frame is %d rows", name, got)
+		}
+
+		choose := chatModel(t)
+		resize(choose, size.width, size.height)
+		choose.openPicker("Choose", "model", manyItems(40))
+		if got := frameHeight(choose.screen()); got > size.height {
+			t.Errorf("picker at %s raw frame is %d rows", name, got)
+		}
+	}
+}
+
 // manyItems builds a picker list of the given length.
 func manyItems(n int) []pickerItem {
 	items := make([]pickerItem, 0, n)

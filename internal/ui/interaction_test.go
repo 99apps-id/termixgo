@@ -163,6 +163,48 @@ func TestTextChunksJoinOneBlock(t *testing.T) {
 	}
 }
 
+// TestReasonedAfterTextDoesNotAppendASecondThinkingBlock is the swap guard.
+//
+// The closing EventReasoned arrives after the whole stream, so by then answer
+// text has already been placed on top of the thinking block. Matching only the
+// tail appended a duplicate reasoning block below the answer, and the operator
+// read the reply and the reasoning as reversed.
+func TestReasonedAfterTextDoesNotAppendASecondThinkingBlock(t *testing.T) {
+	model := chatModel(t)
+
+	model.applyEvent(agent.Event{Kind: agent.EventThinking, Text: "weighing "})
+	model.applyEvent(agent.Event{Kind: agent.EventThinking, Text: "options"})
+	model.applyEvent(agent.Event{Kind: agent.EventText, Text: "Here is the answer."})
+	model.applyEvent(agent.Event{Kind: agent.EventReasoned, Text: "weighing options carefully", ToolMillis: 4200})
+
+	thinking := 0
+	assistantIndex, thinkingIndex := -1, -1
+	for index, item := range model.blocks {
+		switch item.kind {
+		case blockThinking:
+			thinking++
+			thinkingIndex = index
+			if item.running {
+				t.Errorf("the thinking block should be closed")
+			}
+			if item.seconds != 4 {
+				t.Errorf("seconds = %d, want 4", item.seconds)
+			}
+			if item.reasoning != "weighing options carefully" {
+				t.Errorf("reasoning = %q, want the closed text", item.reasoning)
+			}
+		case blockAssistant:
+			assistantIndex = index
+		}
+	}
+	if thinking != 1 {
+		t.Fatalf("want exactly one thinking block, got %d", thinking)
+	}
+	if thinkingIndex > assistantIndex {
+		t.Fatalf("the reasoning rendered below the answer: thinking=%d assistant=%d", thinkingIndex, assistantIndex)
+	}
+}
+
 // TestTextAfterThinkingClosesTheThinkingBlock is a display guard: a live
 // thinking block left next to the answer reads as if the model is still busy.
 func TestTextAfterThinkingClosesTheThinkingBlock(t *testing.T) {
