@@ -97,6 +97,13 @@ All notable changes to Termixgo are recorded here. The format follows
   then one per model, and a press switches the model. It used to print only the
   active model, so choosing another meant knowing its id. `/model <id>` still
   works for a direct switch.
+- Telegram answers are rendered from Markdown: bold, inline code, fenced code,
+  headings and links are converted to the Bot API's HTML subset. If the API
+  rejects the entities the message is resent as plain text, so a formatting bug
+  cannot swallow a reply.
+- A photo sent to the Telegram bot is downloaded and attached to the turn, so a
+  vision model can see it; the caption is the instruction. The whole turn runs
+  on the same runner and card as a text prompt.
 - The opening screen follows a model or trust change. It was built once at
   startup, so an onboarding run that picked a model left the old name in the
   transcript next to a header showing the new one.

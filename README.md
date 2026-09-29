@@ -456,6 +456,12 @@ The bot accepts `/run <prompt>`, `/stop`, `/new`, `/model`, `/status`, `/help`
 and plain text. It refuses every chat until paired, and pins the owner user id
 once paired. Progress is mirrored into one edited message instead of a flood.
 
+Answers are rendered from Markdown: bold, inline code, fenced code blocks,
+headings and links, converted to Telegram's HTML subset, with a plain-text
+fallback if Telegram ever rejects an entity so a formatting bug cannot swallow a
+reply. `/model` opens a provider-and-model picker. Send a photo, optionally with
+a caption as the instruction, and the agent sees it with a vision model.
+
 To run the assistant headless, 24/7:
 
 ```sh

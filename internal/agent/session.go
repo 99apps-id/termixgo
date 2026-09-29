@@ -216,6 +216,22 @@ func (s *Session) AddUser(text string) {
 	s.updatedAt = time.Now()
 }
 
+// AddUserWithImages appends a user turn that carries image attachments, which
+// is how an uploaded image reaches a vision model with its prompt.
+func (s *Session) AddUserWithImages(text string, images []provider.Image) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.messages = append(s.messages, provider.Message{
+		Role:    provider.RoleUser,
+		Content: text,
+		Images:  images,
+	})
+	if strings.TrimSpace(s.title) == "" {
+		s.title = Shorten(text, 60)
+	}
+	s.updatedAt = time.Now()
+}
+
 // AddAssistant appends a completed assistant turn.
 func (s *Session) AddAssistant(text, reasoning string, calls []provider.ToolCall) {
 	s.mu.Lock()

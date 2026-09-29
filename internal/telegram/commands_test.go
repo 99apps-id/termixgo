@@ -12,15 +12,17 @@ import (
 // scriptedAgent is a fully controlled bridge target, which is what the command
 // routing needs: every branch has to be reachable on demand.
 type scriptedAgent struct {
-	mu        sync.Mutex
-	status    string
-	model     string
-	answer    string
-	runErr    error
-	setErr    error
-	prompts   []string
-	newCalls  int
-	stopCalls int
+	mu            sync.Mutex
+	status        string
+	model         string
+	answer        string
+	runErr        error
+	setErr        error
+	prompts       []string
+	newCalls      int
+	stopCalls     int
+	lastMediaType string
+	lastImageData string
 }
 
 func (a *scriptedAgent) RunPrompt(ctx context.Context, prompt string, progress func(string)) (string, error) {
@@ -33,6 +35,24 @@ func (a *scriptedAgent) RunPrompt(ctx context.Context, prompt string, progress f
 		progress("Running tests")
 	}
 	return a.answer, a.runErr
+}
+
+func (a *scriptedAgent) RunPromptWithImage(ctx context.Context, prompt, mediaType, data string, progress func(string)) (string, error) {
+	a.mu.Lock()
+	a.prompts = append(a.prompts, prompt)
+	a.lastMediaType = mediaType
+	a.lastImageData = data
+	a.mu.Unlock()
+	if progress != nil {
+		progress("Reading the image")
+	}
+	return a.answer, a.runErr
+}
+
+func (a *scriptedAgent) imageCall() (string, string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastMediaType, a.lastImageData
 }
 
 func (a *scriptedAgent) Stop() {

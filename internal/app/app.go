@@ -819,6 +819,12 @@ func (a *App) RunTurn(ctx context.Context, input string) error {
 // must be told the agent is busy instead of queueing behind a turn it cannot
 // see, which is what let a Telegram prompt block the terminal indefinitely.
 func (a *App) runTurn(ctx context.Context, input string) error {
+	return a.runTurnWithImages(ctx, input, nil)
+}
+
+// runTurnWithImages is runTurn with images attached to the first user message,
+// which is how an uploaded image reaches a vision model.
+func (a *App) runTurnWithImages(ctx context.Context, input string, images []provider.Image) error {
 	if !a.runMu.TryLock() {
 		return ErrBusy
 	}
@@ -881,6 +887,7 @@ func (a *App) runTurn(ctx context.Context, input string) error {
 		Steer:         a.TakeSteer,
 		Journal:       a.journal,
 		ToolSearch:    cfg.ToolSearchEnabled,
+		TurnImages:    images,
 	}
 	session := a.currentSession()
 	if err := runner.Run(runCtx, session, input); err != nil {
@@ -906,6 +913,25 @@ func (a *App) RunPrompt(ctx context.Context, prompt string, progress func(string
 		defer a.SetObserver(nil)
 	}
 	if err := a.runTurn(ctx, prompt); err != nil {
+		return "", err
+	}
+	return a.currentSession().LastAssistantText(), nil
+}
+
+// RunPromptWithImage runs one turn with an image attached to the prompt, for a
+// photo the operator sent. mediaType is a MIME type and data is base64.
+func (a *App) RunPromptWithImage(ctx context.Context, prompt, mediaType, data string, progress func(string)) (string, error) {
+	if progress != nil {
+		progress("Working...")
+		a.SetObserver(func(event agent.Event) {
+			if line := telegramProgressLine(event); line != "" {
+				progress(line)
+			}
+		})
+		defer a.SetObserver(nil)
+	}
+	images := []provider.Image{{MediaType: mediaType, Data: data}}
+	if err := a.runTurnWithImages(ctx, prompt, images); err != nil {
 		return "", err
 	}
 	return a.currentSession().LastAssistantText(), nil

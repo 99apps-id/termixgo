@@ -75,6 +75,9 @@ type Runner struct {
 	// schema on every step. The core loop and find_tools stay visible; a tool
 	// the model discovers stays visible for the rest of the turn.
 	ToolSearch bool
+	// TurnImages are attached to the turn's first user message, which is how an
+	// uploaded image reaches a vision model.
+	TurnImages []provider.Image
 }
 
 // Run executes one operator turn to completion.
@@ -106,7 +109,12 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	guard := &loopGuard{}
 	nudges := 0
 
-	session.AddUser(input + "\n\n" + FormatEnvironmentBlock(r.Env.Workspace, TrustLabel(r.Env.Trusted)))
+	turnText := input + "\n\n" + FormatEnvironmentBlock(r.Env.Workspace, TrustLabel(r.Env.Trusted))
+	if len(r.TurnImages) > 0 {
+		session.AddUserWithImages(turnText, r.TurnImages)
+	} else {
+		session.AddUser(turnText)
+	}
 
 	emit(Event{Kind: EventTurnStart})
 	stopReason := "stop"

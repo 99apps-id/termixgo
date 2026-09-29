@@ -110,6 +110,10 @@ func (a *blockingAgent) RunPrompt(ctx context.Context, prompt string, progress f
 	}
 }
 
+func (a *blockingAgent) RunPromptWithImage(ctx context.Context, prompt, mediaType, data string, progress func(string)) (string, error) {
+	return a.RunPrompt(ctx, prompt, progress)
+}
+
 func (a *blockingAgent) Stop()                           {}
 func (a *blockingAgent) NewSession()                     {}
 func (a *blockingAgent) Model() string                   { return "test-model" }

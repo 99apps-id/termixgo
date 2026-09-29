@@ -62,12 +62,30 @@ type Chat struct {
 	Type string `json:"type"`
 }
 
+// PhotoSize is one resolution of a sent photo. Telegram sends several; the
+// last is the largest.
+type PhotoSize struct {
+	FileID   string `json:"file_id"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	FileSize int    `json:"file_size"`
+}
+
 // Message is an incoming or outgoing message.
 type Message struct {
-	MessageID int64  `json:"message_id"`
-	From      *User  `json:"from"`
-	Chat      Chat   `json:"chat"`
-	Text      string `json:"text"`
+	MessageID int64       `json:"message_id"`
+	From      *User       `json:"from"`
+	Chat      Chat        `json:"chat"`
+	Text      string      `json:"text"`
+	Caption   string      `json:"caption"`
+	Photo     []PhotoSize `json:"photo"`
+}
+
+// File is a downloadable Telegram file.
+type File struct {
+	FileID   string `json:"file_id"`
+	FilePath string `json:"file_path"`
+	FileSize int    `json:"file_size"`
 }
 
 // CallbackQuery is an inline-button press.
@@ -187,12 +205,33 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, timeoutSeconds in
 	return updates, err
 }
 
-// SendMessage posts a message, optionally with an inline keyboard.
+// SendMessage posts a plain message, optionally with an inline keyboard.
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, keyboard *InlineKeyboard) (Message, error) {
+	return c.sendMessage(ctx, chatID, text, keyboard, "")
+}
+
+// SendMarkdown posts a message rendered from Markdown.
+//
+// The Markdown is converted to Telegram's HTML subset, which escapes every
+// character that is not turned into a tag. If the API still rejects the entities
+// the message is resent as plain text, so a formatting bug can never swallow an
+// answer.
+func (c *Client) SendMarkdown(ctx context.Context, chatID int64, markdown string, keyboard *InlineKeyboard) (Message, error) {
+	message, err := c.sendMessage(ctx, chatID, markdownToTelegramHTML(markdown), keyboard, "HTML")
+	if err != nil && isParseError(err) {
+		return c.sendMessage(ctx, chatID, markdown, keyboard, "")
+	}
+	return message, err
+}
+
+func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, keyboard *InlineKeyboard, parseMode string) (Message, error) {
 	payload := map[string]any{
 		"chat_id":                  chatID,
 		"text":                     clampText(text),
 		"disable_web_page_preview": true,
+	}
+	if parseMode != "" {
+		payload["parse_mode"] = parseMode
 	}
 	if keyboard != nil && len(keyboard.InlineKeyboard) > 0 {
 		payload["reply_markup"] = keyboard
@@ -213,11 +252,28 @@ func (c *Client) EditMessageText(ctx context.Context, chatID int64, messageID in
 // keyboard removes the buttons, which is what a picker does once a choice is
 // made.
 func (c *Client) EditMessageTextWithKeyboard(ctx context.Context, chatID int64, messageID int64, text string, keyboard *InlineKeyboard) error {
+	return c.editMessage(ctx, chatID, messageID, text, keyboard, "")
+}
+
+// EditMarkdown edits a message from Markdown, with the same safe-HTML and
+// plain-text fallback as SendMarkdown.
+func (c *Client) EditMarkdown(ctx context.Context, chatID int64, messageID int64, markdown string, keyboard *InlineKeyboard) error {
+	err := c.editMessage(ctx, chatID, messageID, markdownToTelegramHTML(markdown), keyboard, "HTML")
+	if err != nil && isParseError(err) {
+		return c.editMessage(ctx, chatID, messageID, markdown, keyboard, "")
+	}
+	return err
+}
+
+func (c *Client) editMessage(ctx context.Context, chatID int64, messageID int64, text string, keyboard *InlineKeyboard, parseMode string) error {
 	payload := map[string]any{
 		"chat_id":                  chatID,
 		"message_id":               messageID,
 		"text":                     clampText(text),
 		"disable_web_page_preview": true,
+	}
+	if parseMode != "" {
+		payload["parse_mode"] = parseMode
 	}
 	if keyboard != nil {
 		if keyboard.InlineKeyboard == nil {
@@ -226,6 +282,49 @@ func (c *Client) EditMessageTextWithKeyboard(ctx context.Context, chatID int64, 
 		payload["reply_markup"] = keyboard
 	}
 	return c.call(ctx, "editMessageText", payload, nil)
+}
+
+// isParseError reports whether the API rejected the message body's entities,
+// which is the one send failure that retrying as plain text repairs.
+func isParseError(err error) bool {
+	apiErr, ok := err.(*APIError)
+	if !ok || apiErr.Code != http.StatusBadRequest {
+		return false
+	}
+	lowered := strings.ToLower(apiErr.Description)
+	return strings.Contains(lowered, "parse") || strings.Contains(lowered, "entities")
+}
+
+// maxDownloadBytes bounds one file download so a large upload cannot exhaust
+// memory.
+const maxDownloadBytes = 12 * 1024 * 1024
+
+// GetFile resolves a file id to a downloadable path.
+func (c *Client) GetFile(ctx context.Context, fileID string) (File, error) {
+	var file File
+	err := c.call(ctx, "getFile", map[string]any{"file_id": fileID}, &file)
+	return file, err
+}
+
+// DownloadFile fetches a file's bytes. The path comes from GetFile.
+func (c *Client) DownloadFile(ctx context.Context, filePath string) ([]byte, error) {
+	if strings.TrimSpace(filePath) == "" {
+		return nil, fmt.Errorf("telegram: empty file path")
+	}
+	url := fmt.Sprintf("%s/file/bot%s/%s", c.baseURL, c.token, filePath)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("telegram: file download returned %s", response.Status)
+	}
+	return io.ReadAll(io.LimitReader(response.Body, maxDownloadBytes))
 }
 
 // SendChatAction shows a typing indicator.

@@ -881,6 +881,13 @@ func (a *recordingAgent) RunPrompt(context.Context, string, func(string)) (strin
 	return "answer", nil
 }
 
+func (a *recordingAgent) RunPromptWithImage(context.Context, string, string, string, func(string)) (string, error) {
+	a.mu.Lock()
+	a.calls++
+	a.mu.Unlock()
+	return "answer", nil
+}
+
 func (a *recordingAgent) Stop()                           {}
 func (a *recordingAgent) NewSession()                     {}
 func (a *recordingAgent) Model() string                   { return "test-model" }
@@ -907,6 +914,10 @@ type blockingRecordingAgent struct {
 }
 
 func (a *blockingRecordingAgent) RunPrompt(ctx context.Context, prompt string, progress func(string)) (string, error) {
+	return "", fmt.Errorf("unused")
+}
+
+func (a *blockingRecordingAgent) RunPromptWithImage(context.Context, string, string, string, func(string)) (string, error) {
 	return "", fmt.Errorf("unused")
 }
 

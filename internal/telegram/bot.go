@@ -2,7 +2,9 @@ package telegram
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +17,9 @@ import (
 type Agent interface {
 	// RunPrompt runs one turn, calling progress with short status lines.
 	RunPrompt(ctx context.Context, prompt string, progress func(string)) (string, error)
+	// RunPromptWithImage runs one turn with an image attached for a vision model.
+	// mediaType is a MIME type and data is base64.
+	RunPromptWithImage(ctx context.Context, prompt, mediaType, data string, progress func(string)) (string, error)
 	// Stop cancels the running turn.
 	Stop()
 	// NewSession starts a fresh conversation.
@@ -270,6 +275,14 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		return
 	}
 
+	// A photo is a vision prompt: the caption is the instruction, or a default
+	// asks the model to describe it. It runs before the command switch because
+	// an image message carries no text.
+	if len(message.Photo) > 0 {
+		b.runPhoto(ctx, chatID, message)
+		return
+	}
+
 	command, argument := splitCommand(text)
 	switch command {
 	case "help", "start":
@@ -320,8 +333,42 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 	}
 }
 
-// runPrompt runs one turn and mirrors progress into a single edited message.
+// runPrompt runs one text turn and mirrors progress into a single edited card.
 func (b *Bot) runPrompt(ctx context.Context, chatID int64, prompt string) {
+	b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
+		return b.agent.RunPrompt(runCtx, prompt, progress)
+	})
+}
+
+// runPhoto downloads a photo the operator sent and runs the agent with it
+// attached, so a vision model can see it. The message caption is the prompt.
+func (b *Bot) runPhoto(ctx context.Context, chatID int64, message *Message) {
+	prompt := strings.TrimSpace(message.Caption)
+	if prompt == "" {
+		prompt = "Describe this image and act on anything notable in it."
+	}
+	// Telegram sends several sizes; the last is the largest.
+	photo := message.Photo[len(message.Photo)-1]
+	file, err := b.client.GetFile(ctx, photo.FileID)
+	if err != nil {
+		b.reply(ctx, chatID, "Could not fetch the image: "+err.Error())
+		return
+	}
+	data, err := b.client.DownloadFile(ctx, file.FilePath)
+	if err != nil {
+		b.reply(ctx, chatID, "Could not download the image: "+err.Error())
+		return
+	}
+	encoded := base64.StdEncoding.EncodeToString(data)
+	mediaType := imageMediaType(file.FilePath)
+	b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
+		return b.agent.RunPromptWithImage(runCtx, prompt, mediaType, encoded, progress)
+	})
+}
+
+// runWithCard runs one turn behind the single-run gate and mirrors progress
+// into one message that is edited in place instead of flooding the chat.
+func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Context, func(string)) (string, error)) {
 	if !b.tryStartRun() {
 		b.reply(ctx, chatID, "A run is already in progress. Send /stop to stop it, then retry.")
 		return
@@ -344,10 +391,10 @@ func (b *Bot) runPrompt(ctx context.Context, chatID int64, prompt string) {
 			return
 		}
 		lastEdit = time.Now()
-		_ = b.client.EditMessageText(ctx, chatID, statusMessage.MessageID, line)
+		_ = b.client.EditMarkdown(ctx, chatID, statusMessage.MessageID, line, nil)
 	}
 
-	answer, runErr := b.agent.RunPrompt(ctx, prompt, progress)
+	answer, runErr := run(ctx, progress)
 	if statusMessage.MessageID != 0 {
 		final := answer
 		if runErr != nil {
@@ -356,7 +403,7 @@ func (b *Bot) runPrompt(ctx context.Context, chatID int64, prompt string) {
 		if strings.TrimSpace(final) == "" {
 			final = "(no output)"
 		}
-		_ = b.client.EditMessageText(ctx, chatID, statusMessage.MessageID, final)
+		_ = b.client.EditMarkdown(ctx, chatID, statusMessage.MessageID, final, nil)
 		return
 	}
 	if runErr != nil {
@@ -367,6 +414,21 @@ func (b *Bot) runPrompt(ctx context.Context, chatID int64, prompt string) {
 		answer = "(no output)"
 	}
 	b.reply(ctx, chatID, answer)
+}
+
+// imageMediaType maps a Telegram file path to a media type; photos it sends are
+// jpeg, but an uploaded png or webp keeps its own suffix.
+func imageMediaType(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".png":
+		return "image/png"
+	case ".webp":
+		return "image/webp"
+	case ".gif":
+		return "image/gif"
+	default:
+		return "image/jpeg"
+	}
 }
 
 func (b *Bot) tryPair(ctx context.Context, message *Message, code string) {
@@ -432,6 +494,7 @@ func helpText() string {
 		version.Name + " companion bot",
 		"",
 		"Send any text to run it as a prompt.",
+		"Send a photo (with a caption) to ask about an image.",
 		"/run <prompt>  run with a live progress card",
 		"/stop          stop the running turn",
 		"/new           start a new session",
