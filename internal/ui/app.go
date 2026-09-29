@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -137,6 +138,11 @@ type Options struct {
 	NoAlternateScreen bool
 }
 
+// composerHeight is the composer rows. Five fits a two-line prompt plus a
+// line of @file context without stealing the transcript, which owns the
+// rest of the window.
+const composerHeight = 5
+
 // New builds the program model for an app.
 func New(application *app.App) *Model { return NewWithOptions(application, Options{}) }
 
@@ -148,7 +154,7 @@ func NewWithOptions(application *app.App, options Options) *Model {
 	composer.Placeholder = "Ask Termixgo to change something, or type /help"
 	composer.ShowLineNumbers = false
 	composer.CharLimit = 32000
-	composer.SetHeight(3)
+	composer.SetHeight(composerHeight)
 	// Enter submits; ctrl+j and alt+enter insert a line break.
 	composer.KeyMap.InsertNewline.SetKeys("ctrl+j", "alt+enter")
 
@@ -231,7 +237,26 @@ func (m *Model) welcome() {
 
 // Init implements tea.Model.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.spin.Tick)
+	return tea.Batch(textarea.Blink, m.spin.Tick, tea.SetWindowTitle(m.windowTitle()))
+}
+
+// windowTitle is the terminal tab title. It mirrors the run state so the
+// operator sees working, approval or idle without looking at the pane, the
+// way Codex CLI keeps its tab informative.
+func (m *Model) windowTitle() string {
+	base := "Termixgo"
+	if workspace := strings.TrimSpace(m.app.Workspace()); workspace != "" {
+		base += " - " + filepath.Base(workspace)
+	}
+	switch {
+	case m.pendingApproval != nil:
+		return base + " - approval needed"
+	case m.running:
+		elapsed := time.Since(m.runStarted).Round(time.Second)
+		return fmt.Sprintf("%s - working %s", base, elapsed)
+	default:
+		return base
+	}
 }
 
 // Update implements tea.Model.
@@ -255,7 +280,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		if m.running {
 			m.refresh()
-			return m, tea.Batch(m.spin.Tick, tick())
+			return m, tea.Batch(m.spin.Tick, tick(), tea.SetWindowTitle(m.windowTitle()))
 		}
 		return m, nil
 
@@ -280,7 +305,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m.submit(next)
 		}
 		m.refresh()
-		return m, nil
+		return m, tea.SetWindowTitle(m.windowTitle())
 
 	case approvalRequestMsg:
 		request := typed.request
@@ -288,7 +313,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.approvalReply = typed.reply
 		m.approvalCursor = 0
 		m.refresh()
-		return m, nil
+		return m, tea.SetWindowTitle(m.windowTitle())
 
 	case askRequestMsg:
 		m.pendingAsk = &typed
@@ -303,6 +328,13 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refresh()
 		return m, nil
+
+	case tea.MouseMsg:
+		// The wheel scrolls the transcript. Keys stay with the composer:
+		// forwarding them to the viewport would scroll while typing.
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(message)
+		return m, cmd
 	}
 
 	var cmd tea.Cmd
@@ -357,6 +389,14 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if len(m.slashMatches) > 0 || len(m.mentionMatches) > 0 {
+			// First Esc steps back to typing and keeps the text; a second
+			// Esc clears the composer.
+			m.slashMatches = nil
+			m.mentionMatches = nil
+			m.refresh()
+			return m, nil
+		}
 		m.composer.SetValue("")
 		m.slashMatches = nil
 		m.mentionMatches = nil
@@ -365,6 +405,14 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		value := strings.TrimSpace(m.composer.Value())
 		if value == "" {
+			return m, nil
+		}
+		// The last row is the way back: highlighting it and pressing Enter
+		// or Tab closes the menu and keeps the typed text, for operators
+		// who navigated past the command they wanted.
+		if len(m.slashMatches) > 0 && m.slashCursor == len(m.slashMatches) {
+			m.slashMatches = nil
+			m.refresh()
 			return m, nil
 		}
 		// Accept the highlighted slash completion: typing "/stat" and
@@ -413,7 +461,8 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if len(m.slashMatches) > 0 {
-			m.slashCursor = (m.slashCursor - 1 + len(m.slashMatches)) % len(m.slashMatches)
+			// The range holds one extra row: the back option past the end.
+			m.slashCursor = (m.slashCursor - 1 + len(m.slashMatches) + 1) % (len(m.slashMatches) + 1)
 			return m, nil
 		}
 	case "down":
@@ -422,7 +471,7 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if len(m.slashMatches) > 0 {
-			m.slashCursor = (m.slashCursor + 1) % len(m.slashMatches)
+			m.slashCursor = (m.slashCursor + 1) % (len(m.slashMatches) + 1)
 			return m, nil
 		}
 	case "tab":
@@ -437,10 +486,31 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if len(m.slashMatches) > 0 {
+			if m.slashCursor == len(m.slashMatches) {
+				// Tab on the back row steps back to typing as Enter does.
+				m.slashMatches = nil
+				return m, nil
+			}
 			m.composer.SetValue(m.slashMatches[m.slashCursor].Trigger + " ")
 			m.slashMatches = nil
 			return m, nil
 		}
+	case "pgup":
+		m.viewport.HalfViewUp()
+		m.refresh()
+		return m, nil
+	case "pgdown":
+		m.viewport.HalfViewDown()
+		m.refresh()
+		return m, nil
+	case "home":
+		m.viewport.GotoTop()
+		m.refresh()
+		return m, nil
+	case "end":
+		m.viewport.GotoBottom()
+		m.refresh()
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -521,7 +591,7 @@ func (m *Model) answerApproval(decision agent.Decision) (tea.Model, tea.Cmd) {
 	m.pendingApproval = nil
 	m.approvalReply = nil
 	m.refresh()
-	return m, nil
+	return m, tea.SetWindowTitle(m.windowTitle())
 }
 
 func decisionWord(decision agent.Decision) string {
@@ -623,7 +693,7 @@ func (m *Model) startRun(input string) (tea.Model, tea.Cmd) {
 			m.program.Send(runDoneMsg{err: err})
 		}
 	}()
-	return m, tea.Batch(m.spin.Tick, tick(), waitForEvent(application.Events()))
+	return m, tea.Batch(m.spin.Tick, tick(), waitForEvent(application.Events()), tea.SetWindowTitle(m.windowTitle()))
 }
 
 // waitForEvent reads one agent event off the channel.
@@ -758,9 +828,11 @@ func (m *Model) enterChat() tea.Cmd {
 	return textarea.Blink
 }
 
-// layout recomputes the viewport and composer for the window size.
+// layout recomputes the viewport and composer for the window size. The fixed
+// rows are the header, the status line, the hints and the composer with its
+// border; everything else belongs to the transcript.
 func (m *Model) layout() {
-	transcriptHeight := m.height - 9
+	transcriptHeight := m.height - (composerHeight + 6)
 	if transcriptHeight < 5 {
 		transcriptHeight = 5
 	}
@@ -771,11 +843,16 @@ func (m *Model) layout() {
 	m.refresh()
 }
 
-// refresh re-renders the transcript into the viewport and keeps it scrolled.
+// refresh re-renders the transcript into the viewport. When the operator
+// scrolled up, the offset is kept so reading history is not yanked away by
+// new output; otherwise the view follows the bottom.
 func (m *Model) refresh() {
+	follow := m.viewport.AtBottom()
 	content := transcript(m.blocks, m.styles, m.viewport.Width, m.showDetails)
 	m.viewport.SetContent(content)
-	m.viewport.GotoBottom()
+	if follow {
+		m.viewport.GotoBottom()
+	}
 }
 
 // View implements tea.Model.
@@ -838,6 +915,12 @@ func (m *Model) viewStatus() string {
 		m.styles.Dim.Render(fmt.Sprintf("turns %d", m.app.Session().Turns())),
 		m.styles.Dim.Render(m.app.ContextUsage()),
 	}
+	if m.running {
+		// The hints row is replaced by menus while choosing, so the status
+		// carries its own live working indicator with the spinner frame.
+		elapsed := time.Since(m.runStarted).Round(time.Second)
+		parts = append(parts, m.styles.Plan.Render(fmt.Sprintf("%s working %s", m.spin.View(), elapsed)))
+	}
 	if total > 0 {
 		parts = append(parts, m.styles.Plan.Render(fmt.Sprintf("plan %d/%d", done, total)))
 	}
@@ -859,6 +942,12 @@ func (m *Model) viewStatus() string {
 	parts = append(parts, m.styles.Dim.Render("approval "+string(m.app.Config().ApprovalMode)))
 	if count := m.queuedCount(); count > 0 {
 		parts = append(parts, m.styles.Dim.Render(fmt.Sprintf("queue %d", count)))
+	}
+	// A scrolled-up transcript stops following new output, so the status
+	// names the way back instead of leaving the operator wondering why the
+	// view went still.
+	if !m.viewport.AtBottom() {
+		parts = append(parts, m.styles.Notice.Render("scrolled (End follows)"))
 	}
 	if m.notice != "" {
 		parts = append(parts, m.styles.Notice.Render(m.notice))
@@ -891,7 +980,7 @@ func (m *Model) viewHints() string {
 		}
 		return m.styles.Hint.Render(fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C quit", m.spin.View(), elapsed))
 	}
-	return m.styles.Hint.Render(" Enter send | Ctrl+J newline | / commands @ files | Tab complete | Ctrl+O details | Ctrl+C quit")
+	return m.styles.Hint.Render(" Enter send | Ctrl+J newline | / commands @ files | Tab complete | PgUp/PgDn scroll | Ctrl+O details | Ctrl+C quit")
 }
 
 func (m *Model) viewSlashMenu() string {
@@ -907,6 +996,14 @@ func (m *Model) viewSlashMenu() string {
 		}
 		rows = append(rows, "  "+m.styles.MenuKey.Render(usage)+"  "+m.styles.MenuDesc.Render(command.Summary))
 	}
+	// The last row is the way back to typing for operators who opened the
+	// menu by accident or navigated past their command.
+	if m.slashCursor == len(m.slashMatches) {
+		rows = append(rows, m.styles.MenuSelected.Render("> <- back")+"  "+m.styles.MenuDesc.Render("Return to typing"))
+	} else {
+		rows = append(rows, "  "+m.styles.MenuDesc.Render("<- back  Return to typing"))
+	}
+	rows = append(rows, m.styles.Hint.Render("Up/Down move | Tab complete | Enter run | Esc back"))
 	return m.styles.Menu.Render(strings.Join(rows, "\n"))
 }
 
@@ -1022,7 +1119,7 @@ func (m *Model) viewHelp() string {
 	lines = append(lines, "",
 		m.styles.BoxTitle.Render("Keys"),
 		"",
-		m.styles.MenuDesc.Render("  Enter send | Ctrl+J newline | Tab complete | Esc stop or clear | Ctrl+O toggle details | Ctrl+C quit"),
+		m.styles.MenuDesc.Render("  Enter send | Ctrl+J newline | Tab complete | PgUp/PgDn scroll | Esc stop or clear | Ctrl+O toggle details | Ctrl+C quit"),
 		"",
 		m.styles.Hint.Render("Press any key to close."),
 	)
@@ -1079,7 +1176,9 @@ func (m *Model) updateSlashMatches() {
 	if len(matches) != len(m.slashMatches) {
 		m.slashCursor = 0
 	}
-	if m.slashCursor >= len(matches) {
+	// The cursor may rest on the back row past the end, which stays valid
+	// while the match set is unchanged.
+	if m.slashCursor > len(matches) {
 		m.slashCursor = 0
 	}
 	m.slashMatches = matches

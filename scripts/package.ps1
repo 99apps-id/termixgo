@@ -116,10 +116,13 @@ try {
             foreach ($doc in @("LICENSE", "NOTICE", "README.md")) {
                 Copy-Item (Join-Path $root $doc) $stage -Force
             }
-            & tar -czf $archive -C $stage termixgo install.sh LICENSE NOTICE README.md
+            # bsdtar reads `C:` as a remote host, so the archive and the
+            # stage reach it with forward slashes.
+            $tarArchive = $archive.Replace("\", "/")
+            $tarStage = $stage.Replace("\", "/")
+            & tar -czf $tarArchive -C $tarStage termixgo install.sh LICENSE NOTICE README.md
             Remove-Item $stage -Recurse -Force
-        }
-        if ($LASTEXITCODE -ne 0) { throw "archive failed for $stem" }
+        }        if ($LASTEXITCODE -ne 0) { throw "archive failed for $stem" }
         Write-Host ("  {0}" -f (Split-Path $archive -Leaf))
     }
 

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -61,6 +62,14 @@ func key(name string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyUp}
 	case "down":
 		return tea.KeyMsg{Type: tea.KeyDown}
+	case "pgup":
+		return tea.KeyMsg{Type: tea.KeyPgUp}
+	case "pgdown":
+		return tea.KeyMsg{Type: tea.KeyPgDown}
+	case "home":
+		return tea.KeyMsg{Type: tea.KeyHome}
+	case "end":
+		return tea.KeyMsg{Type: tea.KeyEnd}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
 	case "ctrl+o":
@@ -446,10 +455,76 @@ func TestArrowKeysMoveTheSlashCursor(t *testing.T) {
 	if model.slashCursor != 0 {
 		t.Errorf("up should retreat the cursor, got %d", model.slashCursor)
 	}
-	// Wrapping backwards from the top lands on the last entry.
+	// Wrapping backwards from the top lands on the back row past the end.
 	model = press(t, model, "up")
-	if model.slashCursor != len(model.slashMatches)-1 {
-		t.Errorf("up from the top should wrap, got %d", model.slashCursor)
+	if model.slashCursor != len(model.slashMatches) {
+		t.Errorf("up from the top should wrap to back, got %d", model.slashCursor)
+	}
+}
+
+// TestSlashBackRowClosesWithoutRunning proves the last menu row is a way
+// out: Enter or Tab there keeps the typed text and runs nothing.
+func TestSlashBackRowClosesWithoutRunning(t *testing.T) {
+	for _, keyName := range []string{"enter", "tab"} {
+		model := chatModel(t)
+		model.composer.SetValue("/stat")
+		model.updateSlashMatches()
+		if len(model.slashMatches) == 0 {
+			t.Fatalf("the menu should offer a completion for /stat")
+		}
+		model.slashCursor = len(model.slashMatches)
+
+		updated := press(t, model, keyName)
+		if len(updated.slashMatches) != 0 {
+			t.Errorf("%s on back should close the menu", keyName)
+		}
+		if got := updated.composer.Value(); !strings.Contains(got, "/stat") {
+			t.Errorf("%s on back should keep the text, got %q", keyName, got)
+		}
+		if updated.running {
+			t.Errorf("%s on back must not start a run", keyName)
+		}
+		if view := display(updated); strings.Contains(view, "workspace:") {
+			t.Errorf("%s on back must not run the command:\n%s", keyName, view)
+		}
+	}
+}
+
+// TestEscBacksOutOfTheMenuFirst pins the two-stage escape: the first press
+// closes the popup and keeps the text, the second clears the composer.
+func TestEscBacksOutOfTheMenuFirst(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("/stat")
+	model.updateSlashMatches()
+	if len(model.slashMatches) == 0 {
+		t.Fatalf("the menu should be open")
+	}
+
+	backed := press(t, model, "esc")
+	if len(backed.slashMatches) != 0 {
+		t.Errorf("first Esc should close the menu")
+	}
+	if got := backed.composer.Value(); got != "/stat" {
+		t.Errorf("first Esc should keep the text, got %q", got)
+	}
+
+	cleared := press(t, backed, "esc")
+	if got := cleared.composer.Value(); got != "" {
+		t.Errorf("second Esc should clear the composer, got %q", got)
+	}
+}
+
+// TestSlashMenuShowsTheWayBack keeps the affordance discoverable: the back
+// row and its hint must render.
+func TestSlashMenuShowsTheWayBack(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("/mo")
+	model.updateSlashMatches()
+	view := stripANSI(model.View())
+	for _, want := range []string{"<- back", "Esc back"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the slash menu is missing %q:\n%s", want, view)
+		}
 	}
 }
 
@@ -767,10 +842,12 @@ func TestToolsCommandListsTheFullSet(t *testing.T) {
 	next, _ := model.runSlash("tools", "")
 	final := next.(*Model)
 
-	view := display(final)
+	// Assert on the transcript, not the viewport window: the catalogue is
+	// longer than one screen, and the window only shows the tail.
+	transcript := allText(final)
 	for _, want := range []string{"read_file", "run_background", "git_commit", "edit"} {
-		if !strings.Contains(view, want) {
-			t.Errorf("/tools should list %s:\n%s", want, view)
+		if !strings.Contains(transcript, want) {
+			t.Errorf("/tools should list %s:\n%s", want, transcript)
 		}
 	}
 }
@@ -1125,6 +1202,112 @@ func TestWorktreeSlashLists(t *testing.T) {
 	next, _ := model.runSlash("worktree", "list")
 	if view := display(next.(*Model)); !strings.Contains(view, "Worktrees") {
 		t.Errorf("/worktree list should name the checkout:\n%s", view)
+	}
+}
+
+// TestComposerTakesFiveRows pins the roomier input: the transcript keeps the
+// rest of the window, derived from the composer height rather than a magic
+// number.
+func TestComposerTakesFiveRows(t *testing.T) {
+	model := chatModel(t)
+	if model.viewport.Height != 40-(composerHeight+6) {
+		t.Errorf("viewport height = %d, want %d", model.viewport.Height, 40-(composerHeight+6))
+	}
+	if composerHeight != 5 {
+		t.Errorf("composer height = %d, want the roomier 5 rows", composerHeight)
+	}
+}
+
+// scrollFixture builds a transcript taller than the viewport so scrolling
+// has somewhere to go.
+func scrollFixture(model *Model) *Model {
+	for index := 0; index < 60; index++ {
+		model.blocks = append(model.blocks, block{kind: blockAssistant, text: strings.Repeat("line ", 20) + string(rune('a'+index%26))})
+	}
+	model.refresh()
+	return model
+}
+
+// TestScrollUpHoldsPositionAcrossRefresh proves the follow rule: new output
+// while reading history must not yank the view to the bottom.
+func TestScrollUpHoldsPositionAcrossRefresh(t *testing.T) {
+	model := scrollFixture(chatModel(t))
+	if !model.viewport.AtBottom() {
+		t.Fatalf("a fresh transcript should follow the bottom")
+	}
+
+	moved := press(t, model, "pgup")
+	if moved.viewport.AtBottom() {
+		t.Fatalf("PgUp should leave the bottom")
+	}
+	held := moved.viewport.YOffset
+
+	moved.blocks = append(moved.blocks, block{kind: blockAssistant, text: "fresh output"})
+	moved.refresh()
+	if moved.viewport.YOffset != held {
+		t.Errorf("offset = %d, want the held %d", moved.viewport.YOffset, held)
+	}
+	if view := display(moved); !strings.Contains(view, "scrolled (End follows)") {
+		t.Errorf("the status should name the way back:\n%s", view)
+	}
+}
+
+// TestEndResumesFollowing proves the way back: End returns to the bottom and
+// later output follows again.
+func TestEndResumesFollowing(t *testing.T) {
+	model := scrollFixture(chatModel(t))
+	moved := press(t, model, "pgup")
+	followed := press(t, moved, "end")
+	if !followed.viewport.AtBottom() {
+		t.Fatalf("End should return to the bottom")
+	}
+	followed.blocks = append(followed.blocks, block{kind: blockAssistant, text: "more"})
+	followed.refresh()
+	if !followed.viewport.AtBottom() {
+		t.Errorf("output at the bottom should keep following")
+	}
+}
+
+// TestMouseWheelScrollsTheTranscript proves the wheel path: wheel messages
+// reach the viewport instead of dying in the composer.
+func TestMouseWheelScrollsTheTranscript(t *testing.T) {
+	model := scrollFixture(chatModel(t))
+	before := model.viewport.YOffset
+	next, _ := model.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	moved := next.(*Model)
+	if moved.viewport.YOffset >= before {
+		t.Errorf("wheel up should scroll, offset %d did not drop below %d", moved.viewport.YOffset, before)
+	}
+}
+
+// TestWindowTitleMirrorsTheRunState pins the tab title: idle names the
+// workspace folder, working names the elapsed turn, approval asks for help.
+func TestWindowTitleMirrorsTheRunState(t *testing.T) {
+	model := chatModel(t)
+	if got := model.windowTitle(); !strings.Contains(got, "Termixgo") || strings.Contains(got, "working") {
+		t.Errorf("idle title = %q", got)
+	}
+
+	model.running = true
+	model.runStarted = time.Now()
+	if got := model.windowTitle(); !strings.Contains(got, "working") {
+		t.Errorf("working title = %q", got)
+	}
+
+	model.pendingApproval = &agent.ApprovalRequest{Tool: "run_command"}
+	if got := model.windowTitle(); !strings.Contains(got, "approval needed") {
+		t.Errorf("approval title = %q", got)
+	}
+}
+
+// TestStatusBarAnimatesWhileWorking keeps the working indicator visible even
+// when a menu replaces the hints row.
+func TestStatusBarAnimatesWhileWorking(t *testing.T) {
+	model := chatModel(t)
+	model.running = true
+	model.runStarted = time.Now()
+	if view := display(model); !strings.Contains(view, "working") {
+		t.Errorf("the status bar should carry the working state:\n%s", view)
 	}
 }
 
