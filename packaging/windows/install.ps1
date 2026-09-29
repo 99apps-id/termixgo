@@ -36,7 +36,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Source = $PSScriptRoot,
+    [string]$Source = "",
     [string]$Destination = "",
     [switch]$NoPath,
     [switch]$NoPause
@@ -56,6 +56,17 @@ trap {
 }
 
 function Write-Step([string]$Text) { Write-Host "  $Text" }
+
+# $PSScriptRoot cannot be trusted in the parameter defaults: under
+# `powershell -File install.ps1 -NoPause` the default evaluates to an empty
+# string, which made every install through that path fail. Resolving it here
+# works in every invocation style.
+if ([string]::IsNullOrWhiteSpace($Source)) {
+    $Source = $PSScriptRoot
+}
+if ([string]::IsNullOrWhiteSpace($Source) -and $MyInvocation.MyCommand.Path) {
+    $Source = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
 
 # Pause-AtEnd waits for a keypress unless -NoPause was given. The wait itself
 # never fails the install: without a console to read from there is nothing to
