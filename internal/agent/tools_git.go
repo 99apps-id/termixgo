@@ -28,7 +28,8 @@ func runGit(ctx context.Context, env *Env, args ...string) (string, error) {
 	runCtx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
 	defer cancel()
 
-	command := exec.CommandContext(runCtx, "git", args...)
+	argv := append([]string{"--no-pager"}, args...)
+	command := exec.CommandContext(runCtx, "git", argv...)
 	command.Dir = env.Workspace
 	var buffer bytes.Buffer
 	command.Stdout = &buffer

@@ -5,6 +5,7 @@ package agent
 import (
 	"fmt"
 	"os/exec"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -17,6 +18,7 @@ import (
 // server running: the operator saw "stopped" while the port stayed occupied.
 // A job object with kill-on-close is the Windows mechanism for the job.
 type processTree struct {
+	mu  sync.Mutex
 	job windows.Handle
 }
 
@@ -75,6 +77,8 @@ func (t *processTree) attach(cmd *exec.Cmd) error {
 
 // terminate kills every process in the job.
 func (t *processTree) terminate(cmd *exec.Cmd) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.job == 0 {
 		return fmt.Errorf("no job object")
 	}
@@ -84,6 +88,8 @@ func (t *processTree) terminate(cmd *exec.Cmd) error {
 // release closes the job handle. Kill-on-close means anything still running in
 // the job dies here, which is the last line of defence on shutdown.
 func (t *processTree) release() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.job != 0 {
 		windows.CloseHandle(t.job)
 		t.job = 0
