@@ -221,7 +221,7 @@ func cloneGitRepo(ctx context.Context, source string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", "--no-checkout", source, tmp)
+	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", source, tmp)
 	cmd.Dir = os.TempDir()
 	output, err := cmd.CombinedOutput()
 	if err != nil {

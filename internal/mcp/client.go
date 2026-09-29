@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // defaultTimeout bounds a single request. A tool call runs its own deadline
@@ -387,12 +388,20 @@ func (c *Client) Close() {
 
 // shortLine collapses a multi-line message into one line and clips it, so a
 // stderr dump or a stray stdout line fits in an error the UI can render.
+//
+// The clip moves back to a rune boundary: a server's stderr is free text and may
+// be in any language, and a byte slice at a fixed offset can land inside a
+// multi-byte character and hand the terminal invalid UTF-8.
 func shortLine(text string) string {
 	collapsed := strings.Join(strings.Fields(text), " ")
 	if len(collapsed) <= 400 {
 		return collapsed
 	}
-	return collapsed[:400] + "..."
+	cut := 400
+	for cut > 0 && !utf8.RuneStart(collapsed[cut]) {
+		cut--
+	}
+	return collapsed[:cut] + "..."
 }
 
 // mergeEnv layers extra variables over an inherited environment. A key that

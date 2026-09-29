@@ -105,7 +105,7 @@ func summarizeWorktrees(porcelain string) string {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "worktree ") {
 			lines = append(lines, "  "+strings.TrimPrefix(line, "worktree "))
-		} else if strings.HasPrefix(line, "branch ") {
+		} else if strings.HasPrefix(line, "branch ") && len(lines) > 0 {
 			lines[len(lines)-1] += "  (" + strings.TrimPrefix(line, "branch refs/heads/") + ")"
 		} else if line == "bare" && len(lines) > 0 {
 			lines[len(lines)-1] += "  [bare]"

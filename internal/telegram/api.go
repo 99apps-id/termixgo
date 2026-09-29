@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // apiBase is the Telegram Bot API root.
@@ -233,15 +234,32 @@ func (c *Client) SetMyCommands(ctx context.Context, commands []BotCommand) error
 }
 
 // clampText trims a body to Telegram's limit on a line boundary.
+//
+// The cut lands on a rune boundary as well as a line one. A Telegram body is
+// free text and often holds emoji or non-Latin script, and a byte slice through
+// the middle of one makes the body invalid UTF-8, which the Bot API rejects
+// outright, so the message would never arrive.
 func clampText(text string) string {
 	if len(text) <= messageLimit {
 		return text
 	}
 	cut := messageLimit - 32
-	if index := strings.LastIndex(text[:cut], "\n"); index > cut/2 {
+	if index := strings.LastIndex(clipBytes(text, cut), "\n"); index > cut/2 {
 		cut = index
 	}
-	return text[:cut] + "\n... [truncated]"
+	return clipBytes(text, cut) + "\n... [truncated]"
+}
+
+// clipBytes returns the first limit bytes of text, moved back to a rune boundary.
+func clipBytes(text string, limit int) string {
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut]
 }
 
 // IsPrivate reports whether a chat id is a one-to-one chat.

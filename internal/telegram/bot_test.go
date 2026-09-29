@@ -3,6 +3,7 @@ package telegram
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // bound builds a bot already attached to a chat, which is the state most
@@ -78,6 +79,41 @@ func TestClampTextTrimsToLimit(t *testing.T) {
 	}
 	if short := clampText("ok"); short != "ok" {
 		t.Errorf("short text should pass through, got %q", short)
+	}
+}
+
+// TestClampTextKeepsValidUTF8 covers a message that would otherwise never
+// arrive. A Telegram body is free text and often holds emoji or non-Latin
+// script; a byte slice through the middle of one produces invalid UTF-8, and the
+// Bot API rejects the whole request rather than truncating it.
+func TestClampTextKeepsValidUTF8(t *testing.T) {
+	for _, filler := range []string{"\u00e9", "\u4f60\u597d", "\U0001f600", "a"} {
+		// Strictly over the limit, or clampText returns the body untouched.
+		text := strings.Repeat(filler, messageLimit+64)
+		clamped := clampText(text)
+		if !utf8.ValidString(clamped) {
+			t.Errorf("filler %q produced invalid UTF-8", filler)
+		}
+		if len(clamped) > messageLimit {
+			t.Errorf("filler %q produced %d bytes, over the limit", filler, len(clamped))
+		}
+		if !strings.HasSuffix(clamped, "[truncated]") {
+			t.Errorf("filler %q lost the truncation marker", filler)
+		}
+	}
+}
+
+// TestClampTextPrefersALineBoundary keeps the historical shape: a body with
+// newlines is cut at one rather than mid-sentence.
+func TestClampTextPrefersALineBoundary(t *testing.T) {
+	line := strings.Repeat("x", 100) + "\n"
+	clamped := clampText(strings.Repeat(line, 60))
+	if !strings.HasSuffix(clamped, "[truncated]") {
+		t.Fatalf("the marker is missing")
+	}
+	body := strings.TrimSuffix(clamped, "\n... [truncated]")
+	if !strings.HasSuffix(body, strings.Repeat("x", 100)) {
+		t.Errorf("the cut should land on a line boundary, got %q", body[len(body)-20:])
 	}
 }
 
