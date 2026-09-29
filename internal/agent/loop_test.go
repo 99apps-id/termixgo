@@ -231,9 +231,13 @@ func TestRunApprovalSessionAllowanceSkipsSecondPrompt(t *testing.T) {
 }
 
 func TestRunStopsAtStepBudget(t *testing.T) {
-	// Every step asks for another tool call, so the loop must hit the cap.
-	step := []provider.StreamEvent{callChunk("c", "list_directory", `{"path":"."}`)}
-	client := &fakeClient{steps: [][]provider.StreamEvent{step, step, step}}
+	// Every step asks for another tool call, and each call differs so the loop
+	// guard is not what ends the run: the step cap has to be.
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{callChunk("c1", "list_directory", `{"path":"."}`)},
+		{callChunk("c2", "list_directory", `{"path":"./"}`)},
+		{callChunk("c3", "list_directory", `{"path":"./."}`)},
+	}}
 	runner, _, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
 	runner.MaxSteps = 3
 	session := NewSession(t.TempDir(), "test-model")
@@ -290,12 +294,37 @@ func TestRunSubagentUsesReadOnlyTools(t *testing.T) {
 	registry := readOnlyTools()
 	for _, forbidden := range []string{"write_file", "edit", "run_command", "delete_file"} {
 		if _, ok := registry.Lookup(forbidden); ok {
-			t.Errorf("a subagent must not be able to call %s", forbidden)
+			t.Errorf("a review subagent must not be able to call %s", forbidden)
 		}
 	}
 	for _, allowed := range []string{"read_file", "grep", "glob", "list_directory"} {
 		if _, ok := registry.Lookup(allowed); !ok {
-			t.Errorf("a subagent should be able to call %s", allowed)
+			t.Errorf("a review subagent should be able to call %s", allowed)
 		}
+	}
+}
+
+func TestWorkerSubagentKeepsFullToolset(t *testing.T) {
+	registry := subagentRegistry(string(SubagentGeneral), 0)
+	for _, allowed := range []string{"read_file", "write_file", "edit", "run_command", "run_checks", "run_subagent"} {
+		if _, ok := registry.Lookup(allowed); !ok {
+			t.Errorf("a worker subagent should be able to call %s", allowed)
+		}
+	}
+	capped := subagentRegistry(string(SubagentGeneral), MaxSubagentDepth)
+	if _, ok := capped.Lookup("run_subagent"); ok {
+		t.Errorf("the spawn tool must be withheld at the depth cap")
+	}
+}
+
+func TestLookupSubagentFallsBackToGeneral(t *testing.T) {
+	if got := LookupSubagent("nope"); got.Type != SubagentGeneral {
+		t.Errorf("unknown type = %q, want general", got.Type)
+	}
+	if !SubagentIsReadOnly(string(SubagentCodeReview)) {
+		t.Errorf("code-review should be read-only by design")
+	}
+	if SubagentIsReadOnly(string(SubagentBuilder)) {
+		t.Errorf("builder should keep the full toolset")
 	}
 }

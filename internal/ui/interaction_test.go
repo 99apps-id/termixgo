@@ -391,7 +391,7 @@ func TestEscClearsTheComposerWhenIdle(t *testing.T) {
 	}
 }
 
-func TestEnterWhileRunningIsRefused(t *testing.T) {
+func TestEnterWhileRunningQueues(t *testing.T) {
 	model := chatModel(t)
 	model.running = true
 	model.composer.SetValue("a second request")
@@ -399,13 +399,16 @@ func TestEnterWhileRunningIsRefused(t *testing.T) {
 
 	updated := press(t, model, "enter")
 	if len(updated.blocks) != before {
-		t.Errorf("a second submit must be refused, not queued")
+		t.Errorf("a queued submit must not add a block yet")
 	}
-	if updated.composer.Value() != "a second request" {
-		t.Errorf("the typed text should be kept for later, got %q", updated.composer.Value())
+	if updated.composer.Value() != "" {
+		t.Errorf("the composer should be cleared for the next steer, got %q", updated.composer.Value())
+	}
+	if len(updated.queue) != 1 || updated.queue[0] != "a second request" {
+		t.Errorf("queue = %q, want the second request held", updated.queue)
 	}
 	if updated.notice == "" {
-		t.Errorf("the refusal should be explained")
+		t.Errorf("the queueing should be explained")
 	}
 }
 

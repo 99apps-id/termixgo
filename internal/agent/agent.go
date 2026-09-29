@@ -14,8 +14,17 @@ import (
 // toolTimeoutCap bounds a single tool call so a hung tool cannot wedge a run.
 const toolTimeoutCap = 15 * time.Minute
 
+// SteerPrefix marks an operator message that arrived while the turn was
+// already running, so the model can tell a course correction from the original
+// request.
+const SteerPrefix = "[Operator steer]"
+
 // Runner drives one conversation: it streams from the provider, executes the
 // tools the model requests, and reports every step through Env.Emit.
+//
+// There is no sandbox: every tool in the registry is on the allowlist and
+// runs directly on the operator machine. Folder trust is the gate that keeps
+// that safe, so a mutating tool in an untrusted folder always asks first.
 type Runner struct {
 	Client   provider.Client
 	Model    string
@@ -24,6 +33,8 @@ type Runner struct {
 	Tools    *Registry
 	Policy   *ApprovalPolicy
 	MaxSteps int
+	// Harness selects the agent harness profile. Empty means critical.
+	Harness string
 	// ContextBudget overrides the token budget for history compaction.
 	ContextBudget int
 	// Pricing is the model's cost per million tokens. Costs are reported
@@ -38,15 +49,25 @@ type Runner struct {
 	CostBudgetUSD float64
 	// System, when set, replaces the assembled system prompt.
 	System string
+	// Steer, when set, returns the operator messages typed while this turn is
+	// running. The loop folds them into the conversation at the next step
+	// boundary, which is what lets the operator change course without
+	// aborting the turn. Nil means steering is unavailable.
+	Steer func() []string
 }
 
 // Run executes one operator turn to completion.
 func (r *Runner) Run(ctx context.Context, session *Session, input string) error {
 	emit := r.emit
-	maxSteps := r.MaxSteps
-	if maxSteps <= 0 {
-		maxSteps = 25
-	}
+	profile := GetHarnessProfile(r.Harness)
+	maxSteps := ApplyHarnessToBudget(r.MaxSteps, profile)
+	// The profile reorders and hides tools. Applying it here, once, keeps the
+	// schemas the model sees and the registry the calls are resolved against in
+	// agreement.
+	r.Tools = RegistryForProfile(r.Tools, profile)
+	ledger := NewVerifyLedger()
+	guard := &loopGuard{}
+	nudges := 0
 
 	session.AddUser(input + "\n\n" + FormatEnvironmentBlock(r.Env.Workspace, TrustLabel(r.Env.Trusted)))
 
@@ -71,6 +92,13 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 			},
 			)
 			break
+		}
+
+		// A steer typed while the turn is running is new information, so it also
+		// clears the repetition guard: the operator has a reason for the model to
+		// try again, and the turn should not close just because it was looping.
+		if step > 0 && r.Steer != nil && r.injectSteering(session) {
+			*guard = loopGuard{}
 		}
 
 		request := provider.ChatRequest{
@@ -132,26 +160,88 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 		session.AddAssistant(answer.String(), reasoning.String(), calls)
 
 		if len(calls) == 0 {
+			if strings.TrimSpace(answer.String()) == "" {
+				// Silence is not success: a model that returns no text
+				// and no calls is stuck, so ask again up to the guard
+				// instead of filing an empty turn as done.
+				if stop, reason := guard.noteEmptyStep(); stop {
+					stopReason = "loop-guard"
+					emit(Event{Kind: EventNotice, Text: reason})
+					break
+				}
+				if ledger.ShouldNudgeVerification(false) && nudges < MaxVerifyNudges {
+					nudge := ledger.BuildVerifyNudge(nudges, false)
+					if strings.TrimSpace(nudge) != "" {
+						nudges++
+						session.AddUser(nudge)
+						emit(Event{Kind: EventNotice, Text: "Verifying the change before finishing."})
+						continue
+					}
+				}
+				continue
+			}
+			guard.noteProgress()
+			if ledger.ShouldNudgeVerification(ClaimsVerification(answer.String())) && nudges < MaxVerifyNudges {
+				nudge := ledger.BuildVerifyNudge(nudges, ClaimsVerification(answer.String()))
+				if strings.TrimSpace(nudge) != "" {
+					nudges++
+					session.AddUser(nudge)
+					emit(Event{Kind: EventNotice, Text: "Verifying the change before finishing."})
+					continue
+				}
+			}
 			session.AddUsage(turnUsage)
 			session.SetCost(sessionCost)
 			emit(Event{Kind: EventTurnEnd, StopReason: "stop", Usage: turnUsage, CostUSD: sessionCost, CostKnown: costKnown})
 			return nil
 		}
+		guard.noteProgress()
 
-		for _, call := range calls {
+		// A task that moves to completed is the boundary verification belongs to:
+		// the next task would otherwise build on a change nobody checked.
+		pendingVerify := ""
+		for index, call := range calls {
 			if ctx.Err() != nil {
 				stopReason = "aborted"
+				answerSkippedCalls(session, calls[index:], "the turn was stopped")
 				break
 			}
+			if stop, reason := guard.noteCall(call.Name, call.Arguments); stop {
+				stopReason = "loop-guard"
+				emit(Event{Kind: EventNotice, Text: reason})
+				answerSkippedCalls(session, calls[index:], reason)
+				break
+			}
+			before := r.todoSnapshot()
 			result := r.execute(ctx, call)
+			r.observeToolResult(&ledger, guard, call.Name, call.Arguments, result)
 			session.AddToolResult(call.ID, call.Name, result.Output)
+			if !result.IsError && taskJustCompleted(before, r.todoSnapshot()) {
+				pendingVerify = ledger.BuildVerifyNudge(nudges, false)
+			}
+			if stop, reason := guard.noteResult(result.IsError); stop {
+				stopReason = "loop-guard"
+				emit(Event{Kind: EventNotice, Text: reason})
+				answerSkippedCalls(session, calls[index+1:], reason)
+				break
+			}
 			if ctx.Err() != nil {
 				stopReason = "aborted"
+				answerSkippedCalls(session, calls[index+1:], "the turn was stopped")
 				break
 			}
 		}
+		if stopReason == "loop-guard" || stopReason == "aborted" {
+			break
+		}
 		if ctx.Err() != nil {
 			break
+		}
+		if strings.TrimSpace(pendingVerify) != "" && nudges < MaxVerifyNudges {
+			nudges++
+			session.AddUser(pendingVerify)
+			emit(Event{Kind: EventNotice, Text: "Task finished. Verifying before the next one."})
+			continue
 		}
 	}
 
@@ -174,12 +264,115 @@ func overBudget(budget, spend float64) bool {
 	return budget > 0 && spend >= budget
 }
 
+// injectSteering folds the operator messages typed during this turn into the
+// conversation. It reports whether anything was applied.
+func (r *Runner) injectSteering(session *Session) bool {
+	applied := false
+	for _, message := range r.Steer() {
+		trimmed := strings.TrimSpace(message)
+		if trimmed == "" {
+			continue
+		}
+		session.AddUser(SteerPrefix + " " + trimmed)
+		r.emit(Event{Kind: EventNotice, Text: "Steering: " + trimmed})
+		applied = true
+	}
+	return applied
+}
+
+// todoSnapshot reads the plan before a tool call, so the loop can tell when a
+// task moved to completed.
+func (r *Runner) todoSnapshot() []Todo {
+	if r.Env == nil || r.Env.Todos == nil {
+		return nil
+	}
+	return r.Env.Todos.Items()
+}
+
+// taskJustCompleted reports whether an item that was in progress is now done.
+func taskJustCompleted(before, after []Todo) bool {
+	inProgress := map[string]bool{}
+	for _, item := range before {
+		if item.Status == "in_progress" && item.ID != "" {
+			inProgress[item.ID] = true
+		}
+	}
+	if len(inProgress) == 0 {
+		return false
+	}
+	for _, item := range after {
+		if item.Status == "completed" && inProgress[item.ID] {
+			return true
+		}
+	}
+	return false
+}
+
+// answerSkippedCalls gives every tool call in a batch a result when the loop
+// stops part way through it. A provider rejects a request whose assistant
+// message carries tool calls with no matching results, so a guard that trips
+// mid-batch has to close the batch or the next turn fails for a reason that
+// has nothing to do with the operator's work.
+func answerSkippedCalls(session *Session, calls []provider.ToolCall, reason string) {
+	for _, call := range calls {
+		session.AddToolResult(call.ID, call.Name, "Not run: "+reason)
+	}
+}
+
 // system assembles the system prompt for this step.
 func (r *Runner) system(session *Session) string {
 	if strings.TrimSpace(r.System) != "" {
 		return r.System
 	}
-	return BuildSystem(r.Env, r.Model)
+	return ApplyHarnessToSystem(BuildSystem(r.Env, r.Model), GetHarnessProfile(r.Harness))
+}
+
+// observeToolResult folds one finished tool call into the verify ledger.
+func (r *Runner) observeToolResult(ledger *VerifyLedger, guard *loopGuard, name, rawArgs string, result Result) {
+	lowered := strings.ToLower(strings.TrimSpace(name))
+	switch lowered {
+	case "edit", "replace", "multi_edit", "multi_replace", "write_file", "write", "create_file":
+		if result.IsError {
+			return
+		}
+		args, err := decodeToolArguments(rawArgs)
+		if err != nil {
+			return
+		}
+		path := argString(args, "path", "file", "filename")
+		if path == "" && (lowered == "multi_edit" || lowered == "multi_replace") {
+			path = argString(args, "path", "file")
+		}
+		*ledger = ledger.RecordEdit(path)
+	case "run_checks", "verify", "test", "lint":
+		if !result.IsError {
+			*ledger = ledger.RecordVerification()
+		}
+	case "run_command", "bash", "bash_run", "shell", "exec":
+		if result.IsError {
+			return
+		}
+		args, err := decodeToolArguments(rawArgs)
+		if err != nil {
+			return
+		}
+		if LooksLikeCheckCommand(argString(args, "command")) {
+			*ledger = ledger.RecordVerification()
+		}
+	}
+}
+
+// needsApprovalFor reports whether a call must wait. Trust is the outer
+// gate: a mutating tool in an untrusted folder always asks, even when the
+// approval mode would allow it. In a trusted folder the allowlist runs.
+func (r *Runner) needsApprovalFor(tool Tool) bool {
+	if r.Policy != nil && r.Policy.NeedsApproval(tool) {
+		return true
+	}
+	if tool.Mutating() && r.Env != nil && !r.Env.Trusted {
+		return true
+	}
+	return false
 }
 
 // execute runs one tool call, applying the approval policy first.
@@ -201,7 +394,7 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 	emit := r.emit
 	emit(Event{Kind: EventToolStart, ToolName: tool.Name(), ToolLabel: startLabel, ToolArgs: Shorten(call.Arguments, 240)})
 
-	if r.Policy != nil && r.Policy.NeedsApproval(tool) {
+	if r.needsApprovalFor(tool) {
 		decision := DecisionDeny
 		if r.Env.Approve != nil {
 			decision = r.Env.Approve(ApprovalRequest{

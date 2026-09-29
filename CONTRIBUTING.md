@@ -52,7 +52,10 @@ powershell -File scripts/race.ps1   # Windows
 
 It needs cgo, and cgo needs a C compiler. The script finds one and enables cgo
 itself; when there is none it names what to install and exits 2, which the
-gates treat as "skipped" rather than "failed".
+gates treat as "skipped" rather than "failed". A scoop mingw install does not
+create a shim for `gcc`, so the script also looks in the known scoop location
+and puts that directory on the `PATH` for the run: cgo shells out to `gcc` by
+name, so knowing the full path is not enough on its own.
 
 | Platform | Setup |
 | --- | --- |
@@ -69,6 +72,8 @@ A data race is a real bug, not a flake. When the detector reports one, fix the
 access rather than retrying the run. The report names both sides of the
 conflict, which is usually enough to see which value needs a lock.
 
+## staticcheck
+
 `staticcheck ./...` is required, not optional: a CI job runs it and fails the
 build on any finding. Install it once and run it with the rest of the gate:
 
@@ -81,6 +86,8 @@ It catches things the compiler and vet do not, and four of its findings in this
 repository were real: a `fmt.Sprintf` with no arguments, two error strings that
 opened with a capital letter, and a struct field nothing read.
 
+## Coverage
+
 Coverage is reported per package with `go test -cover ./...`. CI enforces a
 floor on the total figure, so coverage cannot drift down without someone
 deciding to accept it. That floor is a floor, not a target: raise it when the
@@ -91,7 +98,16 @@ real number climbs, never lower it to make a change pass.
 The gate above tests the platform you are sitting at. CI also runs the suite on
 Linux, Windows and macOS, so a change that passes locally can still fail there.
 A Windows developer can check the Linux result before pushing, using the WSL
-distribution already installed on most Windows machines:
+distribution already installed on most Windows machines. `scripts/precheck.sh`
+does the whole sequence, including the race detector and `staticcheck`:
+
+```sh
+wsl -d kali-linux -e bash /mnt/c/project/termigo-cli/scripts/precheck.sh
+```
+
+It creates the Linux tree itself, at `~/termixgo-check` unless you pass another
+directory, so there is nothing to set up beyond a Go toolchain and staticcheck
+inside WSL. To do it by hand instead:
 
 ```sh
 # Install a Go toolchain inside WSL, once.
@@ -109,7 +125,9 @@ staticcheck ./...
 
 Clone rather than copy: the checkout applies the line-ending rules in
 `.gitattributes`, so the tree you test is the tree CI gets. A tree copied
-straight from a Windows drive keeps its CRLF and can behave differently.
+straight from a Windows drive keeps its CRLF and can behave differently. Note
+that a clone only carries committed work; `precheck.sh` rsyncs the working tree
+instead, which is what you want when checking a change before it is committed.
 
 This is worth doing before a change to anything that touches the filesystem or
 process handling, because that is where the platforms genuinely differ: a mode

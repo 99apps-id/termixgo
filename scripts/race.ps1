@@ -16,6 +16,14 @@ try {
         if ($found) { $compiler = $found.Source; break }
     }
 
+    # A scoop mingw install has no shim, so its gcc is on disk but not on the
+    # PATH. Looking in the known location beats telling the developer to install
+    # a toolchain they already have.
+    if (-not $compiler) {
+        $mingw = Join-Path $env:USERPROFILE "scoop\apps\mingw\current\bin\gcc.exe"
+        if (Test-Path $mingw) { $compiler = $mingw }
+    }
+
     if (-not $compiler) {
         Write-Host "No C compiler found, so the race detector cannot run." -ForegroundColor Yellow
         Write-Host ""
@@ -30,6 +38,13 @@ try {
 
     Write-Host "C compiler: $compiler"
     $env:CGO_ENABLED = "1"
+    # cgo shells out to `gcc` by name, so resolving the path is not enough:
+    # the directory has to be on the PATH or the build fails with a message
+    # that reads like a missing toolchain.
+    $compilerDir = Split-Path -Parent $compiler
+    if ($env:PATH -notlike "*$compilerDir*") {
+        $env:PATH = "$compilerDir;$env:PATH"
+    }
 
     # The detector instruments memory access, so a run is slower and the output
     # is only meaningful if it completes: a timeout would look like a pass.

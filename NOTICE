@@ -1,25 +1,10 @@
 Termixgo
 Copyright 2026 99apps-id
-Copyright 2026 Crynta
 
-This product is a terminal derivative of Termigo, the AI-native terminal
-emulator (https://github.com/99apps-id/termigo). The original work is licensed
-under the Apache License, Version 2.0; a copy of that licence is in the LICENSE
-file at the root of this repository.
-
-Termixgo reuses Termigo's design vocabulary and behavioural conventions, and
-reimplements them in Go for a terminal-only runtime. No source file from the
-original TypeScript or Rust codebases is copied verbatim; the shared parts are
-protocol shapes, tool semantics, prompt structure and file layout.
-
-Files whose behaviour is intentionally aligned with the original, so that the
-two stay compatible:
-
-  internal/config       state layout and folder trust
-  internal/agent        tool semantics and the agent loop
-  internal/provider     BYOK provider registry and wire formats
-  internal/skill        SKILL.md discovery and frontmatter
-  internal/telegram     companion bot commands and pairing
+Licensed under the Apache License, Version 2.0. A copy of the licence is in the
+LICENSE file at the root of this repository.
 
 Third-party Go modules retain their own licences; see go.sum for the exact
-versions in use.
+versions in use. The direct dependencies are the Bubble Tea stack for the
+terminal interface, golang.org/x/term and golang.org/x/sys for terminal and
+process handling, and gopkg.in/yaml.v3 for skill frontmatter.

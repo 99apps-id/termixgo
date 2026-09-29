@@ -85,6 +85,9 @@ type Config struct {
 	// SystemPrompt is appended to the built-in prompt when set.
 	SystemPrompt string `json:"systemPrompt,omitempty"`
 
+	// HarnessProfile selects the agent harness. Empty means critical.
+	HarnessProfile string `json:"harnessProfile,omitempty"`
+
 	// BaseURLs overrides provider endpoints, keyed by provider id. Local
 	// providers (ollama, lmstudio) read it too.
 	BaseURLs map[string]string `json:"baseUrls,omitempty"`

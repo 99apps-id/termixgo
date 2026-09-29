@@ -70,8 +70,13 @@ func (p ApprovalPolicy) NeedsApproval(tool Tool) bool {
 	}
 }
 
-// AllowSession records a session-scoped allowance.
+// AllowSession records a session-scoped allowance. A nil policy is a valid
+// state, because the trust gate can demand approval for a runner that has no
+// policy at all, so it is ignored rather than dereferenced.
 func (p *ApprovalPolicy) AllowSession(name string) {
+	if p == nil {
+		return
+	}
 	if p.SessionAllowed == nil {
 		p.SessionAllowed = map[string]bool{}
 	}

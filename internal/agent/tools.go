@@ -66,7 +66,8 @@ type Env struct {
 	Ask func(question string, options []string) (string, error)
 
 	// RunSubagent is injected by the app; nil disables the subagent tool.
-	RunSubagent func(ctx context.Context, prompt string, readOnly bool) (string, error)
+	// The type names a SubagentType; empty means the general worker.
+	RunSubagent func(ctx context.Context, subType, prompt string) (string, error)
 }
 
 // Registry indexes tools by name and alias.

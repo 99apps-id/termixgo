@@ -8,10 +8,88 @@ import (
 	"github.com/99apps-id/termixgo/internal/provider"
 )
 
-// SubagentMaxSteps is the default budget for a delegated investigation.
+// SubagentType names one worker role. The types differ only in the system
+// prompt they are pointed at, not in what they may touch: like Termigo, a
+// subagent is a peer of the main agent with the full toolset and no sandbox.
+// Only the nesting cap withholds the spawn tool.
+type SubagentType string
+
+const (
+	SubagentExplore    SubagentType = "explore"
+	SubagentGeneral    SubagentType = "general"
+	SubagentBuilder    SubagentType = "builder"
+	SubagentCodeReview SubagentType = "code-review"
+	SubagentSecurity   SubagentType = "security"
+)
+
+// MaxSubagentDepth caps nesting. The main agent runs at depth 0 and may
+// spawn down to this depth; at the cap the spawn tool is withheld.
+const MaxSubagentDepth = 3
+
+// SubagentMaxSteps is the default budget for one delegated run.
 const SubagentMaxSteps = 12
 
-// readOnlyTools are the tools a subagent may use: it can look, never touch.
+// SubagentDef describes one worker role.
+type SubagentDef struct {
+	Type         SubagentType
+	Label        string
+	Description  string
+	SystemPrompt string
+	MaxSteps     int
+	ReadOnly     bool
+}
+
+// Subagents is the roster, mirroring the Termigo set in scope.
+var Subagents = map[SubagentType]SubagentDef{
+	SubagentExplore: {
+		Type:         SubagentExplore,
+		Label:        "Explore",
+		Description:  "Codebase explorer. Reads first and acts when the task needs it.",
+		SystemPrompt: "You are an exploration subagent. Answer the spawn question primarily by READING the codebase. You may edit or run a command when the task genuinely requires it. Verify, do not speculate. Return a concise summary with file paths and line numbers. Stop as soon as you can answer.",
+	},
+	SubagentGeneral: {
+		Type:         SubagentGeneral,
+		Label:        "General",
+		Description:  "General-purpose worker for a self-contained task.",
+		SystemPrompt: "You are a general-purpose subagent. Carry out the self-contained task in your prompt end to end. Verify, do not speculate. You have the full toolset. Return a tight summary with the evidence you used and anything you could not finish.",
+	},
+	SubagentBuilder: {
+		Type:         SubagentBuilder,
+		Label:        "Builder",
+		Description:  "Implements one self-contained piece of work.",
+		SystemPrompt: "You are a builder subagent. Implement ONE self-contained piece of work described in your prompt, then stop. Read before you write. Stay inside the files your prompt names. Verify with the smallest check and return a short summary of files changed and anything unfinished.",
+	},
+	SubagentCodeReview: {
+		Type:         SubagentCodeReview,
+		Label:        "Code review",
+		Description:  "Reviews changed code for correctness, architecture, performance and security.",
+		SystemPrompt: "You are a code-review subagent. Inspect the requested code and report only ACTIONABLE findings: correctness bugs, architecture violations, performance issues, security risks. Skip style. Format each finding as severity, file:line, issue, fix. If nothing is wrong, say Looks good.",
+		MaxSteps:     12,
+		ReadOnly:     true,
+	},
+	SubagentSecurity: {
+		Type:         SubagentSecurity,
+		Label:        "Security review",
+		Description:  "Audits code and configuration for security risks.",
+		SystemPrompt: "You are a security-review subagent. Scan the requested scope for injection, auth bypass, secret leakage, missing validation at trust boundaries, unsafe deserialization and weak crypto. Report concrete findings with file:line and severity. If nothing is wrong, say No security issues found.",
+		ReadOnly:     true,
+	},
+}
+
+// LookupSubagent resolves a type, falling back to the general worker so a
+// free-form string never has to handle a miss.
+func LookupSubagent(raw string) SubagentDef {
+	trimmed := SubagentType(strings.ToLower(strings.TrimSpace(raw)))
+	if def, ok := Subagents[trimmed]; ok {
+		return def
+	}
+	return Subagents[SubagentGeneral]
+}
+
+// SubagentIsReadOnly reports whether a role is read-tier by design.
+func SubagentIsReadOnly(raw string) bool { return LookupSubagent(raw).ReadOnly }
+
+// readOnlyTools are the tools a review role may use: it can look, never touch.
 func readOnlyTools() *Registry {
 	return NewRegistry(
 		&readFileTool{},
@@ -21,7 +99,6 @@ func readOnlyTools() *Registry {
 		&findSkillTool{},
 		&useSkillTool{},
 		&thinkTool{},
-		// Git reads are useful for an investigation and change nothing.
 		&gitStatusTool{},
 		&gitDiffTool{},
 		&gitLogTool{},
@@ -29,12 +106,37 @@ func readOnlyTools() *Registry {
 	)
 }
 
-// RunReadOnlySubagent runs a nested, read-only investigation and returns its
-// final answer. The nested run has its own session, so a large search cannot
-// flood the parent context with file contents.
-func RunReadOnlySubagent(ctx context.Context, parent *Env, client provider.Client, model, prompt string, maxSteps int) (string, error) {
+// subagentRegistry builds the toolset for one role. Review roles are
+// read-only by design; every other role gets the full allowlist with no
+// sandbox, and the spawn tool is withheld at the nesting cap.
+func subagentRegistry(subType string, depth int) *Registry {
+	if SubagentIsReadOnly(subType) {
+		return readOnlyTools()
+	}
+	tools := make([]Tool, 0, len(DefaultRegistry().Tools()))
+	for _, tool := range DefaultRegistry().Tools() {
+		name := strings.ToLower(tool.Name())
+		if depth >= MaxSubagentDepth && (name == "run_subagent" || name == "task" || name == "delegate") {
+			continue
+		}
+		tools = append(tools, tool)
+	}
+	return NewRegistry(tools...)
+}
+
+// RunSubagent runs a nested investigation of one typed role and returns its
+// final answer. The nested run gets its own session and todo list, so a
+// large search cannot flood the parent context.
+func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model, subType, prompt string, maxSteps int) (string, error) {
+	def := LookupSubagent(subType)
 	if client == nil {
 		return "", fmt.Errorf("no provider client is available for a subagent")
+	}
+	if strings.TrimSpace(prompt) == "" {
+		return "", fmt.Errorf("a subagent prompt is required")
+	}
+	if maxSteps <= 0 {
+		maxSteps = def.MaxSteps
 	}
 	if maxSteps <= 0 {
 		maxSteps = SubagentMaxSteps
@@ -48,23 +150,24 @@ func RunReadOnlySubagent(ctx context.Context, parent *Env, client provider.Clien
 		Todos:     NewTodoStore(),
 		Trusted:   parent.Trusted,
 		Depth:     parent.Depth + 1,
-		// A subagent reports nothing: its result is the summary it returns.
-		Emit: nil,
+		Emit:      nil,
+		Processes: parent.Processes,
+		Approve:   parent.Approve,
+		Ask:       parent.Ask,
 	}
-	// A subagent may delegate once more. Without this the depth cap in the
-	// subagent tool could never be reached, and the field would be dead
-	// weight rather than a limit that actually holds.
-	child.RunSubagent = func(childCtx context.Context, childPrompt string, readOnly bool) (string, error) {
-		return RunReadOnlySubagent(childCtx, child, client, model, childPrompt, maxSteps)
+	child.RunSubagent = func(childCtx context.Context, childType, childPrompt string) (string, error) {
+		return RunSubagent(childCtx, child, client, model, childType, childPrompt, maxSteps)
 	}
 	runner := &Runner{
 		Client:   client,
 		Model:    model,
 		Config:   parent.Config,
 		Env:      child,
-		Tools:    readOnlyTools(),
+		Tools:    subagentRegistry(string(def.Type), parent.Depth),
 		Policy:   &ApprovalPolicy{Mode: ApprovalAll},
 		MaxSteps: maxSteps,
+		Harness:  string(parent.Config.HarnessProfile),
+		System:   def.SystemPrompt,
 	}
 	session := NewSession(parent.Workspace, model)
 	if err := runner.Run(ctx, session, prompt); err != nil {

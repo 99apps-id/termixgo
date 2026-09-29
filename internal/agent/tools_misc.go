@@ -282,7 +282,9 @@ func (t *thinkTool) Run(ctx context.Context, env *Env, args map[string]any) (Res
 	return Result{Output: "Noted."}, nil
 }
 
-// subagentTool delegates a read-only investigation to a nested run.
+// subagentTool delegates a self-contained task to a nested Termigo-style
+// worker with the full toolset and no sandbox. Review types are read-only
+// by design; every other type can read, edit and run commands as needed.
 type subagentTool struct{}
 
 func (t *subagentTool) Name() string      { return "run_subagent" }
@@ -290,18 +292,19 @@ func (t *subagentTool) Aliases() []string { return []string{"task", "delegate"} 
 func (t *subagentTool) Mutating() bool    { return false }
 func (t *subagentTool) Risk() Risk        { return RiskEdit }
 func (t *subagentTool) Label(a map[string]any) string {
-	return "Delegating: " + Shorten(argString(a, "prompt", "description"), 50)
+	return "Delegating (" + LookupSubagent(argString(a, "type")).Label + "): " + Shorten(argString(a, "prompt", "description"), 50)
 }
 func (t *subagentTool) DoneLabel(a map[string]any) string {
-	return "Delegated: " + Shorten(argString(a, "prompt", "description"), 50)
+	return "Delegated (" + LookupSubagent(argString(a, "type")).Label + "): " + Shorten(argString(a, "prompt", "description"), 50)
 }
 func (t *subagentTool) Description() string {
-	return "Delegate a focused, read-only investigation (search the tree, summarise a subsystem) to a fresh context and get a short report back. Useful when answering would flood this context with file contents."
+	return "Spawn a subagent worker (explore, general, builder, code-review, security) with the full toolset and no sandbox. Use it for a self-contained task so the main context stays lean. Review types only read."
 }
 func (t *subagentTool) Schema() map[string]any {
 	return object(map[string]any{
-		"prompt":      strProp("The question to investigate, stated precisely."),
+		"prompt":      strProp("The task to carry out, stated precisely."),
 		"description": strProp("Three to five words naming the task."),
+		"type":        strProp("Worker type: explore, general, builder, code-review or security. Defaults to general."),
 	}, "prompt")
 }
 
@@ -313,10 +316,14 @@ func (t *subagentTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	if env.RunSubagent == nil {
 		return Result{Output: "Subagents are not available in this session.", IsError: true}, nil
 	}
-	if env.Depth >= 2 {
-		return Result{Output: "Subagents cannot nest more than two deep.", IsError: true}, nil
+	if env.Depth >= MaxSubagentDepth {
+		return Result{Output: "Subagents cannot nest more than three deep.", IsError: true}, nil
 	}
-	report, err := env.RunSubagent(ctx, prompt, true)
+	subType := strings.TrimSpace(argString(args, "type"))
+	if subType == "" {
+		subType = string(SubagentGeneral)
+	}
+	report, err := env.RunSubagent(ctx, subType, prompt)
 	if err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}

@@ -257,30 +257,29 @@ func TestRunChecksDefaultsToTest(t *testing.T) {
 
 // ------------------------------------------------------------------ subagent
 
-// TestRunReadOnlySubagentReturnsItsAnswer drives a nested run against a fake
+// TestRunSubagentReturnsItsAnswer drives a nested run against a fake
 // provider: the delegated investigation must come back as text, in its own
 // session, without touching the parent's conversation.
-func TestRunReadOnlySubagentReturnsItsAnswer(t *testing.T) {
+func TestRunSubagentReturnsItsAnswer(t *testing.T) {
 	client := &fakeClient{steps: [][]provider.StreamEvent{
 		{textChunk("The routes live in internal/http/routes.go.")},
 	}}
 	parent := testEnv(t)
 	parent.Config = config.Default()
 
-	answer, err := RunReadOnlySubagent(context.Background(), parent, client, "test-model", "where are the routes?", 4)
+	answer, err := RunSubagent(context.Background(), parent, client, "test-model", string(SubagentExplore), "where are the routes?", 4)
 	if err != nil {
-		t.Fatalf("RunReadOnlySubagent: %v", err)
+		t.Fatalf("RunSubagent: %v", err)
 	}
 	if !strings.Contains(answer, "internal/http/routes.go") {
 		t.Errorf("answer = %q, want the nested run's text", answer)
 	}
 }
 
-// TestRunReadOnlySubagentChildCannotMutate is the safety property of the whole
-// feature: a delegated investigation may read anything and change nothing.
-func TestRunReadOnlySubagentChildCannotMutate(t *testing.T) {
-	// The child runs with the read-only registry, so a model asking to write
-	// gets the unknown-tool error rather than a written file.
+// TestRunSubagentReviewRoleCannotMutate is the safety property that survives
+// the no-sandbox design: a review worker is handed the read-only registry, so
+// a model asking to write gets the unknown-tool error rather than a file.
+func TestRunSubagentReviewRoleCannotMutate(t *testing.T) {
 	client := &fakeClient{steps: [][]provider.StreamEvent{
 		{callChunk("c1", "write_file", `{"path":"should-not-exist.txt","content":"nope"}`)},
 		{textChunk("I cannot write files.")},
@@ -288,22 +287,37 @@ func TestRunReadOnlySubagentChildCannotMutate(t *testing.T) {
 	parent := testEnv(t)
 	parent.Config = config.Default()
 
-	if _, err := RunReadOnlySubagent(context.Background(), parent, client, "test-model", "write a file", 4); err != nil {
-		t.Fatalf("RunReadOnlySubagent: %v", err)
+	if _, err := RunSubagent(context.Background(), parent, client, "test-model", string(SubagentCodeReview), "write a file", 4); err != nil {
+		t.Fatalf("RunSubagent: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(parent.Workspace, "should-not-exist.txt")); err == nil {
-		t.Fatalf("a subagent wrote a file, which it must never be able to do")
+		t.Fatalf("a review subagent wrote a file, which it must never be able to do")
 	}
 }
 
-func TestRunReadOnlySubagentNeedsAClient(t *testing.T) {
+// TestRunSubagentWorkerRolesAreFullPeers pins the other half of the design:
+// only the review roles are read-tier, every other role is a peer of the main
+// agent with the full allowlist.
+func TestRunSubagentWorkerRolesAreFullPeers(t *testing.T) {
+	for _, role := range []SubagentType{SubagentExplore, SubagentGeneral, SubagentBuilder} {
+		if SubagentIsReadOnly(string(role)) {
+			t.Errorf("%s is a worker, not a review role, so it must keep the full toolset", role)
+		}
+		registry := subagentRegistry(string(role), 0)
+		if _, ok := registry.Lookup("write_file"); !ok {
+			t.Errorf("%s should be able to write", role)
+		}
+	}
+}
+
+func TestRunSubagentNeedsAClient(t *testing.T) {
 	parent := testEnv(t)
-	if _, err := RunReadOnlySubagent(context.Background(), parent, nil, "m", "prompt", 4); err == nil {
+	if _, err := RunSubagent(context.Background(), parent, nil, "m", string(SubagentGeneral), "prompt", 4); err == nil {
 		t.Fatalf("a subagent with no provider client must fail rather than silently do nothing")
 	}
 }
 
-func TestRunReadOnlySubagentWithoutAnAnswerSaysSo(t *testing.T) {
+func TestRunSubagentWithoutAnAnswerSaysSo(t *testing.T) {
 	// A run that produces only tool calls and no text ends with nothing to
 	// report, which has to be stated rather than returned as an empty string.
 	client := &fakeClient{steps: [][]provider.StreamEvent{
@@ -313,36 +327,44 @@ func TestRunReadOnlySubagentWithoutAnAnswerSaysSo(t *testing.T) {
 	parent := testEnv(t)
 	parent.Config = config.Default()
 
-	answer, err := RunReadOnlySubagent(context.Background(), parent, client, "test-model", "look around", 3)
+	answer, err := RunSubagent(context.Background(), parent, client, "test-model", string(SubagentExplore), "look around", 3)
 	if err != nil {
-		t.Fatalf("RunReadOnlySubagent: %v", err)
+		t.Fatalf("RunSubagent: %v", err)
 	}
 	if strings.TrimSpace(answer) == "" {
 		t.Errorf("an empty answer should be described, not returned blank")
 	}
 }
 
-func TestRunReadOnlySubagentRespectsItsStepBudget(t *testing.T) {
+func TestRunSubagentRespectsItsStepBudget(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timing sensitive")
 	}
-	// Every step asks for another tool call, so the child must stop at its own
-	// limit instead of running until the parent's.
-	step := []provider.StreamEvent{callChunk("c", "list_directory", `{"path":"."}`)}
-	client := &fakeClient{steps: [][]provider.StreamEvent{step, step, step, step, step, step, step, step}}
+	// Each step asks for a different directory, so the loop guard cannot be
+	// what stops the run: the child's own step budget has to be.
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{callChunk("c1", "list_directory", `{"path":"."}`)},
+		{callChunk("c2", "list_directory", `{"path":"./"}`)},
+		{callChunk("c3", "list_directory", `{"path":"./."}`)},
+		{callChunk("c4", "list_directory", `{"path":"././"}`)},
+		{callChunk("c5", "list_directory", `{"path":"././."}`)},
+		{callChunk("c6", "list_directory", `{"path":"./././"}`)},
+		{callChunk("c7", "list_directory", `{"path":"./././."}`)},
+		{callChunk("c8", "list_directory", `{"path":"././././"}`)},
+	}}
 
 	parent := testEnv(t)
 	parent.Config = config.Default()
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := RunReadOnlySubagent(context.Background(), parent, client, "test-model", "loop", 3)
+		_, err := RunSubagent(context.Background(), parent, client, "test-model", string(SubagentExplore), "loop", 3)
 		done <- err
 	}()
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("RunReadOnlySubagent: %v", err)
+			t.Fatalf("RunSubagent: %v", err)
 		}
 	case <-time.After(60 * time.Second):
 		t.Fatalf("the subagent did not stop at its step budget")
@@ -350,7 +372,7 @@ func TestRunReadOnlySubagentRespectsItsStepBudget(t *testing.T) {
 	client.mu.Lock()
 	calls := client.calls
 	client.mu.Unlock()
-	if calls > 4 {
+	if calls > 3 {
 		t.Errorf("provider calls = %d, want the child to stop at its own budget of 3", calls)
 	}
 }

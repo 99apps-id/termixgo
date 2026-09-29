@@ -10,6 +10,7 @@ import (
 
 	"github.com/99apps-id/termixgo/internal/app"
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/secrets"
 )
 
@@ -45,6 +46,23 @@ func choose(t *testing.T, model *Model, filter string) *Model {
 		t.Fatalf("filter %q matched %d entries, want exactly one", filter, len(filtered.picker.visible))
 	}
 	return press(t, filtered, "enter")
+}
+
+// providerWithoutModels returns a keyed provider the catalogue has no model
+// for, which is the one case the wizard cannot offer a list for. It needs a
+// default endpoint so the wizard has somewhere to send the model.
+func providerWithoutModels(t *testing.T) string {
+	t.Helper()
+	for _, info := range provider.Providers() {
+		if !info.NeedsKey || info.DefaultBaseURL == "" {
+			continue
+		}
+		if len(provider.ModelsFor(info.ID)) == 0 {
+			return info.ID
+		}
+	}
+	t.Fatal("every keyed provider has catalogue models, so the custom-model path is unreachable")
+	return ""
 }
 
 // TestWizardWalksALocalProviderEndToEnd is the first-run path most people
@@ -143,14 +161,19 @@ func TestWizardStoresAProviderKey(t *testing.T) {
 
 // TestWizardAsksForACustomModel covers a provider with nothing in the local
 // catalogue: the operator has to type the model id.
+//
+// The fixture picks such a provider from the catalogue rather than naming one,
+// because a provider that has no models today gains them on the next update,
+// and the test would then be asserting the wrong branch.
 func TestWizardAsksForACustomModel(t *testing.T) {
 	model := wizardModel(t)
 
-	atKey := choose(t, model, "zhipu")
+	providerID := providerWithoutModels(t)
+	atKey := choose(t, model, providerID)
 	if atKey.setup.step != setupKey {
-		t.Fatalf("zhipu needs a key: step %d", atKey.setup.step)
+		t.Fatalf("%s needs a key: step %d", providerID, atKey.setup.step)
 	}
-	atKey.input.SetValue("zhipu-key")
+	atKey.input.SetValue("a-test-key")
 	atCustom := press(t, atKey, "enter")
 	if atCustom.setup.step != setupCustomModel {
 		t.Fatalf("a provider with no catalogue models must ask for one: step %d", atCustom.setup.step)
@@ -167,7 +190,7 @@ func TestWizardAsksForACustomModel(t *testing.T) {
 
 	// A bare id is qualified with the chosen provider, which is what makes it
 	// resolvable later.
-	refused.input.SetValue("glm-4.6")
+	refused.input.SetValue("a-model-id")
 	done := press(t, refused, "enter")
 	if done.setup.errText != "" {
 		t.Fatalf("a typed model should be accepted, got %q", done.setup.errText)
@@ -175,10 +198,13 @@ func TestWizardAsksForACustomModel(t *testing.T) {
 	if done.setup.step != setupTelegramAsk {
 		t.Fatalf("step = %d, want the Telegram question", done.setup.step)
 	}
-	if done.app.CurrentModel().ID != "glm-4.6" || done.app.CurrentModel().Provider != "zhipu" {
-		t.Errorf("model = %+v, want zhipu:glm-4.6", done.app.CurrentModel())
+	// The bare id is stored against the chosen provider, which is what makes it
+	// resolve later instead of being read as a catalogue id.
+	stored := done.app.CurrentModel()
+	if stored.ID != "a-model-id" || stored.Provider != providerID {
+		t.Errorf("model = %+v, want %s:a-model-id", stored, providerID)
 	}
-	if !strings.Contains(strings.Join(done.setup.summary, " "), "glm-4.6") {
+	if !strings.Contains(strings.Join(done.setup.summary, " "), "a-model-id") {
 		t.Errorf("summary = %v", done.setup.summary)
 	}
 }
@@ -327,14 +353,38 @@ func TestWizardRendersEveryStep(t *testing.T) {
 
 // TestWizardShowsTheKeyRequirementInTheProviderList pins the hint that tells
 // the operator which entries will stop to ask for a key.
+//
+// The catalogue is longer than the picker window, so the local servers are not
+// on the first screen. The guarantee is that every row carries its hint, which
+// is checked on the rows themselves, and that the hint renders when the row is
+// on screen.
 func TestWizardShowsTheKeyRequirementInTheProviderList(t *testing.T) {
 	model := wizardModel(t)
-	view := display(model)
+
+	keyed, local := 0, 0
+	for _, item := range setupProviderItems() {
+		switch item.Extra {
+		case "API key required":
+			keyed++
+		case "local":
+			local++
+		default:
+			t.Errorf("provider %q carries no key hint, got %q", item.ID, item.Extra)
+		}
+	}
+	if keyed == 0 || local == 0 {
+		t.Fatalf("the provider list must mark both cases, got %d keyed and %d local", keyed, local)
+	}
+
+	view := stripANSI(display(model))
 	if !strings.Contains(view, "API key required") {
 		t.Errorf("the provider list should say which entries need a key:\n%s", view)
 	}
-	if !strings.Contains(view, "local") {
-		t.Errorf("the provider list should say which entries are local:\n%s", view)
+
+	// Filtering to a local server brings its row, and its hint, on screen.
+	localView := stripANSI(display(press(t, model, "ollama")))
+	if !strings.Contains(localView, "local") {
+		t.Errorf("the provider list should say which entries are local:\n%s", localView)
 	}
 }
 
@@ -396,13 +446,19 @@ func TestPickerMovesAndFilters(t *testing.T) {
 		t.Errorf("filter = %q, want empty", nothing.picker.filter)
 	}
 
-	typed := press(t, nothing, "qwen")
+	// The full id of one row narrows the list to exactly that row, which is a
+	// property of the filter rather than of the catalogue's size.
+	target := nothing.picker.visible[0].ID
+	typed := press(t, nothing, target)
 	if len(typed.picker.visible) != 1 {
-		t.Fatalf("filter matched %d rows, want 1", len(typed.picker.visible))
+		t.Fatalf("filter %q matched %d rows, want 1", target, len(typed.picker.visible))
+	}
+	if typed.picker.visible[0].ID != target {
+		t.Errorf("filter %q kept %q", target, typed.picker.visible[0].ID)
 	}
 	erased := press(t, typed, "backspace")
-	if erased.picker.filter != "qwe" {
-		t.Errorf("filter = %q, want qwe", erased.picker.filter)
+	if want := target[:len(target)-1]; erased.picker.filter != want {
+		t.Errorf("filter = %q, want %q", erased.picker.filter, want)
 	}
 
 	// A filter that matches nothing must render and then refuse to select.

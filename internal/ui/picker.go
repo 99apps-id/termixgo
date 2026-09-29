@@ -74,10 +74,8 @@ func (m *Model) handlePickerKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.picker = picker{}
 			return m, nil
 		}
-		m.current = modeChat
 		m.picker = picker{}
-		m.refresh()
-		return m, nil
+		return m, m.enterChat()
 	case "up", "ctrl+p":
 		m.picker.cursor = (m.picker.cursor - 1 + max(1, len(m.picker.visible))) % max(1, len(m.picker.visible))
 		return m, nil
@@ -117,14 +115,16 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 		} else {
 			m.blocks = append(m.blocks, block{kind: blockNotice, text: "Model is now " + model.Label})
 		}
+		return m, m.enterChat()
 	case "session":
 		session, err := agent.LoadSession(item.ID)
 		if err != nil {
 			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
-			break
+			return m, m.enterChat()
 		}
 		m.app.LoadSession(session)
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Resumed session %s (%d turns)", shortID(session.ID()), session.Turns())})
+		return m, m.enterChat()
 	case "setup-provider":
 		m.setup.providerID = item.ID
 		m.setup.message = ""
@@ -132,7 +132,7 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 		if !providerNeedsKey(item.ID) {
 			// A local server needs no key: go straight to model selection.
 			m.setup.step = setupModel
-			m.openPicker("Setup: default model", "setup-model", setupModelItems(item.ID))
+			m.openPicker(setupPickerTitle("Model"), "setup-model", setupModelItems(item.ID))
 			return m, nil
 		}
 		m.current = modeSetup
@@ -158,8 +158,7 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 		m.refresh()
 		return m, nil
 	}
-	m.refresh()
-	return m, nil
+	return m, m.enterChat()
 }
 
 func (m *Model) viewPicker() string {

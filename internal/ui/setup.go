@@ -27,6 +27,10 @@ const (
 	setupDone
 )
 
+// setupTitlePrefix brands every wizard title with one wordmark so the picker
+// and the wizard steps never show two different headers.
+const setupTitlePrefix = "TERMIXGO Setup"
+
 // setupState carries the wizard between key presses.
 type setupState struct {
 	step        setupStep
@@ -38,12 +42,16 @@ type setupState struct {
 	summary     []string
 }
 
+// setupPickerTitle names the picker overlay for a wizard step.
+func setupPickerTitle(step string) string { return setupTitlePrefix + ": " + step }
+
 // startSetup opens the wizard at the provider step.
 func (m *Model) startSetup() {
 	m.setup = setupState{step: setupProvider, message: "Choose the provider that will run your models."}
 	m.input.Blur()
 	m.input.EchoMode = textinput.EchoNormal
-	m.picker = picker{title: "Setup: provider", action: "setup-provider", items: setupProviderItems()}
+	m.composer.Blur()
+	m.picker = picker{title: setupPickerTitle("Provider"), action: "setup-provider", items: setupProviderItems()}
 	m.picker.applyFilter()
 	m.current = modePicker
 }
@@ -75,15 +83,13 @@ func setupModelItems(providerID string) []pickerItem {
 // handleSetupKey drives the wizard's input steps.
 func (m *Model) handleSetupKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key.String() == "esc" && m.setup.step == setupProvider {
-		m.current = modeChat
-		m.refresh()
-		return m, nil
+		return m, m.enterChat()
 	}
 
 	switch m.setup.step {
 	case setupProvider:
 		if key.String() == "enter" {
-			m.picker = picker{title: "Setup: provider", action: "setup-provider", items: setupProviderItems()}
+			m.picker = picker{title: setupPickerTitle("Provider"), action: "setup-provider", items: setupProviderItems()}
 			m.picker.applyFilter()
 			m.current = modePicker
 		}
@@ -142,9 +148,8 @@ func (m *Model) handleSetupKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case setupDone:
 		if key.String() == "enter" || key.String() == "esc" {
-			m.current = modeChat
 			m.userMessage()
-			m.refresh()
+			return m, m.enterChat()
 		}
 		return m, nil
 	}
@@ -178,7 +183,7 @@ func (m *Model) saveProviderKey() (tea.Model, tea.Cmd) {
 	}
 	m.setup.step = setupModel
 	m.setup.message = fmt.Sprintf("Stored a key for %s. Pick the default model.", info.Label)
-	m.picker = picker{title: "Setup: default model", action: "setup-model", items: items}
+	m.picker = picker{title: setupPickerTitle("Model"), action: "setup-model", items: items}
 	m.picker.applyFilter()
 	m.current = modePicker
 	return m, nil
@@ -271,7 +276,7 @@ func (m *Model) userMessage() {
 // viewSetup renders the wizard.
 func (m *Model) viewSetup() string {
 	body := []string{
-		m.styles.BoxTitle.Render(fmt.Sprintf("Setup (%d/%d)", setupProgress(m.setup.step), 4)),
+		m.styles.BoxTitle.Render(fmt.Sprintf("%s (%d/%d)", setupTitlePrefix, setupProgress(m.setup.step), 4)),
 		"",
 	}
 	if m.setup.message != "" {

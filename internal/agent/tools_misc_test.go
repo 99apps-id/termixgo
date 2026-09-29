@@ -240,19 +240,19 @@ func TestSubagentToolGuardsAndHandOff(t *testing.T) {
 	// Nesting is capped so a subagent cannot spawn its way to an unbounded
 	// recursion.
 	deep := testEnv(t)
-	deep.Depth = 2
-	deep.RunSubagent = func(context.Context, string, bool) (string, error) { return "unused", nil }
+	deep.Depth = 3
+	deep.RunSubagent = func(context.Context, string, string) (string, error) { return "unused", nil }
 	capped, err := tool.Run(context.Background(), deep, map[string]any{"prompt": "look around"})
 	if err != nil || !capped.IsError {
 		t.Fatalf("the depth cap must be enforced: err=%v result=%+v", err, capped)
 	}
 
-	env.RunSubagent = func(ctx context.Context, prompt string, readOnly bool) (string, error) {
+	env.RunSubagent = func(ctx context.Context, subType, prompt string) (string, error) {
 		if prompt != "summarise the parser" {
 			t.Errorf("prompt = %q", prompt)
 		}
-		if !readOnly {
-			t.Errorf("the delegated run must be read-only")
+		if subType != string(SubagentGeneral) {
+			t.Errorf("subType = %q, want the general worker by default", subType)
 		}
 		return "The parser has three stages.", nil
 	}
@@ -264,7 +264,7 @@ func TestSubagentToolGuardsAndHandOff(t *testing.T) {
 		t.Errorf("output = %q, want the report", report.Output)
 	}
 
-	env.RunSubagent = func(context.Context, string, bool) (string, error) { return "", fmt.Errorf("no client") }
+	env.RunSubagent = func(context.Context, string, string) (string, error) { return "", fmt.Errorf("no client") }
 	failed, err := tool.Run(context.Background(), env, map[string]any{"prompt": "look around"})
 	if err != nil || !failed.IsError {
 		t.Fatalf("a failed subagent must be reported: err=%v result=%+v", err, failed)

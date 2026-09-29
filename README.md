@@ -393,4 +393,6 @@ See [`CHANGELOG.md`](CHANGELOG.md) for what changed and
 
 ## License
 
-Apache-2.0, matching the upstream project this build is derived from.
+Apache-2.0. See [`LICENSE`](LICENSE) for the full text and [`NOTICE`](NOTICE) for
+attribution. Third-party Go modules keep their own licences; the exact versions
+in use are in `go.sum`.

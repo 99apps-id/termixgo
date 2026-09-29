@@ -236,7 +236,7 @@ func TestRunSubagentDrivesAReadOnlyNestedRun(t *testing.T) {
 	application, server := readyApp(t)
 	defer server.Close()
 
-	report, err := application.runSubagent(context.Background(), "what does main.go do?", true)
+	report, err := application.runSubagent(context.Background(), "explore", "what does main.go do?")
 	if err != nil {
 		t.Fatalf("runSubagent: %v", err)
 	}

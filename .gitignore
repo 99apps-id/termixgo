@@ -5,13 +5,23 @@
 *.test
 *.out
 
+# Coverage
+coverage
+coverage.out
+coverage.html
+
 # Go
 vendor/
 
 # Local state that must never be committed
 .termixgo/
-.termixgo/memory.md
+# The pre-rename state directory. The code stopped writing here when the
+# project became Termixgo, but a tree that still has one must not commit it.
+.termigo/
 secrets.json
+
+# Local tool caches
+.gocache/
 
 # Editor and OS noise
 .DS_Store

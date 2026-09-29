@@ -84,6 +84,11 @@ type App struct {
 	runMu   sync.Mutex
 	cancel  context.CancelFunc
 	running bool
+	// steer holds operator messages typed while a turn is running. The runner
+	// drains it at each step boundary so a steer can change the course of the
+	// turn in flight; whatever is left when the turn ends is returned to the
+	// caller instead of being dropped.
+	steer []string
 
 	bot       *telegram.Bot
 	botCancel context.CancelFunc
@@ -458,6 +463,60 @@ func (a *App) Stop() {
 	}
 }
 
+// Steer records an operator message for the turn in flight. A turn that has
+// already stopped streaming cannot take it, so it stays queued for the caller
+// to run as the next turn rather than being lost.
+func (a *App) Steer(input string) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return
+	}
+	a.mu.Lock()
+	a.steer = append(a.steer, trimmed)
+	a.mu.Unlock()
+}
+
+// SteerCount reports how many steers are waiting to be taken.
+func (a *App) SteerCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.steer)
+}
+
+// HarnessProfile reports the harness the next turn will run under. An unset
+// profile resolves to the critical default rather than to no harness at all.
+func (a *App) HarnessProfile() agent.HarnessProfile {
+	return agent.GetHarnessProfile(a.Config().HarnessProfile)
+}
+
+// SetHarnessProfile selects a harness profile, so the operator can trade
+// thoroughness for speed without editing the config file by hand.
+func (a *App) SetHarnessProfile(id string) (agent.HarnessProfile, error) {
+	trimmed := strings.TrimSpace(id)
+	profile, ok := agent.BuiltinHarnessProfiles[trimmed]
+	if !ok {
+		return agent.HarnessProfile{}, fmt.Errorf("unknown harness %q; try one of %s", trimmed, strings.Join(agent.HarnessProfileIDs(), ", "))
+	}
+	if err := a.UpdateConfig(func(cfg *config.Config) { cfg.HarnessProfile = profile.ID }); err != nil {
+		return agent.HarnessProfile{}, err
+	}
+	return profile, nil
+}
+
+// TakeSteer drains the steering queue and returns what was in it. Both the
+// runner and the UI call this, so whichever gets there first owns the message
+// and it is never run twice.
+func (a *App) TakeSteer() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.steer) == 0 {
+		return nil
+	}
+	taken := a.steer
+	a.steer = nil
+	return taken
+}
+
 // env builds the per-run tool environment.
 func (a *App) env() *agent.Env {
 	return &agent.Env{
@@ -529,7 +588,7 @@ func (a *App) ask(question string, options []string) (string, error) {
 	return a.interactor.Ask(question, options)
 }
 
-func (a *App) runSubagent(ctx context.Context, prompt string, readOnly bool) (string, error) {
+func (a *App) runSubagent(ctx context.Context, subType, prompt string) (string, error) {
 	a.mu.Lock()
 	client := a.client
 	model := a.wireModel
@@ -537,7 +596,7 @@ func (a *App) runSubagent(ctx context.Context, prompt string, readOnly bool) (st
 	if client == nil {
 		return "", errors.New("no provider client is available")
 	}
-	return agent.RunReadOnlySubagent(ctx, a.env(), client, model, prompt, agent.SubagentMaxSteps)
+	return agent.RunSubagent(ctx, a.env(), client, model, subType, prompt, agent.SubagentMaxSteps)
 }
 
 // RunTurn runs one operator turn, streaming events to the UI.
@@ -583,18 +642,21 @@ func (a *App) runTurn(ctx context.Context, input string) error {
 		a.mu.Unlock()
 	}()
 
+	cfg := a.Config()
 	runner := &agent.Runner{
 		Client:        client,
 		Model:         model,
-		Config:        a.Config(),
+		Config:        cfg,
 		Env:           a.env(),
 		Tools:         a.tools,
 		Policy:        a.policy,
-		MaxSteps:      a.Config().MaxSteps,
+		MaxSteps:      cfg.MaxSteps,
+		Harness:       cfg.HarnessProfile,
 		ContextBudget: agent.HistoryBudget(window),
 		Pricing:       price,
 		CostKnown:     costKnown,
-		CostBudgetUSD: a.Config().CostBudgetUSD,
+		CostBudgetUSD: cfg.CostBudgetUSD,
+		Steer:         a.TakeSteer,
 	}
 	session := a.currentSession()
 	if err := runner.Run(runCtx, session, input); err != nil {

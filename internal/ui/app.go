@@ -80,6 +80,11 @@ type Model struct {
 	running    bool
 	runStarted time.Time
 
+	// queue holds operator inputs typed while a turn is running. Enter
+	// queues the composer text instead of refusing it, and each runDone
+	// starts the next queued input, so a steer message is never lost.
+	queue []string
+
 	pendingApproval *agent.ApprovalRequest
 	approvalReply   chan agent.Decision
 	pendingAsk      *askRequestMsg
@@ -151,6 +156,8 @@ func NewWithOptions(application *app.App, options Options) *Model {
 	model.welcome()
 	if options.StartSetup || application.NeedsSetup() {
 		model.startSetup()
+	} else {
+		model.composer.Focus()
 	}
 	return model
 }
@@ -240,6 +247,16 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.err != nil {
 			m.blocks = append(m.blocks, block{kind: blockError, text: typed.err.Error()})
 		}
+		// Anything the finished turn never took becomes the next input, in the
+		// order it was typed, so a steer that arrived too late still runs.
+		m.queue = append(m.queue, m.app.TakeSteer()...)
+		if len(m.queue) > 0 {
+			next := m.queue[0]
+			m.queue = m.queue[1:]
+			m.notice = ""
+			m.refresh()
+			return m.submit(next)
+		}
 		m.refresh()
 		return m, nil
 
@@ -301,7 +318,11 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		if m.running {
 			m.app.Stop()
-			m.notice = "Stopping..."
+			if count := m.queuedCount(); count > 0 {
+				m.notice = fmt.Sprintf("Stopping... (%d queued)", count)
+			} else {
+				m.notice = "Stopping..."
+			}
 			return m, nil
 		}
 		m.composer.SetValue("")
@@ -309,13 +330,12 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 	case "enter":
-		if m.running {
-			m.notice = "A turn is already running. Press Esc to stop it."
-			return m, nil
-		}
 		value := strings.TrimSpace(m.composer.Value())
 		if value == "" {
 			return m, nil
+		}
+		if m.running {
+			return m.enqueue(value)
 		}
 		m.composer.SetValue("")
 		m.slashMatches = nil
@@ -423,6 +443,39 @@ func (m *Model) handleAskKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(key)
 	return m, cmd
 }
+
+// maxQueuedInputs bounds the steer queue so a held Enter key cannot grow
+// memory without limit on a small machine.
+const maxQueuedInputs = 5
+
+// enqueue holds one input for after the running turn. The composer is
+// cleared so the operator can keep typing the next steer on top of it.
+//
+// When a turn is genuinely in flight the message is handed to it instead, so
+// the agent can change course at its next step rather than only after it
+// finishes. A message the live turn never reached stays in the app queue and
+// is drained by runDoneMsg, so nothing is lost either way.
+func (m *Model) enqueue(value string) (tea.Model, tea.Cmd) {
+	if m.queuedCount() >= maxQueuedInputs {
+		m.notice = fmt.Sprintf("Queue is full (%d). Wait for the current turn.", maxQueuedInputs)
+		m.refresh()
+		return m, nil
+	}
+	if m.running && m.app.Running() {
+		m.app.Steer(value)
+	} else {
+		m.queue = append(m.queue, value)
+	}
+	m.composer.SetValue("")
+	m.slashMatches = nil
+	m.notice = fmt.Sprintf("Queued (%d). The agent picks it up at its next step.", m.queuedCount())
+	m.refresh()
+	return m, nil
+}
+
+// queuedCount is everything still waiting: what the UI holds plus what the
+// live turn has been handed but not yet taken.
+func (m *Model) queuedCount() int { return len(m.queue) + m.app.SteerCount() }
 
 // submit dispatches either a slash command or an agent turn.
 func (m *Model) submit(value string) (tea.Model, tea.Cmd) {
@@ -566,6 +619,21 @@ func closeOpenThinking(blocks []block) {
 	}
 }
 
+// enterChat returns the model to the chat composer with focus restored.
+//
+// Every path that leaves the setup wizard, a picker or a dialog must go
+// through here. The wizard uses m.input while chat uses m.composer, so a
+// direct mode switch without refocusing leaves the composer blurred and the
+// operator cannot type.
+func (m *Model) enterChat() tea.Cmd {
+	m.current = modeChat
+	m.input.Blur()
+	m.input.EchoMode = textinput.EchoNormal
+	m.composer.Focus()
+	m.refresh()
+	return textarea.Blink
+}
+
 // layout recomputes the viewport and composer for the window size.
 func (m *Model) layout() {
 	transcriptHeight := m.height - 9
@@ -647,6 +715,11 @@ func (m *Model) viewStatus() string {
 	if total > 0 {
 		parts = append(parts, m.styles.Plan.Render(fmt.Sprintf("plan %d/%d", done, total)))
 	}
+	// The task in flight is named rather than only counted, so a glance at the
+	// status line says what the agent is doing without scrolling the transcript.
+	if active, ok := m.app.Todos().Active(); ok {
+		parts = append(parts, m.styles.Plan.Render("task "+truncate(active.Title, 40)))
+	}
 	if usage.TotalTokens > 0 {
 		parts = append(parts, m.styles.Dim.Render(fmt.Sprintf("tokens %d", usage.TotalTokens)))
 	}
@@ -658,6 +731,9 @@ func (m *Model) viewStatus() string {
 		parts = append(parts, style.Render(fmt.Sprintf("$%.4f", spend)))
 	}
 	parts = append(parts, m.styles.Dim.Render("approval "+string(m.app.Config().ApprovalMode)))
+	if count := m.queuedCount(); count > 0 {
+		parts = append(parts, m.styles.Dim.Render(fmt.Sprintf("queue %d", count)))
+	}
 	if m.notice != "" {
 		parts = append(parts, m.styles.Notice.Render(m.notice))
 	}
@@ -684,7 +760,10 @@ func (m *Model) viewComposer() string {
 func (m *Model) viewHints() string {
 	if m.running {
 		elapsed := time.Since(m.runStarted).Round(time.Second)
-		return m.styles.Hint.Render(fmt.Sprintf(" %s working (%s) | Esc stop | Ctrl+C quit", m.spin.View(), elapsed))
+		if count := m.queuedCount(); count > 0 {
+			return m.styles.Hint.Render(fmt.Sprintf(" %s working (%s) | %d queued | Enter steers the run | Esc stop | Ctrl+C quit", m.spin.View(), elapsed, count))
+		}
+		return m.styles.Hint.Render(fmt.Sprintf(" %s working (%s) | Enter steers the run | Esc stop | Ctrl+C quit", m.spin.View(), elapsed))
 	}
 	return m.styles.Hint.Render(" Enter send | Ctrl+J newline | / commands | Tab complete | Ctrl+C quit")
 }

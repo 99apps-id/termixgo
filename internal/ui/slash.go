@@ -23,6 +23,7 @@ var slashCommands = []SlashCommand{
 	{Trigger: "/status", Args: "", Summary: "Show workspace, model and token status"},
 	{Trigger: "/trust", Args: "[on|off]", Summary: "Show or change folder trust"},
 	{Trigger: "/approval", Args: "[ask|edits|all]", Summary: "Show or change the approval policy"},
+	{Trigger: "/harness", Args: "[id]", Summary: "Show or change the agent harness"},
 	{Trigger: "/plan", Args: "", Summary: "Show the current task plan"},
 	{Trigger: "/tools", Args: "", Summary: "List the tools the agent can call"},
 	{Trigger: "/skills", Args: "[reload]", Summary: "List loaded skills"},

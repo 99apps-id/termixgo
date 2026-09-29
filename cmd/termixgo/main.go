@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/app"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/provider"
@@ -71,6 +72,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runTrust(args[1:], stdout)
 	case "approval":
 		return runApproval(args[1:], stdout)
+	case "harness":
+		return runHarness(args[1:], stdout)
 	case "secret":
 		return runSecret(args[1:], stdin, stdout)
 	case "telegram":
@@ -232,6 +235,36 @@ func runApproval(args []string, stdout io.Writer) error {
 	return nil
 }
 
+// runHarness shows or selects the agent harness profile.
+func runHarness(args []string, stdout io.Writer) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if len(args) == 0 {
+		active := agent.GetHarnessProfile(cfg.HarnessProfile)
+		fmt.Fprintf(stdout, "%s (%s)\n", active.ID, active.Label)
+		for _, profile := range agent.HarnessProfiles() {
+			if profile.ID == active.ID {
+				continue
+			}
+			fmt.Fprintf(stdout, "  %-22s %s\n", profile.ID, profile.Description)
+		}
+		return nil
+	}
+	id := strings.TrimSpace(args[0])
+	profile, ok := agent.BuiltinHarnessProfiles[id]
+	if !ok {
+		return fmt.Errorf("unknown harness %q; try one of %s", id, strings.Join(agent.HarnessProfileIDs(), ", "))
+	}
+	cfg.HarnessProfile = profile.ID
+	if err := config.Save(cfg); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "harness is now %s\n", profile.ID)
+	return nil
+}
+
 func runSecret(args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: termixgo secret <provider> [key]")
@@ -381,6 +414,7 @@ Usage:
   termixgo model [id]             Show or set the default model
   termixgo trust [on|off]         Show or set folder trust for this directory
   termixgo approval [mode]        Show or set ask|edits|all
+  termixgo harness [id]           Show or set the agent harness profile
   termixgo secret <provider> [k]  Store a provider API key
   termixgo telegram [status|on|off]
   termixgo doctor                 Inspect configuration and provider keys

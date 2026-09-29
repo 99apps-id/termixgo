@@ -106,3 +106,14 @@ func (s *TodoStore) Progress() (done, total int) {
 	}
 	return done, len(items)
 }
+
+// Active returns the item the agent is working on, so the status line can name
+// the current task instead of only counting the list.
+func (s *TodoStore) Active() (Todo, bool) {
+	for _, item := range s.Items() {
+		if item.Status == "in_progress" {
+			return item, true
+		}
+	}
+	return Todo{}, false
+}

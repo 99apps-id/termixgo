@@ -75,6 +75,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashTrust(args)
 	case "approval":
 		return m.slashApproval(args)
+	case "harness":
+		return m.slashHarness(args)
 	case "plan":
 		m.blocks = append(m.blocks, block{kind: blockPlan, plan: m.app.Todos().Items()})
 		m.refresh()
@@ -254,6 +256,38 @@ func (m *Model) slashApproval(args string) (tea.Model, tea.Cmd) {
 		note += " Nothing waits for confirmation."
 	}
 	m.blocks = append(m.blocks, block{kind: blockNotice, text: note})
+	m.refresh()
+	return m, nil
+}
+
+// slashHarness shows or selects the agent harness profile.
+//
+// The profile is who the agent is for the next turn: how much it plans, how
+// hard it verifies and how many steps it may take. Naming the candidates here
+// means the operator does not have to read the config file to choose.
+func (m *Model) slashHarness(args string) (tea.Model, tea.Cmd) {
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
+		active := m.app.HarnessProfile()
+		lines := []string{"Harness: " + active.Label + " (" + active.ID + ")"}
+		for _, profile := range agent.HarnessProfiles() {
+			marker := "  "
+			if profile.ID == active.ID {
+				marker = "> "
+			}
+			lines = append(lines, fmt.Sprintf("%s%-14s %s", marker, profile.ID, profile.Description))
+		}
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
+		m.refresh()
+		return m, nil
+	}
+	profile, err := m.app.SetHarnessProfile(trimmed)
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		m.refresh()
+		return m, nil
+	}
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: "Harness is now " + profile.Label + ". It applies from the next turn."})
 	m.refresh()
 	return m, nil
 }

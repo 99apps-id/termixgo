@@ -36,12 +36,12 @@ func TestHistoryBudgetReservesRoomAndKeepsAFloor(t *testing.T) {
 }
 
 func TestSubagentDepthCapIsReachable(t *testing.T) {
-	// The subagent tool refuses to nest beyond depth two, so the value the
+	// The subagent tool refuses to nest beyond the cap, so the value the
 	// runner assigns has to be able to reach it for the cap to mean anything.
-	grandchild := &Env{Depth: 2, Todos: NewTodoStore()}
+	grandchild := &Env{Depth: MaxSubagentDepth, Todos: NewTodoStore()}
 	// A grandchild does have a runner injected, so the depth cap, not the
 	// availability check, is what has to stop it.
-	grandchild.RunSubagent = func(context.Context, string, bool) (string, error) { return "", nil }
+	grandchild.RunSubagent = func(context.Context, string, string) (string, error) { return "", nil }
 	child := &Env{Depth: 1, Todos: NewTodoStore()}
 
 	tool := &subagentTool{}
@@ -51,7 +51,7 @@ func TestSubagentDepthCapIsReachable(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !refused.IsError || !strings.Contains(refused.Output, "cannot nest") {
-		t.Errorf("depth 2 must be refused with an explanation, got %+v", refused)
+		t.Errorf("depth 3 must be refused with an explanation, got %+v", refused)
 	}
 
 	// A child without a runner reports that delegation is unavailable, which
