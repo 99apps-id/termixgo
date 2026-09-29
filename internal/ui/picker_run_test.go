@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -158,6 +159,38 @@ func TestOpenPickerResetsTheCursor(t *testing.T) {
 	model.openPicker("Pick one", "model", []pickerItem{{ID: "a", Label: "Alpha"}})
 	if model.picker.cursor != 0 {
 		t.Errorf("opening a picker should reset the cursor, got %d", model.picker.cursor)
+	}
+}
+
+// TestPickerBackspaceRemovesAWholeRune is the multi-byte case of the filter
+// field. Cutting one byte instead of one rune lands inside the last character, so
+// the filter became invalid UTF-8: the field painted a replacement glyph and no
+// row matched any more.
+func TestPickerBackspaceRemovesAWholeRune(t *testing.T) {
+	model := chatModel(t)
+	model.openPicker("Pick one", "model", []pickerItem{{ID: "a", Label: "\u65e5\u672c\u8a9e\u30e2\u30c7\u30eb"}})
+
+	model = press(t, model, "\u65e5\u672c")
+	if model.picker.filter != "\u65e5\u672c" {
+		t.Fatalf("filter = %q, want the two typed characters", model.picker.filter)
+	}
+	model = press(t, model, "backspace")
+	if model.picker.filter != "\u65e5" {
+		t.Errorf("filter = %q, want %q", model.picker.filter, "\u65e5")
+	}
+	if !utf8.ValidString(model.picker.filter) {
+		t.Errorf("backspace left invalid UTF-8 behind: %q", model.picker.filter)
+	}
+	if len(model.picker.visible) != 1 {
+		t.Errorf("the remaining character should still match the label, got %d rows", len(model.picker.visible))
+	}
+
+	model = press(t, model, "backspace")
+	if model.picker.filter != "" {
+		t.Errorf("a second backspace should empty the filter, got %q", model.picker.filter)
+	}
+	if len(model.picker.visible) != 1 {
+		t.Errorf("an empty filter should show every row, got %d", len(model.picker.visible))
 	}
 }
 
