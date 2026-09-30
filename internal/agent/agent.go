@@ -542,6 +542,9 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 		if decision == DecisionAllowSession {
 			r.Policy.AllowSession(tool.Name())
 		}
+		if r.Policy != nil && r.Policy.Memory != nil {
+			r.Policy.Memory.RecordApprovalDecision(tool.Name(), decision)
+		}
 	}
 
 	started := time.Now()

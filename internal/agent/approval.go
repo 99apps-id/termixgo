@@ -39,6 +39,8 @@ type ApprovalPolicy struct {
 	AlwaysAllowed map[string]bool
 	// SessionAllowed holds tools allowed for this session.
 	SessionAllowed map[string]bool
+	// Memory records approval decisions in learned memory.
+	Memory *Memory
 }
 
 // ApprovalMode mirrors config.ApprovalMode without importing it here, which

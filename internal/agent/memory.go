@@ -132,6 +132,28 @@ func (m *Memory) PromptBlock() string {
 	return builder.String()
 }
 
+// RecordApprovalDecision appends one approval decision to the project memory.
+// It is a short machine-readable line so the agent can reuse the pattern
+// without asking again.
+func (m *Memory) RecordApprovalDecision(tool string, decision Decision) {
+	fact := fmt.Sprintf("approval %s %s", decisionWord(decision), tool)
+	_ = m.Remember(fact, "project")
+}
+
+// decisionWord renders a decision as one word for memory lines.
+func decisionWord(decision Decision) string {
+	switch decision {
+	case DecisionAllowOnce:
+		return "allowed_once"
+	case DecisionAllowSession:
+		return "allowed_session"
+	case DecisionAllowAlways:
+		return "always_allowed"
+	default:
+		return "denied"
+	}
+}
+
 // splitFacts reads "- fact" lines out of a memory file.
 func splitFacts(text string) []string {
 	var facts []string

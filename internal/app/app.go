@@ -170,6 +170,7 @@ func New(workspace string) (*App, error) {
 		Mode:           agent.ApprovalModeOrDefault(cfg),
 		AlwaysAllowed:  stringSet(cfg.AlwaysAllowedTools),
 		SessionAllowed: map[string]bool{},
+		Memory:         instance.memory,
 	}
 	instance.session = agent.NewSession(workspace, "")
 
