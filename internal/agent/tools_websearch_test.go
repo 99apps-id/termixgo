@@ -9,10 +9,36 @@ import (
 	"testing"
 )
 
-// searchServer points both search endpoints at one test server so a run never
-// reaches the network. The HTML page is tried first, so the payload is the
-// instant-answer JSON an HTML scrape cannot read; every test therefore also
-// exercises the fallback path.
+// restoreSearchEndpoints puts every search source back to its production URL.
+func restoreSearchEndpoints() {
+	webSearchEndpoint = "https://api.duckduckgo.com/"
+	webSearchHTMLEndpoint = "https://html.duckduckgo.com/html/"
+	webSearchWikipediaEndpoint = "https://en.wikipedia.org/w/api.php"
+	webSearchGitHubEndpoint = "https://api.github.com/search/repositories"
+}
+
+// emptySources stands in for Wikipedia and GitHub with valid but empty
+// payloads, so a test that exercises DuckDuckGo never reaches the network and
+// the extra sources contribute no results of their own.
+func emptySources(t *testing.T) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.URL.Query().Get("action") == "opensearch" {
+			fmt.Fprint(writer, `["q",[],[],[]]`)
+			return
+		}
+		fmt.Fprint(writer, `{"items":[]}`)
+	}))
+	t.Cleanup(server.Close)
+	webSearchWikipediaEndpoint = server.URL
+	webSearchGitHubEndpoint = server.URL
+}
+
+// searchServer points both DuckDuckGo endpoints at one test server so a run
+// never reaches the network. The HTML page is tried first, so the payload is
+// the instant-answer JSON an HTML scrape cannot read; every test therefore
+// also exercises the fallback path.
 func searchServer(t *testing.T, payload string, status int) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -25,11 +51,11 @@ func searchServer(t *testing.T, payload string, status int) *httptest.Server {
 	}))
 	t.Cleanup(func() {
 		server.Close()
-		webSearchEndpoint = "https://api.duckduckgo.com/"
-		webSearchHTMLEndpoint = "https://html.duckduckgo.com/html/"
+		restoreSearchEndpoints()
 	})
 	webSearchEndpoint = server.URL + "/"
 	webSearchHTMLEndpoint = server.URL + "/"
+	emptySources(t)
 	return server
 }
 
@@ -48,12 +74,78 @@ func htmlSearchServer(t *testing.T, markup string) *httptest.Server {
 	}))
 	t.Cleanup(func() {
 		server.Close()
-		webSearchEndpoint = "https://api.duckduckgo.com/"
-		webSearchHTMLEndpoint = "https://html.duckduckgo.com/html/"
+		restoreSearchEndpoints()
 	})
 	webSearchHTMLEndpoint = server.URL + "/"
 	webSearchEndpoint = server.URL + "/"
+	emptySources(t)
 	return server
+}
+
+// TestWebSearchFallsBackToWikipedia proves the chain keeps answering when
+// every DuckDuckGo host is unreachable, which is the outage the operator hit:
+// both DDG endpoints fail, and the Wikipedia source still returns results.
+func TestWebSearchFallsBackToWikipedia(t *testing.T) {
+	ddg := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Error(writer, "blocked", http.StatusForbidden)
+	}))
+	wiki := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Get("action") != "opensearch" {
+			t.Errorf("the opensearch action is missing: %s", request.URL.RawQuery)
+		}
+		fmt.Fprint(writer, `["go",["Go (programming language)"],["Statically typed language"],["https://en.wikipedia.org/wiki/Go_(programming_language)"]]`)
+	}))
+	t.Cleanup(func() {
+		ddg.Close()
+		wiki.Close()
+		restoreSearchEndpoints()
+	})
+	webSearchHTMLEndpoint = ddg.URL
+	webSearchEndpoint = ddg.URL
+	webSearchWikipediaEndpoint = wiki.URL
+	webSearchGitHubEndpoint = ddg.URL
+
+	tool := &webSearchTool{}
+	result, err := tool.Run(context.Background(), &Env{}, map[string]any{"query": "go"})
+	if err != nil || result.IsError {
+		t.Fatalf("Run: err=%v result=%+v", err, result)
+	}
+	for _, want := range []string{"wikipedia", "Go (programming language)", "https://en.wikipedia.org/wiki/Go_(programming_language)"} {
+		if !strings.Contains(result.Output, want) {
+			t.Errorf("output is missing %q:\n%s", want, result.Output)
+		}
+	}
+}
+
+// TestWebSearchFallsBackToGitHub proves the last source in the chain answers
+// when both DuckDuckGo and Wikipedia are down.
+func TestWebSearchFallsBackToGitHub(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Error(writer, "blocked", http.StatusForbidden)
+	}))
+	github := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		fmt.Fprint(writer, `{"items":[{"full_name":"99apps-id/termixgo","html_url":"https://github.com/99apps-id/termixgo","description":"terminal agent"}]}`)
+	}))
+	t.Cleanup(func() {
+		dead.Close()
+		github.Close()
+		restoreSearchEndpoints()
+	})
+	webSearchHTMLEndpoint = dead.URL
+	webSearchEndpoint = dead.URL
+	webSearchWikipediaEndpoint = dead.URL
+	webSearchGitHubEndpoint = github.URL
+
+	tool := &webSearchTool{}
+	result, err := tool.Run(context.Background(), &Env{}, map[string]any{"query": "termixgo"})
+	if err != nil || result.IsError {
+		t.Fatalf("Run: err=%v result=%+v", err, result)
+	}
+	for _, want := range []string{"github", "99apps-id/termixgo"} {
+		if !strings.Contains(result.Output, want) {
+			t.Errorf("output is missing %q:\n%s", want, result.Output)
+		}
+	}
 }
 
 func TestWebSearchReturnsTitlesAndURLs(t *testing.T) {

@@ -23,6 +23,26 @@ var webSearchHTMLEndpoint = "https://html.duckduckgo.com/html/"
 // the queries the HTML page refuses (it serves a bot check now and then).
 var webSearchEndpoint = "https://api.duckduckgo.com/"
 
+// webSearchWikipediaEndpoint is a second keyless source. Every DuckDuckGo host
+// can be unreachable at once, because an ISP or a firewall may block the whole
+// domain, and a search that only knows one vendor dies with it. Wikipedia
+// answers entity and topic queries from anywhere.
+var webSearchWikipediaEndpoint = "https://en.wikipedia.org/w/api.php"
+
+// webSearchGitHubEndpoint is a third keyless source, aimed at the queries a
+// coding agent actually makes: an error message, a library or a repository.
+var webSearchGitHubEndpoint = "https://api.github.com/search/repositories"
+
+// webSearchSource names where results came from, so the model knows how much
+// to trust a general web search against a reference or code lookup.
+type webSearchSource string
+
+const (
+	sourceDuckDuckGo webSearchSource = "duckduckgo"
+	sourceWikipedia  webSearchSource = "wikipedia"
+	sourceGitHub     webSearchSource = "github"
+)
+
 // webSearchUserAgent identifies the tool. DuckDuckGo's HTML page answers a
 // browser-like agent and rejects some empty ones, so the header is explicit.
 const webSearchUserAgent = "Mozilla/5.0 (compatible; Termixgo/0.1; +https://github.com/99apps-id/termixgo)"
@@ -85,7 +105,7 @@ func (t *webSearchTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	requestCtx, cancel := context.WithTimeout(ctx, webSearchTimeout)
 	defer cancel()
 
-	results, lastErr := searchWeb(requestCtx, query)
+	results, source, lastErr := searchWeb(requestCtx, query)
 	if len(results) == 0 {
 		if lastErr != nil {
 			return searchFailure(query, lastErr), nil
@@ -100,29 +120,118 @@ func (t *webSearchTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	for _, result := range results {
 		lines = append(lines, result.line())
 	}
-	output := strings.Join(lines, "\n\n")
+	output := fmt.Sprintf("Source: %s\n\n%s", source, strings.Join(lines, "\n\n"))
 	if len(output) > 6000 {
 		output = clipBytes(output, 6000) + "\n... [truncated]"
 	}
 	return Result{Output: output}, nil
 }
 
-// searchWeb tries the HTML results page first and falls back to the instant
-// answer API. Both are DuckDuckGo, so a dead network fails both and the error
-// is reported once with an offline hint.
-func searchWeb(ctx context.Context, query string) ([]searchResult, error) {
-	results, htmlErr := searchDuckDuckGoHTML(ctx, query)
-	if len(results) > 0 {
-		return results, nil
+// searchProvider is one keyless search source in the fallback chain.
+type searchProvider struct {
+	source webSearchSource
+	run    func(context.Context, string) ([]searchResult, error)
+}
+
+// searchWeb walks the sources in order and returns the first that answers.
+//
+// The chain exists because a single vendor is a single point of failure:
+// DuckDuckGo can be unreachable in a whole country, and a search tool that
+// dies there is worse than one that answers from Wikipedia or GitHub. A
+// source that returns no results moves on; the first real error is kept so a
+// total outage still reports a cause.
+func searchWeb(ctx context.Context, query string) ([]searchResult, webSearchSource, error) {
+	providers := []searchProvider{
+		{sourceDuckDuckGo, searchDuckDuckGoHTML},
+		{sourceDuckDuckGo, searchInstantAnswer},
+		{sourceWikipedia, searchWikipedia},
+		{sourceGitHub, searchGitHub},
 	}
-	fallback, jsonErr := searchInstantAnswer(ctx, query)
-	if len(fallback) > 0 {
-		return fallback, nil
+	var firstErr error
+	for _, provider := range providers {
+		results, err := provider.run(ctx, query)
+		if len(results) > 0 {
+			return results, provider.source, nil
+		}
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	if htmlErr == nil {
-		return nil, jsonErr
+	return nil, "", firstErr
+}
+
+// searchWikipedia queries the MediaWiki opensearch API, which is keyless and
+// reachable far more widely than DuckDuckGo. It answers topic and entity
+// queries with a title, one-line description and canonical URL each.
+func searchWikipedia(ctx context.Context, query string) ([]searchResult, error) {
+	endpoint := strings.TrimSpace(webSearchWikipediaEndpoint)
+	if endpoint == "" {
+		return nil, nil
 	}
-	return nil, htmlErr
+	link := fmt.Sprintf("%s?action=opensearch&format=json&limit=10&search=%s",
+		strings.TrimRight(endpoint, "/"), url.QueryEscape(query))
+	body, err := fetchURL(ctx, link)
+	if err != nil {
+		return nil, err
+	}
+	var parsed []json.RawMessage
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		return nil, fmt.Errorf("read search: %v", err)
+	}
+	// The payload is [query, [titles], [descriptions], [urls]].
+	if len(parsed) < 4 {
+		return nil, nil
+	}
+	var titles, descriptions, urls []string
+	_ = json.Unmarshal(parsed[1], &titles)
+	_ = json.Unmarshal(parsed[2], &descriptions)
+	_ = json.Unmarshal(parsed[3], &urls)
+	results := make([]searchResult, 0, len(titles))
+	for index, title := range titles {
+		snippet := ""
+		if index < len(descriptions) {
+			snippet = descriptions[index]
+		}
+		link := ""
+		if index < len(urls) {
+			link = urls[index]
+		}
+		results = append(results, searchResult{title: title, url: link, snippet: snippet})
+	}
+	return results, nil
+}
+
+// searchGitHub queries the repository search API, which is keyless at a low
+// rate and the right source for a library or an error a project has fixed.
+func searchGitHub(ctx context.Context, query string) ([]searchResult, error) {
+	endpoint := strings.TrimSpace(webSearchGitHubEndpoint)
+	if endpoint == "" {
+		return nil, nil
+	}
+	link := fmt.Sprintf("%s?per_page=10&q=%s", strings.TrimRight(endpoint, "/"), url.QueryEscape(query))
+	body, err := fetchURL(ctx, link)
+	if err != nil {
+		return nil, err
+	}
+	var parsed struct {
+		Items []struct {
+			FullName    string `json:"full_name"`
+			HTMLURL     string `json:"html_url"`
+			Description string `json:"description"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		return nil, fmt.Errorf("read search: %v", err)
+	}
+	results := make([]searchResult, 0, len(parsed.Items))
+	for _, item := range parsed.Items {
+		results = append(results, searchResult{
+			title:   item.FullName,
+			url:     item.HTMLURL,
+			snippet: Shorten(strings.TrimSpace(item.Description), 300),
+		})
+	}
+	return results, nil
 }
 
 // searchFailure renders a failed search. A DNS or connectivity failure is
@@ -325,9 +434,14 @@ func flattenSearchTopics(topics []webSearchTopic) []searchResult {
 
 // ----------------------------------------------------------------- transport
 
-// fetchSearchPage issues one bounded GET and returns the body as text.
+// fetchSearchPage issues one bounded GET for a page that takes the query in
+// its own form, which is how both DuckDuckGo endpoints read it.
 func fetchSearchPage(ctx context.Context, endpoint, query string) (string, error) {
-	link := appendQuery(endpoint, "q", query)
+	return fetchURL(ctx, appendQuery(endpoint, "q", query))
+}
+
+// fetchURL issues one bounded GET and returns the body as text.
+func fetchURL(ctx context.Context, link string) (string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
 	if err != nil {
 		return "", err
