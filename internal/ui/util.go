@@ -114,3 +114,19 @@ func trimLastRune(text string) string {
 	}
 	return text[:len(text)-size]
 }
+
+// clipBytes returns the first limit bytes of text, moved back to a rune
+// boundary so the kept part is valid UTF-8.
+func clipBytes(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(text) <= limit {
+		return text
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut]
+}

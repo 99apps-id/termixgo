@@ -214,7 +214,16 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 	if item.running {
 		return shimmerTool(line, styles)
 	}
-	return style.Render(line + styles.Dim.Render(timing))
+	rendered := style.Render(line + styles.Dim.Render(timing))
+	result := strings.TrimSpace(item.toolResult)
+	if result == "" {
+		return rendered
+	}
+	display := clipBytes(result, markdownResultCap)
+	if len(result) > markdownResultCap {
+		display += "\n... [tool output clipped]"
+	}
+	return rendered + "\n" + renderPrefixed(display, "    ", styles.Dim, width)
 }
 
 func renderPlanBlock(item block, styles Styles, width int) string {
@@ -272,6 +281,11 @@ func indent(text, prefix string) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// markdownResultCap is the maximum bytes a tool result block may display in
+// the TUI. The transcript must stay inside the terminal box, and a command
+// output of tens of thousands of bytes would push the frame past it.
+const markdownResultCap = 12000
 
 // renderMarkdown styles a small, deliberate subset of Markdown: headings,
 // bullets, fenced code, inline code and bold. Anything else passes through.
