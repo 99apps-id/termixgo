@@ -14,13 +14,15 @@ import (
 
 func TestMarkdownToTelegramHTML(t *testing.T) {
 	cases := map[string]string{
-		"plain text":         "plain text",
-		"**bold**":           "<b>bold</b>",
-		"`code`":             "<code>code</code>",
-		"# Heading":          "<b>Heading</b>",
-		"[x](https://e.com)": `<a href="https://e.com">x</a>`,
-		"a < b & c > d":      "a &lt; b &amp; c &gt; d",
-		"see `a<b` here":     "see <code>a&lt;b</code> here",
+		"plain text":                          "plain text",
+		"**bold**":                            "<b>bold</b>",
+		"`code`":                              "<code>code</code>",
+		"# Heading":                           "<b>Heading</b>",
+		"[x](https://e.com)":                  `<a href="https://e.com">x</a>`,
+		"a < b & c > d":                       "a &lt; b &amp; c &gt; d",
+		"see `a<b` here":                      "see <code>a&lt;b</code> here",
+		"| a | b |\n| --- | --- |\n| 1 | 2 |": "<pre>a | b\n| --- | --- |\n1 | 2\n</pre>",
+		"| a & b | c < d |":                   "<pre>a &amp; b | c &lt; d\n</pre>",
 	}
 	for input, want := range cases {
 		if got := markdownToTelegramHTML(input); got != want {
@@ -31,6 +33,11 @@ func TestMarkdownToTelegramHTML(t *testing.T) {
 	code := markdownToTelegramHTML("```\nif a < b {}\n```")
 	if !strings.Contains(code, "<pre>") || !strings.Contains(code, "a &lt; b") || !strings.Contains(code, "</pre>") {
 		t.Errorf("fenced code = %q", code)
+	}
+
+	linenos := markdownToTelegramHTML("```python linenos\nx = 1\n```")
+	if !strings.Contains(linenos, "<pre>") || !strings.Contains(linenos, "1: x = 1") || !strings.Contains(linenos, "</pre>") {
+		t.Errorf("linenos code = %q", linenos)
 	}
 }
 
