@@ -61,6 +61,11 @@ All notable changes to Termixgo are recorded here. The format follows
   one was still dispatching tools, so a small `maxSteps` no longer pauses a task
   that is making progress. The loop guard and the cost cap stay the inner stops
   and the segment count is the outer ceiling; a subagent keeps a hard budget.
+- `search_memory` takes an optional `path`, so a search over a large workspace
+  can be limited to the folder being worked on instead of the whole tree. The
+  workspace index also skips dependency and build trees, and caps how many files
+  one refresh indexes, so a search on a big tree no longer walks tens of
+  thousands of generated files.
 - `search_memory` is registered and the full-text index behind it is opened, so
   the tool is reachable and the index is used. It was written, documented and
   tested but never added to the registry, so the model could not call it and
