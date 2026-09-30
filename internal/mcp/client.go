@@ -129,37 +129,28 @@ func (c *Client) Stderr() string { return c.stderr.String() }
 
 // readLineWithLimit reads one JSON-RPC frame from stdout, capping the line
 // length so a misbehaving server cannot allocate unbounded memory.
+//
+// A frame is not bounded by the reader's buffer: a server's tools/list or a
+// large tool result is one line far bigger than the 4 KB bufio default.
+// ReadSlice stops at the buffer edge and reports ErrBufferFull, so the
+// fragments are collected until the newline arrives rather than treated as an
+// overlong message. Only a frame past the hard cap is refused.
 func (c *Client) readLineWithLimit(reader *bufio.Reader) ([]byte, error) {
-	prefix, err := reader.ReadSlice('\n')
-	if err == bufio.ErrBufferFull {
-		if _, err := reader.Discard(reader.Buffered()); err != nil {
-			return nil, err
+	var frame []byte
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if len(frame)+len(fragment) > maxMessageBytes {
+			return nil, fmt.Errorf("%s produced a message over %d bytes", c.name, maxMessageBytes)
 		}
-		read := 0
-		for {
-			b := make([]byte, 8192)
-			n, err := reader.Read(b)
-			if n > 0 {
-				read += n
-			}
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					return nil, fmt.Errorf("%s produced an overlong message (%d bytes) and closed stdout", c.name, read)
-				}
-				return nil, fmt.Errorf("%s produced an overlong message (%d bytes): %w", c.name, read, err)
-			}
-			if n < len(b) {
-				return nil, fmt.Errorf("%s produced an overlong message (%d bytes)", c.name, read)
-			}
+		frame = append(frame, fragment...)
+		if err == bufio.ErrBufferFull {
+			continue
 		}
+		if err != nil {
+			return frame, err
+		}
+		return frame, nil
 	}
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
-	}
-	if len(prefix) > maxMessageBytes {
-		return prefix, fmt.Errorf("%s produced an overlong message (%d bytes)", c.name, len(prefix))
-	}
-	return prefix, err
 }
 
 // read decodes one JSON-RPC message per line until the stream ends.

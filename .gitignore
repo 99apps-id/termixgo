@@ -23,6 +23,9 @@ secrets.json
 # Local tool caches
 .gocache/
 
+# A stray Node dependency tree is never part of this Go module.
+node_modules/
+
 # Editor and OS noise
 .DS_Store
 Thumbs.db
