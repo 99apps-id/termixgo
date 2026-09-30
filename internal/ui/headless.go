@@ -440,9 +440,16 @@ func runPlainSlash(ctx context.Context, application *app.App, name, args string,
 			return false, nil
 		case "export":
 			if len(fields) < 2 {
-				return false, fmt.Errorf("usage: /sessions export <id>")
+				return false, fmt.Errorf("usage: /sessions export <id> [--format markdown|jsonl]")
 			}
-			document, err := agent.ExportSession(fields[1])
+			format := agent.SessionExportMarkdown
+			for index := 2; index+1 < len(fields); index++ {
+				if strings.EqualFold(fields[index], "--format") {
+					format = agent.SessionExportFormat(strings.ToLower(fields[index+1]))
+					break
+				}
+			}
+			document, err := agent.ExportSession(fields[1], format)
 			if err != nil {
 				return false, err
 			}

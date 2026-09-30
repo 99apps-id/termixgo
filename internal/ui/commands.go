@@ -348,11 +348,18 @@ func (m *Model) slashSessionsDelete(fields []string) (tea.Model, tea.Cmd) {
 
 func (m *Model) slashSessionsExport(fields []string) (tea.Model, tea.Cmd) {
 	if len(fields) < 1 {
-		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /sessions export <id>"})
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /sessions export <id> [--format markdown|jsonl]"})
 		m.refresh()
 		return m, nil
 	}
-	document, err := agent.ExportSession(fields[0])
+	var format agent.SessionExportFormat
+	for index, field := range fields[1:] {
+		if strings.EqualFold(field, "--format") && index+2 < len(fields) {
+			format = agent.SessionExportFormat(strings.ToLower(fields[index+2]))
+			break
+		}
+	}
+	document, err := agent.ExportSession(fields[0], format)
 	if err != nil {
 		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
 		m.refresh()

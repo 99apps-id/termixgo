@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -85,12 +86,31 @@ func SearchSessions(query string) ([]SessionSummary, error) {
 	return matches, nil
 }
 
-// ExportSession renders one saved session as Markdown for sharing or review.
-func ExportSession(id string) (string, error) {
+// SessionExportFormat selects the representation for exported sessions.
+type SessionExportFormat string
+
+const (
+	SessionExportMarkdown SessionExportFormat = "markdown"
+	SessionExportJSONL    SessionExportFormat = "jsonl"
+)
+
+// ExportSession renders one saved session in the requested format.
+func ExportSession(id string, format SessionExportFormat) (string, error) {
 	session, err := LoadSession(id)
 	if err != nil {
 		return "", err
 	}
+	switch format {
+	case SessionExportJSONL:
+		return exportSessionJSONL(session)
+	case SessionExportMarkdown, "":
+		return exportSessionMarkdown(session)
+	default:
+		return "", fmt.Errorf("unsupported session export format %q", format)
+	}
+}
+
+func exportSessionMarkdown(session *Session) (string, error) {
 	var builder strings.Builder
 	title := strings.TrimSpace(session.Title())
 	if title == "" {
@@ -113,6 +133,37 @@ func ExportSession(id string) (string, error) {
 		}
 	}
 	return strings.TrimSpace(builder.String()) + "\n", nil
+}
+
+func exportSessionJSONL(session *Session) (string, error) {
+	var lines []string
+	for _, message := range session.Messages() {
+		payload := map[string]any{
+			"role":    string(message.Role),
+			"content": message.Content,
+		}
+		if len(message.ToolCalls) > 0 {
+			calls := make([]map[string]any, 0, len(message.ToolCalls))
+			for _, call := range message.ToolCalls {
+				calls = append(calls, map[string]any{
+					"id":   call.ID,
+					"name": call.Name,
+					"args": call.Arguments,
+				})
+			}
+			payload["tool_calls"] = calls
+		}
+		if message.ToolID != "" {
+			payload["tool_id"] = message.ToolID
+			payload["name"] = message.Name
+		}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return "", fmt.Errorf("encode session line: %w", err)
+		}
+		lines = append(lines, string(data))
+	}
+	return strings.Join(lines, "\n") + "\n", nil
 }
 
 func checkSessionID(id string) error {
