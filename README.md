@@ -159,6 +159,7 @@ the status code and body shape. The suite passes: 41 tests, 0 failures.
 | `+ Read foo.go (12ms)` | the tool finished |
 | `x Running ...` | the tool failed, with the output in the transcript |
 | `[x] Fix the parser` | the plan, updated as work progresses |
+| `    ... [tool output clipped]` | the tool result is longer than the transcript cap |
 
 Keys:
 
@@ -185,6 +186,7 @@ command typed mid-turn is queued and runs when the turn ends.
 | `/help` | every command and key binding |
 | `/new` | start a new session |
 | `/sessions [list\|search\|rename\|delete\|export]` | manage saved sessions |
+| `/sessions export <id> [--format markdown|jsonl]` | export a session |
 | `/stop` | stop the running turn |
 | `/status` | workspace, model, plan and token status |
 | `/trust [on\|off]` | show or change folder trust |
@@ -211,6 +213,10 @@ each one does. A value that only starts an argument, such as `delete` for
 
 Slash commands are local: they never reach the model as text, so `/cost` while a
 turn is running reports the spend instead of asking the agent about it.
+
+A turn runs at a time across the whole app, acquired with `runMu.TryLock`. A
+second caller gets `app.ErrBusy`; it is never queued, because a queued caller
+looks hung to the operator.
 
 ## Configuration
 
@@ -459,8 +465,10 @@ once paired. Progress is mirrored into one edited message instead of a flood.
 Answers are rendered from Markdown: bold, inline code, fenced code blocks,
 headings and links, converted to Telegram's HTML subset, with a plain-text
 fallback if Telegram ever rejects an entity so a formatting bug cannot swallow a
-reply. `/model` opens a provider-and-model picker. Send a photo, optionally with
-a caption as the instruction, and the agent sees it with a vision model.
+reply. Pipe tables are rendered as aligned preformatted blocks, and fenced code
+blocks whose info string ends with `linenos` are emitted with numbered lines.
+`/model` opens a provider-and-model picker. Send a photo, optionally with a
+caption as the instruction, and the agent sees it with a vision model.
 
 To run the assistant headless, 24/7:
 
