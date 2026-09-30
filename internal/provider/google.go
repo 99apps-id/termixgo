@@ -48,7 +48,7 @@ func (c *googleClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 
 	reader := newSSEReader(response.Body)
 	toolIndex := 0
-	usage := &googleUsage{}
+	usage := &cumulativeUsage{}
 	for {
 		payload, err := reader.next()
 		if err == io.EOF {
@@ -116,51 +116,6 @@ func (c *googleClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 		}
 	}
 	return nil
-}
-
-// googleUsage turns the cumulative usageMetadata of a Gemini stream into the
-// per-chunk increase.
-//
-// Gemini repeats usageMetadata on every chunk, and its counters cover the whole
-// request rather than the chunk, so the value climbs as the answer streams. The
-// agent sums every usage event it is handed, which means forwarding each chunk
-// as-is charged the same tokens once per chunk: the token count and the
-// estimated spend ran several times too high and a cost budget tripped early.
-// Emitting the increase keeps that downstream sum correct and still shows spend
-// as it accrues, which is what the running total is for.
-type googleUsage struct {
-	seen Usage
-}
-
-// step returns how much the counters grew since the last report. It reports
-// false when nothing moved, so a repeated final chunk is not counted twice.
-func (g *googleUsage) step(current Usage) (Usage, bool) {
-	increase := Usage{
-		PromptTokens:     growth(g.seen.PromptTokens, current.PromptTokens),
-		CompletionTokens: growth(g.seen.CompletionTokens, current.CompletionTokens),
-		TotalTokens:      growth(g.seen.TotalTokens, current.TotalTokens),
-	}
-	// The high-water mark, not the latest value: a chunk that reported less
-	// would otherwise re-count ground already charged when the counters climb
-	// again.
-	g.seen = Usage{
-		PromptTokens:     max(g.seen.PromptTokens, current.PromptTokens),
-		CompletionTokens: max(g.seen.CompletionTokens, current.CompletionTokens),
-		TotalTokens:      max(g.seen.TotalTokens, current.TotalTokens),
-	}
-	if increase == (Usage{}) {
-		return Usage{}, false
-	}
-	return increase, true
-}
-
-// growth reports how far a cumulative counter has moved, never below zero: a
-// counter that goes backwards is not a charge.
-func growth(previous, current int) int {
-	if current <= previous {
-		return 0
-	}
-	return current - previous
 }
 
 // googleModelPath accepts either "gemini-2.5-pro" or "models/gemini-2.5-pro".

@@ -2,10 +2,10 @@ package provider
 
 import "testing"
 
-// TestGoogleUsageStepCountsTheIncrease unit-tests the tracker itself, including
+// TestCumulativeUsageStepCountsTheIncrease unit-tests the shared tracker, including
 // the counter that moves backwards.
-func TestGoogleUsageStepCountsTheIncrease(t *testing.T) {
-	tracker := &googleUsage{}
+func TestCumulativeUsageStepCountsTheIncrease(t *testing.T) {
+	tracker := &cumulativeUsage{}
 
 	step, ok := tracker.step(Usage{PromptTokens: 4, CompletionTokens: 1, TotalTokens: 5})
 	if !ok || step != (Usage{PromptTokens: 4, CompletionTokens: 1, TotalTokens: 5}) {

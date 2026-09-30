@@ -51,6 +51,10 @@ func (c *openAIClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 
 	reader := newSSEReader(response.Body)
 	accumulator := newToolCallAccumulator()
+	// A server may repeat the request-wide usage on every chunk, so the increase
+	// is emitted rather than each raw report: the agent sums what it is handed,
+	// and forwarding repeats charged the same tokens once per chunk.
+	usage := &cumulativeUsage{}
 	for {
 		payload, err := reader.next()
 		if err == io.EOF {
@@ -67,12 +71,14 @@ func (c *openAIClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 			continue
 		}
 		if chunk.Usage != nil {
-			if err := emit(StreamEvent{Type: EventUsage, Usage: &Usage{
+			if step, ok := usage.step(Usage{
 				PromptTokens:     chunk.Usage.PromptTokens,
 				CompletionTokens: chunk.Usage.CompletionTokens,
 				TotalTokens:      chunk.Usage.TotalTokens,
-			}}); err != nil {
-				return err
+			}); ok {
+				if err := emit(StreamEvent{Type: EventUsage, Usage: &step}); err != nil {
+					return err
+				}
 			}
 		}
 		for _, choice := range chunk.Choices {
