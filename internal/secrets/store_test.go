@@ -50,6 +50,35 @@ func TestSetGetDeleteRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSetKeepsOtherSecrets guards the operator's expectation that changing a
+// provider key never drops the bot token. A model change writes only
+// config.json and never opens this file, but a provider key is stored here, and
+// it must not take the rest of the map with it.
+func TestSetKeepsOtherSecrets(t *testing.T) {
+	withTempHome(t)
+	store, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := store.Set(TelegramTokenKey(), "8793125192:token"); err != nil {
+		t.Fatalf("set telegram token: %v", err)
+	}
+	// Writing a provider key must leave the bot token in place.
+	if err := store.Set(ProviderKey("openai"), "sk-secret"); err != nil {
+		t.Fatalf("set provider key: %v", err)
+	}
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := reloaded.Get(TelegramTokenKey()); got != "8793125192:token" {
+		t.Errorf("telegram token = %q, want it kept when a provider key was written", got)
+	}
+	if got := reloaded.Get(ProviderKey("openai")); got != "sk-secret" {
+		t.Errorf("provider key = %q", got)
+	}
+}
+
 func TestSecretFileIsPrivate(t *testing.T) {
 	withTempHome(t)
 	store, err := Load()
