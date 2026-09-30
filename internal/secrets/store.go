@@ -39,6 +39,11 @@ type Store struct {
 	mu   sync.Mutex
 	path string
 	data map[string]string
+	// pending holds the changes made since the last save, keyed by secret. A
+	// nil value is a deletion. Saving merges these onto whatever is on disk at
+	// that moment, so a write here never drops a key another process added in
+	// between (the service and a terminal are two processes on one file).
+	pending map[string]*string
 	// protectionErr records a failure to restrict the file's access rules.
 	// It is reported rather than fatal: a read-only share can refuse the
 	// change, and locking the operator out of their own keys would be worse
@@ -63,13 +68,23 @@ func (s *Store) setProtectionErr(err error) {
 // Path returns the secret file location, which callers need to audit it.
 func (s *Store) Path() string { return s.path }
 
+// initLocked makes a zero-value store usable, which a white-box test builds.
+func (s *Store) initLocked() {
+	if s.data == nil {
+		s.data = map[string]string{}
+	}
+	if s.pending == nil {
+		s.pending = map[string]*string{}
+	}
+}
+
 // Load reads the secret file. A missing file yields an empty store.
 func Load() (*Store, error) {
 	path, err := config.HomePath(FileName)
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{path: path, data: map[string]string{}}
+	store := &Store{path: path, data: map[string]string{}, pending: map[string]*string{}}
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return store, nil
@@ -105,12 +120,16 @@ func (s *Store) Has(key string) bool { return strings.TrimSpace(s.Get(key)) != "
 // Set writes a secret and persists the file at 0600.
 func (s *Store) Set(key, value string) error {
 	s.mu.Lock()
+	s.initLocked()
 	previous, existed := s.data[key]
 	s.data[key] = value
+	stored := value
+	s.pending[key] = &stored
 	s.mu.Unlock()
 
 	if err := s.save(); err != nil {
 		s.mu.Lock()
+		delete(s.pending, key)
 		if existed {
 			s.data[key] = previous
 		} else {
@@ -123,13 +142,19 @@ func (s *Store) Set(key, value string) error {
 }
 
 // Delete removes a secret. Deleting a missing key is not an error.
+//
+// A failed write is not rolled back: losing access to a key is the safe side of
+// a failed delete, and the pending deletion is retried on the next save that
+// succeeds, so the file and memory agree again.
 func (s *Store) Delete(key string) error {
 	s.mu.Lock()
+	s.initLocked()
 	if _, ok := s.data[key]; !ok {
 		s.mu.Unlock()
 		return nil
 	}
 	delete(s.data, key)
+	s.pending[key] = nil
 	s.mu.Unlock()
 	return s.save()
 }
@@ -147,20 +172,56 @@ func (s *Store) Keys() []string {
 	return keys
 }
 
+// save merges the pending changes onto the current on-disk file and writes it
+// back, under a cross-process lock.
+//
+// The merge is the point: the file is shared by every Termixgo process on the
+// machine (the serve service and a terminal, say), and a store loaded an hour
+// ago does not know about a key another process added since. Writing the whole
+// in-memory map would drop that key. Instead only the keys this store changed
+// are applied to a fresh read, so no writer can clobber a key it never touched.
 func (s *Store) save() error {
 	s.mu.Lock()
-	encoded, err := json.MarshalIndent(s.data, "", "  ")
-	s.mu.Unlock()
-	if err != nil {
-		return fmt.Errorf("encode secrets: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+	defer s.mu.Unlock()
+
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
 	// The directory carries the restriction that children inherit, so it is
 	// hardened before the file is created inside it.
-	if err := restrictDirectory(filepath.Dir(s.path)); err != nil {
+	if err := restrictDirectory(dir); err != nil {
 		return fmt.Errorf("protect state directory: %w", err)
+	}
+
+	lock, err := lockSecrets(s.path)
+	if err != nil {
+		return err
+	}
+	defer lock.release()
+
+	merged := map[string]string{}
+	if raw, readErr := os.ReadFile(s.path); readErr == nil {
+		if jsonErr := json.Unmarshal(raw, &merged); jsonErr != nil {
+			return fmt.Errorf("parse secrets %s: %w", s.path, jsonErr)
+		}
+		if merged == nil {
+			merged = map[string]string{}
+		}
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return fmt.Errorf("read secrets: %w", readErr)
+	}
+	for key, value := range s.pending {
+		if value == nil {
+			delete(merged, key)
+			continue
+		}
+		merged[key] = *value
+	}
+
+	encoded, err := json.MarshalIndent(merged, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode secrets: %w", err)
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, append(encoded, '\n'), 0o600); err != nil {
@@ -179,8 +240,38 @@ func (s *Store) save() error {
 	if err := restrictFile(s.path); err != nil {
 		return fmt.Errorf("protect secrets: %w", err)
 	}
-	s.setProtectionErr(nil)
+	s.data = merged
+	s.pending = map[string]*string{}
+	s.protectionErr = nil
 	return nil
+}
+
+// secretsLock is an exclusive advisory lock on the secret file's lock file.
+//
+// The lock is a sibling file rather than the secret file itself: on POSIX an
+// advisory lock is held on the inode, and the secret file is replaced by rename
+// on every write, so two processes could otherwise lock two different inodes and
+// run together. The lock file is never renamed, so every process locks one
+// inode.
+type secretsLock struct {
+	file *os.File
+}
+
+func lockSecrets(path string) (*secretsLock, error) {
+	file, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open secrets lock: %w", err)
+	}
+	if err := lockFile(file); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("lock secrets: %w", err)
+	}
+	return &secretsLock{file: file}, nil
+}
+
+func (l *secretsLock) release() {
+	_ = unlockFile(l.file)
+	_ = l.file.Close()
 }
 
 // Redact renders a secret for display: prefix, dots, suffix. It never reveals

@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -76,6 +77,56 @@ func TestSetKeepsOtherSecrets(t *testing.T) {
 	}
 	if got := reloaded.Get(ProviderKey("openai")); got != "sk-secret" {
 		t.Errorf("provider key = %q", got)
+	}
+}
+
+// TestSetMergesAnotherProcessesWrite covers two processes on one file: the
+// serve service and a terminal each hold a store, and one writes a key the other
+// has never seen. Saving must merge onto the file as it is now, not write the
+// stale in-memory map, or the unknown key is lost.
+func TestSetMergesAnotherProcessesWrite(t *testing.T) {
+	home := withTempHome(t)
+	store, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := store.Set(ProviderKey("openai"), "sk-a"); err != nil {
+		t.Fatalf("set provider: %v", err)
+	}
+
+	// Another process adds the bot token straight to the file after this store
+	// was loaded.
+	path := filepath.Join(home, FileName)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read secrets: %v", err)
+	}
+	var onDisk map[string]string
+	if err := json.Unmarshal(raw, &onDisk); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	onDisk[TelegramTokenKey()] = "8793125192:token"
+	updated, _ := json.Marshal(onDisk)
+	if err := os.WriteFile(path, updated, 0o600); err != nil {
+		t.Fatalf("write secrets: %v", err)
+	}
+
+	// The stale store writes a different key. The bot token must survive.
+	if err := store.Set(ProviderKey("deepseek"), "sk-b"); err != nil {
+		t.Fatalf("set second provider: %v", err)
+	}
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := reloaded.Get(TelegramTokenKey()); got != "8793125192:token" {
+		t.Errorf("telegram token = %q, want it kept across a concurrent write", got)
+	}
+	if got := reloaded.Get(ProviderKey("openai")); got != "sk-a" {
+		t.Errorf("openai key = %q", got)
+	}
+	if got := reloaded.Get(ProviderKey("deepseek")); got != "sk-b" {
+		t.Errorf("deepseek key = %q", got)
 	}
 }
 
