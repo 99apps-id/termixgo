@@ -22,6 +22,24 @@ const (
 	maxIndexBytes = 64 * 1024
 )
 
+// skippedDirs are directory names no search enters: dependency trees, build
+// output and caches. They hold thousands of generated files, so indexing them
+// floods the results and bloats the database, and a walk that reads them makes a
+// search take minutes on a large workspace.
+//
+// This is the one list: the agent's grep and glob walk reads it too, through
+// IsSkippedDir, so a file the index knows is a file the tools will search.
+var skippedDirs = map[string]bool{
+	".git": true, "node_modules": true, "vendor": true, "dist": true, "build": true,
+	".next": true, ".turbo": true, ".venv": true, "venv": true, "__pycache__": true,
+	"target": true, ".pnpm-store": true, ".cache": true, "coverage": true,
+}
+
+// IsSkippedDir reports whether a directory name is one a search never enters.
+func IsSkippedDir(name string) bool {
+	return skippedDirs[strings.ToLower(strings.TrimSpace(name))]
+}
+
 // Result is one ranked search hit.
 type Result struct {
 	Scope   string
@@ -297,8 +315,9 @@ func (s *Store) indexWorkspace() {
 			return nil
 		}
 		if d.IsDir() {
-			name := d.Name()
-			if name == ".git" || name == "node_modules" || name == "dist" || name == ".next" {
+			// The root is never skipped even if its own name matches, because
+			// then a workspace called "build" or "dist" would index nothing.
+			if path != s.root && IsSkippedDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			// The state directory holds the database, its WAL and the error

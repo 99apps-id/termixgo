@@ -9,14 +9,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-)
 
-// skippedDirs are trees a code search never wants to walk.
-var skippedDirs = map[string]bool{
-	".git": true, "node_modules": true, "vendor": true, "dist": true, "build": true,
-	".next": true, ".turbo": true, ".venv": true, "venv": true, "__pycache__": true,
-	"target": true, ".pnpm-store": true, ".cache": true, "coverage": true,
-}
+	"github.com/99apps-id/termixgo/internal/search"
+)
 
 // maxSearchFileBytes caps the size of a file a search will read.
 const maxSearchFileBytes = 2 * 1024 * 1024
@@ -86,7 +81,7 @@ func (t *grepTool) Run(ctx context.Context, env *Env, args map[string]any) (Resu
 			return ctx.Err()
 		}
 		if entry.IsDir() {
-			if path != root && skippedDirs[entry.Name()] {
+			if path != root && search.IsSkippedDir(entry.Name()) {
 				return fs.SkipDir
 			}
 			return nil
@@ -193,7 +188,7 @@ func (t *globTool) Run(ctx context.Context, env *Env, args map[string]any) (Resu
 			return ctx.Err()
 		}
 		if entry.IsDir() {
-			if path != root && skippedDirs[entry.Name()] {
+			if path != root && search.IsSkippedDir(entry.Name()) {
 				return fs.SkipDir
 			}
 			return nil
