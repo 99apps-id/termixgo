@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -75,6 +76,41 @@ func TestSendMarkdownFallsBackWhenTelegramRejectsTheEntities(t *testing.T) {
 	}
 	if withParse != 1 || without != 1 {
 		t.Errorf("withParse=%d without=%d, want one of each", withParse, without)
+	}
+}
+
+// TestLongAnswerIsSplitIntoWholeMessages keeps a long answer from being
+// truncated at the Telegram cap: the whole answer must arrive, split over
+// several messages.
+func TestLongAnswerIsSplitIntoWholeMessages(t *testing.T) {
+	api := newRecordingAPI(t)
+	bot := New("123:abc", &scriptedAgent{})
+	bot.client = api.client()
+
+	var builder strings.Builder
+	for index := 0; index < 2000; index++ {
+		fmt.Fprintf(&builder, "line %d of a long answer\n", index)
+	}
+	answer := builder.String()
+
+	bot.replyMarkdown(context.Background(), 7, answer)
+
+	sent := api.calls("sendMessage")
+	if len(sent) < 2 {
+		t.Fatalf("a long answer should be split, got %d message(s)", len(sent))
+	}
+	var joined strings.Builder
+	for _, payload := range sent {
+		text, _ := payload["text"].(string)
+		if len(text) > 4096 {
+			t.Errorf("a chunk is %d bytes, over the Telegram limit", len(text))
+		}
+		joined.WriteString(text)
+	}
+	// The renderer trims trailing newlines, so the answer's final one is not
+	// expected back; every other byte must survive.
+	if got := strings.TrimRight(joined.String(), "\n"); got != strings.TrimRight(answer, "\n") {
+		t.Errorf("the chunks do not rebuild the answer: got %d bytes, want %d", len(got), len(strings.TrimRight(answer, "\n")))
 	}
 }
 

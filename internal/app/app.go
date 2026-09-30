@@ -904,6 +904,8 @@ func (a *App) runTurnWithImages(ctx context.Context, input string, images []prov
 // lines and returning the final answer text.
 func (a *App) RunPrompt(ctx context.Context, prompt string, progress func(string)) (string, error) {
 	if progress != nil {
+		// The opening line is part of the contract: the caller shows it at once,
+		// before the first event arrives.
 		progress("Working...")
 		a.SetObserver(func(event agent.Event) {
 			if line := telegramProgressLine(event); line != "" {

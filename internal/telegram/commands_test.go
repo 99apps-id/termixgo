@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +24,7 @@ type scriptedAgent struct {
 	stopCalls     int
 	lastMediaType string
 	lastImageData string
+	progressLines []string
 }
 
 func (a *scriptedAgent) RunPrompt(ctx context.Context, prompt string, progress func(string)) (string, error) {
@@ -30,9 +32,15 @@ func (a *scriptedAgent) RunPrompt(ctx context.Context, prompt string, progress f
 	a.prompts = append(a.prompts, prompt)
 	a.mu.Unlock()
 	if progress != nil {
-		// Twice, so a test can prove the edit throttle works.
-		progress("Reading main.go")
-		progress("Running tests")
+		if len(a.progressLines) > 0 {
+			for _, line := range a.progressLines {
+				progress(line)
+			}
+		} else {
+			// Twice, so a test can prove the edit throttle works.
+			progress("Reading main.go")
+			progress("Running tests")
+		}
 	}
 	return a.answer, a.runErr
 }
@@ -424,8 +432,13 @@ func TestRunPromptMirrorsProgressIntoOneCard(t *testing.T) {
 	if edits[0]["text"] != "Reading main.go" {
 		t.Errorf("first edit = %v, want the first progress line", edits[0]["text"])
 	}
-	if last := edits[len(edits)-1]["text"]; last != "the final answer" {
-		t.Errorf("last edit = %v, want the answer", last)
+	// The final edit carries the whole activity plus the answer, so nothing the
+	// turn did is lost to the latest line only.
+	last, _ := edits[len(edits)-1]["text"].(string)
+	for _, want := range []string{"Reading main.go", "Running tests", "the final answer"} {
+		if !strings.Contains(last, want) {
+			t.Errorf("final edit is missing %q:\n%s", want, last)
+		}
 	}
 	if !api.called("sendChatAction") {
 		t.Errorf("the typing indicator should be shown")
@@ -434,6 +447,31 @@ func TestRunPromptMirrorsProgressIntoOneCard(t *testing.T) {
 
 // TestRunPromptSaysSoWhenThereIsNoOutput keeps an empty transcript from
 // looking like a message that failed to arrive.
+// TestCardKeepsEarlierSteps is the operator report: replacing the card with the
+// newest line lost every earlier step, so the task scrolled away. The final card
+// must carry the whole activity.
+func TestCardKeepsEarlierSteps(t *testing.T) {
+	lines := make([]string, 0, 30)
+	for index := 0; index < 30; index++ {
+		lines = append(lines, fmt.Sprintf("step %02d", index))
+	}
+	agent := &scriptedAgent{answer: "done", progressLines: lines}
+	bot, api := pairedBot(t, agent)
+
+	bot.runPrompt(context.Background(), 7, "do the thing")
+
+	edits := api.calls("editMessageText")
+	if len(edits) == 0 {
+		t.Fatalf("the card was never edited")
+	}
+	final, _ := edits[len(edits)-1]["text"].(string)
+	for _, want := range []string{"step 00", "step 15", "step 29", "done"} {
+		if !strings.Contains(final, want) {
+			t.Errorf("the final card is missing %q:\n%s", want, final)
+		}
+	}
+}
+
 func TestRunPromptSaysSoWhenThereIsNoOutput(t *testing.T) {
 	agent := &scriptedAgent{answer: "   "}
 	bot, api := pairedBot(t, agent)
@@ -444,7 +482,8 @@ func TestRunPromptSaysSoWhenThereIsNoOutput(t *testing.T) {
 	if len(edits) == 0 {
 		t.Fatalf("no edit was made")
 	}
-	if edits[len(edits)-1]["text"] != "(no output)" {
+	final, _ := edits[len(edits)-1]["text"].(string)
+	if !strings.Contains(final, "(no output)") {
 		t.Errorf("final edit = %v, want the placeholder", edits[len(edits)-1]["text"])
 	}
 }

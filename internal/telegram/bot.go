@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/99apps-id/termixgo/internal/version"
 )
@@ -413,39 +414,123 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 	go b.keepTyping(ctx, chatID, typingDone)
 	defer close(typingDone)
 
+	// The card grows with the turn instead of being replaced by the newest line.
+	// Replacing lost every earlier step: the operator saw one tool at a time and
+	// the task itself scrolled away. An edit the throttle skips is not lost
+	// either, because the next edit carries the whole list.
+	var lines []string
 	var lastEdit time.Time
-	progress := func(line string) {
+	flush := func(force bool) {
 		if statusMessage.MessageID == 0 {
 			return
 		}
 		// Throttle edits: Telegram rate-limits rapid edits to one message.
-		if time.Since(lastEdit) < 2*time.Second {
+		if !force && time.Since(lastEdit) < 2*time.Second {
 			return
 		}
 		lastEdit = time.Now()
-		_ = b.client.EditMarkdown(ctx, chatID, statusMessage.MessageID, line, nil)
+		_ = b.client.EditMarkdown(ctx, chatID, statusMessage.MessageID, strings.Join(lines, "\n"), nil)
+	}
+	progress := func(line string) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return
+		}
+		if len(lines) > 0 && lines[len(lines)-1] == line {
+			return
+		}
+		lines = append(lines, line)
+		lines = capCardLines(lines, telegramChunkLimit)
+		flush(false)
 	}
 
 	answer, runErr := run(ctx, progress)
-	if statusMessage.MessageID != 0 {
-		final := answer
+
+	if statusMessage.MessageID == 0 {
+		// No card to edit: deliver the failure or the answer directly.
 		if runErr != nil {
-			final = "Run failed: " + runErr.Error()
+			b.replyMarkdown(ctx, chatID, "Run failed: "+runErr.Error())
+			return
 		}
-		if strings.TrimSpace(final) == "" {
-			final = "(no output)"
+		if strings.TrimSpace(answer) == "" {
+			answer = "(no output)"
 		}
-		_ = b.client.EditMarkdown(ctx, chatID, statusMessage.MessageID, final, nil)
+		b.replyMarkdown(ctx, chatID, answer)
 		return
 	}
+
 	if runErr != nil {
-		b.reply(ctx, chatID, "Run failed: "+runErr.Error())
+		progress("Run failed: " + runErr.Error())
+		flush(true)
 		return
 	}
 	if strings.TrimSpace(answer) == "" {
 		answer = "(no output)"
 	}
-	b.reply(ctx, chatID, answer)
+
+	// The answer goes on the card when the activity and the answer fit together.
+	// When they do not, the activity stays on the card and the whole answer is
+	// sent as follow-up messages: an edit past the limit is truncated, which
+	// would lose the end of the answer.
+	combined := strings.Join(lines, "\n")
+	if combined != "" {
+		combined += "\n\n"
+	}
+	combined += answer
+	if len(combined) <= telegramChunkLimit {
+		_ = b.client.EditMarkdown(ctx, chatID, statusMessage.MessageID, combined, nil)
+		return
+	}
+	flush(true)
+	b.replyMarkdown(ctx, chatID, answer)
+}
+
+// telegramChunkLimit is the body size the bot targets, under Telegram's 4096
+// byte cap so a converted Markdown body never trips it.
+const telegramChunkLimit = 3800
+
+// replyMarkdown sends Markdown text, split into Telegram-sized messages so a
+// long answer arrives whole instead of being truncated at the cap.
+func (b *Bot) replyMarkdown(ctx context.Context, chatID int64, text string) {
+	remaining := text
+	for len(remaining) > 0 {
+		part := remaining
+		if len(part) > telegramChunkLimit {
+			cut := telegramChunkLimit
+			for cut > 0 && !utf8.RuneStart(remaining[cut]) {
+				cut--
+			}
+			// Prefer a line boundary near the cut, so a sentence is not split
+			// mid-line when a newline is close. The newline itself stays with
+			// the next part: the renderer trims a trailing newline, so keeping
+			// it here would drop it.
+			if index := strings.LastIndexByte(remaining[:cut], '\n'); index > 0 && index > cut/2 {
+				cut = index
+			}
+			part = remaining[:cut]
+			remaining = remaining[cut:]
+		} else {
+			remaining = ""
+		}
+		if _, err := b.client.SendMarkdown(ctx, chatID, part, nil); err != nil {
+			b.logf("send failed: %v", err)
+		}
+	}
+}
+
+// capCardLines keeps the newest lines within limit bytes, dropping the oldest so
+// the growing card never exceeds the Telegram message limit.
+func capCardLines(lines []string, limit int) []string {
+	total := 0
+	for _, line := range lines {
+		total += len(line) + 1
+	}
+	kept := lines
+	for len(kept) > 1 && total > limit {
+		total -= len(kept[0]) + 1
+		kept = kept[1:]
+	}
+	return kept
 }
 
 // imageMediaType maps a Telegram file path to a media type; photos it sends are
