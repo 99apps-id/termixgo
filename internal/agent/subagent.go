@@ -128,7 +128,12 @@ func subagentRegistry(subType string, depth int) *Registry {
 // RunSubagent runs a nested investigation of one typed role and returns its
 // final answer. The nested run gets its own session and todo list, so a
 // large search cannot flood the parent context.
-func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model, subType, prompt string, maxSteps int) (string, error) {
+//
+// The child inherits the parent's budget, pricing and approval mode rather
+// than running free: an unpriced default silently disables the cost cap, an
+// oversized default history overflows a small local window, and a hardcoded
+// allow-all policy let plan mode mutate through a subagent.
+func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model provider.Model, subType, prompt string, maxSteps int) (string, error) {
 	def := LookupSubagent(subType)
 	if client == nil {
 		return "", fmt.Errorf("no provider client is available for a subagent")
@@ -142,6 +147,7 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	if maxSteps <= 0 {
 		maxSteps = SubagentMaxSteps
 	}
+	pricing, costKnown := provider.PricedFor(parent.Config, model)
 	child := &Env{
 		Workspace: parent.Workspace,
 		Config:    parent.Config,
@@ -155,22 +161,29 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		Processes: parent.Processes,
 		Approve:   parent.Approve,
 		Ask:       parent.Ask,
+		Journal:   parent.Journal,
+		Search:    parent.Search,
 	}
 	child.RunSubagent = func(childCtx context.Context, childType, childPrompt string) (string, error) {
 		return RunSubagent(childCtx, child, client, model, childType, childPrompt, maxSteps)
 	}
 	runner := &Runner{
-		Client:   client,
-		Model:    model,
-		Config:   parent.Config,
-		Env:      child,
-		Tools:    subagentRegistry(string(def.Type), parent.Depth),
-		Policy:   &ApprovalPolicy{Mode: ApprovalAll},
-		MaxSteps: maxSteps,
-		Harness:  string(parent.Config.HarnessProfile),
-		System:   def.SystemPrompt,
+		Client:        client,
+		Model:         provider.WireModel(parent.Config, model),
+		Config:        parent.Config,
+		Env:           child,
+		Tools:         subagentRegistry(string(def.Type), parent.Depth),
+		Policy:        &ApprovalPolicy{Mode: ApprovalModeOrDefault(parent.Config)},
+		MaxSteps:      maxSteps,
+		Harness:       string(parent.Config.HarnessProfile),
+		ContextBudget: HistoryBudget(model.Window()),
+		Pricing:       pricing,
+		CostKnown:     costKnown,
+		CostBudgetUSD: parent.Config.CostBudgetUSD,
+		ToolSearch:    parent.Config.ToolSearchEnabled,
+		System:        def.SystemPrompt,
 	}
-	session := NewSession(parent.Workspace, model)
+	session := NewSession(parent.Workspace, model.ID)
 	if err := runner.Run(ctx, session, prompt); err != nil {
 		return "", err
 	}

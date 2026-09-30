@@ -798,7 +798,7 @@ func (a *App) ask(question string, options []string) (string, error) {
 func (a *App) runSubagent(ctx context.Context, subType, prompt string) (string, error) {
 	a.mu.Lock()
 	client := a.client
-	model := a.wireModel
+	model := a.model
 	a.mu.Unlock()
 	if client == nil {
 		return "", errors.New("no provider client is available")

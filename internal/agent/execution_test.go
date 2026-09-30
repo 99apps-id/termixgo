@@ -267,7 +267,7 @@ func TestRunSubagentReturnsItsAnswer(t *testing.T) {
 	parent := testEnv(t)
 	parent.Config = config.Default()
 
-	answer, err := RunSubagent(context.Background(), parent, client, "test-model", string(SubagentExplore), "where are the routes?", 4)
+	answer, err := RunSubagent(context.Background(), parent, client, provider.Model{ID: "test-model"}, string(SubagentExplore), "where are the routes?", 4)
 	if err != nil {
 		t.Fatalf("RunSubagent: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestRunSubagentReviewRoleCannotMutate(t *testing.T) {
 	parent := testEnv(t)
 	parent.Config = config.Default()
 
-	if _, err := RunSubagent(context.Background(), parent, client, "test-model", string(SubagentCodeReview), "write a file", 4); err != nil {
+	if _, err := RunSubagent(context.Background(), parent, client, provider.Model{ID: "test-model"}, string(SubagentCodeReview), "write a file", 4); err != nil {
 		t.Fatalf("RunSubagent: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(parent.Workspace, "should-not-exist.txt")); err == nil {
@@ -312,7 +312,7 @@ func TestRunSubagentWorkerRolesAreFullPeers(t *testing.T) {
 
 func TestRunSubagentNeedsAClient(t *testing.T) {
 	parent := testEnv(t)
-	if _, err := RunSubagent(context.Background(), parent, nil, "m", string(SubagentGeneral), "prompt", 4); err == nil {
+	if _, err := RunSubagent(context.Background(), parent, nil, provider.Model{ID: "m"}, string(SubagentGeneral), "prompt", 4); err == nil {
 		t.Fatalf("a subagent with no provider client must fail rather than silently do nothing")
 	}
 }
@@ -327,7 +327,7 @@ func TestRunSubagentWithoutAnAnswerSaysSo(t *testing.T) {
 	parent := testEnv(t)
 	parent.Config = config.Default()
 
-	answer, err := RunSubagent(context.Background(), parent, client, "test-model", string(SubagentExplore), "look around", 3)
+	answer, err := RunSubagent(context.Background(), parent, client, provider.Model{ID: "test-model"}, string(SubagentExplore), "look around", 3)
 	if err != nil {
 		t.Fatalf("RunSubagent: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestRunSubagentRespectsItsStepBudget(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := RunSubagent(context.Background(), parent, client, "test-model", string(SubagentExplore), "loop", 3)
+		_, err := RunSubagent(context.Background(), parent, client, provider.Model{ID: "test-model"}, string(SubagentExplore), "loop", 3)
 		done <- err
 	}()
 	select {
