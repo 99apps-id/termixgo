@@ -75,6 +75,8 @@ func TestIndexWalkSkipsGeneratedTrees(t *testing.T) {
 	}
 	defer store.Close()
 
+	store.SyncRefreshWorkspace()
+
 	light, err := store.Search("lightproofword", 10)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -90,6 +92,46 @@ func TestIndexWalkSkipsGeneratedTrees(t *testing.T) {
 		if len(results) != 0 {
 			t.Errorf("generated tree was indexed for %q: %+v", query, results)
 		}
+	}
+}
+
+// TestSearchScopePathLimitsToAFolder covers the path filter the operator asked
+// for: a search over a big workspace can be limited to the folder being worked
+// on, and the prefix matches a folder, not a name that merely starts with it.
+func TestSearchScopePathLimitsToAFolder(t *testing.T) {
+	root := t.TempDir()
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	_ = store.Index("workspace", "termigo-cli/internal/ui/render.go", "render.go", "the widget renders the frame")
+	_ = store.Index("workspace", "termigo-cli-extra/main.go", "main.go", "the widget renders the frame")
+	_ = store.Index("workspace", "other/internal/ui/render.go", "render.go", "the widget renders the frame")
+
+	scoped, err := store.SearchScopePath("widget", "workspace", "termigo-cli", 20)
+	if err != nil {
+		t.Fatalf("SearchScopePath: %v", err)
+	}
+	if len(scoped) != 1 || filepath.ToSlash(scoped[0].Path) != "termigo-cli/internal/ui/render.go" {
+		t.Errorf("scoped results = %+v, want only the termigo-cli file", scoped)
+	}
+
+	// A prefix normalizes to nothing and filters nothing.
+	all, err := store.SearchScopePath("widget", "workspace", "./", 20)
+	if err != nil {
+		t.Fatalf("SearchScopePath: %v", err)
+	}
+	if len(all) != 3 {
+		t.Errorf("an empty filter returned %d results, want all 3", len(all))
+	}
+
+	if got := normalizePathPrefix("./termigo-cli/"); got != "termigo-cli" {
+		t.Errorf("normalizePathPrefix = %q, want termigo-cli", got)
+	}
+	if got := normalizePathPrefix("   "); got != "" {
+		t.Errorf("a blank prefix should mean no filter, got %q", got)
 	}
 }
 

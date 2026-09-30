@@ -298,6 +298,24 @@ func TestProcessManagerCapsConcurrency(t *testing.T) {
 // it must not count against the concurrency cap. Counting every handle ever
 // started made the manager refuse all further work once eight commands had
 // finished, which is a permanent failure with nothing running to stop.
+func TestProcessManagerCapsAggregateBuffer(t *testing.T) {
+	manager := newTestManager()
+	defer manager.Shutdown()
+
+	process, err := manager.Start(context.Background(), quickCommand("x"), t.TempDir())
+	if err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	if !process.Wait(30 * time.Second) {
+		t.Fatalf("first process did not exit")
+	}
+
+	_, err = manager.Start(context.Background(), strings.Repeat("a", maxBackgroundBufferBytes-len(process.LogsAll())+1), t.TempDir())
+	if err == nil {
+		t.Fatalf("starting a process that would exceed the aggregate buffer limit must fail")
+	}
+}
+
 func TestFinishedProcessesDoNotHoldTheCap(t *testing.T) {
 	manager := newTestManager()
 	defer manager.Shutdown()

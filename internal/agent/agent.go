@@ -285,6 +285,9 @@ runLoop:
 				}
 				before := r.todoSnapshot()
 				result := r.execute(ctx, call)
+				if result.IsError && ctx.Err() != nil {
+					result.Output = "stopped: " + ctx.Err().Error()
+				}
 				r.observeToolResult(&ledger, guard, call.Name, call.Arguments, result)
 				if result.IsError && r.Journal != nil {
 					r.Journal.Record(call.Name, call.Arguments, result.Output)

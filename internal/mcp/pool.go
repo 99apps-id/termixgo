@@ -13,6 +13,12 @@ import (
 // shortened rather than sent and rejected.
 const maxToolNameLength = 64
 
+// defaultStartConcurrency bounds how many MCP servers are started at once.
+// The handshake itself is quick, but a misconfigured server can hang until the
+// caller's context expires. Limiting concurrency keeps one bad config from
+// holding the whole session hostage while still parallelising healthy ones.
+const defaultStartConcurrency = 4
+
 // separator joins a server name to a tool name. A double underscore is what the
 // other MCP clients use, and it is unlikely to appear inside either half.
 const separator = "__"
@@ -81,51 +87,97 @@ func (p *Pool) Connect(ctx context.Context, disabled []Options, enabled []Option
 			Disabled: true,
 		})
 	}
-	for _, options := range enabled {
-		client, err := Start(ctx, options)
-		if err != nil {
-			p.failures = append(p.failures, Failure{Name: options.Name, Err: err})
-			p.status = append(p.status, ServerStatus{
-				Name:    options.Name,
-				Command: describe(options),
-				Err:     err,
-			})
-			continue
-		}
-		p.clients[options.Name] = client
 
-		tools, err := client.Tools(ctx)
-		status := ServerStatus{
-			Name:       options.Name,
-			Command:    describe(options),
-			Connected:  true,
-			ServerName: client.ServerName(),
-			Version:    client.ProtocolVersion(),
-		}
-		if err != nil {
-			p.failures = append(p.failures, Failure{Name: options.Name, Err: err})
-			status.Err = err
-			status.Stderr = client.Stderr()
-			p.status = append(p.status, status)
+	sem := make(chan struct{}, defaultStartConcurrency)
+	var wg sync.WaitGroup
+	type result struct {
+		options Options
+		status  ServerStatus
+		failure Failure
+		tools   []Tool
+		client  *Client
+	}
+	results := make(chan result, len(enabled))
+	for _, options := range enabled {
+		options := options
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			status, failure, tools, client := p.connectOne(ctx, options)
+			results <- result{options: options, status: status, failure: failure, tools: tools, client: client}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	allResults := make([]result, 0, len(enabled))
+	for r := range results {
+		allResults = append(allResults, r)
+	}
+
+	for _, r := range allResults {
+		if r.failure.Err != nil {
+			p.failures = append(p.failures, r.failure)
+			p.status = append(p.status, r.status)
 			continue
 		}
-		for _, tool := range tools {
-			// An invalid tool name from the server is reported rather than
-			// silently renamed, because a renamed tool is one the model cannot
-			// call the way the server documented it.
+		if !r.status.Connected {
+			p.status = append(p.status, r.status)
+			continue
+		}
+		p.clients[r.options.Name] = r.client
+		p.status = append(p.status, r.status)
+	}
+
+	// Claim unique names in a single pass now that every server's raw tools
+	// are known. Doing this here, after all connectOne goroutines have finished,
+	// makes the collision pass visible to every tool in the pool.
+	for _, r := range allResults {
+		if !r.status.Connected || r.failure.Err != nil {
+			continue
+		}
+		for _, tool := range r.tools {
 			if strings.TrimSpace(tool.Name) == "" {
 				continue
 			}
-			bound := Bound{
-				Server: options.Name,
+			p.bound = append(p.bound, Bound{
+				Server: r.options.Name,
 				Tool:   tool,
-				Name:   p.claim(options.Name, tool.Name),
-			}
-			p.bound = append(p.bound, bound)
+				Name:   p.claim(r.options.Name, tool.Name),
+			})
 		}
-		status.ToolCount = len(tools)
-		p.status = append(p.status, status)
 	}
+}
+
+// connectOne starts and lists one server, returning the status, any failure,
+// the tools it listed, and the connected client. Keeping it separate lets
+// Connect run several in parallel under a semaphore.
+func (p *Pool) connectOne(ctx context.Context, options Options) (ServerStatus, Failure, []Tool, *Client) {
+	client, err := Start(ctx, options)
+	if err != nil {
+		return ServerStatus{
+			Name:    options.Name,
+			Command: describe(options),
+			Err:     err,
+		}, Failure{Name: options.Name, Err: err}, nil, nil
+	}
+
+	tools, err := client.Tools(ctx)
+	status := ServerStatus{
+		Name:       options.Name,
+		Command:    describe(options),
+		Connected:  true,
+		ServerName: client.ServerName(),
+		Version:    client.ProtocolVersion(),
+	}
+	if err != nil {
+		client.Close()
+		return status, Failure{Name: options.Name, Err: err}, nil, nil
+	}
+	status.ToolCount = len(tools)
+	return status, Failure{}, tools, client
 }
 
 // claim builds a unique, provider-safe tool name for a server tool.

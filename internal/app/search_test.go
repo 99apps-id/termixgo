@@ -102,11 +102,9 @@ func TestSearchIndexIsNotIndexedAsContent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "notes.md"), []byte("a real document about zephyrs\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	// A search triggers the workspace refresh, which is what would walk into
-	// the state directory if it were not skipped.
-	if _, err := application.search.SearchScope("zephyrs", "workspace", 10); err != nil {
-		t.Fatalf("search: %v", err)
-	}
+	// The workspace refresh is asynchronous; wait for it so the walk has
+	// completed before the assertions below.
+	application.search.SyncRefreshWorkspace()
 
 	results, err := application.search.SearchScope("search", "workspace", 20)
 	if err != nil {

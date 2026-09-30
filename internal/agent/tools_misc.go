@@ -29,18 +29,23 @@ func (t *searchMemoryTool) Aliases() []string { return []string{"fts_search", "m
 func (t *searchMemoryTool) Mutating() bool    { return false }
 func (t *searchMemoryTool) Risk() Risk        { return RiskEdit }
 func (t *searchMemoryTool) Label(a map[string]any) string {
-	return "Searching memory for " + Shorten(argString(a, "query"), 40)
+	label := "Searching memory for " + Shorten(argString(a, "query"), 40)
+	if path := strings.TrimSpace(argString(a, "path")); path != "" {
+		label += " in " + Shorten(path, 30)
+	}
+	return label
 }
 func (t *searchMemoryTool) DoneLabel(a map[string]any) string {
 	return "Searched memory"
 }
 func (t *searchMemoryTool) Description() string {
-	return "Search the agent's learned memory, error journal, and indexed workspace files using full-text search."
+	return "Search the agent's learned memory, error journal, and indexed workspace files using full-text search. Pass path to limit the search to the folder being worked on."
 }
 func (t *searchMemoryTool) Schema() map[string]any {
 	return object(map[string]any{
 		"query": strProp("Full-text search query."),
 		"scope": strProp("Optional scope filter: memory, journal, workspace, or all."),
+		"path":  strProp("Optional workspace-relative folder or file to limit the search to, for example 'termigo-cli' or 'internal/ui'."),
 	}, "query")
 }
 
@@ -53,16 +58,21 @@ func (t *searchMemoryTool) Run(ctx context.Context, env *Env, args map[string]an
 	if scope == "" {
 		scope = "all"
 	}
+	subPath := strings.TrimSpace(argString(args, "path"))
 
-	// Try the FTS5 search store if available. The scope goes into the query
-	// rather than filtering the results afterwards: the store returns the best
-	// twenty rows overall, so a scope whose matches all ranked lower would have
+	// Try the FTS5 search store if available. The scope and the path go into
+	// the query rather than filtering the results afterwards: the store returns
+	// the best twenty rows overall, so discarding the wrong ones would have
 	// looked like "no matches" even though the index held them.
 	if env.Search != nil {
-		results, err := env.Search.SearchScope(query, scope, 20)
+		results, err := env.Search.SearchScopePath(query, scope, subPath, 20)
 		if err == nil && len(results) > 0 {
+			header := fmt.Sprintf("FTS5 results for %q", query)
+			if subPath != "" {
+				header += fmt.Sprintf(" under %q", subPath)
+			}
 			var b strings.Builder
-			b.WriteString(fmt.Sprintf("FTS5 results for %q:\n\n", query))
+			b.WriteString(header + ":\n\n")
 			for _, r := range results {
 				b.WriteString(fmt.Sprintf("[%s] %s (%s)\n%s\n\n", r.Scope, r.Title, r.Path, r.Snippet))
 			}
@@ -86,6 +96,9 @@ func (t *searchMemoryTool) Run(ctx context.Context, env *Env, args map[string]an
 		}
 	}
 	if len(matches) == 0 {
+		if subPath != "" {
+			return Result{Output: fmt.Sprintf("No matches for %q under %q in memory or journal.", query, subPath)}, nil
+		}
 		return Result{Output: fmt.Sprintf("No matches for %q in memory or journal.", query)}, nil
 	}
 	return Result{Output: strings.Join(matches, "\n\n")}, nil
@@ -305,7 +318,10 @@ func copyFile(src, dst string) error {
 		_ = out.Close()
 		return err
 	}
-	return out.Close()
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // todoWriteTool replaces the plan.

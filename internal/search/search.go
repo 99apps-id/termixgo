@@ -20,6 +20,10 @@ const (
 	defaultDBSuffix = "search.db"
 	// maxIndexBytes caps a single document so the FTS5 table stays fast.
 	maxIndexBytes = 64 * 1024
+	// defaultWorkspaceFileCap limits how many workspace files are indexed in one
+	// refresh. A walk over a huge tree spends most of its time collecting paths;
+	// capping it keeps search responsive.
+	defaultWorkspaceFileCap = 20000
 )
 
 // skippedDirs are directory names no search enters: dependency trees, build
@@ -59,6 +63,35 @@ type Store struct {
 	// indexedAt is when the workspace walk last finished, which is what keeps a
 	// burst of searches from re-walking the tree on every call.
 	indexedAt time.Time
+	// queryCache stores recent query results so repeated searches stay fast
+	// without hitting SQLite again.
+	queryCache map[string][]Result
+	// workspaceFileCap limits how many workspace files are indexed in one
+	// refresh, which keeps a search from spending minutes walking a huge tree.
+	workspaceFileCap int
+}
+
+func (s *Store) cachedQuery(key string) ([]Result, bool) {
+	if s.queryCache == nil {
+		return nil, false
+	}
+	results, ok := s.queryCache[key]
+	if !ok {
+		return nil, false
+	}
+	out := make([]Result, len(results))
+	copy(out, results)
+	return out, true
+}
+
+func (s *Store) storeQuery(key string, results []Result) {
+	if len(results) == 0 {
+		return
+	}
+	if s.queryCache == nil {
+		s.queryCache = make(map[string][]Result, 4)
+	}
+	s.queryCache[key] = append([]Result(nil), results...)
 }
 
 // Open opens (or creates) the search database inside the given directory and
@@ -100,7 +133,10 @@ func OpenIn(root, dataDir string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("search: create table: %w", err)
 	}
-	store := &Store{db: db, root: root, dataDir: dataDir}
+	store := &Store{db: db, root: root, dataDir: dataDir, workspaceFileCap: defaultWorkspaceFileCap}
+	if store.queryCache == nil {
+		store.queryCache = make(map[string][]Result, 4)
+	}
 	return store, nil
 }
 
@@ -185,6 +221,16 @@ func (s *Store) Search(query string, limit int) ([]Result, error) {
 // the limit would report "no matches" whenever the other scopes were the
 // better matches.
 func (s *Store) SearchScope(query, scope string, limit int) ([]Result, error) {
+	return s.SearchScopePath(query, scope, "", limit)
+}
+
+// SearchScopePath is SearchScope with an optional workspace-relative path
+// prefix, so a search over a large workspace can be limited to the folder being
+// worked on. The prefix is applied in the query rather than over the results,
+// for the same reason as the scope: the store returns the best twenty rows, and
+// discarding the wrong path afterwards would report "no matches" when the index
+// held them.
+func (s *Store) SearchScopePath(query, scope, pathPrefix string, limit int) ([]Result, error) {
 	if strings.TrimSpace(query) == "" {
 		return nil, nil
 	}
@@ -199,26 +245,63 @@ func (s *Store) SearchScope(query, scope string, limit int) ([]Result, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
+	prefix := normalizePathPrefix(pathPrefix)
+	like := prefix + "/%"
 	// The workspace documents are refreshed before the query, so a hit reflects
 	// the files as they are now rather than as they were at startup. Memory and
 	// journal documents are kept fresh by the writer, so they need no walk.
 	s.refreshWorkspace()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT scope, path, title, snippet(docs, 3, '', '', ' ... ', 40), rank FROM docs WHERE docs MATCH ? AND (? = 'all' OR scope = ?) ORDER BY rank LIMIT ?`, expression, scope, scope, limit)
+	cacheKey := expression + "\x00" + scope + "\x00" + prefix + "\x00" + string(rune(limit))
+	if results, ok := s.cachedQuery(cacheKey); ok {
+		return results, nil
+	}
+	// Paths are stored as the operating system separates them; the replace
+	// normalizes both separators to a slash before the prefix compare, so a
+	// filter still matches an index written on another platform.
+	rows, err := s.db.Query(`
+SELECT scope, path, title, snippet(docs, 3, '', '', ' ... ', 40), rank
+FROM docs
+WHERE docs MATCH ?
+  AND (? = 'all' OR scope = ?)
+  AND (? = '' OR lower(replace(path, '\', '/')) = ? OR lower(replace(path, '\', '/')) LIKE ?)
+ORDER BY rank LIMIT ?`,
+		expression, scope, scope, prefix, prefix, like, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var results []Result
+	var queryResults []Result
 	for rows.Next() {
 		var r Result
 		if err := rows.Scan(&r.Scope, &r.Path, &r.Title, &r.Snippet, &r.Rank); err != nil {
 			return nil, err
 		}
-		results = append(results, r)
+		queryResults = append(queryResults, r)
 	}
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	s.storeQuery(cacheKey, queryResults)
+	return queryResults, nil
+}
+
+// normalizePathPrefix tidies an operator path into a slash-separated,
+// lower-case prefix with no leading "./" or surrounding slashes. A prefix that
+// normalizes to nothing means "no filter".
+func normalizePathPrefix(raw string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = filepath.ToSlash(trimmed)
+	trimmed = strings.TrimPrefix(trimmed, "./")
+	trimmed = strings.Trim(trimmed, "/")
+	if trimmed == "." {
+		return ""
+	}
+	return trimmed
 }
 
 // ftsQuery turns free-form operator input into a valid FTS5 query.
@@ -296,14 +379,47 @@ func (s *Store) refreshWorkspace() {
 	s.indexing = true
 	s.mu.Unlock()
 
-	defer func() {
+	go func() {
+		s.indexWorkspace()
 		s.mu.Lock()
 		s.indexing = false
 		s.indexedAt = time.Now()
+		s.queryCache = nil
 		s.mu.Unlock()
 	}()
+}
+
+// SyncRefreshWorkspace forces a synchronous workspace refresh and waits for it
+// to complete. It is intended for tests and callers that need the index to be
+// up to date before continuing.
+func (s *Store) SyncRefreshWorkspace() {
+	s.mu.Lock()
+	if s.indexing {
+		s.mu.Unlock()
+		s.waitForIndexing()
+		return
+	}
+	s.indexing = true
+	s.mu.Unlock()
 
 	s.indexWorkspace()
+	s.mu.Lock()
+	s.indexing = false
+	s.indexedAt = time.Now()
+	s.queryCache = nil
+	s.mu.Unlock()
+}
+
+func (s *Store) waitForIndexing() {
+	for {
+		s.mu.Lock()
+		indexing := s.indexing
+		s.mu.Unlock()
+		if !indexing {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // indexWorkspace walks the root and indexes the text files it finds. The caller
@@ -311,6 +427,9 @@ func (s *Store) refreshWorkspace() {
 func (s *Store) indexWorkspace() {
 	var files []string
 	_ = filepath.WalkDir(s.root, func(path string, d os.DirEntry, err error) error {
+		if len(files) >= defaultWorkspaceFileCap {
+			return filepath.SkipDir
+		}
 		if err != nil {
 			return nil
 		}

@@ -24,6 +24,11 @@ const defaultTimeout = 30 * time.Second
 // kilobytes are what names the missing package or the bad argument.
 const stderrBufferBytes = 8192
 
+// maxMessageBytes bounds one JSON-RPC line on the server's stdout. A protocol
+// violation or a server dumping binary to stdout would otherwise grow without
+// limit and exhaust memory.
+const maxMessageBytes = 4 << 20
+
 // Options describe how to start one MCP server.
 type Options struct {
 	// Name is the label the operator uses and the prefix of every tool the
@@ -122,6 +127,41 @@ func (c *Client) ProtocolVersion() string { return c.version }
 // Stderr returns what the server has written to stderr, for diagnosis.
 func (c *Client) Stderr() string { return c.stderr.String() }
 
+// readLineWithLimit reads one JSON-RPC frame from stdout, capping the line
+// length so a misbehaving server cannot allocate unbounded memory.
+func (c *Client) readLineWithLimit(reader *bufio.Reader) ([]byte, error) {
+	prefix, err := reader.ReadSlice('\n')
+	if err == bufio.ErrBufferFull {
+		if _, err := reader.Discard(reader.Buffered()); err != nil {
+			return nil, err
+		}
+		read := 0
+		for {
+			b := make([]byte, 8192)
+			n, err := reader.Read(b)
+			if n > 0 {
+				read += n
+			}
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					return nil, fmt.Errorf("%s produced an overlong message (%d bytes) and closed stdout", c.name, read)
+				}
+				return nil, fmt.Errorf("%s produced an overlong message (%d bytes): %w", c.name, read, err)
+			}
+			if n < len(b) {
+				return nil, fmt.Errorf("%s produced an overlong message (%d bytes)", c.name, read)
+			}
+		}
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	if len(prefix) > maxMessageBytes {
+		return prefix, fmt.Errorf("%s produced an overlong message (%d bytes)", c.name, len(prefix))
+	}
+	return prefix, err
+}
+
 // read decodes one JSON-RPC message per line until the stream ends.
 //
 // A message without an id is a notification, and one carrying a method is a
@@ -132,7 +172,7 @@ func (c *Client) read(stdout io.ReadCloser) {
 	defer close(c.done)
 	reader := bufio.NewReader(stdout)
 	for {
-		line, err := reader.ReadBytes('\n')
+		line, err := c.readLineWithLimit(reader)
 		if len(line) > 0 {
 			c.deliver(line)
 		}

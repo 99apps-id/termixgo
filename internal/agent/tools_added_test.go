@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/search"
 )
 
 // TestGitHubToolsValidateArguments keeps a bad call from reaching the network:
@@ -95,6 +97,32 @@ func TestExecuteCancelStopsTheProcessTree(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("execute did not return after cancel; the process tree was not killed")
+	}
+}
+
+// TestSearchMemoryPathScopesResults covers the operator ask: a search over a
+// large workspace can be limited to the folder being audited.
+func TestSearchMemoryPathScopesResults(t *testing.T) {
+	store, err := search.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("search.Open: %v", err)
+	}
+	defer store.Close()
+	_ = store.Index("workspace", "termixgo/internal/ui/render.go", "render.go", "the widget renders the frame")
+	_ = store.Index("workspace", "other/render.go", "render.go", "the widget renders the frame")
+
+	env := testEnv(t)
+	env.Search = store
+
+	result, err := (&searchMemoryTool{}).Run(context.Background(), env, map[string]any{"query": "widget", "path": "termixgo"})
+	if err != nil || result.IsError {
+		t.Fatalf("Run: err=%v result=%+v", err, result)
+	}
+	if !strings.Contains(result.Output, "termixgo/internal/ui/render.go") {
+		t.Errorf("the scoped file is missing:\n%s", result.Output)
+	}
+	if strings.Contains(result.Output, "other/render.go") {
+		t.Errorf("a file outside the path filter was returned:\n%s", result.Output)
 	}
 }
 

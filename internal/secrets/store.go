@@ -98,6 +98,7 @@ func Load() (*Store, error) {
 	if store.data == nil {
 		store.data = map[string]string{}
 	}
+	rejectPrototypePollution(store.data)
 	// Repair the access rules of a file written by an older build, or under a
 	// looser umask. A failure is recorded rather than returned so the
 	// operator is warned by doctor instead of being locked out.
@@ -208,6 +209,7 @@ func (s *Store) save() error {
 		if merged == nil {
 			merged = map[string]string{}
 		}
+		rejectPrototypePollution(merged)
 	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return fmt.Errorf("read secrets: %w", readErr)
 	}
@@ -272,6 +274,16 @@ func lockSecrets(path string) (*secretsLock, error) {
 func (l *secretsLock) release() {
 	_ = unlockFile(l.file)
 	_ = l.file.Close()
+}
+
+// rejectPrototypePollution removes well-known prototype pollution keys from a
+// loaded secrets map. Go does not have a prototype chain, but these keys must
+// not be accepted from a JSON file: a corrupted or attacker-written
+// secrets.json would otherwise load them into the in-memory store.
+func rejectPrototypePollution(data map[string]string) {
+	for _, key := range []string{"__proto__", "constructor", "prototype"} {
+		delete(data, key)
+	}
 }
 
 // Redact renders a secret for display: prefix, dots, suffix. It never reveals

@@ -103,6 +103,7 @@ func (c *httpClient) postWithStall(ctx context.Context, url string, headers map[
 		after := parseRetryAfter(response.Header.Get("Retry-After"))
 		statusErr := c.statusError(response)
 		cancel()
+		response.Body.Close()
 		if !retryableStatus(response.StatusCode) {
 			return nil, statusErr
 		}

@@ -16,9 +16,10 @@ import (
 // turn, so these exist to stop an agent from spawning work the operator cannot
 // see or stop.
 const (
-	maxBackgroundProcesses = 8
-	processBufferBytes     = 256 * 1024
-	maxLogChunkChars       = 16000
+	maxBackgroundProcesses   = 8
+	processBufferBytes       = 256 * 1024
+	maxBackgroundBufferBytes = 1 * 1024 * 1024
+	maxLogChunkChars         = 16000
 	// processWaitDelay bounds how long Wait blocks on the output pipe after the
 	// direct child exits, which a surviving grandchild would otherwise hold
 	// open forever.
@@ -177,6 +178,10 @@ func (m *ProcessManager) Start(ctx context.Context, command, dir string) (*Proce
 	if m.runningLocked() >= maxBackgroundProcesses {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("already running %d background processes; stop one with run_kill first", maxBackgroundProcesses)
+	}
+	if m.bufferUsageLocked()+processBufferBytes > maxBackgroundBufferBytes {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("starting another background process would exceed the aggregate output buffer limit; stop one with run_kill first")
 	}
 	m.nextID++
 	id := fmt.Sprintf("proc-%d", m.nextID)
@@ -356,6 +361,16 @@ func (m *ProcessManager) runningLocked() int {
 	return count
 }
 
+// bufferUsageLocked sums the current buffer sizes of managed processes. The
+// caller holds m.mu.
+func (m *ProcessManager) bufferUsageLocked() int {
+	total := 0
+	for _, process := range m.processes {
+		total += process.buffer.used()
+	}
+	return total
+}
+
 // pruneFinishedLocked forgets the oldest finished handles once too many have
 // accumulated. Running handles are always kept.
 func (m *ProcessManager) pruneFinishedLocked() {
@@ -403,6 +418,12 @@ type ringBuffer struct {
 
 func newRingBuffer(max int) *ringBuffer {
 	return &ringBuffer{max: max}
+}
+
+func (r *ringBuffer) used() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.data)
 }
 
 func (r *ringBuffer) Write(p []byte) (int, error) {
