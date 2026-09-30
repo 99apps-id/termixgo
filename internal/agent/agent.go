@@ -223,7 +223,15 @@ runLoop:
 				break runLoop
 			}
 
-			session.AddAssistant(answer.String(), reasoning.String(), calls)
+			// A step that produced no text and no tool call is not a turn worth
+			// keeping. Storing it would put an empty assistant message, or two
+			// in a row when the model is idle, into the history: a weaker
+			// OpenAI-compatible model reads that as a malformed turn and can
+			// answer an earlier message instead of the operator's latest one.
+			// The guard below still counts the idle step, so the loop stops.
+			if strings.TrimSpace(answer.String()) != "" || len(calls) > 0 {
+				session.AddAssistant(answer.String(), reasoning.String(), calls)
+			}
 
 			if len(calls) == 0 {
 				if strings.TrimSpace(answer.String()) == "" {

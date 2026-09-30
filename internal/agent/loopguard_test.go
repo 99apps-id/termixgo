@@ -94,6 +94,14 @@ func TestLoopGuardTripsOnEmptySteps(t *testing.T) {
 	if stopReason != "loop-guard" {
 		t.Errorf("stop reason = %q, want loop-guard", stopReason)
 	}
+	// An idle step must not be filed as an assistant turn. An empty assistant
+	// message, or two in a row, is what a weaker OpenAI-compatible model reads
+	// as a malformed turn and answers an earlier message from.
+	for _, message := range session.Messages() {
+		if message.Role == provider.RoleAssistant && strings.TrimSpace(message.Content) == "" && len(message.ToolCalls) == 0 {
+			t.Errorf("an empty model step was stored as an assistant turn: %+v", message)
+		}
+	}
 }
 
 // TestLoopGuardLetsDistinctWorkThrough proves the guard is a tripwire, not
