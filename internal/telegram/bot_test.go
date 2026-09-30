@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -33,6 +34,36 @@ func TestSplitCommand(t *testing.T) {
 			t.Errorf("splitCommand(%q) = (%q, %q), want (%q, %q)",
 				testCase.input, command, args, testCase.command, testCase.args)
 		}
+	}
+}
+
+// TestCursorOffsetSurvivesRestart pins the fix for a replay: the last
+// confirmed update id is restored on the next start, so Telegram does not
+// redeliver a prompt the bot already handled before it stopped.
+func TestCursorOffsetSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "telegram-offset.txt")
+
+	first := &Bot{}
+	first.SetCursorPath(path)
+	first.saveOffset(4242)
+
+	restarted := &Bot{}
+	restarted.SetCursorPath(path)
+	if got := restarted.loadOffset(); got != 4242 {
+		t.Fatalf("loadOffset after restart = %d, want 4242", got)
+	}
+}
+
+// TestCursorOffsetMissingFileIsZero keeps a broken cursor from wedging the
+// loop: no file simply means start from the beginning, as before.
+func TestCursorOffsetMissingFileIsZero(t *testing.T) {
+	bot := &Bot{}
+	bot.SetCursorPath(filepath.Join(t.TempDir(), "absent.txt"))
+	if got := bot.loadOffset(); got != 0 {
+		t.Errorf("loadOffset with no file = %d, want 0", got)
+	}
+	if (&Bot{}).loadOffset() != 0 {
+		t.Errorf("a bot with no cursor path must report zero")
 	}
 }
 

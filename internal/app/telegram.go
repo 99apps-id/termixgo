@@ -136,6 +136,17 @@ func (a *App) StartTelegram() error {
 	bot := telegram.New(token, a)
 	bot.Pair(cfg.Telegram.ChatID, cfg.Telegram.OwnerUserID)
 	bot.SetPairingCode(cfg.Telegram.PairingCode)
+	// The confirmed update id lives beside the rest of the state, scoped to this
+	// bot id, so a restart resumes instead of replaying an old prompt. A token
+	// without a numeric id has no id to scope by, so no cursor is set rather
+	// than sharing one file across bots.
+	if id := telegram.BotIDFromToken(token); id != "" {
+		if _, err := config.EnsureHome(); err == nil {
+			if path, err := config.HomePath("telegram-offset-" + id + ".txt"); err == nil {
+				bot.SetCursorPath(path)
+			}
+		}
+	}
 	bot.Log = func(line string) {
 		a.mu.Lock()
 		a.botStatus = "error: " + line

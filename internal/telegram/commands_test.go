@@ -390,6 +390,51 @@ func TestBareTextIsAPrompt(t *testing.T) {
 	}
 }
 
+// TestPlainTextStartingWithACommandWordIsAPrompt pins the routing rule: only a
+// leading slash makes a command. A sentence that opens with "run", "new" or
+// "stop" is the operator talking, and treating it as that command either
+// dropped its first word or silently reset the session.
+func TestPlainTextStartingWithACommandWordIsAPrompt(t *testing.T) {
+	for _, phrase := range []string{"run the tests", "new project please", "stop the server"} {
+		t.Run(phrase, func(t *testing.T) {
+			agent := &scriptedAgent{answer: "done", model: "test-model"}
+			bot, _ := pairedBot(t, agent)
+
+			bot.handleMessage(context.Background(), message(phrase))
+
+			if got := agent.firstPrompt(); got != phrase {
+				t.Errorf("prompt = %q, want the whole sentence %q", got, phrase)
+			}
+			if calls := agent.newSessionCalls(); calls != 0 {
+				t.Errorf("NewSession was called %d times; a plain sentence must not reset the session", calls)
+			}
+			if calls := agent.stopCallsCount(); calls != 0 {
+				t.Errorf("Stop was called %d times; a plain sentence must not stop the turn", calls)
+			}
+		})
+	}
+}
+
+// TestMessageWithNoTextIsIgnored covers a sticker, a voice note or a document:
+// there is no prompt in it, so the agent must not run an empty turn that the
+// model then answers from the previous context.
+func TestMessageWithNoTextIsIgnored(t *testing.T) {
+	agent := &scriptedAgent{answer: "done", model: "test-model"}
+	bot, api := pairedBot(t, agent)
+
+	bot.handleMessage(context.Background(), &Message{
+		Chat: Chat{ID: 7, Type: "private"},
+		From: &User{ID: 9},
+	})
+
+	if count := agent.promptCount(); count != 0 {
+		t.Errorf("the agent ran %d prompts for a message with no text", count)
+	}
+	if calls := api.calls("sendMessage"); len(calls) != 0 {
+		t.Errorf("a message with no text should not draw a reply, got %d", len(calls))
+	}
+}
+
 // TestGroupCommandSuffixIsStripped covers the "@botname" Telegram appends to
 // commands in a group, which would otherwise read as an unknown command.
 func TestGroupCommandSuffixIsStripped(t *testing.T) {
@@ -432,13 +477,11 @@ func TestRunPromptMirrorsProgressIntoOneCard(t *testing.T) {
 	if edits[0]["text"] != "Reading main.go" {
 		t.Errorf("first edit = %v, want the first progress line", edits[0]["text"])
 	}
-	// The final edit carries the whole activity plus the answer, so nothing the
-	// turn did is lost to the latest line only.
+	// The final edit replaces the activity with the answer alone: the tools that
+	// scrolled by during the run must not stay in the chat.
 	last, _ := edits[len(edits)-1]["text"].(string)
-	for _, want := range []string{"Reading main.go", "Running tests", "the final answer"} {
-		if !strings.Contains(last, want) {
-			t.Errorf("final edit is missing %q:\n%s", want, last)
-		}
+	if strings.TrimSpace(last) != "the final answer" {
+		t.Errorf("final edit = %q, want only the answer", last)
 	}
 	if !api.called("sendChatAction") {
 		t.Errorf("the typing indicator should be shown")
@@ -447,10 +490,11 @@ func TestRunPromptMirrorsProgressIntoOneCard(t *testing.T) {
 
 // TestRunPromptSaysSoWhenThereIsNoOutput keeps an empty transcript from
 // looking like a message that failed to arrive.
-// TestCardKeepsEarlierSteps is the operator report: replacing the card with the
-// newest line lost every earlier step, so the task scrolled away. The final card
-// must carry the whole activity.
-func TestCardKeepsEarlierSteps(t *testing.T) {
+// TestCardShowsProgressThenBecomesTheAnswer covers the two halves of the card's
+// life: while the turn runs it accumulates the steps so the task is visible, and
+// when the turn ends it is replaced by the answer so the backend steps do not
+// stay in the chat.
+func TestCardShowsProgressThenBecomesTheAnswer(t *testing.T) {
 	lines := make([]string, 0, 30)
 	for index := 0; index < 30; index++ {
 		lines = append(lines, fmt.Sprintf("step %02d", index))
@@ -464,11 +508,50 @@ func TestCardKeepsEarlierSteps(t *testing.T) {
 	if len(edits) == 0 {
 		t.Fatalf("the card was never edited")
 	}
+	// Mid-run the card carries the activity, which is what proves earlier steps
+	// are kept rather than replaced by the newest line.
+	first, _ := edits[0]["text"].(string)
+	if !strings.Contains(first, "step 00") {
+		t.Errorf("the progress card is missing the first step:\n%s", first)
+	}
 	final, _ := edits[len(edits)-1]["text"].(string)
-	for _, want := range []string{"step 00", "step 15", "step 29", "done"} {
-		if !strings.Contains(final, want) {
-			t.Errorf("the final card is missing %q:\n%s", want, final)
-		}
+	if strings.TrimSpace(final) != "done" {
+		t.Errorf("final card = %q, want only the answer with the steps cleared", final)
+	}
+}
+
+// TestLongAnswerGoesOnTheCardAndAsFollowUps covers the answer that does not fit
+// one message: the card becomes the first part and the rest arrive as new
+// messages, so the whole answer is delivered with the activity still cleared.
+func TestLongAnswerGoesOnTheCardAndAsFollowUps(t *testing.T) {
+	var builder strings.Builder
+	for index := 0; index < 800; index++ {
+		fmt.Fprintf(&builder, "line %d of a long answer\n", index)
+	}
+	answer := builder.String()
+	if len(answer) <= telegramChunkLimit {
+		t.Fatalf("the fixture must exceed the chunk limit")
+	}
+	agent := &scriptedAgent{answer: answer, progressLines: []string{"step one"}}
+	bot, api := pairedBot(t, agent)
+
+	bot.runPrompt(context.Background(), 7, "do it")
+
+	edits := api.calls("editMessageText")
+	if len(edits) == 0 {
+		t.Fatalf("the card was never edited")
+	}
+	card, _ := edits[len(edits)-1]["text"].(string)
+	if len(card) > telegramChunkLimit {
+		t.Errorf("the card is %d bytes, over the chunk limit", len(card))
+	}
+	if strings.Contains(card, "step one") {
+		t.Errorf("the activity must be cleared from the card:\n%s", card)
+	}
+	sent := api.calls("sendMessage")
+	// One message is the "Working..." card; the rest are the answer's tail.
+	if len(sent) < 2 {
+		t.Fatalf("the answer tail should arrive as follow-up messages, got %d sendMessage call(s)", len(sent))
 	}
 }
 

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +56,12 @@ type Bot struct {
 	Log func(string)
 
 	offset int64
+	// cursorPath, when set, is where the last confirmed update id is kept so a
+	// restart resumes instead of replaying the prompts Telegram still holds. A
+	// crash between fetching a batch and confirming it otherwise re-ran an older
+	// prompt on the next start, which the operator read as the agent answering a
+	// question from before.
+	cursorPath string
 
 	// handlers tracks in-flight update handlers so shutdown waits for them
 	// instead of leaving a goroutine writing to a dead client.
@@ -135,6 +143,41 @@ func (b *Bot) logf(format string, args ...any) {
 	}
 }
 
+// SetCursorPath records where the confirmed update id is persisted. The file is
+// scoped to one bot by the caller, so two bots never share a cursor.
+func (b *Bot) SetCursorPath(path string) { b.cursorPath = path }
+
+// loadOffset reads the last confirmed update id. A missing or unreadable file
+// yields zero, which is the current behaviour, so a broken cursor never wedges
+// the loop on a stale offset.
+func (b *Bot) loadOffset() int64 {
+	if b.cursorPath == "" {
+		return 0
+	}
+	data, err := os.ReadFile(b.cursorPath)
+	if err != nil {
+		return 0
+	}
+	value, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil || value < 0 {
+		return 0
+	}
+	return value
+}
+
+// saveOffset persists the confirmed update id through a temporary file, so an
+// interrupted write leaves the old value rather than a half-written one.
+func (b *Bot) saveOffset(offset int64) {
+	if b.cursorPath == "" {
+		return
+	}
+	tmp := b.cursorPath + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.FormatInt(offset, 10)), 0o600); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, b.cursorPath)
+}
+
 // Verify checks the token and returns the bot identity.
 func (b *Bot) Verify(ctx context.Context) (User, error) {
 	return b.client.GetMe(ctx)
@@ -145,6 +188,12 @@ func (b *Bot) Run(ctx context.Context) error {
 	// Handlers may outlive a poll iteration; wait for them on the way out so
 	// a stopping bot does not keep working in the background.
 	defer b.handlers.Wait()
+
+	// Resume from the last confirmed update so a restart does not replay the
+	// prompts Telegram still holds.
+	if b.offset == 0 {
+		b.offset = b.loadOffset()
+	}
 
 	commands := []BotCommand{
 		{Command: "run", Description: "Run a prompt with live progress"},
@@ -183,6 +232,7 @@ func (b *Bot) Run(ctx context.Context) error {
 				continue
 			}
 			b.offset = update.UpdateID + 1
+			b.saveOffset(b.offset)
 			b.dispatch(ctx, update)
 		}
 	}
@@ -259,14 +309,20 @@ func (b *Bot) handleCallback(ctx context.Context, query *CallbackQuery) {
 func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 	chatID := message.Chat.ID
 	text := strings.TrimSpace(message.Text)
+	// A command is only a command when a slash introduces it. splitCommand
+	// happily reads the first word of any message, so without this guard a
+	// plain sentence beginning with "run", "new" or "stop" was routed as that
+	// command and either lost its first word or reset the session.
+	isCommand := strings.HasPrefix(text, "/")
 
 	if !b.Paired() {
 		// Unpaired: only /pair is accepted, which is what stops a stranger
 		// who finds the bot from running the agent.
-		command, argument := splitCommand(text)
-		if command == "pair" {
-			b.tryPair(ctx, message, argument)
-			return
+		if isCommand {
+			if command, argument := splitCommand(text); command == "pair" {
+				b.tryPair(ctx, message, argument)
+				return
+			}
 		}
 		b.reply(ctx, chatID, "This bot is not paired yet. Send /pair <code> with the code shown in Termixgo.")
 		return
@@ -281,6 +337,20 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 	// an image message carries no text.
 	if len(message.Photo) > 0 {
 		b.runPhoto(ctx, chatID, message)
+		return
+	}
+
+	// No text and no photo means there is nothing to ask. Running the agent
+	// anyway sent an empty turn, which the model answered from the previous
+	// context: the operator saw the agent reply to an older question (a
+	// sticker or a voice note triggered it).
+	if text == "" {
+		return
+	}
+
+	if !isCommand {
+		// Plain text is a prompt, which is the natural way to use the bot.
+		b.runPrompt(ctx, chatID, text)
 		return
 	}
 
@@ -325,12 +395,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		}
 		b.runPrompt(ctx, chatID, prompt)
 	default:
-		if strings.HasPrefix(text, "/") {
-			b.reply(ctx, chatID, "Unknown command. Send /help.")
-			return
-		}
-		// Plain text is a prompt, which is the natural way to use the bot.
-		b.runPrompt(ctx, chatID, text)
+		b.reply(ctx, chatID, "Unknown command. Send /help.")
 	}
 }
 
@@ -468,21 +533,22 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 		answer = "(no output)"
 	}
 
-	// The answer goes on the card when the activity and the answer fit together.
-	// When they do not, the activity stays on the card and the whole answer is
-	// sent as follow-up messages: an edit past the limit is truncated, which
-	// would lose the end of the answer.
-	combined := strings.Join(lines, "\n")
-	if combined != "" {
-		combined += "\n\n"
-	}
-	combined += answer
-	if len(combined) <= telegramChunkLimit {
-		_ = b.client.EditMarkdown(ctx, chatID, statusMessage.MessageID, combined, nil)
+	// The card carried the tool activity while the turn ran. Once the turn is
+	// done that activity has served its purpose, so the card is replaced by the
+	// answer alone: the chat is left with the conversation (the prompt, the
+	// agent's reply) instead of the backend steps behind it. When the answer is
+	// too long for one message the card carries its first part and the rest
+	// follow as new messages, because an edit past the limit is truncated.
+	first, rest := nextChunk(answer, telegramChunkLimit)
+	if err := b.client.EditMarkdown(ctx, chatID, statusMessage.MessageID, first, nil); err != nil {
+		// The card could not be rewritten, so deliver the whole answer as its
+		// own message rather than lose it.
+		b.replyMarkdown(ctx, chatID, answer)
 		return
 	}
-	flush(true)
-	b.replyMarkdown(ctx, chatID, answer)
+	if rest != "" {
+		b.replyMarkdown(ctx, chatID, rest)
+	}
 }
 
 // telegramChunkLimit is the body size the bot targets, under Telegram's 4096
@@ -492,30 +558,32 @@ const telegramChunkLimit = 3800
 // replyMarkdown sends Markdown text, split into Telegram-sized messages so a
 // long answer arrives whole instead of being truncated at the cap.
 func (b *Bot) replyMarkdown(ctx context.Context, chatID int64, text string) {
-	remaining := text
-	for len(remaining) > 0 {
-		part := remaining
-		if len(part) > telegramChunkLimit {
-			cut := telegramChunkLimit
-			for cut > 0 && !utf8.RuneStart(remaining[cut]) {
-				cut--
-			}
-			// Prefer a line boundary near the cut, so a sentence is not split
-			// mid-line when a newline is close. The newline itself stays with
-			// the next part: the renderer trims a trailing newline, so keeping
-			// it here would drop it.
-			if index := strings.LastIndexByte(remaining[:cut], '\n'); index > 0 && index > cut/2 {
-				cut = index
-			}
-			part = remaining[:cut]
-			remaining = remaining[cut:]
-		} else {
-			remaining = ""
-		}
+	for len(text) > 0 {
+		part, rest := nextChunk(text, telegramChunkLimit)
+		text = rest
 		if _, err := b.client.SendMarkdown(ctx, chatID, part, nil); err != nil {
 			b.logf("send failed: %v", err)
 		}
 	}
+}
+
+// nextChunk splits text into a part under limit bytes and the remainder. The
+// cut lands on a rune boundary, which Telegram requires, and prefers a line
+// boundary near the limit so a sentence is not split mid-line when a newline is
+// close. The newline itself stays with the next part: the renderer trims a
+// trailing newline, so keeping it here would drop it.
+func nextChunk(text string, limit int) (string, string) {
+	if len(text) <= limit {
+		return text, ""
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	if index := strings.LastIndexByte(text[:cut], '\n'); index > 0 && index > cut/2 {
+		cut = index
+	}
+	return text[:cut], text[cut:]
 }
 
 // capCardLines keeps the newest lines within limit bytes, dropping the oldest so
