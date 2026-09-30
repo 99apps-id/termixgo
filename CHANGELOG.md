@@ -102,6 +102,9 @@ All notable changes to Termixgo are recorded here. The format follows
   then one per model, and a press switches the model. It used to print only the
   active model, so choosing another meant knowing its id. `/model <id>` still
   works for a direct switch.
+- The Telegram progress card keeps the whole turn instead of only the newest
+  line, so the task no longer scrolls away, and a long answer is no longer
+  truncated: it is sent as follow-up messages split on a line boundary.
 - Telegram answers are rendered from Markdown: bold, inline code, fenced code,
   headings and links are converted to the Bot API's HTML subset. If the API
   rejects the entities the message is resent as plain text, so a formatting bug
