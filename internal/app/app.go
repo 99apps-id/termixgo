@@ -358,6 +358,10 @@ func (a *App) applyModel(model provider.Model) error {
 		return a.modelErr
 	}
 	if info.NeedsKey && !provider.HasKey(a.store, info.ID) {
+		if info.OAuth {
+			a.modelErr = fmt.Errorf("%s needs a login; run 'termixgo login %s'", info.Label, info.ID)
+			return a.modelErr
+		}
 		a.modelErr = fmt.Errorf("no API key for %s yet; run /setup", info.Label)
 		return a.modelErr
 	}
@@ -365,6 +369,14 @@ func (a *App) applyModel(model provider.Model) error {
 	if err != nil {
 		a.modelErr = err
 		return err
+	}
+	if info.OAuth {
+		// A Codex request must name the ChatGPT account the token belongs to.
+		if token, ok := provider.OAuthStore(a.store).Load(info.ID); ok {
+			if setter, ok := client.(interface{ SetAccountID(string) }); ok {
+				setter.SetAccountID(token.AccountID)
+			}
+		}
 	}
 	a.client = client
 	a.model = model

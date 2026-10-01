@@ -1,12 +1,17 @@
 package provider
 
 import (
+	"context"
 	"os"
 	"strings"
 
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/oauth"
 	"github.com/99apps-id/termixgo/internal/secrets"
 )
+
+// OAuthStore returns the token store bound to a secret store.
+func OAuthStore(store *secrets.Store) *oauth.Store { return oauth.NewStore(store) }
 
 // EnvKey returns a provider key from the environment, which lets CI and
 // shell profiles work without touching the local store.
@@ -23,9 +28,12 @@ func EnvKey(id string) string {
 	return ""
 }
 
-// ResolveKey returns the API key for a provider: the stored secret first,
-// then the environment.
+// ResolveKey returns the credential for a provider: an OAuth access token for
+// a login provider, otherwise the stored secret, then the environment.
 func ResolveKey(store *secrets.Store, id string) string {
+	if info, ok := ByID(id); ok && info.OAuth {
+		return oauth.AccessToken(context.Background(), oauth.NewStore(store), id)
+	}
 	if store != nil {
 		if value := strings.TrimSpace(store.Get(secrets.ProviderKey(id))); value != "" {
 			return value

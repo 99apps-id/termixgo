@@ -27,6 +27,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/cron"
 	"github.com/99apps-id/termixgo/internal/mcp"
+	"github.com/99apps-id/termixgo/internal/oauth"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/secrets"
 	"github.com/99apps-id/termixgo/internal/ui"
@@ -95,6 +96,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runMCP(args[1:], stdout)
 	case "secret":
 		return runSecret(args[1:], stdin, stdout)
+	case "login":
+		return runLogin(args[1:], stdout)
+	case "logout":
+		return runLogout(args[1:], stdout)
 	case "telegram":
 		return runTelegram(args[1:], stdout)
 	case "serve":
@@ -483,6 +488,40 @@ func runSecret(args []string, stdin io.Reader, stdout io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "stored a key for %s\n", providerID)
+	return nil
+}
+
+// runLogin performs a device login for an OAuth provider and stores the token.
+func runLogin(args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: termixgo login <%s>", strings.Join(oauth.Supported(), "|"))
+	}
+	providerID := strings.TrimSpace(args[0])
+	if _, ok := oauth.SpecFor(providerID); !ok {
+		return fmt.Errorf("%q does not support a login; supported: %s", providerID, strings.Join(oauth.Supported(), ", "))
+	}
+	store, err := secrets.Load()
+	if err != nil {
+		return err
+	}
+	ctx, stop := signalContext()
+	defer stop()
+	return oauth.Login(ctx, oauth.NewStore(store), providerID, stdout)
+}
+
+// runLogout removes a stored OAuth token.
+func runLogout(args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: termixgo logout <provider>")
+	}
+	store, err := secrets.Load()
+	if err != nil {
+		return err
+	}
+	if err := oauth.NewStore(store).Delete(strings.TrimSpace(args[0])); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Logged out of %s.\n", strings.TrimSpace(args[0]))
 	return nil
 }
 
@@ -1148,6 +1187,8 @@ Usage:
   termixgo mcp                    List the MCP servers and the tools they add
   termixgo completion [shell]     Print shell completion (bash|zsh|fish|powershell)
   termixgo secret <provider> [k]  Store a provider API key
+  termixgo login <provider>       Log in with a device code (xai-oauth, openai-codex)
+  termixgo logout <provider>       Remove a stored OAuth token
   termixgo telegram [status|on|off]
   termixgo cron [list|add|remove|on|off|run]
                                   Manage scheduled assistant jobs

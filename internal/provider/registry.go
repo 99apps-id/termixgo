@@ -24,6 +24,9 @@ type Provider struct {
 	NeedsKey       bool
 	KeyPrefix      string
 	EnvKeys        []string
+	// OAuth marks a provider whose credential comes from a login (a stored
+	// OAuth token) rather than a pasted API key.
+	OAuth bool
 }
 
 // Model is one entry in the local catalogue. APIID is what goes on the wire
@@ -70,6 +73,14 @@ var contextWindows = map[string]int{
 	"gemini-3.7-flash":       1048576,
 	"gemini-3.5-flash":       1048576,
 	"gemini-3.5-flash-lite":  1048576,
+
+	// OAuth catalogue entries keep a distinct local id; their window follows
+	// the model they map to.
+	"codex-gpt-5.3":        400000,
+	"codex-gpt-5.5":        1050000,
+	"grok-4.7-oauth":       500000,
+	"grok-4.5-oauth":       500000,
+	"grok-build-0.1-oauth": 256000,
 
 	// xAI.
 	"grok-4.7":       500000,
@@ -217,6 +228,8 @@ func Providers() []Provider {
 		{ID: "anthropic", Label: "Anthropic", Kind: KindAnthropic, DefaultBaseURL: "https://api.anthropic.com", ConsoleURL: "https://console.anthropic.com/settings/keys", NeedsKey: true, KeyPrefix: "sk-ant-", EnvKeys: []string{"ANTHROPIC_API_KEY"}},
 		{ID: "google", Label: "Google Gemini", Kind: KindGoogle, DefaultBaseURL: "https://generativelanguage.googleapis.com", ConsoleURL: "https://aistudio.google.com/apikey", NeedsKey: true, EnvKeys: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 		{ID: "xai", Label: "xAI Grok", Kind: KindOpenAI, DefaultBaseURL: "https://api.x.ai/v1", ConsoleURL: "https://console.x.ai/", NeedsKey: true, KeyPrefix: "xai-", EnvKeys: []string{"XAI_API_KEY"}},
+		{ID: "xai-oauth", Label: "xAI Grok (OAuth)", Kind: KindOpenAI, DefaultBaseURL: "https://api.x.ai/v1", ConsoleURL: "https://x.ai/", NeedsKey: true, OAuth: true},
+		{ID: "openai-codex", Label: "OpenAI Codex (ChatGPT)", Kind: KindOpenAI, DefaultBaseURL: "https://chatgpt.com/backend-api/codex", ConsoleURL: "https://chatgpt.com/", NeedsKey: true, OAuth: true},
 
 		// Vendors that matter most for agentic coding, cheapest strong models
 		// first so the wizard's default order is also a sensible one.
@@ -318,6 +331,11 @@ func Models() []Model {
 		{ID: "gpt-5.4", Provider: "openai", Label: "GPT-5.4", Description: "Long-context workhorse.", Tags: []string{"tools", "vision"}},
 		{ID: "gpt-5.4-mini", Provider: "openai", Label: "GPT-5.4 mini", Description: "Fast and inexpensive.", Tags: []string{"fast", "tools"}},
 		{ID: "gpt-5.3-codex", Provider: "openai", Label: "GPT-5.3 Codex", Description: "Tuned for agentic software engineering.", Tags: []string{"coding", "tools"}},
+		// The same models served through a ChatGPT login (Codex OAuth). The
+		// local id is distinct because the catalogue keys by id alone; APIID
+		// is what goes on the wire.
+		{ID: "codex-gpt-5.3", Provider: "openai-codex", Label: "GPT-5.3 Codex (ChatGPT)", APIID: "gpt-5.3-codex", Description: "Agentic coding through a ChatGPT login.", Tags: []string{"coding", "tools"}},
+		{ID: "codex-gpt-5.5", Provider: "openai-codex", Label: "GPT-5.5 (ChatGPT)", APIID: "gpt-5.5", Description: "Frontier generation through a ChatGPT login.", Tags: []string{"reasoning", "tools"}},
 
 		// Anthropic. Fable is the Mythos tier, above Opus.
 		{ID: "claude-fable-5-1", Provider: "anthropic", Label: "Claude Fable 5.1", Description: "Deepest reasoning and long-horizon agentic work.", Tags: []string{"reasoning", "tools", "coding"}},
@@ -339,6 +357,10 @@ func Models() []Model {
 		{ID: "grok-4.6", Provider: "xai", Label: "Grok 4.6", Description: "Previous flagship.", Tags: []string{"reasoning", "tools"}},
 		{ID: "grok-4.5", Provider: "xai", Label: "Grok 4.5", Description: "Frontier coding and STEM.", Tags: []string{"reasoning", "tools"}},
 		{ID: "grok-build-0.1", Provider: "xai", Label: "Grok Build 0.1", Description: "Fast model tuned for agentic coding.", Tags: []string{"coding", "fast"}},
+		// The Grok models served through a SuperGrok login (OAuth).
+		{ID: "grok-4.7-oauth", Provider: "xai-oauth", Label: "Grok 4.7 (OAuth)", APIID: "grok-4.7", Description: "Flagship coding model through a Grok login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "grok-4.5-oauth", Provider: "xai-oauth", Label: "Grok 4.5 (OAuth)", APIID: "grok-4.5", Description: "Frontier coding and STEM through a Grok login.", Tags: []string{"reasoning", "tools"}},
+		{ID: "grok-build-0.1-oauth", Provider: "xai-oauth", Label: "Grok Build 0.1 (OAuth)", APIID: "grok-build-0.1", Description: "Fast agentic coding through a Grok login.", Tags: []string{"coding", "fast"}},
 
 		// DeepSeek. Pro is the large MoE, Flash the cheap one.
 		{ID: "deepseek-v4-pro", Provider: "deepseek", Label: "DeepSeek V4 Pro", Description: "Large MoE for advanced reasoning and coding.", Tags: []string{"reasoning", "tools", "coding"}},

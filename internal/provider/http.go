@@ -18,8 +18,14 @@ type httpClient struct {
 	info    Provider
 	baseURL string
 	apiKey  string
-	http    *http.Client
+	// accountID is the provider-side account a Codex token belongs to, sent in
+	// the ChatGPT-Account-ID header. Empty for every other provider.
+	accountID string
+	http      *http.Client
 }
+
+// SetAccountID records the account a Codex token belongs to.
+func (c *httpClient) SetAccountID(id string) { c.accountID = strings.TrimSpace(id) }
 
 func newHTTPClient(info Provider, baseURL, apiKey string) (Client, error) {
 	shared := &http.Client{
@@ -38,6 +44,10 @@ func newHTTPClient(info Provider, baseURL, apiKey string) (Client, error) {
 		},
 	}
 	base := &httpClient{info: info, baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, http: shared}
+	// A Codex login targets the ChatGPT Responses backend, not chat-completions.
+	if info.ID == "openai-codex" {
+		return &codexClient{httpClient: base}, nil
+	}
 	switch info.Kind {
 	case KindAnthropic:
 		return &anthropicClient{httpClient: base}, nil

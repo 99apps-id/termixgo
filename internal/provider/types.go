@@ -132,6 +132,9 @@ func NewClient(id, baseURL string, resolveKey KeyResolver) (Client, error) {
 		key = strings.TrimSpace(resolveKey(id))
 	}
 	if info.NeedsKey && key == "" {
+		if info.OAuth {
+			return nil, fmt.Errorf("%s needs a login; run 'termixgo login %s'", info.Label, id)
+		}
 		return nil, fmt.Errorf("no API key for %s; run /setup to add one", info.Label)
 	}
 	return newHTTPClient(info, endpoint, key)

@@ -192,6 +192,11 @@ func TestProvidersRequiringKeySortedAndConsistent(t *testing.T) {
 		if !info.NeedsKey {
 			t.Errorf("%s is in the key list but does not need a key", info.ID)
 		}
+		// An OAuth provider has no environment variable: its credential comes
+		// from a stored login, not an API key.
+		if info.OAuth {
+			continue
+		}
 		if len(info.EnvKeys) == 0 {
 			t.Errorf("%s needs a key but declares no environment variable", info.ID)
 		}
