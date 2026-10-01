@@ -7,11 +7,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/provider"
 )
 
 func testEnv(t *testing.T) *Env {
 	t.Helper()
+	// Global memory lives under the home directory, so the test home is
+	// redirected here. Without this a test that writes a global fact appends
+	// to the operator's real ~/.termixgo/memory.md and then fails on the next
+	// run when that file already holds entries.
+	t.Setenv(config.EnvHome, t.TempDir())
 	workspace := t.TempDir()
 	return &Env{
 		Workspace: workspace,
