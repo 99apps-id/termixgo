@@ -189,6 +189,14 @@ func (s *Session) AddUsage(usage provider.Usage) {
 	s.mu.Unlock()
 }
 
+// ReplaceUsage overwrites the token accounting. A load uses it to repair a
+// total no real run could have produced.
+func (s *Session) ReplaceUsage(usage provider.Usage) {
+	s.mu.Lock()
+	s.usage = usage
+	s.mu.Unlock()
+}
+
 // Cost is the estimated spend across the session.
 func (s *Session) Cost() float64 {
 	s.mu.Lock()
@@ -387,7 +395,62 @@ func LoadSession(id string) (*Session, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("parse session %s: %w", id, err)
 	}
-	return fromJSON(state), nil
+	session := fromJSON(state)
+	repairImpossibleUsage(session)
+	return session, nil
+}
+
+// repairImpossibleUsage resets a stored usage total that no real run could have
+// produced. The old per-chunk accounting counted a step's tokens once for every
+// streamed chunk, so some sessions recorded hundreds of millions of prompt
+// tokens. A request can never exceed the model's context window, so the total
+// across steps cannot exceed the number of steps times the window; a figure
+// past twice that is treated as corrupt and rebuilt from the messages. The cost
+// derived from it is scaled by the same factor.
+func repairImpossibleUsage(session *Session) {
+	messages := session.Messages()
+	steps := 0
+	for _, message := range messages {
+		if message.Role == provider.RoleAssistant {
+			steps++
+		}
+	}
+	if steps == 0 {
+		return
+	}
+	stored := session.Usage()
+	if stored.PromptTokens <= 0 {
+		return
+	}
+	window := provider.DefaultContextWindow
+	if model, ok := provider.ModelByID(session.Model()); ok {
+		window = model.Window()
+	}
+	if int64(stored.PromptTokens) <= int64(steps)*int64(window)*2 {
+		return
+	}
+	recomputed := recomputeUsage(messages)
+	if stored.TotalTokens > 0 {
+		session.SetCost(session.Cost() * float64(recomputed.TotalTokens) / float64(stored.TotalTokens))
+	}
+	session.ReplaceUsage(recomputed)
+}
+
+// recomputeUsage estimates the usage a conversation corresponds to by summing
+// the prompt the model received at each assistant step. It is the honest
+// fallback when a stored total is corrupt, not a replacement for the provider's
+// own number.
+func recomputeUsage(messages []provider.Message) provider.Usage {
+	var usage provider.Usage
+	for index, message := range messages {
+		if message.Role != provider.RoleAssistant {
+			continue
+		}
+		usage.PromptTokens += EstimateMessages(messages[:index])
+		usage.CompletionTokens += estimateMessageTokens(message)
+	}
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	return usage
 }
 
 // fromJSON builds a live session from persisted state.
