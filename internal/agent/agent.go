@@ -542,10 +542,6 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 	return result
 }
 
-func (r *Runner) toolNames() string {
-	return strings.Join(r.toolNamesList(), ", ")
-}
-
 func (r *Runner) toolNamesList() []string {
 	names := make([]string, 0, len(r.Tools.Tools()))
 	for _, tool := range r.Tools.Tools() {

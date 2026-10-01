@@ -144,6 +144,26 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Fixed
 
+- `/cron run` no longer starts an empty turn for a job that does not exist. The
+  not-found and read-failure branches used `break` inside the inner switch,
+  which only left that switch: the command then printed `Running job .` and
+  called the run path with an empty prompt. The branches are now cases of the
+  same switch, so a refusal is the only thing that happens.
+- Approval decisions keep being written to learned memory after a config change.
+  `UpdateConfig` and `SetApprovalMode` replace the `ApprovalPolicy` to change the
+  mode, and the replacement dropped its `Memory` field, so the runner silently
+  stopped recording "the operator allowed this tool" after the first settings
+  write of a session. The rewrite now keeps the memory and the session and
+  always-allowed sets.
+- `staticcheck ./...` is clean again, which the CI job requires. The findings
+  were an error string that opened with a capital letter, the two unused
+  functions `Runner.toolNames` and `Store.setProtectionErr`, a loop in
+  `PruneCheckpoints` whose body always returned, an assignment in
+  `decodeMultiEdits` whose value was overwritten before it was read, two
+  redundant `break` statements, and four calls to the deprecated
+  `viewport.HalfViewUp`/`HalfViewDown`. The Windows ACL helper now reads the
+  process token through `windows.GetCurrentProcessToken` instead of the
+  deprecated `OpenCurrentProcessToken`.
 - Gemini token usage is no longer counted once per chunk. The Google endpoint
   repeats `usageMetadata` on every chunk with counters that cover the whole
   request, and the run loop sums every usage event to show the running total, so

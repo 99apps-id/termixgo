@@ -70,7 +70,7 @@ type multiPreviewEdit struct {
 func decodeMultiEdits(args map[string]any) []multiPreviewEdit {
 	raw, ok := args["edits"]
 	if !ok {
-		raw, ok = args["instructions"]
+		raw, _ = args["instructions"]
 	}
 	list, ok := raw.([]any)
 	if !ok {

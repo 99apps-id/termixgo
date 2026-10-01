@@ -621,11 +621,11 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "pgup":
-		m.viewport.HalfViewUp()
+		m.viewport.HalfPageUp()
 		m.refresh()
 		return m, nil
 	case "pgdown":
-		m.viewport.HalfViewDown()
+		m.viewport.HalfPageDown()
 		m.refresh()
 		return m, nil
 	case "home":
@@ -698,11 +698,11 @@ func (m *Model) handleSlashMenuKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, textareaBlink()
 	case "pgup":
-		m.viewport.HalfViewUp()
+		m.viewport.HalfPageUp()
 		m.refresh()
 		return m, nil
 	case "pgdown":
-		m.viewport.HalfViewDown()
+		m.viewport.HalfPageDown()
 		m.refresh()
 		return m, nil
 	case "home":

@@ -529,7 +529,7 @@ func runServe(stdout io.Writer) error {
 		return fmt.Errorf("no Telegram token configured; run 'termixgo setup' or 'termixgo telegram on'")
 	}
 	if !cfg.Telegram.Enabled {
-		return fmt.Errorf("Telegram is disabled; run 'termixgo telegram on' first")
+		return fmt.Errorf("the Telegram companion is disabled; run 'termixgo telegram on' first")
 	}
 
 	fmt.Fprintf(stdout, "Starting Termixgo assistant (Ctrl+C to stop)...\n")

@@ -59,12 +59,6 @@ func (s *Store) ProtectionError() error {
 	return s.protectionErr
 }
 
-func (s *Store) setProtectionErr(err error) {
-	s.mu.Lock()
-	s.protectionErr = err
-	s.mu.Unlock()
-}
-
 // Path returns the secret file location, which callers need to audit it.
 func (s *Store) Path() string { return s.path }
 

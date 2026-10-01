@@ -965,16 +965,20 @@ func (m *Model) slashCron(args string) (tea.Model, tea.Cmd) {
 			break
 		}
 		job, ok, err := m.app.CronJob(fields[1])
+		// The failure branches have to return rather than break: a break here
+		// leaves the switch and falls into the line below, which reported
+		// "Running job ." and started an empty turn for a job that does not
+		// exist or could not be read.
 		switch {
 		case err != nil:
 			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
-			break
 		case !ok:
 			m.blocks = append(m.blocks, block{kind: blockError, text: "No job with id " + fields[1] + "."})
-			break
+		default:
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "Running job " + job.ID + "."})
+			m.refresh()
+			return m.startRun(job.Prompt)
 		}
-		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Running job " + job.ID + "."})
-		return m.startRun(job.Prompt)
 	default:
 		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /cron [list|add|remove|on|off|run]"})
 	}

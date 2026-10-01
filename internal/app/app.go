@@ -526,15 +526,28 @@ func (a *App) UpdateConfig(change func(cfg *config.Config)) error {
 	a.mu.Lock()
 	change(&a.cfg)
 	a.cfg = a.cfg.WithRecent(a.workspace)
-	a.policy = &agent.ApprovalPolicy{
-		Mode:           agent.ApprovalModeOrDefault(a.cfg),
-		AlwaysAllowed:  a.policy.AlwaysAllowed,
-		SessionAllowed: a.policy.SessionAllowed,
-	}
+	a.replacePolicy(agent.ApprovalModeOrDefault(a.cfg))
 	a.pricing, a.costKnown = provider.PricedFor(a.cfg, a.model)
 	cfg := a.cfg
 	a.mu.Unlock()
 	return config.Save(cfg)
+}
+
+// replacePolicy installs a policy with a new mode while keeping the parts that
+// are not about the mode. The caller holds a.mu.
+//
+// AlwaysAllowed and SessionAllowed survive a policy replacement, and so does
+// Memory: it is where the loop records "the operator allowed this tool", so
+// dropping it silently stopped the agent learning approval decisions after any
+// config write.
+func (a *App) replacePolicy(mode agent.ApprovalMode) {
+	previous := a.policy
+	policy := &agent.ApprovalPolicy{Mode: mode, Memory: a.memory}
+	if previous != nil {
+		policy.AlwaysAllowed = previous.AlwaysAllowed
+		policy.SessionAllowed = previous.SessionAllowed
+	}
+	a.policy = policy
 }
 
 // Policy returns the live approval policy. The pointer is shared with the
@@ -623,11 +636,7 @@ func (a *App) SetApprovalMode(mode config.ApprovalMode) error {
 	}
 	a.mu.Lock()
 	a.cfg.ApprovalMode = mode
-	a.policy = &agent.ApprovalPolicy{
-		Mode:           agent.ApprovalMode(mode),
-		AlwaysAllowed:  a.policy.AlwaysAllowed,
-		SessionAllowed: a.policy.SessionAllowed,
-	}
+	a.replacePolicy(agent.ApprovalMode(mode))
 	cfg := a.cfg
 	a.mu.Unlock()
 	return config.Save(cfg)

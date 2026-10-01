@@ -61,14 +61,13 @@ func applyDACL(path string, inheritance uint32) error {
 
 // currentUserSID identifies the account the process runs as.
 func currentUserSID() (*windows.SID, error) {
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		return nil, fmt.Errorf("open process token: %w", err)
-	}
-	defer token.Close()
+	// GetCurrentProcessToken returns a pseudo token carrying TOKEN_QUERY. It
+	// must not be closed, which is why it is preferred over the deprecated
+	// OpenCurrentProcessToken, whose real handle has to be released.
+	token := windows.GetCurrentProcessToken()
 	user, err := token.GetTokenUser()
 	if err != nil {
-		return nil, fmt.Errorf("read token user: %w", err)
+		return nil, fmt.Errorf("read the process token user: %w", err)
 	}
 	return user.User.Sid, nil
 }

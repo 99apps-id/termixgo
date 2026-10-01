@@ -160,18 +160,20 @@ func PruneCheckpoints(ctx context.Context, workspace string, keep int) error {
 	if keep < 1 {
 		keep = 1
 	}
-	checkpoints, err := ListCheckpoints(ctx, workspace)
-	if err != nil {
-		return err
-	}
-	for _, extra := range checkpoints[min(keep, len(checkpoints)):] {
-		if _, err := gitOutput(ctx, workspace, "stash", "drop", extra.Ref); err != nil {
-			return fmt.Errorf("drop %s: %w", extra.Ref, err)
+	// Dropping renumbers the refs, so the list is re-read before every drop
+	// rather than trusting the positions taken from the first read.
+	for {
+		checkpoints, err := ListCheckpoints(ctx, workspace)
+		if err != nil {
+			return err
 		}
-		// Dropping renumbers the refs, so re-list before the next drop.
-		return PruneCheckpoints(ctx, workspace, keep)
+		if len(checkpoints) <= keep {
+			return nil
+		}
+		if _, err := gitOutput(ctx, workspace, "stash", "drop", checkpoints[keep].Ref); err != nil {
+			return fmt.Errorf("drop %s: %w", checkpoints[keep].Ref, err)
+		}
 	}
-	return nil
 }
 
 // AutoCheckpoint saves a best-effort snapshot before a turn and prunes the
