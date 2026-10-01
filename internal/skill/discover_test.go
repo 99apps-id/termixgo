@@ -183,6 +183,11 @@ func TestCreateRejectsAnImpossibleName(t *testing.T) {
 }
 
 func TestCreateSuppliesADefaultDescription(t *testing.T) {
+	// Discover reads the user skills folder as well as the project one, so
+	// without a private state directory the count below is whatever the
+	// machine running the test happens to have installed. Every other
+	// Discover test isolates the home for the same reason.
+	t.Setenv(config.EnvHome, t.TempDir())
 	workspace := t.TempDir()
 	created, err := Create(workspace, "no description", "   ")
 	if err != nil {
