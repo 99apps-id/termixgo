@@ -198,6 +198,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashHeartbeat(args)
 	case "audit":
 		return m.slashAudit(args)
+	case "worker":
+		return m.slashWorker(args)
 	case "init":
 		if !m.app.HasModel() {
 			m.blocks = append(m.blocks, block{kind: blockError, text: "Pick a model first with /setup."})
@@ -1055,6 +1057,45 @@ func (m *Model) slashAudit(args string) (tea.Model, tea.Cmd) {
 		lines = append(lines, fmt.Sprintf("  %s  %-5s %-16s %-5s %s", entry.Time.Format("01-02 15:04:05"), entry.Kind, entry.Name, status, detail))
 	}
 	m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
+	m.refresh()
+	return m, nil
+}
+
+// slashWorker lists the coding workers or starts one.
+func (m *Model) slashWorker(args string) (tea.Model, tea.Cmd) {
+	fields := strings.Fields(strings.TrimSpace(args))
+	if len(fields) == 0 || strings.EqualFold(fields[0], "list") {
+		lines := []string{"Coding workers:"}
+		for _, info := range m.app.WorkerCatalog() {
+			state := "missing"
+			if info.Available {
+				state = "ready"
+			}
+			lines = append(lines, fmt.Sprintf("  %-10s %-7s %s", info.Kind, state, info.Detail))
+		}
+		lines = append(lines, "", "Start one with /worker start <kind> <task>.")
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
+		m.refresh()
+		return m, nil
+	}
+	if !strings.EqualFold(fields[0], "start") {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /worker [list|start <kind> <task>]"})
+		m.refresh()
+		return m, nil
+	}
+	if len(fields) < 3 {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /worker start <kind> <task>"})
+		m.refresh()
+		return m, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	output, err := m.app.StartCodeWorker(ctx, fields[1], strings.Join(fields[2:], " "), "")
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+	} else {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: output})
+	}
 	m.refresh()
 	return m, nil
 }

@@ -201,6 +201,7 @@ command typed mid-turn is queued and runs when the turn ends.
 | `/cron [list\|add\|remove\|on\|off\|run]` | schedule assistant jobs |
 | `/heartbeat [on\|off\|<interval>]` | periodic self-check for a 24/7 assistant |
 | `/audit [count]` | show recent audited actions |
+| `/worker [list\|start]` | run a background coding worker |
 | `/init` | generate a `TERMIXGO.md` for the project |
 | `/cost` | token usage and estimated spend for this session |
 | `/ps [kill <handle>]` | list background processes, or stop one |
@@ -265,6 +266,8 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
 | `modelOverrides` | map a stable model id to the id sent on the wire |
 | `modelPricing` | give an unpriced model a price so a budget can fire |
 | `mcpServers` | MCP servers to start with a session |
+| `workerCommands` | override a background worker's argv, keyed by worker id |
+| `heartbeat` | `{ "enabled": true, "interval": "30m" }` for the periodic self-check |
 
 Set `TERMIXGO_HOME` to move the whole state directory, which is useful for tests
 and throwaway profiles.
@@ -649,6 +652,10 @@ termixgo harness [id]           # show or set the agent harness profile
 termixgo mcp                    # list MCP servers and their tools
 termixgo secret <provider> [key] # store a provider API key
 termixgo telegram [status|on|off]
+termixgo cron [list|add|remove|on|off|run]
+termixgo heartbeat [status|on|off|interval <duration>]
+termixgo audit [count]          # metadata-only action ledger
+termixgo worker [list]          # background coding workers
 termixgo serve                  # run the Telegram assistant 24/7
 termixgo service [install|uninstall|status]
 termixgo completion [shell]     # bash, zsh, fish or powershell

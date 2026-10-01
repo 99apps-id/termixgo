@@ -139,6 +139,13 @@ type Config struct {
 	// custom endpoint still gets a working cost budget.
 	ModelPricing map[string]ModelPrice `json:"modelPricing,omitempty"`
 
+	// WorkerCommands overrides the command line for a background coding
+	// worker, keyed by worker id (termixgo, claude, codex, opencode). Each
+	// entry is an argv; an element containing "{task}" is replaced by the task
+	// text, and an entry with no placeholder gets the task appended. A worker
+	// with no entry uses the built-in command.
+	WorkerCommands map[string][]string `json:"workerCommands,omitempty"`
+
 	// TrustedFolders is the canonical list of folders where the agent may
 	// write and run commands without per-action approval.
 	TrustedFolders []string `json:"trustedFolders,omitempty"`

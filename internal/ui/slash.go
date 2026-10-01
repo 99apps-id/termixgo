@@ -95,6 +95,10 @@ var slashCommands = []SlashCommand{
 		{Value: "2h", Detail: "run the heartbeat every 2 hours"},
 	}},
 	{Trigger: "/audit", Args: "[count]", Summary: "Show recent audited actions"},
+	{Trigger: "/worker", Args: "[list|start]", Summary: "Run a background coding worker: start <kind> <task>", Options: []SlashOption{
+		{Value: "list", Detail: "show workers and whether each is ready"},
+		{Value: "start", Detail: "start a worker, then type: <kind> <task>", Complete: true},
+	}},
 	{Trigger: "/init", Args: "", Summary: "Generate a TERMIXGO.md for this project"},
 	{Trigger: "/cost", Args: "", Summary: "Show token usage for this session"},
 	{Trigger: "/ps", Args: "[kill <handle>]", Summary: "List background processes, or stop one"},

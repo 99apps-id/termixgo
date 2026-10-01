@@ -99,6 +99,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runHeartbeat(args[1:], stdout)
 	case "audit":
 		return runAudit(args[1:], stdout)
+	case "worker":
+		return runWorker(args[1:], stdout)
 	case "service":
 		return runService(args[1:], stdout)
 	case "completion":
@@ -759,6 +761,32 @@ func runAudit(args []string, stdout io.Writer) error {
 	return nil
 }
 
+// runWorker lists the background coding workers and whether each is ready.
+//
+// Starting a worker is deliberately not a CLI action: a worker is a detached
+// process, and a short-lived CLI process would kill it on exit. Start one from
+// the terminal UI with /worker start, or from a running `serve` by asking the
+// agent to use code_worker.
+func runWorker(args []string, stdout io.Writer) error {
+	if len(args) > 0 && args[0] != "list" {
+		return fmt.Errorf("usage: termixgo worker [list]")
+	}
+	application, err := app.New("")
+	if err != nil {
+		return err
+	}
+	defer application.Shutdown()
+	for _, info := range application.WorkerCatalog() {
+		state := "missing"
+		if info.Available {
+			state = "ready"
+		}
+		fmt.Fprintf(stdout, "%-10s %-7s %s\n", info.Kind, state, info.Detail)
+	}
+	fmt.Fprintln(stdout, "\nStart one from the terminal UI with /worker start <kind> <task>.")
+	return nil
+}
+
 const (
 	serviceTaskName = "TermixgoAssistant"
 	launchdLabel    = "com.termixgo.assistant"
@@ -1120,6 +1148,7 @@ Usage:
   termixgo heartbeat [status|on|off|interval <duration>]
                                   Periodic self-check for the 24/7 assistant
   termixgo audit [count]          Show recent audited actions (metadata only)
+  termixgo worker [list]          List the background coding workers
   termixgo serve                  Run the Telegram assistant 24/7
   termixgo service [install|uninstall|status]
                                   Manage auto-start (systemd, launchd, schtasks)

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/config"
 )
 
 // echoArgv is a trivial worker that needs no external coding CLI.
@@ -52,6 +54,31 @@ func TestBuildWorkerArgv(t *testing.T) {
 	}
 	if len(native) != 3 || native[1] != "run" || native[2] != "do it" {
 		t.Errorf("native worker argv = %v, want [<exe> run <task>]", native)
+	}
+}
+
+func TestResolveWorkerCommandUsesConfigTemplate(t *testing.T) {
+	cfg := config.Default()
+	cfg.WorkerCommands = map[string][]string{"claude": {"myclaude", "--task", "{task}"}}
+	argv, err := resolveWorkerCommand(cfg, "claude", "fix it")
+	if err != nil {
+		t.Fatalf("resolveWorkerCommand: %v", err)
+	}
+	if strings.Join(argv, "|") != "myclaude|--task|fix it" {
+		t.Errorf("template argv = %v", argv)
+	}
+
+	// No placeholder: the task is appended.
+	cfg.WorkerCommands["codex"] = []string{"mycodex", "exec"}
+	argv, _ = resolveWorkerCommand(cfg, "codex", "go")
+	if strings.Join(argv, "|") != "mycodex|exec|go" {
+		t.Errorf("appended argv = %v", argv)
+	}
+
+	// A worker with no template falls back to the built-in.
+	argv, _ = resolveWorkerCommand(config.Default(), "claude", "x")
+	if len(argv) == 0 || argv[0] != "claude" {
+		t.Errorf("fallback argv = %v", argv)
 	}
 }
 

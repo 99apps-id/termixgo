@@ -40,6 +40,13 @@ func TestCronCommandRejectsABadSchedule(t *testing.T) {
 	}
 }
 
+func TestWorkerCommandListsNative(t *testing.T) {
+	model := chatModel(t)
+	if _, out := runSlash(t, model, "/worker"); !strings.Contains(out, "termixgo") || !strings.Contains(out, "ready") {
+		t.Fatalf("worker list = %q", out)
+	}
+}
+
 func TestAuditCommandRuns(t *testing.T) {
 	model := chatModel(t)
 	if _, out := runSlash(t, model, "/audit"); !strings.Contains(out, "audit") && !strings.Contains(out, "Audit") {

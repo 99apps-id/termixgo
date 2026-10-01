@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/config"
 )
 
 // workerDepthEnv marks a native worker child, so it cannot start another worker
@@ -41,6 +43,47 @@ func buildWorkerArgv(kind, task string) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("unknown worker %q; use termixgo, claude, codex or opencode", kind)
 	}
+}
+
+// workerKinds are the worker ids a caller may use, in display order.
+var workerKinds = []string{"termixgo", "claude", "codex", "opencode"}
+
+// WorkerKinds returns the supported worker ids, in display order.
+func WorkerKinds() []string {
+	out := make([]string, len(workerKinds))
+	copy(out, workerKinds)
+	return out
+}
+
+// resolveWorkerCommand prefers a configured template for the worker, falling
+// back to the built-in. A template is an argv where "{task}" is replaced, or the
+// task appended when no placeholder is present.
+func resolveWorkerCommand(cfg config.Config, kind, task string) ([]string, error) {
+	template, ok := cfg.WorkerCommands[strings.ToLower(strings.TrimSpace(kind))]
+	if !ok || len(template) == 0 {
+		return codeWorkerArgv(kind, task)
+	}
+	return renderWorkerTemplate(template, task)
+}
+
+func renderWorkerTemplate(template []string, task string) ([]string, error) {
+	if strings.TrimSpace(task) == "" {
+		return nil, fmt.Errorf("the task is empty")
+	}
+	out := make([]string, 0, len(template)+1)
+	replaced := false
+	for _, part := range template {
+		if strings.Contains(part, "{task}") {
+			out = append(out, strings.ReplaceAll(part, "{task}", task))
+			replaced = true
+			continue
+		}
+		out = append(out, part)
+	}
+	if !replaced {
+		out = append(out, task)
+	}
+	return out, nil
 }
 
 // codeWorkerTool hands a coding task to an external coding agent in its own
@@ -84,7 +127,7 @@ func (t *codeWorkerTool) Run(ctx context.Context, env *Env, args map[string]any)
 		return Result{Output: "background processes are not available in this session", IsError: true}, nil
 	}
 	kind := workerKind(args)
-	argv, err := codeWorkerArgv(kind, task)
+	argv, err := resolveWorkerCommand(env.Config, kind, task)
 	if err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
