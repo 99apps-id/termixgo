@@ -532,10 +532,12 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		// A command followed by a space is the operator asking for its
-		// arguments. The prefix menu has nothing to complete at that point, so
-		// without this the argument list is only reachable by memory.
-		if strings.HasSuffix(raw, " ") && strings.Count(value, " ") == 0 && strings.HasPrefix(value, "/") {
+		// A bare command with a closed argument set opens its choices instead of
+		// running the no-argument form, so "/approval" and "/harness" let the
+		// operator pick a mode rather than only printing the current one. The
+		// picker keeps a "(no argument)" row for the bare form, and a command
+		// typed with arguments still runs as before.
+		if strings.Count(value, " ") == 0 && strings.HasPrefix(value, "/") {
 			name := strings.TrimPrefix(value, "/")
 			if _, ok := FindSlash(name); ok && len(SlashOptions(name)) > 0 {
 				m.composer.SetValue(slashTrigger(name) + " ")

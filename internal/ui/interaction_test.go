@@ -859,8 +859,52 @@ func TestSlashCursorResetsWhenMatchesChange(t *testing.T) {
 	}
 
 	submitted := press(t, model, "enter")
-	if view := display(submitted); !strings.Contains(view, "Harness:") {
-		t.Errorf("Enter should have run /harness:\n%s", view)
+	if submitted.current != modePicker {
+		t.Fatalf("Enter on /harness should open its choices, mode is %d", submitted.current)
+	}
+	if submitted.picker.action != slashArgAction+"harness" {
+		t.Fatalf("picker action = %q, want the harness menu", submitted.picker.action)
+	}
+}
+
+// TestBareModeCommandsOpenTheirChoices is the requested behaviour: a bare
+// /approval or /harness offers the modes instead of only printing the current
+// one, and the picker can still run the bare form through its "(no argument)"
+// row.
+func TestBareModeCommandsOpenTheirChoices(t *testing.T) {
+	for _, name := range []string{"approval", "harness"} {
+		model := chatModel(t)
+		model.composer.SetValue("/" + name)
+		opened := press(t, model, "enter")
+
+		if opened.current != modePicker {
+			t.Fatalf("Enter on /%s should open the argument menu, mode is %d", name, opened.current)
+		}
+		if opened.picker.action != slashArgAction+name {
+			t.Fatalf("picker action = %q, want the %s menu", opened.picker.action, name)
+		}
+		if got := opened.picker.items[0].ID; got != "" {
+			t.Errorf("the %s menu should keep a bare-form row first, got id %q", name, got)
+		}
+	}
+}
+
+// TestChoosingApprovalModeAppliesIt proves the choice reaches the app rather
+// than only being listed.
+func TestChoosingApprovalModeAppliesIt(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("/approval")
+	opened := press(t, model, "enter")
+
+	for index, item := range opened.picker.visible {
+		if item.ID == "plan" {
+			opened.picker.cursor = index
+		}
+	}
+	chosen := press(t, opened, "enter")
+
+	if got := chosen.appConfig().ApprovalMode; got != config.ApprovalPlan {
+		t.Errorf("approval mode = %q, want %q", got, config.ApprovalPlan)
 	}
 }
 

@@ -211,10 +211,11 @@ appears while you are typing, so a slash inside a path or a sentence is plain
 text: `c:/project` and `/home/you` stay typeable, and the request is sent as
 written.
 
-A command with a fixed set of arguments offers them as a menu. Press `Tab` on
-`/trust`, or type `/trust ` and `Enter`, and the choices are listed with what
-each one does. A value that only starts an argument, such as `delete` for
-`/sessions`, fills the composer and waits for the rest.
+A command with a fixed set of arguments offers them as a menu. Type `/approval`
+or `/harness` and press `Enter` and the modes are listed with what each one
+does; `/approval` also keeps a `(no argument)` row that prints the current
+policy. The same menu opens with `Tab`. A value that only starts an argument,
+such as `delete` for `/sessions`, fills the composer and waits for the rest.
 
 Slash commands are local: they never reach the model as text, so `/cost` while a
 turn is running reports the spend instead of asking the agent about it.
