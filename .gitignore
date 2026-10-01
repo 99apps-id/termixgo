@@ -26,6 +26,12 @@ secrets.json
 # A stray Node dependency tree is never part of this Go module.
 node_modules/
 
+# A downloaded Go toolchain, its tarball and a manual root-level cross-build
+# are never part of this module. The project builds from the installed Go.
+/go/
+go.tar.gz
+/termixgo-linux
+
 # Editor and OS noise
 .DS_Store
 Thumbs.db
