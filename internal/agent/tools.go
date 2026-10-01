@@ -137,6 +137,7 @@ func DefaultRegistry() *Registry {
 		&askUserTool{},
 		&webFetchTool{},
 		&webSearchTool{},
+		&lookupTool{},
 		&readImageTool{},
 		&findToolsTool{},
 		&orchestrateTool{},

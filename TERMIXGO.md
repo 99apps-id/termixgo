@@ -159,6 +159,10 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   retries through r.jina.ai automatically when a direct fetch cannot resolve or
   is bot-blocked, and `reader: true` forces the reader for a JavaScript page, so
   a host a local DNS block hides still reads without the model knowing the flag.
+  A question with a fixed source (weather, exchange rate, crypto price, a
+  Wikipedia summary) goes through the `lookup` tool's keyless endpoints, not a
+  search: routing those through a search returns a list where the source would
+  return the answer.
 - Cancellation flows through a context: `signal.NotifyContext` in the command,
   through `App.RunTurn`, into `Runner.Run`, and out to the HTTP request. The
   run loop checks the context between steps, so a stop is prompt and saves

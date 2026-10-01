@@ -374,8 +374,9 @@ ecosystem tools out of every request and loads them on demand through
 
 | Tool | Purpose |
 | --- | --- |
-| `web_fetch` | fetch a URL and reduce HTML to text; `reader: true` routes through r.jina.ai |
+| `web_fetch` | fetch a URL and reduce HTML to text; falls back to the r.jina.ai reader |
 | `web_search` | search the web and return titles, URLs and snippets |
+| `lookup` | weather, exchange rate, crypto price or a Wikipedia summary from a known keyless source |
 | `read_image` | attach a local image so a vision model can see it |
 | `find_tools` | search the toolset by keyword and load the match |
 
@@ -399,6 +400,19 @@ when the direct fetch is DNS-blocked or bot-blocked (a 403 or 429), so a host
 your DNS blocks still reads. Pass `reader: true` to force the reader for a
 JavaScript page. A search that finds nothing does not claim the machine is
 offline: that message appears only when no source could be reached at all.
+
+For questions with a fixed source, `lookup` answers directly without a search:
+
+```
+lookup kind=weather query=Jakarta
+lookup kind=fx from=USD to=IDR amount=100
+lookup kind=crypto query=bitcoin
+lookup kind=wiki query=Go programming language
+```
+
+Weather uses Open-Meteo, exchange rates use the European Central Bank feed via
+Frankfurter, crypto prices use CoinGecko and summaries use Wikipedia. All are
+keyless.
 
 ## Orchestration pipelines
 
