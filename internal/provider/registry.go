@@ -54,6 +54,8 @@ var contextWindows = map[string]int{
 	"gpt-6-sol":     1050000,
 	"gpt-6-luna":    1050000,
 	"gpt-5.6-terra": 1050000,
+	"gpt-5.6-sol":   1050000,
+	"gpt-5.6-luna":  1050000,
 	"gpt-5.5":       1050000,
 	"gpt-5.4":       1050000,
 	"gpt-5.4-mini":  400000,
@@ -76,11 +78,24 @@ var contextWindows = map[string]int{
 
 	// OAuth catalogue entries keep a distinct local id; their window follows
 	// the model they map to.
-	"codex-gpt-5.3":        400000,
-	"codex-gpt-5.5":        1050000,
-	"grok-4.7-oauth":       500000,
-	"grok-4.5-oauth":       500000,
-	"grok-build-0.1-oauth": 256000,
+	"codex-gpt-6-astra":         1050000,
+	"codex-gpt-6-sol":           1050000,
+	"codex-gpt-6-luna":          1050000,
+	"codex-gpt-5.6-terra":       1050000,
+	"codex-gpt-5.6-sol":         1050000,
+	"codex-gpt-5.6-luna":        1050000,
+	"codex-gpt-5.5":             1050000,
+	"codex-gpt-5.4":             1050000,
+	"codex-gpt-5.4-codex":       400000,
+	"codex-gpt-5.3-codex":       400000,
+	"codex-gpt-5.3-codex-spark": 400000,
+	"codex-gpt-5.2-codex":       400000,
+	"codex-gpt-5.1-codex-max":   400000,
+	"codex-gpt-5.1-codex":       400000,
+	"codex-gpt-5-codex":         400000,
+	"grok-4.7-oauth":            500000,
+	"grok-4.5-oauth":            500000,
+	"grok-build-0.1-oauth":      256000,
 
 	// xAI.
 	"grok-4.7":       500000,
@@ -327,15 +342,30 @@ func Models() []Model {
 		{ID: "gpt-6-sol", Provider: "openai", Label: "GPT-6 Sol", Description: "Balances intelligence and cost.", Tags: []string{"reasoning", "tools", "vision", "coding"}},
 		{ID: "gpt-6-luna", Provider: "openai", Label: "GPT-6 Luna", Description: "Efficient tier for high-volume work.", Tags: []string{"fast", "tools", "coding"}},
 		{ID: "gpt-5.6-terra", Provider: "openai", Label: "GPT-5.6 Terra", Description: "Previous balanced generation.", Tags: []string{"reasoning", "tools"}},
+		{ID: "gpt-5.6-sol", Provider: "openai", Label: "GPT-5.6 Sol", Description: "Balanced previous generation.", Tags: []string{"reasoning", "tools"}},
+		{ID: "gpt-5.6-luna", Provider: "openai", Label: "GPT-5.6 Luna", Description: "Efficient previous generation.", Tags: []string{"fast", "tools"}},
 		{ID: "gpt-5.5", Provider: "openai", Label: "GPT-5.5", Description: "Previous frontier generation.", Tags: []string{"reasoning", "tools"}},
 		{ID: "gpt-5.4", Provider: "openai", Label: "GPT-5.4", Description: "Long-context workhorse.", Tags: []string{"tools", "vision"}},
 		{ID: "gpt-5.4-mini", Provider: "openai", Label: "GPT-5.4 mini", Description: "Fast and inexpensive.", Tags: []string{"fast", "tools"}},
 		{ID: "gpt-5.3-codex", Provider: "openai", Label: "GPT-5.3 Codex", Description: "Tuned for agentic software engineering.", Tags: []string{"coding", "tools"}},
-		// The same models served through a ChatGPT login (Codex OAuth). The
-		// local id is distinct because the catalogue keys by id alone; APIID
-		// is what goes on the wire.
-		{ID: "codex-gpt-5.3", Provider: "openai-codex", Label: "GPT-5.3 Codex (ChatGPT)", APIID: "gpt-5.3-codex", Description: "Agentic coding through a ChatGPT login.", Tags: []string{"coding", "tools"}},
-		{ID: "codex-gpt-5.5", Provider: "openai-codex", Label: "GPT-5.5 (ChatGPT)", APIID: "gpt-5.5", Description: "Frontier generation through a ChatGPT login.", Tags: []string{"reasoning", "tools"}},
+		// The models served through a ChatGPT login (Codex OAuth). The local id
+		// is distinct because the catalogue keys by id alone; APIID is what goes
+		// on the wire. The newest Codex generation first.
+		{ID: "codex-gpt-6-astra", Provider: "openai-codex", Label: "GPT-6 Astra (ChatGPT)", APIID: "gpt-6-astra", Description: "Flagship through a ChatGPT login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "codex-gpt-6-sol", Provider: "openai-codex", Label: "GPT-6 Sol (ChatGPT)", APIID: "gpt-6-sol", Description: "Balanced through a ChatGPT login.", Tags: []string{"reasoning", "tools"}},
+		{ID: "codex-gpt-6-luna", Provider: "openai-codex", Label: "GPT-6 Luna (ChatGPT)", APIID: "gpt-6-luna", Description: "Efficient through a ChatGPT login.", Tags: []string{"fast", "tools"}},
+		{ID: "codex-gpt-5.6-terra", Provider: "openai-codex", Label: "GPT-5.6 Terra (ChatGPT)", APIID: "gpt-5.6-terra", Description: "Previous balanced generation through a ChatGPT login.", Tags: []string{"reasoning", "tools"}},
+		{ID: "codex-gpt-5.6-sol", Provider: "openai-codex", Label: "GPT-5.6 Sol (ChatGPT)", APIID: "gpt-5.6-sol", Description: "Previous balanced generation through a ChatGPT login.", Tags: []string{"reasoning", "tools"}},
+		{ID: "codex-gpt-5.6-luna", Provider: "openai-codex", Label: "GPT-5.6 Luna (ChatGPT)", APIID: "gpt-5.6-luna", Description: "Previous efficient generation through a ChatGPT login.", Tags: []string{"fast", "tools"}},
+		{ID: "codex-gpt-5.5", Provider: "openai-codex", Label: "GPT-5.5 (ChatGPT)", APIID: "gpt-5.5", Description: "Latest frontier generation through a ChatGPT login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "codex-gpt-5.4", Provider: "openai-codex", Label: "GPT-5.4 (ChatGPT)", APIID: "gpt-5.4", Description: "Long-context workhorse through a ChatGPT login.", Tags: []string{"reasoning", "tools"}},
+		{ID: "codex-gpt-5.4-codex", Provider: "openai-codex", Label: "GPT-5.4 Codex", APIID: "gpt-5.4-codex", Description: "Newest Codex-tuned model.", Tags: []string{"coding", "tools"}},
+		{ID: "codex-gpt-5.3-codex", Provider: "openai-codex", Label: "GPT-5.3 Codex", APIID: "gpt-5.3-codex", Description: "Agentic software engineering.", Tags: []string{"coding", "tools"}},
+		{ID: "codex-gpt-5.3-codex-spark", Provider: "openai-codex", Label: "GPT-5.3 Codex Spark", APIID: "gpt-5.3-codex-spark", Description: "Fast Codex variant, on the ChatGPT Pro entitlement.", Tags: []string{"coding", "fast"}},
+		{ID: "codex-gpt-5.2-codex", Provider: "openai-codex", Label: "GPT-5.2 Codex", APIID: "gpt-5.2-codex", Description: "Previous Codex generation.", Tags: []string{"coding", "tools"}},
+		{ID: "codex-gpt-5.1-codex-max", Provider: "openai-codex", Label: "GPT-5.1 Codex Max", APIID: "gpt-5.1-codex-max", Description: "Long-horizon Codex model.", Tags: []string{"coding", "tools"}},
+		{ID: "codex-gpt-5.1-codex", Provider: "openai-codex", Label: "GPT-5.1 Codex", APIID: "gpt-5.1-codex", Description: "Earlier Codex model.", Tags: []string{"coding", "tools"}},
+		{ID: "codex-gpt-5-codex", Provider: "openai-codex", Label: "GPT-5 Codex", APIID: "gpt-5-codex", Description: "First Codex generation.", Tags: []string{"coding", "tools"}},
 
 		// Anthropic. Fable is the Mythos tier, above Opus.
 		{ID: "claude-fable-5-1", Provider: "anthropic", Label: "Claude Fable 5.1", Description: "Deepest reasoning and long-horizon agentic work.", Tags: []string{"reasoning", "tools", "coding"}},

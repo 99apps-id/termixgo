@@ -34,6 +34,8 @@ var pricingTable = map[string]Pricing{
 	"gpt-6-sol":     {2.00, 10.00},
 	"gpt-6-luna":    {0.10, 0.50},
 	"gpt-5.6-terra": {2.00, 12.00},
+	"gpt-5.6-sol":   {2.00, 10.00},
+	"gpt-5.6-luna":  {0.15, 0.75},
 	"gpt-5.5":       {5.00, 30.00},
 	"gpt-5.4":       {2.50, 15.00},
 	"gpt-5.4-mini":  {0.75, 4.50},
@@ -175,6 +177,11 @@ type PlanInfo struct {
 var planProviders = map[string]PlanInfo{
 	"qwen-token-plan": {Name: "Qwen Cloud Token Plan", CreditUnit: "Credits", USDPerCredit: 15.0 / 20000.0},
 	"stepfun-plan":    {Name: "StepFun Step Plan", CreditUnit: "M Credits"},
+	// An OAuth login is a subscription, not a per-token bill: a ChatGPT or
+	// SuperGrok plan has no dollar rate per model, and inventing one would be
+	// money the operator never pays.
+	"openai-codex": {Name: "ChatGPT (Codex)", CreditUnit: "subscription"},
+	"xai-oauth":    {Name: "SuperGrok", CreditUnit: "subscription"},
 }
 
 // Plan returns the subscription a model is served under, when its provider
