@@ -7,9 +7,11 @@ import (
 )
 
 func TestHistoryBudgetReservesRoomAndKeepsAFloor(t *testing.T) {
-	// A large window leaves most of the room to the conversation.
+	// A large window leaves half of itself to the conversation: the reserve
+	// grows with the window so a huge context cannot crowd out the prompt, the
+	// tool schemas and the model's own answer.
 	large := HistoryBudget(200000)
-	if want := 200000 - toolsAndOutputReserveTokens; large != want {
+	if want := 100000; large != want {
 		t.Errorf("large window budget = %d, want %d", large, want)
 	}
 

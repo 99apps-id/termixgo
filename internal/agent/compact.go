@@ -58,32 +58,62 @@ func Compact(messages []provider.Message, budgetTokens int) []provider.Message {
 	trimmed := make([]provider.Message, len(messages))
 	copy(trimmed, messages)
 
-	cut := len(trimmed) - keepTailMessages
-	if cut < 0 {
-		cut = 0
+	// Protect the whole current turn, not just the last few messages. A turn
+	// with several tool calls is longer than the message-count window, so
+	// counting messages alone elided the turn's own earlier tool results while
+	// it was still running: the model watched its context disappear mid-task and
+	// answered from what was left. Only the messages before the turn may be
+	// trimmed here.
+	protected := currentTurnStart(trimmed)
+	if byCount := len(trimmed) - keepTailMessages; byCount < protected {
+		protected = byCount
 	}
-	for index := 0; index < cut; index++ {
+	if protected < 0 {
+		protected = 0
+	}
+	for index := 0; index < protected; index++ {
 		trimmed[index] = elide(trimmed[index])
 	}
 
-	// Still over budget: drop the oldest messages. The floor is not the only
-	// stop: a request may not begin with a tool result, so a drop that would
+	// Still over budget: drop the oldest messages, but never into the protected
+	// turn. A request may not begin with a tool result, so a drop that would
 	// put one at the head is refused and the head stays on the assistant turn
 	// that owns those results. Being a little over budget is a smaller problem
 	// than a sequence the provider rejects.
-	for EstimateMessages(trimmed) > budgetTokens && len(trimmed) > keepMinMessages {
+	for EstimateMessages(trimmed) > budgetTokens && protected > 0 && len(trimmed) > keepMinMessages {
 		candidate := trimmed[1:]
 		if len(candidate) == 0 || candidate[0].Role == provider.RoleTool {
 			break
 		}
 		trimmed = candidate
+		protected--
 	}
+
+	// The protected turn alone can still be over budget, which the provider
+	// rejects. Elide from its oldest end as a last resort, keeping the newest
+	// messages whole.
 	if EstimateMessages(trimmed) > budgetTokens {
 		for index := 0; index < len(trimmed)-keepMinMessages; index++ {
+			if EstimateMessages(trimmed) <= budgetTokens {
+				break
+			}
 			trimmed[index] = elide(trimmed[index])
 		}
 	}
 	return trimmed
+}
+
+// currentTurnStart is the index of the last user message, which begins the turn
+// being answered. Everything before it belongs to an earlier turn and may be
+// trimmed; the messages from it onward are the live context the model needs to
+// finish the current turn.
+func currentTurnStart(messages []provider.Message) int {
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messages[index].Role == provider.RoleUser {
+			return index
+		}
+	}
+	return 0
 }
 
 // elide replaces a message's payload with a marker, keeping its role so the
@@ -134,15 +164,24 @@ const toolsAndOutputReserveTokens = 32000
 // HistoryBudget converts a model's context window into the token budget for
 // the conversation history.
 //
-// The floor matters for a small local model: a 32k window minus a 32k reserve
-// would leave nothing, so the budget never drops below 30 percent of the
-// window. That is tight, but it fails loudly at the provider rather than
-// silently discarding every earlier turn.
+// A large window is not a licence to fill it. The reserve is at least half the
+// window, so history never takes more than half: a request that runs close to
+// the limit is where a weaker model loses the thread, and where a provider may
+// silently truncate the start. Budgeting to a few percent under the window, as
+// this once did, left a 262k model with a 230k history and invited exactly that.
+//
+// The floor still matters for a small local model: a 32k window minus a 32k
+// reserve would leave nothing, so the budget never drops below 30 percent of
+// the window.
 func HistoryBudget(contextWindow int) int {
 	if contextWindow <= 0 {
 		return defaultContextBudget
 	}
-	budget := contextWindow - toolsAndOutputReserveTokens
+	reserve := toolsAndOutputReserveTokens
+	if half := contextWindow / 2; half > reserve {
+		reserve = half
+	}
+	budget := contextWindow - reserve
 	floor := contextWindow * 30 / 100
 	if budget < floor {
 		budget = floor

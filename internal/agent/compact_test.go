@@ -64,6 +64,51 @@ func TestCompactNeverLeavesAToolResultAtTheHead(t *testing.T) {
 	}
 }
 
+// TestCompactKeepsTheCurrentTurnIntact is the fix for a long turn: the turn
+// being answered must not lose its own earlier tool results to compaction while
+// it is still running. Only the turns before it may be trimmed.
+func TestCompactKeepsTheCurrentTurnIntact(t *testing.T) {
+	call := provider.Message{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "1", Name: "read_file", Arguments: `{"path":"x"}`}}}
+	result := provider.Message{Role: provider.RoleTool, ToolID: "1", Name: "read_file", Content: strings.Repeat("t", 800)}
+
+	var messages []provider.Message
+	for index := 0; index < 20; index++ {
+		messages = append(messages,
+			provider.Message{Role: provider.RoleUser, Content: strings.Repeat("old question ", 20)},
+			provider.Message{Role: provider.RoleAssistant, Content: strings.Repeat("old answer ", 20)},
+		)
+	}
+	messages = append(messages, provider.Message{Role: provider.RoleUser, Content: "CURRENT QUESTION"})
+	for index := 0; index < 20; index++ {
+		messages = append(messages, call, result)
+	}
+
+	// A budget the current turn fits inside but the whole run does not.
+	currentTurn := messages[len(messages)-41:]
+	budget := EstimateMessages(currentTurn) + 200
+	if EstimateMessages(messages) <= budget {
+		t.Fatal("the fixture must exceed the budget")
+	}
+
+	trimmed := Compact(messages, budget)
+
+	found := false
+	for _, message := range trimmed {
+		if message.Role == provider.RoleUser && strings.Contains(message.Content, "CURRENT QUESTION") {
+			found = true
+			if message.Content != "CURRENT QUESTION" {
+				t.Errorf("the current turn's question was trimmed: %q", message.Content)
+			}
+		}
+		if message.Role == provider.RoleTool && message.Content == elidedToolBody {
+			t.Errorf("a tool result in the current turn was elided")
+		}
+	}
+	if !found {
+		t.Fatalf("the current turn's question was dropped by compaction")
+	}
+}
+
 func TestCompactIsNoOpUnderBudget(t *testing.T) {
 	messages := []provider.Message{
 		{Role: provider.RoleUser, Content: "hello"},
