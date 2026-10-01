@@ -191,6 +191,10 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashWorktree(args)
 	case "telegram":
 		return m.slashTelegram(args)
+	case "cron":
+		return m.slashCron(args)
+	case "heartbeat":
+		return m.slashHeartbeat(args)
 	case "init":
 		if !m.app.HasModel() {
 			m.blocks = append(m.blocks, block{kind: blockError, text: "Pick a model first with /setup."})
@@ -808,6 +812,154 @@ func (m *Model) slashTelegram(args string) (tea.Model, tea.Cmd) {
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Pairing code: %s. Send /pair %s in Telegram.", code, code)})
 	default:
 		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /telegram [status|on|off|setup|pair]"})
+	}
+	m.refresh()
+	return m, nil
+}
+
+// slashCron manages scheduled jobs. The "::" separator keeps a schedule with
+// spaces apart from the prompt: /cron add every 30m :: check the build.
+func (m *Model) slashCron(args string) (tea.Model, tea.Cmd) {
+	trimmed := strings.TrimSpace(args)
+	fields := strings.Fields(trimmed)
+	if trimmed == "" || (len(fields) > 0 && fields[0] == "list") {
+		jobs, err := m.app.CronJobs()
+		if err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+			m.refresh()
+			return m, nil
+		}
+		if len(jobs) == 0 {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "No scheduled jobs.\nAdd one with /cron add every 30m :: <prompt>"})
+			m.refresh()
+			return m, nil
+		}
+		lines := []string{fmt.Sprintf("%d scheduled job(s):", len(jobs))}
+		for _, job := range jobs {
+			state := "off"
+			if job.Enabled {
+				state = "on"
+			}
+			name := job.Name
+			if name == "" {
+				name = "(unnamed)"
+			}
+			lines = append(lines, fmt.Sprintf("  %s  %-3s  %-18s %s", job.ID, state, job.Schedule.String(), name))
+			if job.Enabled && !job.NextRun.IsZero() {
+				lines = append(lines, "       next: "+job.NextRun.Format("2006-01-02 15:04"))
+			}
+			if job.LastError != "" {
+				lines = append(lines, "       error: "+job.LastError)
+			}
+		}
+		lines = append(lines, "", "Manage with /cron add <spec> :: <prompt>, /cron remove|on|off|run <id>.")
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
+		m.refresh()
+		return m, nil
+	}
+	switch fields[0] {
+	case "add":
+		rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "add"))
+		parts := strings.SplitN(rest, "::", 2)
+		if len(parts) != 2 {
+			m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /cron add every 30m :: <prompt>"})
+			break
+		}
+		job, err := m.app.CronAdd("", strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+		if err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+			break
+		}
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Added job %s (%s). Next run %s.", job.ID, job.Schedule.String(), job.NextRun.Format("2006-01-02 15:04"))})
+	case "remove":
+		if len(fields) < 2 {
+			m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /cron remove <id>"})
+			break
+		}
+		removed, err := m.app.CronRemove(fields[1])
+		switch {
+		case err != nil:
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		case !removed:
+			m.blocks = append(m.blocks, block{kind: blockError, text: "No job with id " + fields[1] + "."})
+		default:
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "Removed job " + fields[1] + "."})
+		}
+	case "on", "off":
+		if len(fields) < 2 {
+			m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /cron " + fields[0] + " <id>"})
+			break
+		}
+		_, ok, err := m.app.CronSetEnabled(fields[1], fields[0] == "on")
+		switch {
+		case err != nil:
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		case !ok:
+			m.blocks = append(m.blocks, block{kind: blockError, text: "No job with id " + fields[1] + "."})
+		default:
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "Job " + fields[1] + " is now " + fields[0] + "."})
+		}
+	case "run":
+		if len(fields) < 2 {
+			m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /cron run <id>"})
+			break
+		}
+		job, ok, err := m.app.CronJob(fields[1])
+		switch {
+		case err != nil:
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+			break
+		case !ok:
+			m.blocks = append(m.blocks, block{kind: blockError, text: "No job with id " + fields[1] + "."})
+			break
+		}
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Running job " + job.ID + "."})
+		return m.startRun(job.Prompt)
+	default:
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /cron [list|add|remove|on|off|run]"})
+	}
+	m.refresh()
+	return m, nil
+}
+
+// slashHeartbeat shows or changes the periodic self-check.
+func (m *Model) slashHeartbeat(args string) (tea.Model, tea.Cmd) {
+	trimmed := strings.ToLower(strings.TrimSpace(args))
+	switch {
+	case trimmed == "" || trimmed == "status":
+		enabled := m.app.Config().Heartbeat.Enabled
+		state := "off"
+		if enabled {
+			state = "on"
+		}
+		text := "Heartbeat is " + state + " (" + m.app.Config().Heartbeat.Interval + ")."
+		if !enabled {
+			text += "\nTurn it on with /heartbeat on, or set a cadence with /heartbeat 30m."
+		}
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: text})
+	case trimmed == "on":
+		if err := m.app.SetHeartbeat(true, ""); err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		} else {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "Heartbeat is on (" + m.app.Config().Heartbeat.Interval + "). It applies the next time 'termixgo serve' starts."})
+		}
+	case trimmed == "off":
+		if err := m.app.SetHeartbeat(false, ""); err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		} else {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "Heartbeat is off."})
+		}
+	default:
+		interval, err := time.ParseDuration(trimmed)
+		if err != nil || interval < time.Minute {
+			m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /heartbeat [on|off|30m]"})
+			break
+		}
+		if err := m.app.SetHeartbeat(true, trimmed); err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		} else {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "Heartbeat runs every " + trimmed + "."})
+		}
 	}
 	m.refresh()
 	return m, nil

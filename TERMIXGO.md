@@ -130,7 +130,14 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   method that takes its mutex. That is deliberate: an unlocked read does not
   compile. The race detector found this the first time it was run, so keep it
   running. `Messages()` and `Todos()` copy the slice header; the elements are
-  never mutated after being added, which is what makes sharing them safe.- Cancellation flows through a context: `signal.NotifyContext` in the command,
+  never mutated after being added, which is what makes sharing them safe.- A scheduled job and the heartbeat run through the same runner as an operator
+  turn, but on a throwaway session that is never saved: a background turn must
+  not appear in the operator's conversation or rewrite the live session file.
+  Only a real answer is delivered; an empty reply, `[SILENT]` or `HEARTBEAT_OK`
+  is dropped. The scheduler advances a job's `NextRun` before it runs, so a
+  restart replays nothing, and the jobs file is re-read each tick so the CLI can
+  edit it while `serve` runs.
+- Cancellation flows through a context: `signal.NotifyContext` in the command,
   through `App.RunTurn`, into `Runner.Run`, and out to the HTTP request. The
   run loop checks the context between steps, so a stop is prompt and saves
   state instead of abandoning it. Nothing may block on a context the caller

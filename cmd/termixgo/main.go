@@ -23,6 +23,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/app"
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/cron"
 	"github.com/99apps-id/termixgo/internal/mcp"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/secrets"
@@ -90,6 +91,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runTelegram(args[1:], stdout)
 	case "serve":
 		return runServe(stdout)
+	case "cron":
+		return runCron(args[1:], stdout)
+	case "heartbeat":
+		return runHeartbeat(args[1:], stdout)
 	case "service":
 		return runService(args[1:], stdout)
 	case "completion":
@@ -539,6 +544,12 @@ func runServe(stdout io.Writer) error {
 	if err := application.StartTelegram(); err != nil {
 		return err
 	}
+	if err := application.StartScheduler(); err != nil {
+		fmt.Fprintf(stdout, "Scheduler: off (%v)\n", err)
+	} else {
+		fmt.Fprintf(stdout, "Scheduler: on\n")
+		fmt.Fprintf(stdout, "Heartbeat: %s\n", application.HeartbeatStatus())
+	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt)
@@ -550,6 +561,156 @@ func runServe(stdout io.Writer) error {
 
 	<-ctx.Done()
 	fmt.Fprintf(stdout, "\nAssistant stopped.\n")
+	return nil
+}
+
+// runCron manages the scheduled jobs. It edits the same file the serve
+// scheduler reads, so a change takes effect on the next tick.
+func runCron(args []string, stdout io.Writer) error {
+	store, err := openCronStore()
+	if err != nil {
+		return err
+	}
+	if len(args) == 0 || args[0] == "list" {
+		jobs := store.List()
+		if len(jobs) == 0 {
+			fmt.Fprintln(stdout, "No scheduled jobs.")
+			fmt.Fprintln(stdout, `Add one with: termixgo cron add "every 30m" <name> <prompt>`)
+			return nil
+		}
+		for _, job := range jobs {
+			state := "off"
+			if job.Enabled {
+				state = "on"
+			}
+			name := job.Name
+			if name == "" {
+				name = "(unnamed)"
+			}
+			fmt.Fprintf(stdout, "%s  %-3s  %-18s  %s\n", job.ID, state, job.Schedule.String(), name)
+			if job.Enabled && !job.NextRun.IsZero() {
+				fmt.Fprintf(stdout, "     next: %s\n", job.NextRun.Format("2006-01-02 15:04"))
+			}
+			if job.LastError != "" {
+				fmt.Fprintf(stdout, "     last error: %s\n", job.LastError)
+			}
+		}
+		return nil
+	}
+	switch args[0] {
+	case "add":
+		if len(args) < 4 {
+			return fmt.Errorf(`usage: termixgo cron add "<schedule>" <name> <prompt>`)
+		}
+		schedule, err := cron.Parse(args[1])
+		if err != nil {
+			return err
+		}
+		job, err := store.Add(args[2], strings.Join(args[3:], " "), schedule, time.Now())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Added job %s (%s), first run %s\n", job.ID, job.Schedule.String(), job.NextRun.Format("2006-01-02 15:04"))
+		return nil
+	case "remove":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: termixgo cron remove <id>")
+		}
+		removed, err := store.Remove(args[1])
+		if err != nil {
+			return err
+		}
+		if !removed {
+			return fmt.Errorf("no job with id %q", args[1])
+		}
+		fmt.Fprintf(stdout, "Removed job %s\n", args[1])
+		return nil
+	case "on", "off":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: termixgo cron %s <id>", args[0])
+		}
+		job, ok, err := store.SetEnabled(args[1], args[0] == "on", time.Now())
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("no job with id %q", args[1])
+		}
+		state := "off"
+		if job.Enabled {
+			state = "on"
+		}
+		fmt.Fprintf(stdout, "Job %s is now %s\n", job.ID, state)
+		return nil
+	case "run":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: termixgo cron run <id>")
+		}
+		application, err := app.New("")
+		if err != nil {
+			return err
+		}
+		defer application.Shutdown()
+		if !application.HasModel() {
+			return fmt.Errorf("no model is configured; run 'termixgo setup'")
+		}
+		ctx, stop := signalContext()
+		defer stop()
+		output, err := application.CronRun(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, output)
+		return nil
+	default:
+		return fmt.Errorf("usage: termixgo cron [list|add|remove|on|off|run]")
+	}
+}
+
+func openCronStore() (*cron.Store, error) {
+	path, err := cron.DefaultPath()
+	if err != nil {
+		return nil, err
+	}
+	return cron.Open(path)
+}
+
+// runHeartbeat shows or changes the periodic self-check.
+func runHeartbeat(args []string, stdout io.Writer) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if len(args) == 0 || args[0] == "status" {
+		state := "off"
+		if cfg.Heartbeat.Enabled {
+			state = "on"
+		}
+		fmt.Fprintf(stdout, "heartbeat: %s\ninterval: %s\n", state, cfg.Heartbeat.Interval)
+		return nil
+	}
+	switch args[0] {
+	case "on":
+		cfg.Heartbeat.Enabled = true
+	case "off":
+		cfg.Heartbeat.Enabled = false
+	case "interval":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: termixgo heartbeat interval <duration>")
+		}
+		interval, err := time.ParseDuration(strings.TrimSpace(args[1]))
+		if err != nil || interval < time.Minute {
+			return fmt.Errorf("the interval must be at least one minute, such as 30m or 2h")
+		}
+		cfg.Heartbeat.Interval = strings.TrimSpace(args[1])
+	default:
+		return fmt.Errorf("usage: termixgo heartbeat [status|on|off|interval <duration>]")
+	}
+	if err := config.Save(cfg); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "heartbeat enabled: %v, interval: %s\n", cfg.Heartbeat.Enabled, cfg.Heartbeat.Interval)
+	fmt.Fprintln(stdout, "Restart 'termixgo serve' for the change to take effect.")
 	return nil
 }
 
@@ -909,6 +1070,10 @@ Usage:
   termixgo completion [shell]     Print shell completion (bash|zsh|fish|powershell)
   termixgo secret <provider> [k]  Store a provider API key
   termixgo telegram [status|on|off]
+  termixgo cron [list|add|remove|on|off|run]
+                                  Manage scheduled assistant jobs
+  termixgo heartbeat [status|on|off|interval <duration>]
+                                  Periodic self-check for the 24/7 assistant
   termixgo serve                  Run the Telegram assistant 24/7
   termixgo service [install|uninstall|status]
                                   Manage auto-start (systemd, launchd, schtasks)

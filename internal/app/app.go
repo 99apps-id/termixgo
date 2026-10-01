@@ -16,6 +16,7 @@ import (
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/cron"
 	"github.com/99apps-id/termixgo/internal/mcp"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/search"
@@ -111,6 +112,15 @@ type App struct {
 	bot       *telegram.Bot
 	botCancel context.CancelFunc
 	botStatus string
+
+	// cronStore is the scheduled-job list. It is opened lazily so a terminal
+	// session with no scheduler still pays nothing for it.
+	cronStore *cron.Store
+	// scheduler runs scheduled jobs and the heartbeat. It is started by
+	// `serve`, which is the long-lived process.
+	scheduler       *cron.Scheduler
+	schedulerCancel context.CancelFunc
+	schedulerStatus string
 
 	// mcp owns the connected MCP servers and the tools they contribute. It is
 	// replaced rather than mutated on a reload, so a turn already in flight
@@ -734,6 +744,7 @@ func (a *App) Processes() *agent.ProcessManager { return a.processes }
 // Shutdown stops everything the app started. The command calls it on exit so a
 // dev server does not outlive the terminal that started it.
 func (a *App) Shutdown() {
+	a.StopScheduler()
 	a.StopTelegram()
 	if a.processes != nil {
 		a.processes.Shutdown()
@@ -826,6 +837,13 @@ func (a *App) runTurn(ctx context.Context, input string) error {
 // runTurnWithImages is runTurn with images attached to the first user message,
 // which is how an uploaded image reaches a vision model.
 func (a *App) runTurnWithImages(ctx context.Context, input string, images []provider.Image) error {
+	return a.runOn(ctx, input, images, nil)
+}
+
+// runOn is the single run path. A nil isolated session uses the live one; a
+// session passed in is a scheduled run that must not touch the operator's
+// conversation, so it is never saved and its todos are not published.
+func (a *App) runOn(ctx context.Context, input string, images []provider.Image, isolated *agent.Session) error {
 	if !a.runMu.TryLock() {
 		return ErrBusy
 	}
@@ -888,12 +906,17 @@ func (a *App) runTurnWithImages(ctx context.Context, input string, images []prov
 		ToolSearch:    cfg.ToolSearchEnabled,
 		TurnImages:    images,
 	}
-	session := a.currentSession()
+	session := isolated
+	if session == nil {
+		session = a.currentSession()
+	}
 	if err := runner.Run(runCtx, session, input); err != nil {
 		return err
 	}
-	session.SetTodos(a.todos.Items())
-	if a.Ephemeral() {
+	if isolated == nil {
+		session.SetTodos(a.todos.Items())
+	}
+	if isolated != nil || a.Ephemeral() {
 		return nil
 	}
 	return session.Save()

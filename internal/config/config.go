@@ -70,6 +70,14 @@ type Telegram struct {
 	PairingCode string `json:"pairingCode,omitempty"`
 }
 
+// Heartbeat runs a periodic isolated turn. The turn answers HEARTBEAT_OK when
+// it has nothing worth saying, so a quiet assistant never pings.
+type Heartbeat struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// Interval is a Go duration such as 30m or 2h. Empty means 30m.
+	Interval string `json:"interval,omitempty"`
+}
+
 // MCPServer configures one Model Context Protocol server for this install.
 //
 // A server that is listed is wanted by definition, so the flag is the
@@ -145,6 +153,10 @@ type Config struct {
 
 	RecentProjects []string `json:"recentProjects,omitempty"`
 	Telegram       Telegram `json:"telegram,omitempty"`
+
+	// Heartbeat is the periodic self-check. Its jobs live in a separate file,
+	// but whether it runs at all is configuration.
+	Heartbeat Heartbeat `json:"heartbeat,omitempty"`
 }
 
 // Default returns the configuration a fresh install starts from.
@@ -234,6 +246,9 @@ func (c *Config) normalise() {
 	}
 	if c.BaseURLs == nil {
 		c.BaseURLs = map[string]string{}
+	}
+	if strings.TrimSpace(c.Heartbeat.Interval) == "" {
+		c.Heartbeat.Interval = "30m"
 	}
 	// A server with no command would start a process that cannot exist, so it
 	// is dropped rather than left to fail on every session start.

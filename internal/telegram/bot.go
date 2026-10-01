@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -659,6 +660,17 @@ func (b *Bot) reply(ctx context.Context, chatID int64, text string) {
 	if _, err := b.client.SendMessage(ctx, chatID, text, nil); err != nil {
 		b.logf("send failed: %v", err)
 	}
+}
+
+// Send posts a message to the paired chat, whether or not the bot is polling.
+// It is how a scheduled job reaches the operator outside a turn.
+func (b *Bot) Send(ctx context.Context, text string) error {
+	chatID, _ := b.Pairing()
+	if chatID == 0 {
+		return errors.New("the bot is not paired")
+	}
+	_, err := b.client.SendMarkdown(ctx, chatID, text, nil)
+	return err
 }
 
 // splitCommand parses "/name argument" or "name argument", tolerating the

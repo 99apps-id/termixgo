@@ -198,6 +198,8 @@ command typed mid-turn is queued and runs when the turn ends.
 | `/skills [reload]` | list loaded skills |
 | `/memory` | show what the agent has learned |
 | `/telegram [setup\|on\|off\|status\|pair]` | manage the companion bot |
+| `/cron [list\|add\|remove\|on\|off\|run]` | schedule assistant jobs |
+| `/heartbeat [on\|off\|<interval>]` | periodic self-check for a 24/7 assistant |
 | `/init` | generate a `TERMIXGO.md` for the project |
 | `/cost` | token usage and estimated spend for this session |
 | `/ps [kill <handle>]` | list background processes, or stop one |
@@ -488,6 +490,40 @@ termixgo service install   # register auto-start with systemd, launchd or schtas
 names the exact reason (a missing key, an unknown provider) if it is not. The CLI
 keeps its own settings, so a custom endpoint set in another application is not
 shared with it; use `termixgo endpoint` and `termixgo secret` to configure it.
+
+## Scheduled jobs and heartbeat
+
+A scheduled job is a saved prompt with a schedule. The `serve` scheduler runs it
+on a fresh, isolated session, so it never appears in your conversation, and
+sends the answer to the paired Telegram chat unless the answer is exactly
+`[SILENT]`.
+
+```sh
+termixgo cron add "every 30m" build "run the tests and report failures"
+termixgo cron add "cron 0 9 * * 1-5" standup "summarise what changed yesterday"
+termixgo cron add "at 2026-01-02 15:04" ship "remind me to tag the release"
+termixgo cron list
+termixgo cron off <id>
+termixgo cron run <id>       # run it once now and print the answer
+```
+
+Schedules are `every <duration>`, `at <time>`, a five-field `cron` expression
+(`minute hour day month weekday`, names and macros such as `@daily` accepted),
+or `@hourly`. The same commands are available inside the UI as `/cron add
+every 30m :: <prompt>`.
+
+The heartbeat is a periodic self-check for an assistant left running. It asks
+the model to look for anything worth saying and answer exactly `HEARTBEAT_OK`
+when there is nothing, which is dropped instead of delivered. Put a checklist
+in a `HEARTBEAT.md` at the workspace root to give it something to check.
+
+```sh
+termixgo heartbeat on
+termixgo heartbeat interval 2h
+```
+
+Jobs and the heartbeat run only under `termixgo serve`; a plain terminal session
+is unaffected. `/heartbeat` and `/cron` show the same state from inside the UI.
 
 ## Cost, budgets and plans
 
