@@ -97,10 +97,12 @@ var slashCommands = []SlashCommand{
 		{Value: "list", Detail: "show the checkpoints Termixgo saved"},
 	}},
 	{Trigger: "/rewind", Args: "[ref]", Summary: "Restore the newest checkpoint, undoing later edits"},
-	{Trigger: "/worktree", Args: "[list|add|remove]", Summary: "List, add or remove git worktrees for parallel tasks", Options: []SlashOption{
-		{Value: "list", Detail: "show every worktree"},
+	{Trigger: "/worktree", Args: "[list|add|remove|touch|prune]", Summary: "Manage git worktrees for parallel tasks", Options: []SlashOption{
+		{Value: "list", Detail: "show every worktree and its idle age"},
 		{Value: "add", Detail: "create a parallel checkout", Complete: true},
 		{Value: "remove", Detail: "delete a worktree", Complete: true},
+		{Value: "touch", Detail: "mark a worktree as just used", Complete: true},
+		{Value: "prune", Detail: "reclaim idle clean worktrees, snapshotted first", Complete: true},
 	}},
 	{Trigger: "/exit", Args: "", Summary: "Quit Termixgo"},
 }

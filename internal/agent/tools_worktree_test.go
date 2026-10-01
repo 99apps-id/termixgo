@@ -74,6 +74,82 @@ func TestWorktreeAddListRemove(t *testing.T) {
 	}
 }
 
+// ageWorktree backdates a registry entry so prune sees it as idle.
+func ageWorktree(t *testing.T, workspace, name string) string {
+	t.Helper()
+	entries, err := loadWorktreeEntries(workspace)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("no registry entries: %v", err)
+	}
+	path := ""
+	for index := range entries {
+		if entries[index].Name == name {
+			entries[index].LastUsedAt = time.Now().Add(-48 * time.Hour)
+			path = entries[index].Path
+		}
+	}
+	if path == "" {
+		t.Fatalf("no entry named %q in %v", name, entries)
+	}
+	if err := saveWorktreeEntries(workspace, entries); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestWorktreePruneReclaimsAnIdleCleanTree(t *testing.T) {
+	workspace := worktreeRepo(t)
+	env := worktreeEnv(t, workspace)
+	tool := &gitWorktreeTool{}
+	ctx := context.Background()
+
+	if _, err := tool.Run(ctx, env, map[string]any{"action": "add", "path": "idle", "branch": "idle-feature"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	dir := ageWorktree(t, workspace, "idle")
+
+	result, _ := tool.Run(ctx, env, map[string]any{"action": "prune", "max_age": "1h"})
+	if result.IsError {
+		t.Fatalf("prune is an error: %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "Pruned") {
+		t.Fatalf("prune output = %q", result.Output)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("the idle worktree directory should be gone")
+	}
+	if entries, _ := loadWorktreeEntries(workspace); len(entries) != 0 {
+		t.Errorf("the registry should be empty, got %v", entries)
+	}
+	refs, err := runGit(ctx, env, "for-each-ref", "--format=%(refname)", "refs/termixgo/snapshots")
+	if err != nil || !strings.Contains(refs, "refs/termixgo/snapshots/") {
+		t.Errorf("the tip should be snapshotted first, got %q err=%v", refs, err)
+	}
+}
+
+func TestWorktreePruneKeepsADirtyTree(t *testing.T) {
+	workspace := worktreeRepo(t)
+	env := worktreeEnv(t, workspace)
+	tool := &gitWorktreeTool{}
+	ctx := context.Background()
+
+	if _, err := tool.Run(ctx, env, map[string]any{"action": "add", "path": "busy", "branch": "busy-feature"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	dir := ageWorktree(t, workspace, "busy")
+	if err := os.WriteFile(filepath.Join(dir, "scratch.txt"), []byte("work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, _ := tool.Run(ctx, env, map[string]any{"action": "prune", "max_age": "1h"})
+	if !strings.Contains(result.Output, "Kept") || !strings.Contains(result.Output, "uncommitted") {
+		t.Fatalf("prune should keep a dirty tree, got %q", result.Output)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "scratch.txt")); err != nil {
+		t.Errorf("the dirty worktree should still exist: %v", err)
+	}
+}
+
 func TestWorktreeRequiresActionAndPath(t *testing.T) {
 	workspace := worktreeRepo(t)
 	env := worktreeEnv(t, workspace)

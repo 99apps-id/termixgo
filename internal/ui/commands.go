@@ -756,13 +756,18 @@ func (m *Model) slashWorktree(args string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	callArgs := map[string]any{"action": action}
-	if len(fields) > 1 {
-		callArgs["path"] = strings.Join(fields[1:], " ")
-	}
-	// /worktree add <path> <branch> carries the branch as the last word.
-	if action == "add" && len(fields) > 2 {
+	switch {
+	case action == "prune":
+		// /worktree prune [max_age]
+		if len(fields) > 1 {
+			callArgs["max_age"] = fields[1]
+		}
+	case action == "add" && len(fields) > 2:
+		// /worktree add <path> <branch> carries the branch as the tail.
 		callArgs["path"] = fields[1]
 		callArgs["branch"] = strings.Join(fields[2:], " ")
+	case len(fields) > 1:
+		callArgs["path"] = strings.Join(fields[1:], " ")
 	}
 	result, err := tool.Run(ctx, &agent.Env{Workspace: m.app.Workspace()}, callArgs)
 	if err != nil {
