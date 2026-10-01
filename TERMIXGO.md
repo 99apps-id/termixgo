@@ -147,7 +147,9 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   worker has to be detached to survive the turn. It runs in its own git worktree
   so it cannot edit the main tree; the worker argv is explicit, never a shell
   string, a missing binary is named before a worktree is created, and its
-  completion is an `EventProcessEnd` the app forwards to chat.
+  completion is an `EventProcessEnd` the app forwards to chat. A native worker
+  (`termixgo`) runs this same binary and needs no external account, and it sets
+  `TERMIXGO_WORKER_DEPTH` in the child so a worker cannot start another worker.
 - Cancellation flows through a context: `signal.NotifyContext` in the command,
   through `App.RunTurn`, into `Runner.Run`, and out to the HTTP request. The
   run loop checks the context between steps, so a stop is prompt and saves

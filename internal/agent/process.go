@@ -177,7 +177,7 @@ func (m *ProcessManager) Start(ctx context.Context, command, dir string) (*Proce
 		return nil, errors.New("command is required")
 	}
 	shell, args := shellForProcess(trimmed)
-	return m.start(ctx, dir, shell, args, trimmed, "", false)
+	return m.start(ctx, dir, shell, args, trimmed, "", false, nil)
 }
 
 // StartWorker launches a worker from an explicit argv, without a shell. The
@@ -186,11 +186,18 @@ func (m *ProcessManager) Start(ctx context.Context, command, dir string) (*Proce
 // batch file directly. label names the worker in the completion notice; notify
 // asks for an EventProcessEnd when it finishes.
 func (m *ProcessManager) StartWorker(ctx context.Context, dir string, argv []string, label string, notify bool) (*Process, error) {
+	return m.StartWorkerEnv(ctx, dir, argv, label, notify, nil)
+}
+
+// StartWorkerEnv is StartWorker with extra environment entries appended to the
+// inherited environment. It is how a native worker is marked so it cannot spawn
+// another worker and recurse.
+func (m *ProcessManager) StartWorkerEnv(ctx context.Context, dir string, argv []string, label string, notify bool, env []string) (*Process, error) {
 	shell, args, display, err := resolveArgv(argv)
 	if err != nil {
 		return nil, err
 	}
-	return m.start(ctx, dir, shell, args, display, label, notify)
+	return m.start(ctx, dir, shell, args, display, label, notify, env)
 }
 
 // resolveArgv turns a worker argv into an executable and arguments. A missing
@@ -218,7 +225,7 @@ func resolveArgv(argv []string) (shell string, args []string, display string, er
 	return binary, argv[1:], display, nil
 }
 
-func (m *ProcessManager) start(ctx context.Context, dir, shell string, args []string, display, label string, notify bool) (*Process, error) {
+func (m *ProcessManager) start(ctx context.Context, dir, shell string, args []string, display, label string, notify bool, env []string) (*Process, error) {
 	m.mu.Lock()
 	// Only a process that has not exited counts against the cap: a finished
 	// handle is kept so its output is still readable, and counting it made the
@@ -253,6 +260,9 @@ func (m *ProcessManager) start(ctx context.Context, dir, shell string, args []st
 	// manager, which kills it on shutdown.
 	cmd := exec.CommandContext(processCtx, shell, args...)
 	cmd.Dir = dir
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	cmd.Stdout = process.buffer
 	cmd.Stderr = process.buffer
 	cmd.Stdin = strings.NewReader("")

@@ -5,10 +5,15 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
 )
+
+// workerDepthEnv marks a native worker child, so it cannot start another worker
+// and recurse.
+const workerDepthEnv = "TERMIXGO_WORKER_DEPTH"
 
 // codeWorkerArgv builds the command line for a coding worker. It is a variable
 // so a test can substitute a trivial process instead of a real CLI.
@@ -25,8 +30,16 @@ func buildWorkerArgv(kind, task string) ([]string, error) {
 		return []string{"codex", "exec", task}, nil
 	case "opencode":
 		return []string{"opencode", "run", task}, nil
+	case "termixgo":
+		// The native worker needs no external account: it runs this same
+		// binary against the provider already configured here.
+		executable, err := os.Executable()
+		if err != nil || strings.TrimSpace(executable) == "" {
+			executable = "termixgo"
+		}
+		return []string{executable, "run", task}, nil
 	default:
-		return nil, fmt.Errorf("unknown worker %q; use claude, codex or opencode", kind)
+		return nil, fmt.Errorf("unknown worker %q; use termixgo, claude, codex or opencode", kind)
 	}
 }
 
@@ -49,17 +62,20 @@ func (t *codeWorkerTool) DoneLabel(a map[string]any) string {
 	return "Started " + workerKind(a) + " coding worker"
 }
 func (t *codeWorkerTool) Description() string {
-	return "Hand a self-contained coding task to an external coding agent (claude, codex or opencode) in its own git worktree. The worker runs in the background and survives the turn; its completion is announced in chat. Use it for a long task that would otherwise block the conversation."
+	return "Hand a self-contained coding task to a background coding agent in its own git worktree. The worker can be termixgo (this same binary, which needs no external account and uses the configured model) or claude, codex, opencode. It runs detached and survives the turn; its completion is announced in chat. Use it for a long task that would otherwise block the conversation."
 }
 func (t *codeWorkerTool) Schema() map[string]any {
 	return object(map[string]any{
 		"task":   strProp("The coding task, written as a complete instruction."),
-		"worker": strProp("Which coding agent: claude (default), codex or opencode."),
+		"worker": strProp("Which coding agent: termixgo (this same binary, no external account), claude (default), codex or opencode."),
 		"name":   strProp("Optional worktree name; a short one is generated when omitted."),
 	}, "task")
 }
 
 func (t *codeWorkerTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	if os.Getenv(workerDepthEnv) != "" {
+		return Result{Output: "a background worker cannot start another worker", IsError: true}, nil
+	}
 	task := strings.TrimSpace(argString(args, "task"))
 	if task == "" {
 		return Result{Output: "task is required", IsError: true}, nil
@@ -87,7 +103,11 @@ func (t *codeWorkerTool) Run(ctx context.Context, env *Env, args map[string]any)
 		return created, nil
 	}
 	dir := worktreePath(env, name)
-	process, err := env.Processes.StartWorker(ctx, dir, argv, kind+" worker "+name, true)
+	var childEnv []string
+	if kind == "termixgo" {
+		childEnv = []string{workerDepthEnv + "=1"}
+	}
+	process, err := env.Processes.StartWorkerEnv(ctx, dir, argv, kind+" worker "+name, true, childEnv)
 	if err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}

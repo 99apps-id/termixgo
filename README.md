@@ -367,7 +367,7 @@ ecosystem tools out of every request and loads them on demand through
 | `think` | reason without acting |
 | `subagent` | delegate a typed, self-contained task |
 | `orchestrate`, `list_pipelines` | run a multi-agent pipeline |
-| `code_worker` | hand a coding task to an external agent in its own worktree |
+| `code_worker` | hand a coding task to a background agent (termixgo, claude, codex, opencode) in its own worktree |
 
 | Tool | Purpose |
 | --- | --- |
@@ -404,16 +404,22 @@ failed is skipped, and the result reports what completed, failed and was skipped
 
 ### Background coding workers
 
-`code_worker` hands a self-contained coding task to an external coding agent,
-`claude`, `codex` or `opencode`, running in its own git worktree. It is a
-detached process, not a second in-process turn: the run loop stays single-turn,
-the worker survives the turn that started it, and it never edits the main tree.
-When it finishes, the result is announced in the transcript and sent to the
-paired Telegram chat.
+`code_worker` hands a self-contained coding task to a background coding agent in
+its own git worktree. It is a detached process, not a second in-process turn:
+the run loop stays single-turn, the worker survives the turn that started it,
+and it never edits the main tree. When it finishes, the result is announced in
+the transcript and sent to the paired Telegram chat.
 
-The worker binary must be on `PATH`; a missing one is named rather than reported
-as a bare command error. The tool is approval gated like any other command,
-because it runs a coding agent with permission to write.
+The worker is one of:
+
+- `termixgo` - this same binary running `termixgo run <task>`, so it needs no
+  external account and uses the model already configured here.
+- `claude`, `codex` or `opencode` - an external coding CLI, which must be on
+  `PATH`; a missing one is named rather than reported as a bare command error.
+
+A native worker is marked so it cannot start another worker and recurse. The
+tool is approval gated like any other command, because it runs a coding agent
+with permission to write.
 
 ## Trust and approval
 

@@ -43,6 +43,26 @@ func TestBuildWorkerArgv(t *testing.T) {
 	if _, err := buildWorkerArgv("claude", "  "); err == nil {
 		t.Errorf("an empty task should fail")
 	}
+
+	// The native worker runs this same binary; the path depends on the build,
+	// so assert the shape rather than the exact file.
+	native, err := buildWorkerArgv("termixgo", "do it")
+	if err != nil {
+		t.Fatalf("buildWorkerArgv(termixgo): %v", err)
+	}
+	if len(native) != 3 || native[1] != "run" || native[2] != "do it" {
+		t.Errorf("native worker argv = %v, want [<exe> run <task>]", native)
+	}
+}
+
+func TestCodeWorkerRefusesToNest(t *testing.T) {
+	workspace := worktreeRepo(t)
+	t.Setenv(workerDepthEnv, "1")
+	env := &Env{Workspace: workspace, Todos: NewTodoStore(), Memory: NewMemory(workspace), Trusted: true, Processes: NewProcessManager()}
+	result, _ := (&codeWorkerTool{}).Run(context.Background(), env, map[string]any{"task": "x", "worker": "termixgo"})
+	if !result.IsError {
+		t.Errorf("a nested worker must be refused")
+	}
 }
 
 func TestStartWorkerAnnouncesCompletion(t *testing.T) {
