@@ -34,6 +34,12 @@ import (
 )
 
 func main() {
+	// On Windows, force pure-Go DNS so the agent's web tools are not
+	// derailed by a misbehaving system resolver or a VPN tunnel that
+	// breaks the CGO lookup path.
+	if runtime.GOOS == "windows" {
+		_ = os.Setenv("GODEBUG", "netdns=go")
+	}
 	os.Exit(terminate(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr), os.Stderr))
 }
 

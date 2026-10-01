@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,46 @@ func restoreSearchEndpoints() {
 	webSearchHTMLEndpoint = "https://html.duckduckgo.com/html/"
 	webSearchWikipediaEndpoint = "https://en.wikipedia.org/w/api.php"
 	webSearchGitHubEndpoint = "https://api.github.com/search/repositories"
+	webSearchTavilyEndpoint = "https://api.tavily.com/search"
+	webSearchBraveEndpoint = "https://api.search.brave.com/res/v1/web/search"
+}
+
+// TestWebSearchPrefersAConfiguredTavilyKey proves a keyed provider answers
+// before the keyless chain, which is what works where DuckDuckGo is DNS-blocked.
+func TestWebSearchPrefersAConfiguredTavilyKey(t *testing.T) {
+	t.Setenv("TAVILY_API_KEY", "test-key")
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			t.Errorf("Tavily search must be a POST, got %s", request.Method)
+		}
+		body, _ := io.ReadAll(request.Body)
+		if !strings.Contains(string(body), "test-key") {
+			t.Errorf("the API key is not in the request body: %s", body)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(writer, `{"results":[{"title":"Go","url":"https://go.dev","content":"The Go language"}]}`)
+	}))
+	t.Cleanup(func() {
+		server.Close()
+		restoreSearchEndpoints()
+	})
+	webSearchTavilyEndpoint = server.URL
+	// The keyless sources are unreachable, so only Tavily can answer.
+	webSearchHTMLEndpoint = "http://search.invalid/"
+	webSearchEndpoint = "http://search.invalid/"
+	webSearchWikipediaEndpoint = "http://search.invalid/"
+	webSearchGitHubEndpoint = "http://search.invalid/"
+
+	tool := &webSearchTool{}
+	result, err := tool.Run(context.Background(), &Env{}, map[string]any{"query": "go"})
+	if err != nil || result.IsError {
+		t.Fatalf("Run: err=%v result=%+v", err, result)
+	}
+	for _, want := range []string{"tavily", "https://go.dev"} {
+		if !strings.Contains(result.Output, want) {
+			t.Errorf("output is missing %q:\n%s", want, result.Output)
+		}
+	}
 }
 
 // emptySources stands in for Wikipedia and GitHub with valid but empty
@@ -188,6 +229,30 @@ func TestWebSearchReportsNoResults(t *testing.T) {
 	result, _ := tool.Run(context.Background(), &Env{}, map[string]any{"query": "zzz unlikely"})
 	if result.IsError || !strings.Contains(result.Output, "No results") {
 		t.Errorf("an empty set should say so, got %q", result.Output)
+	}
+}
+
+// TestWebSearchDoesNotClaimOfflineWhenASourceWasReachable is the false-outage
+// regression: a blocked DuckDuckGo host must not make an empty result read as
+// "the machine is offline" when Wikipedia or GitHub answered.
+func TestWebSearchDoesNotClaimOfflineWhenASourceWasReachable(t *testing.T) {
+	emptySources(t)
+	// A host that never resolves: the DNS failure the operator hits when an
+	// ISP blocks DuckDuckGo.
+	webSearchHTMLEndpoint = "http://search.invalid/"
+	webSearchEndpoint = "http://search.invalid/"
+	t.Cleanup(restoreSearchEndpoints)
+
+	tool := &webSearchTool{}
+	result, _ := tool.Run(context.Background(), &Env{}, map[string]any{"query": "zzz unlikely"})
+	if result.IsError {
+		t.Fatalf("a reachable source must not read as offline: %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "No results") {
+		t.Errorf("output = %q, want no results", result.Output)
+	}
+	if strings.Contains(result.Output, "offline") {
+		t.Errorf("output must not claim the machine is offline: %q", result.Output)
 	}
 }
 

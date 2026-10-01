@@ -374,7 +374,7 @@ ecosystem tools out of every request and loads them on demand through
 
 | Tool | Purpose |
 | --- | --- |
-| `web_fetch` | fetch a URL and reduce HTML to text |
+| `web_fetch` | fetch a URL and reduce HTML to text; `reader: true` routes through r.jina.ai |
 | `web_search` | search the web and return titles, URLs and snippets |
 | `read_image` | attach a local image so a vision model can see it |
 | `find_tools` | search the toolset by keyword and load the match |
@@ -383,6 +383,21 @@ ecosystem tools out of every request and loads them on demand through
 `pytest`, `golangci-lint` and anything else your project uses; the output is
 streamed into the transcript. Every MCP server you configure adds its own tools,
 named `mcp_<server>__<tool>`.
+
+**Web access.** `web_search` is keyless out of the box: it uses DuckDuckGo, then
+falls back to Wikipedia and GitHub when a source is unreachable. Where an ISP
+blocks DuckDuckGo by DNS, give it a keyed provider instead. A key set with
+`termixgo secret tavily` (or `BRAVE_API_KEY`/`TAVILY_API_KEY`) is tried first:
+
+```sh
+termixgo secret tavily     # prompts, input hidden
+termixgo secret brave
+```
+
+`web_fetch` reads a page directly; pass `reader: true` to fetch through
+`r.jina.ai` instead, which works for a host your DNS blocks and for JavaScript
+pages. A search that finds nothing does not claim the machine is offline: that
+message appears only when no source could be reached at all.
 
 ## Orchestration pipelines
 

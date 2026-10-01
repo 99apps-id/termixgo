@@ -434,6 +434,31 @@ func TestWebFetchReportsAnUnreachableHost(t *testing.T) {
 	}
 }
 
+// TestWebFetchReaderUsesTheReaderHost proves reader=true routes through the
+// reader service, so a locally DNS-blocked host can still be read.
+func TestWebFetchReaderUsesTheReaderHost(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(writer, "READER CONTENT")
+	}))
+	t.Cleanup(func() {
+		server.Close()
+		webReaderBase = "https://r.jina.ai/"
+	})
+	webReaderBase = server.URL + "/"
+
+	result, err := (&webFetchTool{}).Run(context.Background(), testEnv(t), map[string]any{
+		"url":    "https://blocked.invalid/page",
+		"reader": true,
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("Run: err=%v result=%+v", err, result)
+	}
+	if !strings.Contains(result.Output, "READER CONTENT") {
+		t.Errorf("output = %q, want the reader content", result.Output)
+	}
+}
+
 // TestWebFetchTruncatesALargePage keeps one page from filling the context
 // window, which would be reported later as an unexplained trim.
 func TestWebFetchTruncatesALargePage(t *testing.T) {

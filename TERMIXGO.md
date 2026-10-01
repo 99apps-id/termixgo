@@ -150,6 +150,14 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   completion is an `EventProcessEnd` the app forwards to chat. A native worker
   (`termixgo`) runs this same binary and needs no external account, and it sets
   `TERMIXGO_WORKER_DEPTH` in the child so a worker cannot start another worker.
+- Web search is keyless-first but key-aware: a configured Tavily or Brave key
+  is tried before the keyless DuckDuckGo/Wikipedia/GitHub chain, because an ISP
+  can block one hostname by DNS without blocking a paid API on another domain.
+  A DNS failure is not retried, since the name will not resolve on a second
+  attempt; only a transient connect failure is. An empty result from a source
+  that answered is never reported as the machine being offline. `web_fetch`
+  with `reader: true` routes through r.jina.ai, which reads a host a local DNS
+  block hides.
 - Cancellation flows through a context: `signal.NotifyContext` in the command,
   through `App.RunTurn`, into `Runner.Run`, and out to the HTTP request. The
   run loop checks the context between steps, so a stop is prompt and saves

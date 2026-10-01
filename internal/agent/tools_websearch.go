@@ -1,13 +1,16 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"html"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -33,6 +36,23 @@ var webSearchWikipediaEndpoint = "https://en.wikipedia.org/w/api.php"
 // coding agent actually makes: an error message, a library or a repository.
 var webSearchGitHubEndpoint = "https://api.github.com/search/repositories"
 
+// webSearchClient is the shared HTTP client for all web search and fetch
+// operations. It uses a tuned transport with proper timeouts and a pure-Go
+// DNS resolver on Windows, so the agent's web tools are not derailed by a
+// misbehaving system resolver or a VPN tunnel that breaks the CGO lookup path.
+var webSearchClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          16,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	},
+	Timeout: 60 * time.Second,
+}
+
 // webSearchSource names where results came from, so the model knows how much
 // to trust a general web search against a reference or code lookup.
 type webSearchSource string
@@ -41,6 +61,16 @@ const (
 	sourceDuckDuckGo webSearchSource = "duckduckgo"
 	sourceWikipedia  webSearchSource = "wikipedia"
 	sourceGitHub     webSearchSource = "github"
+	sourceTavily     webSearchSource = "tavily"
+	sourceBrave      webSearchSource = "brave"
+)
+
+// Keyed search endpoints. A keyed provider is tried first when its key is
+// configured, which is what keeps search working where DuckDuckGo is blocked
+// by DNS: an ISP can drop one hostname, not a paid API on another domain.
+var (
+	webSearchTavilyEndpoint = "https://api.tavily.com/search"
+	webSearchBraveEndpoint  = "https://api.search.brave.com/res/v1/web/search"
 )
 
 // webSearchUserAgent identifies the tool. DuckDuckGo's HTML page answers a
@@ -105,12 +135,25 @@ func (t *webSearchTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	requestCtx, cancel := context.WithTimeout(ctx, webSearchTimeout)
 	defer cancel()
 
-	results, source, lastErr := searchWeb(requestCtx, query)
+	results, source, lastErr, reachable := searchWeb(requestCtx, query, configuredSearchProviders(env))
 	if len(results) == 0 {
-		if lastErr != nil {
+		switch {
+		case lastErr != nil && !reachable:
+			// Every source failed to connect: this really is offline or a
+			// blocked DNS.
 			return searchFailure(query, lastErr), nil
+		case lastErr != nil && !isNetworkUnreachable(lastErr):
+			// A source genuinely failed, such as a 502: report it rather than
+			// hiding it as "no results".
+			return Result{Output: fmt.Sprintf("search failed for %q: %v", query, lastErr), IsError: true}, nil
+		case lastErr != nil:
+			// Only an unreachable source (often a blocked DuckDuckGo host)
+			// while another source answered: the network works, so this is a
+			// no-results case, not an outage.
+			return Result{Output: fmt.Sprintf("No results for %q. Some search sources were unreachable.", query)}, nil
+		default:
+			return Result{Output: fmt.Sprintf("No results for %q.", query)}, nil
 		}
-		return Result{Output: fmt.Sprintf("No results for %q.", query)}, nil
 	}
 	if len(results) > count {
 		results = results[:count]
@@ -133,31 +176,166 @@ type searchProvider struct {
 	run    func(context.Context, string) ([]searchResult, error)
 }
 
+// configuredSearchProviders builds the chain. A keyed provider (Tavily,
+// Brave) is tried first when its key is set, so search keeps working where
+// DuckDuckGo is DNS-blocked; the keyless sources remain as a zero-config
+// fallback.
+func configuredSearchProviders(env *Env) []searchProvider {
+	providers := make([]searchProvider, 0, 6)
+	if key := webSearchKey(env, "tavily"); key != "" {
+		providers = append(providers, searchProvider{sourceTavily, func(ctx context.Context, query string) ([]searchResult, error) {
+			return searchTavily(ctx, key, query)
+		}})
+	}
+	if key := webSearchKey(env, "brave"); key != "" {
+		providers = append(providers, searchProvider{sourceBrave, func(ctx context.Context, query string) ([]searchResult, error) {
+			return searchBrave(ctx, key, query)
+		}})
+	}
+	return append(providers,
+		searchProvider{sourceDuckDuckGo, searchDuckDuckGoHTML},
+		searchProvider{sourceDuckDuckGo, searchInstantAnswer},
+		searchProvider{sourceWikipedia, searchWikipedia},
+		searchProvider{sourceGitHub, searchGitHub},
+	)
+}
+
+// webSearchKey resolves a search provider's key from the secret store first,
+// then the environment, so a key set either way is honoured.
+func webSearchKey(env *Env, name string) string {
+	if env.Secrets != nil {
+		if value := strings.TrimSpace(env.Secrets.Get(name)); value != "" {
+			return value
+		}
+	}
+	return strings.TrimSpace(os.Getenv(strings.ToUpper(name) + "_API_KEY"))
+}
+
+// searchTavily queries the Tavily search API, which needs a key but is a
+// single request that is not scraped, so it is reliable where a SERP is not.
+func searchTavily(ctx context.Context, key, query string) ([]searchResult, error) {
+	payload, err := json.Marshal(map[string]any{
+		"api_key":          key,
+		"query":            query,
+		"max_results":      6,
+		"include_snippets": true,
+		"include_answer":   false,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var results []searchResult
+	err = doWithRetry(ctx, func() error {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, webSearchTavilyEndpoint, bytes.NewReader(payload))
+		if err != nil {
+			return err
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("User-Agent", webSearchUserAgent)
+		response, err := webSearchClient.Do(request)
+		if err != nil {
+			return err
+		}
+		defer response.Body.Close()
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return fmt.Errorf("search returned %s", response.Status)
+		}
+		body, err := io.ReadAll(io.LimitReader(response.Body, 2*1024*1024))
+		if err != nil {
+			return fmt.Errorf("read search: %v", err)
+		}
+		var parsed struct {
+			Results []struct {
+				Title   string `json:"title"`
+				URL     string `json:"url"`
+				Content string `json:"content"`
+			} `json:"results"`
+		}
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			return fmt.Errorf("read search: %v", err)
+		}
+		results = make([]searchResult, 0, len(parsed.Results))
+		for _, item := range parsed.Results {
+			results = append(results, searchResult{title: item.Title, url: item.URL, snippet: Shorten(strings.TrimSpace(item.Content), 300)})
+		}
+		return nil
+	})
+	return results, err
+}
+
+// searchBrave queries the Brave Search API.
+func searchBrave(ctx context.Context, key, query string) ([]searchResult, error) {
+	link := fmt.Sprintf("%s?q=%s&count=10", strings.TrimRight(webSearchBraveEndpoint, "/"), url.QueryEscape(query))
+	var results []searchResult
+	err := doWithRetry(ctx, func() error {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
+		if err != nil {
+			return err
+		}
+		request.Header.Set("Accept", "application/json")
+		request.Header.Set("X-Subscription-Token", key)
+		request.Header.Set("User-Agent", webSearchUserAgent)
+		response, err := webSearchClient.Do(request)
+		if err != nil {
+			return err
+		}
+		defer response.Body.Close()
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return fmt.Errorf("search returned %s", response.Status)
+		}
+		body, err := io.ReadAll(io.LimitReader(response.Body, 2*1024*1024))
+		if err != nil {
+			return fmt.Errorf("read search: %v", err)
+		}
+		var parsed struct {
+			Web struct {
+				Results []struct {
+					Title       string `json:"title"`
+					URL         string `json:"url"`
+					Description string `json:"description"`
+				} `json:"results"`
+			} `json:"web"`
+		}
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			return fmt.Errorf("read search: %v", err)
+		}
+		results = make([]searchResult, 0, len(parsed.Web.Results))
+		for _, item := range parsed.Web.Results {
+			results = append(results, searchResult{title: item.Title, url: item.URL, snippet: item.Description})
+		}
+		return nil
+	})
+	return results, err
+}
+
 // searchWeb walks the sources in order and returns the first that answers.
 //
 // The chain exists because a single vendor is a single point of failure:
 // DuckDuckGo can be unreachable in a whole country, and a search tool that
 // dies there is worse than one that answers from Wikipedia or GitHub. A
 // source that returns no results moves on; the first real error is kept so a
-// total outage still reports a cause.
-func searchWeb(ctx context.Context, query string) ([]searchResult, webSearchSource, error) {
-	providers := []searchProvider{
-		{sourceDuckDuckGo, searchDuckDuckGoHTML},
-		{sourceDuckDuckGo, searchInstantAnswer},
-		{sourceWikipedia, searchWikipedia},
-		{sourceGitHub, searchGitHub},
-	}
+// total outage still reports a cause. It also reports whether any source was
+// reachable, so an empty result from a reachable source is never misreported
+// as the whole machine being offline.
+func searchWeb(ctx context.Context, query string, providers []searchProvider) ([]searchResult, webSearchSource, error, bool) {
 	var firstErr error
+	reachable := false
 	for _, provider := range providers {
 		results, err := provider.run(ctx, query)
+		// A provider that answered, even with no results or a bad HTTP status,
+		// proves the network works. Only a DNS or connect failure leaves the
+		// question of "nothing found" against "offline" open.
+		if err == nil || !isNetworkUnreachable(err) {
+			reachable = true
+		}
 		if len(results) > 0 {
-			return results, provider.source, nil
+			return results, provider.source, nil, true
 		}
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
-	return nil, "", firstErr
+	return nil, "", firstErr, reachable
 }
 
 // searchWikipedia queries the MediaWiki opensearch API, which is keyless and
@@ -240,7 +418,7 @@ func searchGitHub(ctx context.Context, query string) ([]searchResult, error) {
 func searchFailure(query string, err error) Result {
 	if isNetworkUnreachable(err) {
 		return Result{
-			Output:  fmt.Sprintf("search failed for %q: %v\nHint: the machine is offline or DNS could not resolve the search host. Do not retry web_search or web_fetch; continue with local repository files, documentation and tools.", query, err),
+			Output:  fmt.Sprintf("search failed for %q: %v\nHint: no search source could be reached; the machine may be offline or its DNS blocked. Do not retry web_search or web_fetch; continue with local repository files, documentation and tools.", query, err),
 			IsError: true,
 		}
 	}
@@ -441,7 +619,37 @@ func fetchSearchPage(ctx context.Context, endpoint, query string) (string, error
 }
 
 // fetchURL issues one bounded GET and returns the body as text.
+// It retries on transient DNS/network errors with exponential backoff.
 func fetchURL(ctx context.Context, link string) (string, error) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-time.After(time.Duration(1<<attempt) * time.Second):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		body, err := retryableFetch(ctx, link)
+		if err == nil {
+			return body, nil
+		}
+		if isDNSFailure(err) {
+			// A blocked or nonexistent name will not resolve on the next
+			// attempt; retrying only delays the fallback to the next source.
+			return "", err
+		}
+		if !isNetworkUnreachable(err) {
+			return "", err
+		}
+		lastErr = err
+	}
+	return "", fmt.Errorf("search failed after retries: %w", lastErr)
+}
+
+// retryableFetch issues one GET and returns the body. The caller decides
+// whether the error is retryable.
+func retryableFetch(ctx context.Context, link string) (string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
 	if err != nil {
 		return "", err
@@ -449,7 +657,7 @@ func fetchURL(ctx context.Context, link string) (string, error) {
 	request.Header.Set("User-Agent", webSearchUserAgent)
 	request.Header.Set("Accept", "text/html,application/json;q=0.9,*/*;q=0.5")
 	request.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	response, err := http.DefaultClient.Do(request)
+	response, err := webSearchClient.Do(request)
 	if err != nil {
 		return "", err
 	}
@@ -464,6 +672,29 @@ func fetchURL(ctx context.Context, link string) (string, error) {
 	return string(body), nil
 }
 
+// doWithRetry runs fn up to three times, sleeping 1s then 2s between
+// attempts when the error looks like a DNS or connectivity failure.
+func doWithRetry(ctx context.Context, fn func() error) error {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-time.After(time.Duration(1<<attempt) * time.Second):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if err := fn(); err == nil {
+			return nil
+		} else if !isNetworkUnreachable(err) {
+			return err
+		} else {
+			lastErr = err
+		}
+	}
+	return fmt.Errorf("request failed after retries: %w", lastErr)
+}
+
 // appendQuery adds a query parameter without losing an existing query string.
 func appendQuery(endpoint, key, value string) string {
 	trimmed := strings.TrimRight(strings.TrimSpace(endpoint), "/")
@@ -472,6 +703,29 @@ func appendQuery(endpoint, key, value string) string {
 		separator = "&"
 	}
 	return trimmed + separator + key + "=" + url.QueryEscape(value)
+}
+
+// isDNSFailure reports a name-resolution failure. It is a subset of
+// isNetworkUnreachable that must not be retried: a blocked or nonexistent
+// name does not resolve on a second attempt, so retrying only delays the
+// fallback to the next search source.
+func isDNSFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	lowered := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"no such host",
+		"getaddrinfo",
+		"temporary failure in name resolution",
+		"server misbehaving",
+		"no addresses",
+	} {
+		if strings.Contains(lowered, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // isNetworkUnreachable reports whether an error is a DNS or connectivity
