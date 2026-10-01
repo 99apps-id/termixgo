@@ -253,6 +253,19 @@ func TestBuildSystemIncludesWorkspaceAndTrust(t *testing.T) {
 	}
 }
 
+// TestBuildSystemWarnsAgainstAFalseOutageClaim points the agent at the DoH
+// fallback and forbids telling the operator the machine cannot fetch or search
+// when only one host fails.
+func TestBuildSystemWarnsAgainstAFalseOutageClaim(t *testing.T) {
+	env := testEnv(t)
+	system := BuildSystem(env, "test")
+	for _, want := range []string{"DNS-over-HTTPS", "Never tell the operator the machine cannot fetch or search"} {
+		if !strings.Contains(system, want) {
+			t.Errorf("the system prompt is missing %q", want)
+		}
+	}
+}
+
 func TestBuildSystemIncludesSkillsAndPlan(t *testing.T) {
 	env := testEnv(t)
 	env.Skills = []skill.Skill{{Name: "review", Description: "Review a change set.", Scope: "project"}}

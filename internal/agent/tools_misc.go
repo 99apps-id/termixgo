@@ -784,7 +784,7 @@ func (t *webFetchTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	}
 	if isNetworkUnreachable(transportErr) {
 		return Result{
-			Output:  fmt.Sprintf("fetch failed: %v\nHint: that host could not be reached directly or through the reader (a blocked or misspelled name, or the machine is offline). Continue with local files and tools.", transportErr),
+			Output:  fmt.Sprintf("fetch failed: %v\nHint: the direct fetch, the DNS-over-HTTPS resolver and the r.jina.ai reader all failed for this host, so this is about this URL, not the machine. Do not tell the operator the machine cannot fetch. Try another URL, web_search, or the lookup tool.", transportErr),
 			IsError: true,
 		}, nil
 	}

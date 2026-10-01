@@ -328,15 +328,18 @@ func TestWebSearchParsesDuckDuckGoHTML(t *testing.T) {
 	}
 }
 
-// TestWebSearchOfflineHintTellsTheModelToStop covers the failure the operator
-// hit: a DNS failure must be named as offline so the agent stops retrying.
-func TestWebSearchOfflineHintTellsTheModelToStop(t *testing.T) {
+// TestSearchFailureMentionsDoHWithoutClaimingOffline proves the failure text
+// points at the DoH fallback and forbids telling the operator the machine
+// cannot search, which is the misreport this change fixes.
+func TestSearchFailureMentionsDoHWithoutClaimingOffline(t *testing.T) {
 	result := searchFailure("go 1.26", fmt.Errorf("dial tcp: lookup html.duckduckgo.com: no such host"))
 	if !result.IsError {
-		t.Fatalf("a DNS failure must be an error result")
+		t.Fatalf("a failed search must be an error result")
 	}
-	if !strings.Contains(result.Output, "offline") || !strings.Contains(result.Output, "Do not retry") {
-		t.Errorf("output = %q, want the offline hint", result.Output)
+	for _, want := range []string{"DNS-over-HTTPS", "Do not tell the operator"} {
+		if !strings.Contains(result.Output, want) {
+			t.Errorf("output = %q, want %q", result.Output, want)
+		}
 	}
 	if !isNetworkUnreachable(fmt.Errorf("dial tcp: lookup x: no such host")) {
 		t.Errorf("no such host must read as unreachable")

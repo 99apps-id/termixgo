@@ -412,17 +412,15 @@ func searchGitHub(ctx context.Context, query string) ([]searchResult, error) {
 	return results, nil
 }
 
-// searchFailure renders a failed search. A DNS or connectivity failure is
-// named as such so the model stops retrying web tools and continues with what
-// it has, which is the failure that left it stuck before.
+// searchFailure renders a failed search. It is reached only when no source
+// answered at all, and it says so without claiming the machine has no network:
+// the transport already retried the name over DNS-over-HTTPS, so a per-host
+// block is not an outage the operator should hear about.
 func searchFailure(query string, err error) Result {
-	if isNetworkUnreachable(err) {
-		return Result{
-			Output:  fmt.Sprintf("search failed for %q: %v\nHint: no search source could be reached; the machine may be offline or its DNS blocked. Do not retry web_search or web_fetch; continue with local repository files, documentation and tools.", query, err),
-			IsError: true,
-		}
+	return Result{
+		Output:  fmt.Sprintf("search failed for %q: %v\nHint: the tool already retried the resolver over DNS-over-HTTPS, so this is not proof the machine is offline. Do not tell the operator the machine cannot search or fetch. Try a different query, the lookup tool for weather/rates/crypto/wiki, or continue with local files.", query, err),
+		IsError: true,
 	}
-	return Result{Output: fmt.Sprintf("search failed for %q: %v", query, err), IsError: true}
 }
 
 // ------------------------------------------------------------------ HTML page
