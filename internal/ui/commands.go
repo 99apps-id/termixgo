@@ -642,20 +642,70 @@ func firstLine(text string) string {
 }
 
 func (m *Model) slashSkills(args string) (tea.Model, tea.Cmd) {
-	if strings.EqualFold(strings.TrimSpace(args), "reload") {
-		m.app.ReloadSkills()
+	fields := strings.Fields(strings.TrimSpace(args))
+	sub := ""
+	if len(fields) > 0 {
+		sub = strings.ToLower(fields[0])
 	}
-	skills := m.app.Skills()
-	if len(skills) == 0 {
-		m.blocks = append(m.blocks, block{kind: blockNotice, text: "No skills found. Add one at .termixgo/skills/<name>/SKILL.md."})
-		m.refresh()
-		return m, nil
+	switch sub {
+	case "proposals":
+		proposals, err := m.app.SkillProposals()
+		if err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+			break
+		}
+		if len(proposals) == 0 {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "No pending skill proposals."})
+			break
+		}
+		lines := []string{fmt.Sprintf("%d skill proposal(s):", len(proposals))}
+		for _, proposal := range proposals {
+			line := fmt.Sprintf("  %s  %-6s %-20s %s", proposal.ID, proposal.Action, proposal.Name, proposal.Summary)
+			if proposal.Status != "" && proposal.Status != "pending" {
+				line += "  [" + proposal.Status + "]"
+			}
+			lines = append(lines, line)
+		}
+		lines = append(lines, "", "Apply with /skills apply <id>, drop with /skills reject <id>.")
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
+	case "apply":
+		if len(fields) < 2 {
+			m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /skills apply <id>"})
+			break
+		}
+		applied, err := m.app.ApplySkillProposal(fields[1])
+		if err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+			break
+		}
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Applied skill " + applied.Name + "."})
+	case "reject":
+		if len(fields) < 2 {
+			m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /skills reject <id>"})
+			break
+		}
+		if err := m.app.RejectSkillProposal(fields[1]); err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+			break
+		}
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Rejected proposal " + fields[1] + "."})
+	case "", "list", "reload":
+		if sub == "reload" {
+			m.app.ReloadSkills()
+		}
+		skills := m.app.Skills()
+		if len(skills) == 0 {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "No skills found. Add one at .termixgo/skills/<name>/SKILL.md."})
+			break
+		}
+		var lines []string
+		for _, item := range skills {
+			lines = append(lines, fmt.Sprintf("  %-20s %-8s %s", item.Name, item.Scope, item.Description))
+		}
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Skills (%d):\n%s", len(skills), strings.Join(lines, "\n"))})
+	default:
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /skills [list|reload|proposals|apply|reject]"})
 	}
-	var lines []string
-	for _, item := range skills {
-		lines = append(lines, fmt.Sprintf("  %-20s %-8s %s", item.Name, item.Scope, item.Description))
-	}
-	m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Skills (%d):\n%s", len(skills), strings.Join(lines, "\n"))})
 	m.refresh()
 	return m, nil
 }

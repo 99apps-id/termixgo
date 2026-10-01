@@ -137,6 +137,11 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   is dropped. The scheduler advances a job's `NextRun` before it runs, so a
   restart replays nothing, and the jobs file is re-read each tick so the CLI can
   edit it while `serve` runs.
+- Generated skill content is staged, never written live. `propose_skill` records
+  a proposal under `.termixgo/skill-proposals/`; only the operator applies it
+  with `/skills apply`, and an update whose target hash moved since the proposal
+  is refused as stale. A path that writes the live `SKILL.md` directly would
+  defeat that, so the write stays behind the operator.
 - Cancellation flows through a context: `signal.NotifyContext` in the command,
   through `App.RunTurn`, into `Runner.Run`, and out to the HTTP request. The
   run loop checks the context between steps, so a stop is prompt and saves

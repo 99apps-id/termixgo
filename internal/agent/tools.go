@@ -133,6 +133,7 @@ func DefaultRegistry() *Registry {
 		&useSkillTool{},
 		&findSkillTool{},
 		&installSkillTool{},
+		&proposeSkillTool{},
 		&askUserTool{},
 		&webFetchTool{},
 		&webSearchTool{},

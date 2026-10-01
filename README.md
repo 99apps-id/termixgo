@@ -195,7 +195,7 @@ command typed mid-turn is queued and runs when the turn ends.
 | `/plan` | show the current task plan |
 | `/tools` | list the tools the agent can call |
 | `/mcp [reload]` | show the MCP servers and the tools they add |
-| `/skills [reload]` | list loaded skills |
+| `/skills [list\|reload\|proposals\|apply\|reject]` | list or manage skills |
 | `/memory` | show what the agent has learned |
 | `/telegram [setup\|on\|off\|status\|pair]` | manage the companion bot |
 | `/cron [list\|add\|remove\|on\|off\|run]` | schedule assistant jobs |
@@ -422,6 +422,20 @@ Once a folder is trusted, the agent works without interrupting you.
 - **Skills**: `.termixgo/skills/<name>/SKILL.md` in the project, or
   `~/.termixgo/skills/<name>/SKILL.md` globally. Only the short description
   enters the prompt; the body loads on demand.
+
+Skills are never rewritten behind your back. The `propose_skill` tool stages a
+new or updated skill as a proposal instead of writing it, and the operator
+applies or rejects it:
+
+```
+/skills proposals      # list staged proposals
+/skills apply <id>     # write the live SKILL.md
+/skills reject <id>    # drop it
+```
+
+An update records the target's hash, so applying a proposal whose target has
+changed since it was staged is refused as stale rather than clobbering newer
+work. Proposals live in `.termixgo/skill-proposals/` until they are resolved.
 
 ## MCP servers
 

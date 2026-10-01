@@ -65,8 +65,12 @@ var slashCommands = []SlashCommand{
 	{Trigger: "/mcp", Args: "[reload]", Summary: "Show the MCP servers and their tools", Options: []SlashOption{
 		{Value: "reload", Detail: "reconnect every configured server"},
 	}},
-	{Trigger: "/skills", Args: "[reload]", Summary: "List loaded skills", Options: []SlashOption{
+	{Trigger: "/skills", Args: "[list|reload|proposals|apply|reject]", Summary: "List or manage skills", Options: []SlashOption{
+		{Value: "list", Detail: "show loaded skills"},
 		{Value: "reload", Detail: "rescan the skill folders"},
+		{Value: "proposals", Detail: "show pending skill proposals"},
+		{Value: "apply", Detail: "apply a proposal by id", Complete: true},
+		{Value: "reject", Detail: "drop a proposal by id", Complete: true},
 	}},
 	{Trigger: "/memory", Args: "", Summary: "Show what the agent has learned"},
 	{Trigger: "/telegram", Args: "[setup|on|off|status|pair]", Summary: "Manage the Telegram companion", Options: []SlashOption{

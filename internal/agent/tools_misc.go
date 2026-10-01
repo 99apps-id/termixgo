@@ -219,6 +219,47 @@ func (t *installSkillTool) Run(ctx context.Context, env *Env, args map[string]an
 	return Result{Output: fmt.Sprintf("Installed skill %q to %s (scope %s). Description: %s. Files: %s", name, targetDir, scope, description, strings.Join(helperFiles, ", "))}, nil
 }
 
+// proposeSkillTool stages a skill change for the operator to approve. It never
+// writes the live skill, so generated guidance cannot rewrite itself unnoticed;
+// the operator applies it with /skills apply.
+type proposeSkillTool struct{}
+
+func (t *proposeSkillTool) Name() string      { return "propose_skill" }
+func (t *proposeSkillTool) Aliases() []string { return nil }
+func (t *proposeSkillTool) Mutating() bool    { return false }
+func (t *proposeSkillTool) Risk() Risk        { return RiskEdit }
+func (t *proposeSkillTool) Label(a map[string]any) string {
+	return "Proposing skill " + Shorten(argString(a, "name"), 40)
+}
+func (t *proposeSkillTool) DoneLabel(a map[string]any) string {
+	return "Proposed skill " + Shorten(argString(a, "name"), 40)
+}
+func (t *proposeSkillTool) Description() string {
+	return "Stage a new or updated skill for the operator to review. This does not change the live skill: the operator applies it with /skills apply <id>. Use it when a procedure is worth remembering across sessions."
+}
+func (t *proposeSkillTool) Schema() map[string]any {
+	return object(map[string]any{
+		"name":        strProp("Skill name."),
+		"description": strProp("One-line description shown in the prompt."),
+		"body":        strProp("The Markdown instructions for the skill."),
+		"summary":     strProp("Short note on why this skill is proposed."),
+	}, "name", "body")
+}
+
+func (t *proposeSkillTool) Run(_ context.Context, env *Env, args map[string]any) (Result, error) {
+	proposal, err := skill.Propose(
+		env.Workspace,
+		argString(args, "name"),
+		argString(args, "description"),
+		argString(args, "body"),
+		argString(args, "summary"),
+	)
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	return Result{Output: fmt.Sprintf("Staged %s proposal %s for skill %q. Review it, then apply with /skills apply %s.", proposal.Action, proposal.ID, proposal.Name, proposal.ID)}, nil
+}
+
 // isGitURL reports whether the source looks like a git URL.
 func isGitURL(source string) bool {
 	source = strings.ToLower(source)
