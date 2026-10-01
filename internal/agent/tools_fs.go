@@ -46,7 +46,17 @@ func checkWorkspacePath(env *Env, path string) error {
 	if strings.TrimSpace(env.Workspace) == "" {
 		return nil
 	}
-	rel, err := filepath.Rel(env.Workspace, path)
+	resolved := path
+	// A symlink inside the workspace can point outside it. filepath.Rel on the
+	// symlink path returns a relative path that looks safe, but the resolved
+	// path escapes the workspace. Resolve symlinks on the existing components
+	// so the check reflects where the path actually lands.
+	if abs, err := filepath.EvalSymlinks(path); err == nil {
+		resolved = abs
+	} else if abs, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		resolved = filepath.Join(abs, filepath.Base(path))
+	}
+	rel, err := filepath.Rel(env.Workspace, resolved)
 	if err != nil {
 		return fmt.Errorf("cannot resolve path against workspace: %v", err)
 	}

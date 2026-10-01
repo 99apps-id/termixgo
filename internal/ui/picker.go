@@ -74,6 +74,23 @@ func (m *Model) handlePickerKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.picker = picker{}
 			return m, nil
 		}
+		if strings.HasPrefix(m.picker.action, slashArgAction) {
+			resume := m.pickerResume
+			pending := m.slashPending
+			m.picker = picker{}
+			m.pickerResume = ""
+			m.slashPending = ""
+			m.composer.SetValue(resume)
+			if pending != "" {
+				m.slashOpen = true
+				m.slashAnchor = resume
+				m.slashInput = pending
+				m.refreshSlashMenu()
+			} else {
+				m.updateSlashMatches()
+			}
+			return m, m.enterChat()
+		}
 		m.picker = picker{}
 		return m, m.enterChat()
 	case "up", "ctrl+p":

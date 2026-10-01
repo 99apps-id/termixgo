@@ -501,17 +501,22 @@ func TestEnterWhileRunningQueues(t *testing.T) {
 	}
 }
 
-func TestTabCompletesASlashCommand(t *testing.T) {
+func TestTabInSlashEntryRunsWithoutLeavingSlash(t *testing.T) {
 	model := chatModel(t)
-	model.composer.SetValue("/mo")
-	model.updateSlashMatches()
-
-	updated := press(t, model, "tab")
-	if !strings.HasPrefix(updated.composer.Value(), "/model") {
-		t.Errorf("tab should complete to /model, got %q", updated.composer.Value())
+	typed := press(t, model, "/")
+	for _, stroke := range []string{"m", "o"} {
+		typed = press(t, typed, stroke)
 	}
-	if len(updated.slashMatches) != 0 {
-		t.Errorf("the menu should close after completing")
+
+	updated := press(t, typed, "tab")
+	if updated.current != modePicker {
+		t.Fatalf("Tab on /model should open the model picker, mode is %d", updated.current)
+	}
+	if updated.picker.action != "model" {
+		t.Fatalf("picker action = %q, want the model picker", updated.picker.action)
+	}
+	if got := updated.composer.Value(); got != "" {
+		t.Errorf("completing from the popup must not leave slash text, got %q", got)
 	}
 }
 
@@ -535,6 +540,272 @@ func TestArrowKeysMoveTheSlashCursor(t *testing.T) {
 	model = press(t, model, "up")
 	if model.slashCursor != len(model.slashMatches) {
 		t.Errorf("up from the top should wrap to back, got %d", model.slashCursor)
+	}
+}
+
+// TestSlashKeyOpensMenuWithoutLeavingSlashInComposer reproduces the typed
+// slash bug: pressing / must open the popup menu, not put a slash into the
+// composer text.
+func TestSlashKeyOpensMenuWithoutLeavingSlashInComposer(t *testing.T) {
+	model := chatModel(t)
+	typed := press(t, model, "/")
+
+	if got := typed.composer.Value(); got != "" {
+		t.Fatalf("composer = %q after /, want no slash text", got)
+	}
+	if len(typed.slashMatches) == 0 {
+		t.Fatalf("pressing / should open the slash menu")
+	}
+	resize(typed, 50, 16)
+	if got := frameHeight(typed.screen()); got > 16 {
+		t.Fatalf("the slash entry overlay drew %d rows in a 16-row terminal", got)
+	}
+}
+
+// TestSlashTypingFiltersWithoutEchoingSlash proves the rest of the keystrokes
+// filter the popup instead of accumulating slash text in the composer.
+func TestSlashTypingFiltersWithoutEchoingSlash(t *testing.T) {
+	model := chatModel(t)
+	typed := press(t, model, "/")
+	for _, stroke := range []string{"s", "t", "a", "t"} {
+		typed = press(t, typed, stroke)
+	}
+
+	if got := typed.composer.Value(); got != "" {
+		t.Fatalf("composer = %q while filtering, want no slash text", got)
+	}
+	if len(typed.slashMatches) == 0 || typed.slashMatches[typed.slashCursor].Trigger != "/status" {
+		t.Fatalf("the popup should be on /status, got %+v cursor %d", typed.slashMatches, typed.slashCursor)
+	}
+
+	submitted := press(t, typed, "enter")
+	if view := display(submitted); !strings.Contains(view, "workspace:") {
+		t.Errorf("Enter should have run /status:\n%s", view)
+	}
+}
+
+// TestSlashEntryKeepsThePopupVisible proves the raw slash line stays in the
+// popup while its composer value remains ordinary text.
+func TestSlashEntryKeepsThePopupVisible(t *testing.T) {
+	model := chatModel(t)
+	typed := press(t, model, "/")
+	for _, stroke := range []string{"x", "y", "z"} {
+		typed = press(t, typed, stroke)
+	}
+
+	if !typed.slashOpen {
+		t.Fatalf("an unknown slash entry should keep the popup open")
+	}
+	view := display(typed)
+	if strings.Contains(view, "Ask Termixgo to change something") {
+		t.Errorf("the composer should be replaced by the popup:\n%s", view)
+	}
+	if !strings.Contains(view, "> /xyz") {
+		t.Errorf("the popup should show the slash entry:\n%s", view)
+	}
+}
+
+// TestSlashEntryReportsAnUnknownCommand proves an unmatched popup entry still
+// resolves through the ordinary command path, then leaves an empty composer.
+func TestSlashEntryReportsAnUnknownCommand(t *testing.T) {
+	model := chatModel(t)
+	typed := press(t, model, "/")
+	for _, stroke := range []string{"x", "y", "z"} {
+		typed = press(t, typed, stroke)
+	}
+
+	submitted := press(t, typed, "enter")
+	view := display(submitted)
+	if !strings.Contains(view, "Unknown command") || !strings.Contains(view, "/xyz") {
+		t.Errorf("an unknown popup command should be reported:\n%s", view)
+	}
+	if submitted.slashOpen {
+		t.Errorf("a submitted command must close the popup")
+	}
+	if got := submitted.composer.Value(); got != "" {
+		t.Errorf("a submitted command must not leave slash text, got %q", got)
+	}
+}
+
+// TestSlashEntryBackRowAndEscapeDiscardTheToken proves returning to typing
+// from the popup starts clean. The intermediate slash token never reaches the
+// composer.
+func TestSlashEntryBackRowAndEscapeDiscardTheToken(t *testing.T) {
+	model := chatModel(t)
+	typed := press(t, model, "/")
+	for _, stroke := range []string{"s", "t", "a", "t"} {
+		typed = press(t, typed, stroke)
+	}
+	typed.slashCursor = len(typed.slashMatches)
+
+	backed := press(t, typed, "enter")
+	if backed.slashOpen || len(backed.slashMatches) != 0 {
+		t.Fatalf("the back row should close the popup")
+	}
+	if got := backed.composer.Value(); got != "" {
+		t.Fatalf("the back row should discard the slash token, got %q", got)
+	}
+
+	typed = press(t, model, "/")
+	typed = press(t, typed, "s")
+	escaped := press(t, typed, "esc")
+	if escaped.slashOpen || len(escaped.slashMatches) != 0 {
+		t.Fatalf("Esc should close the popup")
+	}
+	if got := escaped.composer.Value(); got != "" {
+		t.Fatalf("Esc should discard the slash token, got %q", got)
+	}
+}
+
+// TestSlashEntryTabOpensArgumentsWithoutLeavingSlash proves a command with a
+// closed argument set keeps its unfinished line in popup/picker state.
+func TestSlashEntryTabOpensArgumentsWithoutLeavingSlash(t *testing.T) {
+	model := chatModel(t)
+	typed := press(t, model, "/")
+	for _, stroke := range []string{"t", "r", "u", "s", "t"} {
+		typed = press(t, typed, stroke)
+	}
+
+	opened := press(t, typed, "tab")
+	if opened.current != modePicker {
+		t.Fatalf("Tab on /trust should open the argument picker, mode is %d", opened.current)
+	}
+	if opened.picker.action != "slash-arg:trust" {
+		t.Fatalf("picker action = %q, want the trust argument menu", opened.picker.action)
+	}
+	if got := opened.composer.Value(); got != "" {
+		t.Fatalf("opening arguments must not leave slash text, got %q", got)
+	}
+}
+
+// TestCancellingSlashArgumentsReturnsToThePopup proves the slash token goes
+// back to the popup rather than reappearing in the composer.
+func TestCancellingSlashArgumentsReturnsToThePopup(t *testing.T) {
+	model := chatModel(t)
+	typed := press(t, model, "/")
+	for _, stroke := range []string{"t", "r", "u", "s", "t"} {
+		typed = press(t, typed, stroke)
+	}
+	opened := press(t, typed, "tab")
+
+	cancelled := press(t, opened, "esc")
+	if !cancelled.slashOpen {
+		t.Fatalf("cancelling arguments should return to the slash popup")
+	}
+	if got := cancelled.composer.Value(); got != "" {
+		t.Fatalf("cancelling arguments must not restore slash text, got %q", got)
+	}
+	if got := stripANSI(cancelled.viewSlashMenu()); !strings.Contains(got, "> /trust") {
+		t.Errorf("the popup should keep the pending slash entry:\n%s", got)
+	}
+}
+
+// TestSlashAfterProseStaysProse proves that typing a slash after prose moves
+// the text into the slash popup flow instead of leaving a stray slash in the
+// composer. The anchor is preserved so the operator can back out without
+// losing what they had typed.
+func TestSlashAfterProseStaysProse(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("draft")
+
+	typed := press(t, model, "/")
+	if !typed.slashOpen {
+		t.Fatalf("a slash after prose must open the popup flow")
+	}
+	if got := typed.composer.Value(); got != "draft" {
+		t.Fatalf("composer = %q, want the anchor preserved", got)
+	}
+	if got := typed.slashInput; got != "/" {
+		t.Fatalf("slashInput = %q, want the slash in the popup state", got)
+	}
+}
+
+// TestSlashEntrySpaceKeepsArgumentsInThePopup proves a trailing space stays in
+// slash state instead of inserting an explicit slash line into the composer.
+// The ordinary Enter path still opens the argument menu from there.
+func TestSlashEntrySpaceKeepsArgumentsInThePopup(t *testing.T) {
+	model := chatModel(t)
+	typed := press(t, model, "/")
+	for _, stroke := range []string{"t", "r", "u", "s", "t", " "} {
+		typed = press(t, typed, stroke)
+	}
+
+	if got := typed.composer.Value(); got != "" {
+		t.Fatalf("composer = %q after the slash space, want no slash text", got)
+	}
+	if !typed.slashOpen {
+		t.Fatalf("a slash argument should keep the popup open")
+	}
+
+	opened := press(t, typed, "enter")
+	if opened.current != modePicker {
+		t.Fatalf("Enter on \"/trust \" should open the argument picker, mode is %d", opened.current)
+	}
+	if opened.picker.action != "slash-arg:trust" {
+		t.Fatalf("picker action = %q, want the trust argument menu", opened.picker.action)
+	}
+	if got := opened.composer.Value(); got != "" {
+		t.Fatalf("opening arguments must not leave slash text, got %q", got)
+	}
+}
+
+// TestSlashEntryDuringARunRoutesCommandsCorrectly proves the hidden slash flow
+// works while a turn is running: a live command runs at once and a command
+// that starts work is queued, without leaving the token in the composer.
+func TestSlashEntryDuringARunRoutesCommandsCorrectly(t *testing.T) {
+	for _, command := range []string{"/status", "/new"} {
+		model := chatModel(t)
+		model.running = true
+		typed := press(t, model, "/")
+		for _, stroke := range strings.Split(strings.TrimPrefix(command, "/"), "") {
+			typed = press(t, typed, stroke)
+		}
+		ran := press(t, typed, "enter")
+
+		if ran.slashOpen {
+			t.Fatalf("%s left the slash popup open", command)
+		}
+		if got := ran.composer.Value(); got != "" {
+			t.Fatalf("%s left slash text, got %q", command, got)
+		}
+		if command == "/status" {
+			if len(ran.queue) != 0 {
+				t.Errorf("/status should run at once, got queue %q", ran.queue)
+			}
+			if len(ran.blocks) == 0 {
+				t.Errorf("/status printed nothing")
+			}
+			continue
+		}
+		if len(ran.queue) != 1 || ran.queue[0] != "/new" {
+			t.Fatalf("queue = %q, want /new waiting", ran.queue)
+		}
+	}
+}
+
+// TestEscDuringSlashEntryStopsTheRunningTurn proves the slash popup never
+// captures the stop shortcut. Esc still stops first; a separate Esc closes the
+// popup afterward.
+func TestEscDuringSlashEntryStopsTheRunningTurn(t *testing.T) {
+	model := chatModel(t)
+	model.running = true
+	typed := press(t, model, "/")
+	if !typed.slashOpen {
+		t.Fatalf("slash should open the popup while a turn runs")
+	}
+
+	stopped := press(t, typed, "esc")
+	if !stopped.slashOpen {
+		t.Fatalf("the first Esc during a run should stop, not close the popup")
+	}
+	if stopped.notice == "" {
+		t.Errorf("stopping should tell the operator what is happening")
+	}
+
+	stopped.running = false
+	closed := press(t, stopped, "esc")
+	if closed.slashOpen || len(closed.slashMatches) != 0 {
+		t.Fatalf("the second Esc should close the popup")
 	}
 }
 
@@ -931,6 +1202,9 @@ func TestPickingAnArgumentRunsTheCommand(t *testing.T) {
 	}
 	if chosen.current != modeChat {
 		t.Errorf("choosing an argument should return to chat, mode is %d", chosen.current)
+	}
+	if got := chosen.composer.Value(); got != "" {
+		t.Errorf("running an argument must clear the staged composer, got %q", got)
 	}
 }
 

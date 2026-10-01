@@ -74,6 +74,19 @@ type Model struct {
 	slashMatches []SlashCommand
 	slashCursor  int
 
+	// slashOpen tracks an interactive slash entry started with an empty
+	// composer. The whole slash line lives in slashInput and never enters the
+	// composer while the popup is active, so typing only drives the popup.
+	// slashAnchor preserves the ordinary text from before the slash.
+	slashOpen   bool
+	slashAnchor string
+	slashInput  string
+	// slashPending preserves the unfinished slash line across an argument
+	// picker. pickerResume preserves the ordinary composer text from before
+	// it. A staging slash is deliberately not left in the composer on cancel.
+	slashPending string
+	pickerResume string
+
 	// mentionMatches holds the @file candidates for the token being typed.
 	// Tab accepts the highlighted one; Enter leaves the text alone.
 	mentionMatches []string
@@ -451,6 +464,11 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modePicker, modeSessions:
 		return m.handlePickerKey(key)
 	}
+	// Escape still reaches the ordinary handler so a slash popup opened during
+	// a run never blocks the stop shortcut.
+	if m.slashOpen && key.String() != "esc" {
+		return m.handleSlashMenuKey(key)
+	}
 
 	switch key.String() {
 	case "ctrl+o":
@@ -470,6 +488,10 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.notice = "Stopping..."
 			}
+			return m, nil
+		}
+		if m.slashOpen {
+			m.cancelSlashMenu()
 			return m, nil
 		}
 		if len(m.slashMatches) > 0 || len(m.mentionMatches) > 0 {
@@ -624,6 +646,12 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if key.Type == tea.KeyRunes && len(key.Runes) > 0 {
+		if m.beginSlashEntry(string(key.Runes)) {
+			return m, textareaBlink()
+		}
+	}
+
 	var cmd tea.Cmd
 	m.composer, cmd = m.composer.Update(key)
 	m.updateSlashMatches()
@@ -642,6 +670,144 @@ var approvalOptions = []struct {
 	{"s", "allow session", agent.DecisionAllowSession},
 	{"a", "always", agent.DecisionAllowAlways},
 	{"n", "deny", agent.DecisionDeny},
+}
+
+// handleSlashMenuKey keeps slash keystrokes in the popup instead of the
+// composer. Text is routed to the slash entry, and selection keys reuse the
+// ordinary submit path with the slash value staged only at the last moment.
+func (m *Model) handleSlashMenuKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "ctrl+o":
+		m.showDetails = !m.showDetails
+		if m.showDetails {
+			m.notice = "Details visible (Ctrl+O to hide)"
+		} else {
+			m.notice = "Details hidden (Ctrl+O to show)"
+		}
+		m.refresh()
+		return m, nil
+	case "up":
+		if len(m.slashMatches) > 0 {
+			m.slashCursor = (m.slashCursor - 1 + len(m.slashMatches) + 1) % (len(m.slashMatches) + 1)
+		}
+		return m, nil
+	case "down":
+		if len(m.slashMatches) > 0 {
+			m.slashCursor = (m.slashCursor + 1) % (len(m.slashMatches) + 1)
+		}
+		return m, nil
+	case "tab":
+		return m.completeSlashEntry()
+	case "enter":
+		return m.submitSlashEntry()
+	case "backspace":
+		if m.slashInput == "/" {
+			m.cancelSlashMenu()
+			return m, nil
+		}
+		m.slashInput = trimLastRune(m.slashInput)
+		m.refreshSlashMenu()
+		m.refresh()
+		return m, textareaBlink()
+	case "pgup":
+		m.viewport.HalfViewUp()
+		m.refresh()
+		return m, nil
+	case "pgdown":
+		m.viewport.HalfViewDown()
+		m.refresh()
+		return m, nil
+	case "home":
+		m.viewport.GotoTop()
+		m.refresh()
+		return m, nil
+	case "end":
+		m.viewport.GotoBottom()
+		m.refresh()
+		return m, nil
+	}
+	if key.Type != tea.KeyRunes || len(key.Runes) == 0 {
+		return m, nil
+	}
+	m.slashInput += string(key.Runes)
+	m.refreshSlashMenu()
+	m.refresh()
+	return m, textareaBlink()
+}
+
+// submitSlashEntry runs the popup's highlighted or matching command without
+// leaving the slash token in the composer.
+func (m *Model) submitSlashEntry() (tea.Model, tea.Cmd) {
+	m.refreshSlashMenu()
+	if len(m.slashMatches) == 0 {
+		if strings.TrimSpace(m.slashInput) == "" || m.slashInput == "/" {
+			m.cancelSlashMenu()
+			return m, nil
+		}
+		entry := m.slashInput
+		m.closeSlashEntry()
+		m.composer.SetValue(entry)
+		m.updateSlashMatches()
+		return m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+	if m.slashCursor == len(m.slashMatches) {
+		m.cancelSlashMenu()
+		return m, nil
+	}
+	cursor := m.slashCursor
+	if cursor < 0 || cursor >= len(m.slashMatches) {
+		cursor = 0
+		m.slashCursor = 0
+	}
+	entry := m.slashInput
+	current := strings.TrimSpace(entry)
+	if !strings.Contains(current, " ") && strings.HasPrefix(current, "/") && m.slashMatches[cursor].Trigger != current {
+		entry = m.slashMatches[cursor].Trigger + entry[len(current):]
+	}
+	m.closeSlashEntry()
+	m.composer.SetValue(entry)
+	m.updateSlashMatches()
+	return m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+}
+
+// completeSlashEntry accepts the highlighted popup item without leaving a raw
+// trigger in the composer. Commands with a closed argument set open their
+// argument picker; a command that runs as typed runs at once.
+func (m *Model) completeSlashEntry() (tea.Model, tea.Cmd) {
+	if len(m.slashMatches) == 0 {
+		return m, nil
+	}
+	if m.slashCursor == len(m.slashMatches) {
+		m.cancelSlashMenu()
+		return m, nil
+	}
+	cursor := m.slashCursor
+	if cursor < 0 || cursor >= len(m.slashMatches) {
+		cursor = 0
+		m.slashCursor = 0
+	}
+	selection := m.slashMatches[cursor]
+	name := strings.TrimPrefix(selection.Trigger, "/")
+	if len(SlashOptions(name)) == 0 {
+		m.closeSlashEntry()
+		m.composer.SetValue(selection.Trigger)
+		m.updateSlashMatches()
+		return m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+	m.stageSlashPicker(selection.Trigger)
+	return m.openSlashArgs(name)
+}
+
+// stageSlashPicker preserves the unfinished slash line and ordinary composer
+// text while an argument picker is open.
+func (m *Model) stageSlashPicker(command string) {
+	m.slashPending = command
+	m.pickerResume = m.slashAnchor
+	m.closeSlashEntry()
+	m.composer.SetValue(m.pickerResume)
+	m.updateMentionMatches()
 }
 
 func (m *Model) handleApprovalKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1189,7 +1355,7 @@ func (m *Model) screen() string {
 		overlay = m.viewApproval()
 	case m.pendingAsk != nil:
 		overlay = m.viewAsk()
-	case len(m.slashMatches) > 0:
+	case m.slashMenuOpen():
 		overlay = m.viewSlashMenu()
 	case len(m.mentionMatches) > 0:
 		overlay = m.viewMentionMenu()
@@ -1424,7 +1590,7 @@ func (m *Model) applyComposerStyle() {
 // away, so the status line has to know whether it is still there.
 func (m *Model) hintsVisible() bool {
 	return m.pendingApproval == nil && m.pendingAsk == nil &&
-		len(m.slashMatches) == 0 && len(m.mentionMatches) == 0
+		!m.slashMenuOpen() && len(m.mentionMatches) == 0
 }
 
 func (m *Model) viewHints() string {
@@ -1447,8 +1613,25 @@ func (m *Model) viewHints() string {
 func (m *Model) viewSlashMenu() string {
 	body := m.menuBodyWidth()
 	var rows []string
+	if m.slashOpen {
+		// The popup owns the slash token while it is being typed, so the
+		// composer underneath can keep the ordinary text from before it.
+		// Collapse the entry to one line: the composer keeps the ordinary text,
+		// while the popup is allowed to echo the slash being filtered.
+		input := strings.Join(strings.Fields(m.slashInput), " ")
+		if input == "" {
+			input = "/"
+		}
+		rows = append(rows, truncate(m.styles.MenuKey.Render("> "+input)+"  "+m.styles.MenuDesc.Render("Enter run | Esc back"), body))
+	}
 	total := len(m.slashMatches) + 1
-	start, end := windowRows(m.slashCursor, total, m.menuRowLimit())
+	listLimit := m.menuRowLimit()
+	if m.slashOpen {
+		// The entry echo is part of the overlay, so it comes out of the list
+		// budget rather than adding a row the layout did not count.
+		listLimit = max(1, listLimit-1)
+	}
+	start, end := windowRows(m.slashCursor, total, listLimit)
 	if start > 0 {
 		rows = append(rows, truncate(m.styles.MenuDesc.Render(fmt.Sprintf("  ... %d above", start)), body))
 	}
@@ -1793,11 +1976,27 @@ func (m *Model) matchCustom(input string) []SlashCommand {
 	return matches
 }
 
-// updateSlashMatches recomputes the inline command menu.
-func (m *Model) updateSlashMatches() {
+// slashMenuOpen reports whether the command popup is active. It stays active
+// for an interactive slash entry even when the filter has no matches, so the
+// popup does not disappear while the operator is still choosing.
+func (m *Model) slashMenuOpen() bool { return m.slashOpen || len(m.slashMatches) > 0 }
+
+// refreshSlashMenu recomputes the popup from the interactive slash entry.
+func (m *Model) refreshSlashMenu() {
+	if !m.slashOpen {
+		return
+	}
 	m.ensureCustomCommands()
-	matches := MatchSlash(m.composer.Value())
-	matches = append(matches, m.matchCustom(m.composer.Value())...)
+	text := m.slashInput
+	matches := MatchSlash(text)
+	matches = append(matches, m.matchCustom(text)...)
+	m.setSlashMatches(matches)
+}
+
+// setSlashMatches stores one recomputed menu set in both slash flows. The
+// cursor rule lives here so interactive typing and programmatic composer text
+// cannot drift apart.
+func (m *Model) setSlashMatches(matches []SlashCommand) {
 	// The highlight follows the first match whenever the set itself changes.
 	// Comparing lengths is not enough: "/model" and "/harness" both match
 	// exactly one command, and a cursor parked on the back row would survive
@@ -1805,13 +2004,66 @@ func (m *Model) updateSlashMatches() {
 	if slashSignature(matches) != slashSignature(m.slashMatches) {
 		m.slashCursor = 0
 	}
-	// The cursor may rest on the back row past the end, which stays valid
-	// while the match set is unchanged.
 	if m.slashCursor > len(matches) {
 		m.slashCursor = 0
 	}
 	m.slashMatches = matches
 	m.updateMentionMatches()
+}
+
+// beginSlashEntry starts an interactive slash entry from an empty composer.
+// The slash keystroke is consumed into popup state rather than inserted, so
+// the composer keeps the ordinary text from before the popup opened.
+func (m *Model) beginSlashEntry(text string) bool {
+	if m.slashOpen || m.current != modeChat || m.pendingApproval != nil || m.pendingAsk != nil {
+		return false
+	}
+	anchor := m.composer.Value()
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(trimmed, "/") {
+		return false
+	}
+	m.slashAnchor = anchor
+	m.slashOpen = true
+	m.slashInput = trimmed
+	m.refreshSlashMenu()
+	m.refresh()
+	return true
+}
+
+// cancelSlashMenu exits the interactive entry and restores ordinary typing.
+// The unfinished slash token is discarded, which is what stops it from
+// disturbing the composer when the operator backs out of the popup.
+func (m *Model) cancelSlashMenu() {
+	anchor := m.slashAnchor
+	m.closeSlashEntry()
+	m.composer.SetValue(anchor)
+	m.updateSlashMatches()
+	m.refresh()
+}
+
+// closeSlashEntry clears interactive slash state before a menu selection runs.
+func (m *Model) closeSlashEntry() {
+	m.slashOpen = false
+	m.slashAnchor = ""
+	m.slashInput = ""
+	m.slashMatches = nil
+	m.updateMentionMatches()
+}
+
+// updateSlashMatches recomputes the inline command menu.
+func (m *Model) updateSlashMatches() {
+	if m.slashOpen {
+		m.refreshSlashMenu()
+		return
+	}
+	m.ensureCustomCommands()
+	value := m.composer.Value()
+	matches := MatchSlash(value)
+	matches = append(matches, m.matchCustom(value)...)
+	// The cursor may rest on the back row past the end, which stays valid
+	// while the match set is unchanged.
+	m.setSlashMatches(matches)
 }
 
 // slashSignature identifies a menu set for the cursor: same length with

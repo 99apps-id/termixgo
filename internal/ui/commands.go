@@ -38,6 +38,14 @@ func (m *Model) openSlashArgs(name string) (tea.Model, tea.Cmd) {
 	if len(options) == 0 {
 		return m, nil
 	}
+	if m.slashPending == "" {
+		m.slashPending = slashTrigger(name)
+		m.pickerResume = ""
+	}
+	m.closeSlashEntry()
+	m.composer.SetValue(m.pickerResume)
+	m.slashMatches = nil
+	m.mentionMatches = nil
 	items := make([]pickerItem, 0, len(options)+1)
 	// The bare form stays available as a row when the command has one, so
 	// "show me the current value" is still one keystroke away. The label
@@ -75,10 +83,18 @@ func (m *Model) applySlashArg(name, value string) (tea.Model, tea.Cmd) {
 		}
 		m.composer.SetValue(slashTrigger(name) + " " + value + " ")
 		m.composer.CursorEnd()
+		m.slashPending = ""
+		m.pickerResume = ""
+		m.closeSlashEntry()
 		m.updateSlashMatches()
 		m.refresh()
 		return m, textareaBlink()
 	}
+	m.slashPending = ""
+	m.pickerResume = ""
+	m.closeSlashEntry()
+	m.composer.SetValue("")
+	m.updateSlashMatches()
 	return m.runSlash(strings.TrimPrefix(name, "/"), value)
 }
 

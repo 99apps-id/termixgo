@@ -593,6 +593,9 @@ func capCardLines(lines []string, limit int) []string {
 	for _, line := range lines {
 		total += len(line) + 1
 	}
+	if len(lines) > 0 {
+		total--
+	}
 	kept := lines
 	for len(kept) > 1 && total > limit {
 		total -= len(kept[0]) + 1
