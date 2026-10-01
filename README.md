@@ -200,6 +200,7 @@ command typed mid-turn is queued and runs when the turn ends.
 | `/telegram [setup\|on\|off\|status\|pair]` | manage the companion bot |
 | `/cron [list\|add\|remove\|on\|off\|run]` | schedule assistant jobs |
 | `/heartbeat [on\|off\|<interval>]` | periodic self-check for a 24/7 assistant |
+| `/audit [count]` | show recent audited actions |
 | `/init` | generate a `TERMIXGO.md` for the project |
 | `/cost` | token usage and estimated spend for this session |
 | `/ps [kill <handle>]` | list background processes, or stop one |
@@ -603,8 +604,12 @@ issue.
 | `~/.termixgo/secrets.json` | provider keys and the bot token, owner-only |
 | `~/.termixgo/sessions/*.json` | saved conversations, owner-only |
 | `~/.termixgo/memory.md` | global learned memory |
+| `~/.termixgo/cron/jobs.json` | scheduled assistant jobs |
+| `~/.termixgo/audit.jsonl` | metadata-only ledger of turns and tool calls |
 | `<workspace>/.termixgo/memory.md` | project learned memory |
 | `<workspace>/.termixgo/skills/` | project skills |
+| `<workspace>/.termixgo/skill-proposals/` | staged skill changes awaiting review |
+| `<workspace>/.termixgo/worktrees.json` | tracked parallel worktrees |
 | `<workspace>/.termixgo/pipelines/` | orchestration pipelines |
 | `<workspace>/.termixgo/search.db` | the full-text index behind `search_memory` |
 | `<workspace>/.termixgo/error-journal.jsonl` | the error journal |

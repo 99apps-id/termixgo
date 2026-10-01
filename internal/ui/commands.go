@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -195,6 +196,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashCron(args)
 	case "heartbeat":
 		return m.slashHeartbeat(args)
+	case "audit":
+		return m.slashAudit(args)
 	case "init":
 		if !m.app.HasModel() {
 			m.blocks = append(m.blocks, block{kind: blockError, text: "Pick a model first with /setup."})
@@ -1016,6 +1019,42 @@ func (m *Model) slashHeartbeat(args string) (tea.Model, tea.Cmd) {
 			m.blocks = append(m.blocks, block{kind: blockNotice, text: "Heartbeat runs every " + trimmed + "."})
 		}
 	}
+	m.refresh()
+	return m, nil
+}
+
+// slashAudit prints the newest metadata-only ledger entries.
+func (m *Model) slashAudit(args string) (tea.Model, tea.Cmd) {
+	limit := 20
+	if fields := strings.Fields(args); len(fields) > 0 {
+		if value, err := strconv.Atoi(fields[0]); err == nil && value > 0 {
+			limit = value
+		}
+	}
+	entries, err := m.app.AuditTail(limit)
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		m.refresh()
+		return m, nil
+	}
+	if len(entries) == 0 {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: "No audit entries yet."})
+		m.refresh()
+		return m, nil
+	}
+	lines := []string{fmt.Sprintf("Audit (%d):", len(entries))}
+	for _, entry := range entries {
+		status := "ok"
+		if !entry.OK {
+			status = "fail"
+		}
+		detail := entry.StopReason
+		if entry.Kind == "tool" && entry.Millis > 0 {
+			detail = fmt.Sprintf("%dms", entry.Millis)
+		}
+		lines = append(lines, fmt.Sprintf("  %s  %-5s %-16s %-5s %s", entry.Time.Format("01-02 15:04:05"), entry.Kind, entry.Name, status, detail))
+	}
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
 	m.refresh()
 	return m, nil
 }

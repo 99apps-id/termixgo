@@ -40,6 +40,13 @@ func TestCronCommandRejectsABadSchedule(t *testing.T) {
 	}
 }
 
+func TestAuditCommandRuns(t *testing.T) {
+	model := chatModel(t)
+	if _, out := runSlash(t, model, "/audit"); !strings.Contains(out, "audit") && !strings.Contains(out, "Audit") {
+		t.Fatalf("audit output = %q", out)
+	}
+}
+
 // TestHeartbeatCommandToggles covers the periodic self-check switch.
 func TestHeartbeatCommandToggles(t *testing.T) {
 	model := chatModel(t)

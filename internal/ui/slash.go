@@ -94,6 +94,7 @@ var slashCommands = []SlashCommand{
 		{Value: "30m", Detail: "run the heartbeat every 30 minutes"},
 		{Value: "2h", Detail: "run the heartbeat every 2 hours"},
 	}},
+	{Trigger: "/audit", Args: "[count]", Summary: "Show recent audited actions"},
 	{Trigger: "/init", Args: "", Summary: "Generate a TERMIXGO.md for this project"},
 	{Trigger: "/cost", Args: "", Summary: "Show token usage for this session"},
 	{Trigger: "/ps", Args: "[kill <handle>]", Summary: "List background processes, or stop one"},

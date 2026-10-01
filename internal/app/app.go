@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/agent"
+	"github.com/99apps-id/termixgo/internal/audit"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/cron"
 	"github.com/99apps-id/termixgo/internal/mcp"
@@ -130,6 +131,10 @@ type App struct {
 	// journal records recurring tool failures so the agent can learn from them.
 	journal *agent.ErrorJournal
 
+	// audit is the metadata-only ledger of finished turns and tool calls. A
+	// write failure never fails a turn, so it is best effort.
+	audit *audit.Ledger
+
 	// toolCalls ledgers finished tool calls for /cost. It lives beside usage
 	// because money comes from the price table while the shape of a turn
 	// comes from here.
@@ -172,6 +177,11 @@ func New(workspace string) (*App, error) {
 	journal, err := agent.NewErrorJournal(workspace)
 	if err == nil {
 		instance.journal = journal
+	}
+	if path, err := audit.DefaultPath(); err == nil {
+		if ledger, err := audit.Open(path); err == nil {
+			instance.audit = ledger
+		}
 	}
 	// The manager outlives a turn, so its emitter is installed once here rather
 	// than being handed a per-run environment.
@@ -764,6 +774,7 @@ func (a *App) Shutdown() {
 }
 
 func (a *App) emit(event agent.Event) {
+	a.recordAudit(event)
 	if event.Kind == agent.EventUsage {
 		a.AddUsage(event.Usage)
 	}
@@ -791,6 +802,45 @@ func (a *App) emit(event agent.Event) {
 		// Dropping a display event is better than blocking the run; the
 		// final state is always reconciled by the UI.
 	}
+}
+
+// recordAudit appends a metadata-only line for a finished tool call or turn.
+// The ledger never carries a prompt, a result or a secret.
+func (a *App) recordAudit(event agent.Event) {
+	ledger := a.audit
+	if ledger == nil {
+		return
+	}
+	switch event.Kind {
+	case agent.EventToolEnd:
+		_ = ledger.Record(audit.Entry{
+			Workspace: a.workspace,
+			Kind:      "tool",
+			Name:      event.ToolName,
+			OK:        event.ToolOK,
+			Millis:    event.ToolMillis,
+		})
+	case agent.EventTurnEnd:
+		_ = ledger.Record(audit.Entry{
+			Workspace:    a.workspace,
+			Kind:         "turn",
+			OK:           event.StopReason == "stop",
+			StopReason:   event.StopReason,
+			InputTokens:  event.Usage.PromptTokens,
+			OutputTokens: event.Usage.CompletionTokens,
+		})
+	}
+}
+
+// AuditTail returns the newest audit entries, oldest first.
+func (a *App) AuditTail(limit int) ([]audit.Entry, error) {
+	a.mu.Lock()
+	ledger := a.audit
+	a.mu.Unlock()
+	if ledger == nil {
+		return nil, nil
+	}
+	return ledger.Tail(limit)
 }
 
 func (a *App) approve(request agent.ApprovalRequest) agent.Decision {

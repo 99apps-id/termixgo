@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/app"
+	"github.com/99apps-id/termixgo/internal/audit"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/cron"
 	"github.com/99apps-id/termixgo/internal/mcp"
@@ -95,6 +97,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runCron(args[1:], stdout)
 	case "heartbeat":
 		return runHeartbeat(args[1:], stdout)
+	case "audit":
+		return runAudit(args[1:], stdout)
 	case "service":
 		return runService(args[1:], stdout)
 	case "completion":
@@ -714,6 +718,47 @@ func runHeartbeat(args []string, stdout io.Writer) error {
 	return nil
 }
 
+// runAudit prints the newest metadata-only ledger entries.
+func runAudit(args []string, stdout io.Writer) error {
+	limit := 50
+	if len(args) > 0 {
+		value, err := strconv.Atoi(strings.TrimSpace(args[0]))
+		if err != nil || value <= 0 {
+			return fmt.Errorf("usage: termixgo audit [count]")
+		}
+		limit = value
+	}
+	path, err := audit.DefaultPath()
+	if err != nil {
+		return err
+	}
+	ledger, err := audit.Open(path)
+	if err != nil {
+		return err
+	}
+	entries, err := ledger.Tail(limit)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Fprintln(stdout, "No audit entries yet.")
+		return nil
+	}
+	for _, entry := range entries {
+		status := "ok"
+		if !entry.OK {
+			status = "fail"
+		}
+		detail := entry.StopReason
+		if entry.Kind == "tool" && entry.Millis > 0 {
+			detail = fmt.Sprintf("%dms", entry.Millis)
+		}
+		fmt.Fprintf(stdout, "%s  %-5s %-16s %-5s %s\n",
+			entry.Time.Format("2006-01-02 15:04:05"), entry.Kind, entry.Name, status, detail)
+	}
+	return nil
+}
+
 const (
 	serviceTaskName = "TermixgoAssistant"
 	launchdLabel    = "com.termixgo.assistant"
@@ -1074,6 +1119,7 @@ Usage:
                                   Manage scheduled assistant jobs
   termixgo heartbeat [status|on|off|interval <duration>]
                                   Periodic self-check for the 24/7 assistant
+  termixgo audit [count]          Show recent audited actions (metadata only)
   termixgo serve                  Run the Telegram assistant 24/7
   termixgo service [install|uninstall|status]
                                   Manage auto-start (systemd, launchd, schtasks)
