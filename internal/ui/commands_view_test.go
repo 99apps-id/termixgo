@@ -1086,8 +1086,9 @@ func writeProbeCommand(t *testing.T, model *Model) {
 func TestCustomCommandAppearsInMenu(t *testing.T) {
 	model := chatModel(t)
 	writeProbeCommand(t, model)
-	model.composer.SetValue("/rev")
-	model.updateSlashMatches()
+	model = openSlashPalette(t, model)
+	model.slashInput = "/rev"
+	model.refreshSlashMenu()
 	found := false
 	for _, match := range model.slashMatches {
 		if match.Trigger == "/review" {

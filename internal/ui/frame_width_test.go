@@ -174,8 +174,9 @@ func TestMenuFitsTheTerminalWidth(t *testing.T) {
 	for _, width := range []int{50, 60, 80, 120} {
 		model := chatModel(t)
 		resize(model, width, 30)
-		model.composer.SetValue("/st")
-		model.updateSlashMatches()
+		model.openSlashMenu()
+		model.slashInput = "/st"
+		model.refreshSlashMenu()
 		if model.slashMatches == nil {
 			t.Fatalf("/st matched no command, so the menu renderer is not exercised")
 		}

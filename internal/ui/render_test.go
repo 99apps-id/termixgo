@@ -355,14 +355,10 @@ func TestComposerAndHintsChangeWhileRunning(t *testing.T) {
 // discoverability path for the commands.
 func TestViewSlashMenuMarksTheSelection(t *testing.T) {
 	model := chatModel(t)
-	// The composer is what triggers the menu, so the text is set the way a
-	// real keystroke would leave it.
-	model.composer.SetValue("/")
-	model.updateSlashMatches()
-	if len(model.slashMatches) == 0 {
+	typed := openSlashPalette(t, model)
+	if len(typed.slashMatches) == 0 {
 		t.Fatalf("the slash menu should have matches")
 	}
-	typed := model
 	rendered := stripANSI(typed.viewSlashMenu())
 	if !strings.Contains(rendered, "> ") {
 		t.Errorf("rendered = %q, want the selected row marked", rendered)

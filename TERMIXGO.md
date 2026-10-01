@@ -83,7 +83,10 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
 - A slash command is a local control and is never handed to the model as text.
   Read-only commands and the ones that act on the live turn run while a turn is
   in flight; a command that would start work, such as `/new`, is queued and runs
-  as a command when the turn ends.
+  as a command when the turn ends. The command menu is opened deliberately: a
+  slash typed while composing stays literal, and only a bare slash committed
+  with Enter opens the palette. Typing never summons the menu, so a path such as
+  `c:/project` or prose that contains a slash stays intact.
 - `search_memory` is backed by the FTS5 store in `internal/search`, which the app
   opens at `<workspace>/.termixgo/search.db`. The database is state, not content:
   the workspace walk skips that directory, and a checkpoint stash excludes it.

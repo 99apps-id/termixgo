@@ -40,8 +40,10 @@ func TestWorkingIndicatorSurvivesAHiddenHintsRow(t *testing.T) {
 	model.running = true
 	model.runStarted = time.Now()
 
-	model.composer.SetValue("/st")
-	model.updateSlashMatches()
+	model = openSlashPalette(t, model)
+	for _, stroke := range []string{"s", "t"} {
+		model = press(t, model, stroke)
+	}
 	if len(model.slashMatches) == 0 {
 		t.Fatalf("/st matched no command, so no menu replaces the hints row")
 	}

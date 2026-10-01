@@ -122,8 +122,9 @@ func ParseSlash(input string) (name, args string, ok bool) {
 	return strings.ToLower(body), "", true
 }
 
-// MatchSlash returns the commands whose trigger starts with the typed prefix,
-// used by the composer's inline menu.
+// MatchSlash returns the commands whose trigger starts with the typed prefix.
+// It backs the command palette and on-demand Tab/Enter completion; there is no
+// always-on inline menu.
 func MatchSlash(input string) []SlashCommand {
 	trimmed := strings.TrimSpace(input)
 	if !strings.HasPrefix(trimmed, "/") || strings.ContainsAny(trimmed, " \n\t") {

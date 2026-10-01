@@ -101,16 +101,22 @@ func TestApprovalViewRendersChoices(t *testing.T) {
 	}
 }
 
-func TestSlashMenuAppearsWhileTyping(t *testing.T) {
-	model := newTestModel(t)
-	resize(model, 100, 30)
-	model.current = modeChat
-	model.composer.SetValue("/mo")
-	model.updateSlashMatches()
-	if len(model.slashMatches) != 1 || model.slashMatches[0].Trigger != "/model" {
-		t.Fatalf("expected the /model entry, got %+v", model.slashMatches)
+// TestSlashMenuAppearsOnEnter is the discoverability contract after the path
+// fix: the command menu must not appear while ordinary typing, but Enter on a
+// bare slash must bring it up.
+func TestSlashMenuAppearsOnEnter(t *testing.T) {
+	model := chatModel(t)
+
+	typed := press(t, model, "/")
+	if view := stripANSI(typed.View()); strings.Contains(view, "Show or switch the model") {
+		t.Errorf("the slash menu must not appear while typing:\n%s", view)
 	}
-	if view := stripANSI(model.View()); !strings.Contains(view, "Show or switch the model") {
+
+	opened := press(t, typed, "enter")
+	if len(opened.slashMatches) == 0 {
+		t.Fatalf("Enter on / should open the menu")
+	}
+	if view := stripANSI(opened.View()); !strings.Contains(view, "Show or switch the model") {
 		t.Errorf("the slash menu should render:\n%s", view)
 	}
 }

@@ -44,8 +44,7 @@ func TestFrameNeverExceedsTheTerminalHeight(t *testing.T) {
 			states := map[string]func(*Model){
 				"chat": func(model *Model) { model.refresh() },
 				"slash menu": func(model *Model) {
-					model.composer.SetValue("/")
-					model.updateSlashMatches()
+					model.openSlashMenu()
 				},
 				"mention menu": func(model *Model) {
 					for index := 0; index < 40; index++ {
@@ -106,8 +105,7 @@ func TestOverlayFrameFitsBeforeTheClamp(t *testing.T) {
 		resize(menu, size.width, size.height)
 		menu.blocks = append(menu.blocks, block{kind: blockAssistant, text: strings.Repeat("chatter ", 200)})
 		menu.refresh()
-		menu.composer.SetValue("/")
-		menu.updateSlashMatches()
+		menu.openSlashMenu()
 		if got := frameHeight(menu.screen()); got > size.height {
 			t.Errorf("slash menu at %s raw frame is %d rows", name, got)
 		}
@@ -189,8 +187,7 @@ func manyItems(n int) []pickerItem {
 func TestLongSlashMenuIsWindowed(t *testing.T) {
 	model := chatModel(t)
 	resize(model, 100, 24)
-	model.composer.SetValue("/")
-	model.updateSlashMatches()
+	model.openSlashMenu()
 	if len(model.slashMatches) < 20 {
 		t.Fatalf("the fixture needs the full catalogue, got %d matches", len(model.slashMatches))
 	}

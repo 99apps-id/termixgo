@@ -513,31 +513,22 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if value == "" {
 			return m, nil
 		}
-		// The last row is the way back: highlighting it and pressing Enter
-		// or Tab closes the menu and keeps the typed text, for operators
-		// who navigated past the command they wanted.
-		if len(m.slashMatches) > 0 && m.slashCursor == len(m.slashMatches) {
-			m.slashMatches = nil
-			m.refresh()
+		// A bare slash committed with Enter opens the command palette. A slash
+		// anywhere else is ordinary text, so typing a path such as c:/project
+		// or reading /home/user stays in the composer instead of being pulled
+		// into the menu.
+		if value == "/" {
+			m.openSlashMenu()
 			return m, nil
 		}
-		// Accept the highlighted slash completion: typing "/stat" and
-		// pressing Enter must run /status, not report an unknown command.
-		// Text with arguments is already explicit and passes through.
-		// The menu cache can be stale on the very first Enter, so fall back
-		// to a fresh match instead of trusting it blindly.
+		// Accept a unique slash completion: typing "/stat" and pressing Enter
+		// runs /status, not reports an unknown command. An exact trigger and
+		// text with arguments pass through untouched. No menu is on screen, so
+		// the match is computed here on demand.
 		if !strings.Contains(value, " ") && strings.HasPrefix(value, "/") {
-			matches := m.slashMatches
-			if len(matches) == 0 {
-				matches = MatchSlash(value)
-			}
-			if len(matches) > 0 {
-				cursor := m.slashCursor
-				if cursor < 0 || cursor >= len(matches) {
-					cursor = 0
-				}
-				if matches[cursor].Trigger != value {
-					value = matches[cursor].Trigger
+			if _, ok := FindSlash(value); !ok {
+				if matches := MatchSlash(value); len(matches) > 0 {
+					value = matches[0].Trigger
 				}
 			}
 		}
@@ -610,23 +601,22 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.updateSlashMatches()
 			return m, nil
 		}
-		if len(m.slashMatches) > 0 {
-			if m.slashCursor == len(m.slashMatches) {
-				// Tab on the back row steps back to typing as Enter does.
-				m.slashMatches = nil
-				return m, nil
+		// Tab still completes a typed slash command, even though no menu is
+		// shown: "/tr" becomes /trust and a command with a closed argument set
+		// opens its choices. The match is on demand, not a cached list.
+		if value := m.composer.Value(); !strings.ContainsAny(value, " \n\t") && strings.HasPrefix(value, "/") {
+			if matches := MatchSlash(value); len(matches) > 0 {
+				trigger := strings.TrimPrefix(matches[0].Trigger, "/")
+				m.composer.SetValue(matches[0].Trigger + " ")
+				m.updateSlashMatches()
+				if len(SlashOptions(trigger)) == 0 {
+					return m, nil
+				}
+				// The command takes an argument from a known set, so completing
+				// it to bare text would leave the operator to remember the
+				// values. Opening the argument menu is what makes Tab useful.
+				return m.openSlashArgs(trigger)
 			}
-			trigger := strings.TrimPrefix(m.slashMatches[m.slashCursor].Trigger, "/")
-			m.composer.SetValue(m.slashMatches[m.slashCursor].Trigger + " ")
-			m.slashMatches = nil
-			if len(SlashOptions(trigger)) == 0 {
-				return m, nil
-			}
-			// The command takes an argument from a known set, so completing it
-			// to bare text would leave the operator to remember the values.
-			// Opening the argument menu is what makes the menu usable rather
-			// than read-only.
-			return m.openSlashArgs(trigger)
 		}
 	case "pgup":
 		m.viewport.HalfViewUp()
@@ -644,12 +634,6 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 		m.refresh()
 		return m, nil
-	}
-
-	if key.Type == tea.KeyRunes && len(key.Runes) > 0 {
-		if m.beginSlashEntry(string(key.Runes)) {
-			return m, textareaBlink()
-		}
 	}
 
 	var cmd tea.Cmd
@@ -2011,24 +1995,20 @@ func (m *Model) setSlashMatches(matches []SlashCommand) {
 	m.updateMentionMatches()
 }
 
-// beginSlashEntry starts an interactive slash entry from an empty composer.
-// The slash keystroke is consumed into popup state rather than inserted, so
-// the composer keeps the ordinary text from before the popup opened.
-func (m *Model) beginSlashEntry(text string) bool {
+// openSlashMenu enters the command palette. It is what a bare slash committed
+// with Enter does: the slash becomes popup state so the composer is empty while
+// the operator filters the command list. Ordinary typing never opens the
+// palette, which keeps a slash inside a path or a sentence as plain text.
+func (m *Model) openSlashMenu() {
 	if m.slashOpen || m.current != modeChat || m.pendingApproval != nil || m.pendingAsk != nil {
-		return false
+		return
 	}
-	anchor := m.composer.Value()
-	trimmed := strings.TrimSpace(text)
-	if !strings.HasPrefix(trimmed, "/") {
-		return false
-	}
-	m.slashAnchor = anchor
+	m.slashAnchor = ""
 	m.slashOpen = true
-	m.slashInput = trimmed
+	m.slashInput = "/"
+	m.composer.SetValue("")
 	m.refreshSlashMenu()
 	m.refresh()
-	return true
 }
 
 // cancelSlashMenu exits the interactive entry and restores ordinary typing.
@@ -2051,19 +2031,17 @@ func (m *Model) closeSlashEntry() {
 	m.updateMentionMatches()
 }
 
-// updateSlashMatches recomputes the inline command menu.
+// updateSlashMatches refreshes the command palette or clears it. The command
+// list is never derived from ordinary composer text: it appears only inside the
+// palette the operator opened with Enter on a bare slash, so typing a slash as
+// part of a path does not summon a menu.
 func (m *Model) updateSlashMatches() {
 	if m.slashOpen {
 		m.refreshSlashMenu()
 		return
 	}
-	m.ensureCustomCommands()
-	value := m.composer.Value()
-	matches := MatchSlash(value)
-	matches = append(matches, m.matchCustom(value)...)
-	// The cursor may rest on the back row past the end, which stays valid
-	// while the match set is unchanged.
-	m.setSlashMatches(matches)
+	m.slashMatches = nil
+	m.updateMentionMatches()
 }
 
 // slashSignature identifies a menu set for the cursor: same length with

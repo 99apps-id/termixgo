@@ -206,6 +206,11 @@ command typed mid-turn is queued and runs when the turn ends.
 | `/worktree [list\|add\|remove]` | git worktrees, for a second task in parallel |
 | `/exit` | quit |
 
+Type `/` on its own and press `Enter` to open the command menu. The menu never
+appears while you are typing, so a slash inside a path or a sentence is plain
+text: `c:/project` and `/home/you` stay typeable, and the request is sent as
+written.
+
 A command with a fixed set of arguments offers them as a menu. Press `Tab` on
 `/trust`, or type `/trust ` and `Enter`, and the choices are listed with what
 each one does. A value that only starts an argument, such as `delete` for

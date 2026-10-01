@@ -98,6 +98,18 @@ func display(model *Model) string {
 	return stripANSI(model.View())
 }
 
+// openSlashPalette opens the command palette the way an operator does: a bare
+// slash committed with Enter. Typing the slash alone must never open it, so the
+// helper also pins that half of the rule.
+func openSlashPalette(t *testing.T, model *Model) *Model {
+	t.Helper()
+	typed := press(t, model, "/")
+	if typed.slashOpen {
+		t.Fatalf("a slash alone must not open the palette")
+	}
+	return press(t, typed, "enter")
+}
+
 // ---------------------------------------------------------------- event folding
 
 // TestThinkingAccumulatesThenCloses is the reasoning display contract: chunks
@@ -503,7 +515,7 @@ func TestEnterWhileRunningQueues(t *testing.T) {
 
 func TestTabInSlashEntryRunsWithoutLeavingSlash(t *testing.T) {
 	model := chatModel(t)
-	typed := press(t, model, "/")
+	typed := openSlashPalette(t, model)
 	for _, stroke := range []string{"m", "o"} {
 		typed = press(t, typed, stroke)
 	}
@@ -522,8 +534,7 @@ func TestTabInSlashEntryRunsWithoutLeavingSlash(t *testing.T) {
 
 func TestArrowKeysMoveTheSlashCursor(t *testing.T) {
 	model := chatModel(t)
-	model.composer.SetValue("/")
-	model.updateSlashMatches()
+	model = openSlashPalette(t, model)
 	if len(model.slashMatches) < 3 {
 		t.Fatalf("the fixture needs at least three commands, got %d", len(model.slashMatches))
 	}
@@ -543,30 +554,52 @@ func TestArrowKeysMoveTheSlashCursor(t *testing.T) {
 	}
 }
 
-// TestSlashKeyOpensMenuWithoutLeavingSlashInComposer reproduces the typed
-// slash bug: pressing / must open the popup menu, not put a slash into the
-// composer text.
-func TestSlashKeyOpensMenuWithoutLeavingSlashInComposer(t *testing.T) {
+// TestSlashAloneStaysLiteralUntilEnter is the path fix: pressing / leaves a
+// literal slash and no menu, so a request such as "audit di c:/project" stays
+// typeable. Enter on the bare slash is what opens the palette.
+func TestSlashAloneStaysLiteralUntilEnter(t *testing.T) {
 	model := chatModel(t)
 	typed := press(t, model, "/")
 
-	if got := typed.composer.Value(); got != "" {
-		t.Fatalf("composer = %q after /, want no slash text", got)
+	if typed.slashOpen || len(typed.slashMatches) != 0 {
+		t.Fatalf("a slash alone must not open the menu")
 	}
-	if len(typed.slashMatches) == 0 {
-		t.Fatalf("pressing / should open the slash menu")
+	if got := typed.composer.Value(); got != "/" {
+		t.Fatalf("composer = %q after /, want the literal slash", got)
 	}
-	resize(typed, 50, 16)
-	if got := frameHeight(typed.screen()); got > 16 {
+	opened := press(t, typed, "enter")
+	if !opened.slashOpen || len(opened.slashMatches) == 0 {
+		t.Fatalf("Enter on / should open the slash menu")
+	}
+	resize(opened, 50, 16)
+	if got := frameHeight(opened.screen()); got > 16 {
 		t.Fatalf("the slash entry overlay drew %d rows in a 16-row terminal", got)
 	}
 }
 
-// TestSlashTypingFiltersWithoutEchoingSlash proves the rest of the keystrokes
-// filter the popup instead of accumulating slash text in the composer.
-func TestSlashTypingFiltersWithoutEchoingSlash(t *testing.T) {
+// TestSlashInsideProseStaysLiteral is the Windows-path regression: a slash in
+// the middle of a request is ordinary text. Typing c:/project must insert the
+// slash rather than stealing the keystroke into the command popup.
+func TestSlashInsideProseStaysLiteral(t *testing.T) {
 	model := chatModel(t)
-	typed := press(t, model, "/")
+	typed := model
+	for _, stroke := range []string{"c", ":", "/", "p", "r", "o", "j", "e", "c", "t"} {
+		typed = press(t, typed, stroke)
+	}
+
+	if typed.slashOpen || len(typed.slashMatches) != 0 {
+		t.Fatalf("a slash inside prose must not open the slash menu, matches=%+v", typed.slashMatches)
+	}
+	if got := typed.composer.Value(); got != "c:/project" {
+		t.Fatalf("composer = %q, want %q", got, "c:/project")
+	}
+}
+
+// TestSlashTypingFiltersThePalette proves the keystrokes after Enter filter the
+// palette while the composer stays empty.
+func TestSlashTypingFiltersThePalette(t *testing.T) {
+	model := chatModel(t)
+	typed := openSlashPalette(t, model)
 	for _, stroke := range []string{"s", "t", "a", "t"} {
 		typed = press(t, typed, stroke)
 	}
@@ -588,7 +621,7 @@ func TestSlashTypingFiltersWithoutEchoingSlash(t *testing.T) {
 // popup while its composer value remains ordinary text.
 func TestSlashEntryKeepsThePopupVisible(t *testing.T) {
 	model := chatModel(t)
-	typed := press(t, model, "/")
+	typed := openSlashPalette(t, model)
 	for _, stroke := range []string{"x", "y", "z"} {
 		typed = press(t, typed, stroke)
 	}
@@ -609,7 +642,7 @@ func TestSlashEntryKeepsThePopupVisible(t *testing.T) {
 // resolves through the ordinary command path, then leaves an empty composer.
 func TestSlashEntryReportsAnUnknownCommand(t *testing.T) {
 	model := chatModel(t)
-	typed := press(t, model, "/")
+	typed := openSlashPalette(t, model)
 	for _, stroke := range []string{"x", "y", "z"} {
 		typed = press(t, typed, stroke)
 	}
@@ -632,7 +665,7 @@ func TestSlashEntryReportsAnUnknownCommand(t *testing.T) {
 // composer.
 func TestSlashEntryBackRowAndEscapeDiscardTheToken(t *testing.T) {
 	model := chatModel(t)
-	typed := press(t, model, "/")
+	typed := openSlashPalette(t, model)
 	for _, stroke := range []string{"s", "t", "a", "t"} {
 		typed = press(t, typed, stroke)
 	}
@@ -646,7 +679,7 @@ func TestSlashEntryBackRowAndEscapeDiscardTheToken(t *testing.T) {
 		t.Fatalf("the back row should discard the slash token, got %q", got)
 	}
 
-	typed = press(t, model, "/")
+	typed = openSlashPalette(t, model)
 	typed = press(t, typed, "s")
 	escaped := press(t, typed, "esc")
 	if escaped.slashOpen || len(escaped.slashMatches) != 0 {
@@ -661,7 +694,7 @@ func TestSlashEntryBackRowAndEscapeDiscardTheToken(t *testing.T) {
 // closed argument set keeps its unfinished line in popup/picker state.
 func TestSlashEntryTabOpensArgumentsWithoutLeavingSlash(t *testing.T) {
 	model := chatModel(t)
-	typed := press(t, model, "/")
+	typed := openSlashPalette(t, model)
 	for _, stroke := range []string{"t", "r", "u", "s", "t"} {
 		typed = press(t, typed, stroke)
 	}
@@ -682,7 +715,7 @@ func TestSlashEntryTabOpensArgumentsWithoutLeavingSlash(t *testing.T) {
 // back to the popup rather than reappearing in the composer.
 func TestCancellingSlashArgumentsReturnsToThePopup(t *testing.T) {
 	model := chatModel(t)
-	typed := press(t, model, "/")
+	typed := openSlashPalette(t, model)
 	for _, stroke := range []string{"t", "r", "u", "s", "t"} {
 		typed = press(t, typed, stroke)
 	}
@@ -700,32 +733,28 @@ func TestCancellingSlashArgumentsReturnsToThePopup(t *testing.T) {
 	}
 }
 
-// TestSlashAfterProseStaysProse proves that typing a slash after prose moves
-// the text into the slash popup flow instead of leaving a stray slash in the
-// composer. The anchor is preserved so the operator can back out without
-// losing what they had typed.
-func TestSlashAfterProseStaysProse(t *testing.T) {
+// TestSlashAfterProseStaysLiteral pins the rule the other way: a slash typed
+// after prose is plain text, so the operator keeps typing into the same line
+// instead of being thrown into the menu. Only a line that is exactly a slash
+// opens the palette.
+func TestSlashAfterProseStaysLiteral(t *testing.T) {
 	model := chatModel(t)
 	model.composer.SetValue("draft")
 
 	typed := press(t, model, "/")
-	if !typed.slashOpen {
-		t.Fatalf("a slash after prose must open the popup flow")
+	if typed.slashOpen || len(typed.slashMatches) != 0 {
+		t.Fatalf("a slash after prose must not open the popup")
 	}
-	if got := typed.composer.Value(); got != "draft" {
-		t.Fatalf("composer = %q, want the anchor preserved", got)
-	}
-	if got := typed.slashInput; got != "/" {
-		t.Fatalf("slashInput = %q, want the slash in the popup state", got)
+	if got := typed.composer.Value(); got != "draft/" {
+		t.Fatalf("composer = %q, want the slash appended as text", got)
 	}
 }
 
-// TestSlashEntrySpaceKeepsArgumentsInThePopup proves a trailing space stays in
-// slash state instead of inserting an explicit slash line into the composer.
-// The ordinary Enter path still opens the argument menu from there.
-func TestSlashEntrySpaceKeepsArgumentsInThePopup(t *testing.T) {
+// TestSlashSpaceOpensArguments keeps the argument route discoverable: a command
+// followed by a space, committed with Enter from the palette, opens its choices.
+func TestSlashSpaceOpensArguments(t *testing.T) {
 	model := chatModel(t)
-	typed := press(t, model, "/")
+	typed := openSlashPalette(t, model)
 	for _, stroke := range []string{"t", "r", "u", "s", "t", " "} {
 		typed = press(t, typed, stroke)
 	}
@@ -756,7 +785,7 @@ func TestSlashEntryDuringARunRoutesCommandsCorrectly(t *testing.T) {
 	for _, command := range []string{"/status", "/new"} {
 		model := chatModel(t)
 		model.running = true
-		typed := press(t, model, "/")
+		typed := openSlashPalette(t, model)
 		for _, stroke := range strings.Split(strings.TrimPrefix(command, "/"), "") {
 			typed = press(t, typed, stroke)
 		}
@@ -789,7 +818,7 @@ func TestSlashEntryDuringARunRoutesCommandsCorrectly(t *testing.T) {
 func TestEscDuringSlashEntryStopsTheRunningTurn(t *testing.T) {
 	model := chatModel(t)
 	model.running = true
-	typed := press(t, model, "/")
+	typed := openSlashPalette(t, model)
 	if !typed.slashOpen {
 		t.Fatalf("slash should open the popup while a turn runs")
 	}
@@ -815,15 +844,16 @@ func TestEscDuringSlashEntryStopsTheRunningTurn(t *testing.T) {
 // to the command instead of silently closing the menu on Enter.
 func TestSlashCursorResetsWhenMatchesChange(t *testing.T) {
 	model := chatModel(t)
-	model.composer.SetValue("/model")
-	model.updateSlashMatches()
+	model = openSlashPalette(t, model)
+	model.slashInput = "/model"
+	model.refreshSlashMenu()
 	if len(model.slashMatches) != 1 {
 		t.Fatalf("the fixture needs one match, got %+v", model.slashMatches)
 	}
 	model.slashCursor = len(model.slashMatches)
 
-	model.composer.SetValue("/harness")
-	model.updateSlashMatches()
+	model.slashInput = "/harness"
+	model.refreshSlashMenu()
 	if model.slashCursor != 0 {
 		t.Fatalf("a new match set should highlight the command, got cursor %d", model.slashCursor)
 	}
@@ -834,24 +864,22 @@ func TestSlashCursorResetsWhenMatchesChange(t *testing.T) {
 	}
 }
 
-// TestSlashBackRowClosesWithoutRunning proves the last menu row is a way
-// out: Enter or Tab there keeps the typed text and runs nothing.
+// TestSlashBackRowClosesWithoutRunning proves the last menu row is a way out:
+// Enter or Tab there closes the palette and runs nothing.
 func TestSlashBackRowClosesWithoutRunning(t *testing.T) {
 	for _, keyName := range []string{"enter", "tab"} {
 		model := chatModel(t)
-		model.composer.SetValue("/stat")
-		model.updateSlashMatches()
-		if len(model.slashMatches) == 0 {
+		typed := openSlashPalette(t, model)
+		typed.slashInput = "/stat"
+		typed.refreshSlashMenu()
+		if len(typed.slashMatches) == 0 {
 			t.Fatalf("the menu should offer a completion for /stat")
 		}
-		model.slashCursor = len(model.slashMatches)
+		typed.slashCursor = len(typed.slashMatches)
 
-		updated := press(t, model, keyName)
-		if len(updated.slashMatches) != 0 {
+		updated := press(t, typed, keyName)
+		if updated.slashOpen || len(updated.slashMatches) != 0 {
 			t.Errorf("%s on back should close the menu", keyName)
-		}
-		if got := updated.composer.Value(); !strings.Contains(got, "/stat") {
-			t.Errorf("%s on back should keep the text, got %q", keyName, got)
 		}
 		if updated.running {
 			t.Errorf("%s on back must not start a run", keyName)
@@ -862,36 +890,30 @@ func TestSlashBackRowClosesWithoutRunning(t *testing.T) {
 	}
 }
 
-// TestEscBacksOutOfTheMenuFirst pins the two-stage escape: the first press
-// closes the popup and keeps the text, the second clears the composer.
-func TestEscBacksOutOfTheMenuFirst(t *testing.T) {
+// TestEscClearsTypedSlashTextWithoutAMenu pins the rule that follows from the
+// new input model: with no menu open, Esc clears the composer in one press,
+// because a typed slash command is ordinary text until it is submitted.
+func TestEscClearsTypedSlashTextWithoutAMenu(t *testing.T) {
 	model := chatModel(t)
 	model.composer.SetValue("/stat")
 	model.updateSlashMatches()
-	if len(model.slashMatches) == 0 {
-		t.Fatalf("the menu should be open")
+	if len(model.slashMatches) != 0 {
+		t.Fatalf("a typed command must not open a menu")
 	}
 
-	backed := press(t, model, "esc")
-	if len(backed.slashMatches) != 0 {
-		t.Errorf("first Esc should close the menu")
-	}
-	if got := backed.composer.Value(); got != "/stat" {
-		t.Errorf("first Esc should keep the text, got %q", got)
-	}
-
-	cleared := press(t, backed, "esc")
+	cleared := press(t, model, "esc")
 	if got := cleared.composer.Value(); got != "" {
-		t.Errorf("second Esc should clear the composer, got %q", got)
+		t.Errorf("Esc should clear the composer, got %q", got)
 	}
 }
 
 // TestSlashMenuShowsTheWayBack keeps the affordance discoverable: the back
-// row and its hint must render.
+// row and its hint must render in the palette.
 func TestSlashMenuShowsTheWayBack(t *testing.T) {
 	model := chatModel(t)
-	model.composer.SetValue("/mo")
-	model.updateSlashMatches()
+	model = openSlashPalette(t, model)
+	model.slashInput = "/mo"
+	model.refreshSlashMenu()
 	view := stripANSI(model.View())
 	for _, want := range []string{"<- back", "Esc back"} {
 		if !strings.Contains(view, want) {
