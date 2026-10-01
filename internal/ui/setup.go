@@ -29,6 +29,10 @@ const (
 	setupTelegramToken
 	setupTelegramPair
 	setupDone
+	// setupOAuth is the login step for a provider that uses a device code
+	// instead of an API key. It is last so the numeric order of the others is
+	// unchanged.
+	setupOAuth
 )
 
 // setupTitlePrefix brands every wizard title with one wordmark so the picker
@@ -66,7 +70,10 @@ func setupProviderItems() []pickerItem {
 	items := make([]pickerItem, 0, len(providers))
 	for _, info := range providers {
 		extra := "local"
-		if info.NeedsKey {
+		switch {
+		case info.OAuth:
+			extra = "login required"
+		case info.NeedsKey:
 			extra = "API key required"
 		}
 		items = append(items, pickerItem{ID: info.ID, Label: info.Label, Detail: info.DefaultBaseURL, Extra: extra})
@@ -114,6 +121,12 @@ func (m *Model) handleSetupKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(key)
 		return m, cmd
+
+	case setupOAuth:
+		if key.String() == "enter" {
+			return m.confirmOAuthLogin()
+		}
+		return m, nil
 
 	case setupCustomModel:
 		if key.String() == "enter" {
@@ -194,6 +207,20 @@ func (m *Model) saveEndpoint() (tea.Model, tea.Cmd) {
 	m.input.Focus()
 	m.current = modeSetup
 	return m, textareaBlink()
+}
+
+// confirmOAuthLogin checks that a login exists before moving on. The login
+// itself is a device flow run from a shell, because it needs to show a code and
+// poll; the wizard only verifies the result rather than asking for a key.
+func (m *Model) confirmOAuthLogin() (tea.Model, tea.Cmd) {
+	if !provider.HasKey(m.app.Secrets(), m.setup.providerID) {
+		m.setup.errText = fmt.Sprintf("No login found. Run 'termixgo login %s' in a shell, then press Enter.", m.setup.providerID)
+		return m, nil
+	}
+	m.setup.errText = ""
+	m.setup.message = "Logged in."
+	m.setup.summary = append(m.setup.summary, "login: "+m.setup.providerID)
+	return m.advanceToModel()
 }
 
 // saveProviderKey stores the typed API key and advances to model selection.
@@ -362,6 +389,10 @@ func (m *Model) viewSetup() string {
 	case setupKey:
 		body = append(body, m.styles.Dim.Render("Paste the API key. It is stored in ~/.termixgo/secrets.json with mode 0600 and never shown again."))
 		body = append(body, "", m.input.View())
+	case setupOAuth:
+		body = append(body, m.styles.Dim.Render("This provider logs in with a device code, not an API key."))
+		body = append(body, m.styles.Dim.Render("In a shell run: termixgo login "+m.setup.providerID))
+		body = append(body, "", m.styles.Hint.Render("Press Enter once the login finishes."))
 	case setupCustomModel:
 		body = append(body, m.styles.Dim.Render("Type the model id your server expects."))
 		body = append(body, "", m.input.View())
@@ -401,7 +432,7 @@ func setupProgress(step setupStep) int {
 	switch step {
 	case setupProvider:
 		return 1
-	case setupEndpoint, setupKey, setupModel, setupCustomModel:
+	case setupEndpoint, setupKey, setupModel, setupCustomModel, setupOAuth:
 		return 2
 	case setupTelegramAsk, setupTelegramToken, setupTelegramPair:
 		return 3

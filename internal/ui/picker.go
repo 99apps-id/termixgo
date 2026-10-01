@@ -167,6 +167,16 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 			m.refresh()
 			return m, textareaBlink()
 		}
+		if provider.UsesOAuth(item.ID) {
+			// A login provider must not be asked for an API key: point the
+			// operator at the device login and verify it before continuing.
+			m.current = modeSetup
+			m.setup.step = setupOAuth
+			m.setup.message = fmt.Sprintf("%s logs in with a device code.", item.Label)
+			m.setup.errText = ""
+			m.refresh()
+			return m, nil
+		}
 		if !providerNeedsKey(item.ID) {
 			// A local server needs no key: go straight to model selection.
 			m.setup.step = setupModel

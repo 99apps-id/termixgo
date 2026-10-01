@@ -456,6 +456,9 @@ func runSecret(args []string, stdin io.Reader, stdout io.Writer) error {
 	if _, ok := provider.ByID(providerID); !ok {
 		return fmt.Errorf("unknown provider %q", providerID)
 	}
+	if provider.UsesOAuth(providerID) {
+		return fmt.Errorf("%s logs in with a device code, not an API key; run 'termixgo login %s'", providerID, providerID)
+	}
 	value := ""
 	if len(args) > 1 {
 		value = args[1]

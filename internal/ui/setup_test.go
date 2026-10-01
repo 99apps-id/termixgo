@@ -357,19 +357,24 @@ func TestWizardRendersEveryStep(t *testing.T) {
 func TestWizardShowsTheKeyRequirementInTheProviderList(t *testing.T) {
 	model := wizardModel(t)
 
-	keyed, local := 0, 0
+	keyed, local, login := 0, 0, 0
 	for _, item := range setupProviderItems() {
 		switch item.Extra {
 		case "API key required":
 			keyed++
 		case "local":
 			local++
+		case "login required":
+			login++
 		default:
 			t.Errorf("provider %q carries no key hint, got %q", item.ID, item.Extra)
 		}
 	}
 	if keyed == 0 || local == 0 {
 		t.Fatalf("the provider list must mark both cases, got %d keyed and %d local", keyed, local)
+	}
+	if login == 0 {
+		t.Errorf("the provider list must mark a login provider")
 	}
 
 	view := stripANSI(display(model))

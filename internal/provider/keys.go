@@ -42,6 +42,13 @@ func ResolveKey(store *secrets.Store, id string) string {
 	return EnvKey(id)
 }
 
+// UsesOAuth reports whether a provider logs in with a device code instead of
+// taking an API key.
+func UsesOAuth(id string) bool {
+	info, ok := ByID(id)
+	return ok && info.OAuth
+}
+
 // KeySource names where a key came from, for the status view.
 func KeySource(store *secrets.Store, id string) string {
 	if store != nil && store.Has(secrets.ProviderKey(id)) {
