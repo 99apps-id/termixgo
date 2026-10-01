@@ -44,6 +44,20 @@ func choose(t *testing.T, model *Model, filter string) *Model {
 	return press(t, filtered, "enter")
 }
 
+// chooseID selects one picker item by its exact id, which a substring filter
+// cannot do once two providers share a base URL in their detail.
+func chooseID(t *testing.T, model *Model, id string) *Model {
+	t.Helper()
+	for index, item := range model.picker.visible {
+		if item.ID == id {
+			model.picker.cursor = index
+			return press(t, model, "enter")
+		}
+	}
+	t.Fatalf("provider %q is not in the picker", id)
+	return nil
+}
+
 // providerWithoutModels returns a keyed provider the catalogue has no model
 // for, which is the one case the wizard cannot offer a list for. It needs a
 // default endpoint so the wizard has somewhere to send the model.
@@ -109,7 +123,7 @@ func TestWizardWalksALocalProviderEndToEnd(t *testing.T) {
 func TestWizardStoresAProviderKey(t *testing.T) {
 	model := wizardModel(t)
 
-	atKey := choose(t, model, "anthropic")
+	atKey := chooseID(t, model, "anthropic")
 	if atKey.setup.step != setupKey {
 		t.Fatalf("a keyed provider must ask for a key: step %d", atKey.setup.step)
 	}
@@ -285,7 +299,7 @@ func TestWizardEscClosesFromTheFirstStep(t *testing.T) {
 // to the later steps where there is a defined meaning.
 func TestWizardEscFromTheKeyStepIsNotAnExit(t *testing.T) {
 	model := wizardModel(t)
-	atKey := choose(t, model, "anthropic")
+	atKey := chooseID(t, model, "anthropic")
 
 	stuck := press(t, atKey, "esc")
 	if stuck.setup.step != setupKey {

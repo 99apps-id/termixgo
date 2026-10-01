@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 )
@@ -25,6 +26,26 @@ func Login(ctx context.Context, store *Store, provider string, out io.Writer) er
 		}
 		fmt.Fprintf(out, "Open %s and enter code %s\n", flow.VerifyURL(), device.UserCode)
 		token, err := WaitCodexToken(ctx, flow, device, clock)
+		if err != nil {
+			return err
+		}
+		if err := store.Save(provider, token); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Logged in to %s.\n", provider)
+		return nil
+	case "pkce":
+		flow := pkceFlowFromSpec(spec)
+		if strings.TrimSpace(flow.ClientID) == "" {
+			return fmt.Errorf("%s needs OAuth client credentials in %s", provider, spec.ClientIDEnv)
+		}
+		session, authURL, err := StartPKCE(flow)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Open this URL to log in:\n%s\n", authURL)
+		openBrowser(authURL)
+		token, err := session.Wait(ctx, clock)
 		if err != nil {
 			return err
 		}
@@ -56,6 +77,35 @@ func Login(ctx context.Context, store *Store, provider string, out io.Writer) er
 	}
 }
 
+// pkceFlowFromSpec maps a spec to the PKCE flow, resolving a client credential
+// from the environment when the spec names one.
+func pkceFlowFromSpec(spec Spec) PKCEFlow {
+	clientID := spec.ClientID
+	if spec.ClientIDEnv != "" {
+		if value := strings.TrimSpace(os.Getenv(spec.ClientIDEnv)); value != "" {
+			clientID = value
+		}
+	}
+	clientSecret := spec.ClientSecret
+	if spec.ClientSecretEnv != "" {
+		if value := strings.TrimSpace(os.Getenv(spec.ClientSecretEnv)); value != "" {
+			clientSecret = value
+		}
+	}
+	return PKCEFlow{
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		AuthorizeURL: spec.AuthorizeURL,
+		TokenURL:     spec.TokenURL,
+		Scopes:       spec.Scopes,
+		RedirectPort: spec.RedirectPort,
+		RedirectPath: spec.RedirectPath,
+		ExtraAuth:    spec.ExtraAuth,
+		ExchangeJSON: spec.ExchangeJSON,
+		RefreshJSON:  spec.RefreshJSON,
+	}
+}
+
 // AccessToken returns a valid access token for a provider, refreshing and
 // saving when the stored one has expired. It returns "" when no login exists.
 func AccessToken(ctx context.Context, store *Store, provider string) string {
@@ -76,6 +126,8 @@ func AccessToken(ctx context.Context, store *Store, provider string) string {
 	switch spec.Kind {
 	case "codex":
 		refreshed, err = RefreshCodex(ctx, CodexFlow{ClientID: spec.ClientID, Issuer: spec.Issuer}, token.Refresh, clock)
+	case "pkce":
+		refreshed, err = RefreshPKCE(ctx, pkceFlowFromSpec(spec), token.Refresh, clock)
 	default:
 		refreshed, err = RefreshDevice(ctx, DeviceFlow{ClientID: spec.ClientID, DeviceURL: spec.DeviceURL, TokenURL: spec.TokenURL}, token.Refresh, clock)
 	}

@@ -182,6 +182,7 @@ var planProviders = map[string]PlanInfo{
 	// money the operator never pays.
 	"openai-codex": {Name: "ChatGPT (Codex)", CreditUnit: "subscription"},
 	"xai-oauth":    {Name: "SuperGrok", CreditUnit: "subscription"},
+	"claude-oauth": {Name: "Claude", CreditUnit: "subscription"},
 }
 
 // Plan returns the subscription a model is served under, when its provider

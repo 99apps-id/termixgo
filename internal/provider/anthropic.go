@@ -32,9 +32,15 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 		payload["tools"] = encodeAnthropicTools(req.Tools)
 	}
 
-	headers := map[string]string{
-		"x-api-key":         c.apiKey,
-		"anthropic-version": "2023-06-01",
+	headers := map[string]string{"anthropic-version": "2023-06-01"}
+	if c.info.OAuth {
+		// An OAuth login sends a bearer token and needs the beta that unlocks
+		// it, instead of the API key header.
+		headers["Authorization"] = "Bearer " + c.apiKey
+		headers["anthropic-beta"] = "oauth-2025-04-20"
+		headers["x-app"] = "cli"
+	} else {
+		headers["x-api-key"] = c.apiKey
 	}
 	response, err := c.post(ctx, c.baseURL+"/v1/messages", headers, payload)
 	if err != nil {

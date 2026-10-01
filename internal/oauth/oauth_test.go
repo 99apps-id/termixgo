@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -153,6 +154,49 @@ func TestTokenStore(t *testing.T) {
 	}
 	if _, ok := tokens.Load("xai-oauth"); ok {
 		t.Errorf("a deleted token should not load")
+	}
+}
+
+// TestPKCEFlow drives the loopback authorization-code flow end to end against
+// a fake token endpoint: start, visit the redirect with a code, exchange.
+func TestPKCEFlow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/token" {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(writer, `{"access_token":"pkce-access","refresh_token":"pkce-refresh","expires_in":3600}`)
+	}))
+	defer server.Close()
+
+	flow := PKCEFlow{ClientID: "cid", AuthorizeURL: server.URL + "/authorize", TokenURL: server.URL + "/token", RedirectPath: "/callback"}
+	session, authURL, err := StartPKCE(flow)
+	if err != nil {
+		t.Fatalf("StartPKCE: %v", err)
+	}
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("parse authorize url: %v", err)
+	}
+	if parsed.Query().Get("code_challenge") == "" || parsed.Query().Get("code_challenge_method") != "S256" {
+		t.Errorf("the authorize url must carry a PKCE challenge: %s", authURL)
+	}
+	redirect := parsed.Query().Get("redirect_uri")
+	state := parsed.Query().Get("state")
+
+	response, err := http.Get(redirect + "?code=the-code&state=" + state)
+	if err != nil {
+		t.Fatalf("call the callback: %v", err)
+	}
+	response.Body.Close()
+
+	token, err := session.Wait(context.Background(), noWaitClock())
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if token.Access != "pkce-access" || token.Refresh != "pkce-refresh" {
+		t.Fatalf("token = %+v", token)
 	}
 }
 
