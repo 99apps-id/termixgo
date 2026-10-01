@@ -43,7 +43,7 @@ var webSearchGitHubEndpoint = "https://api.github.com/search/repositories"
 var webSearchClient = &http.Client{
 	Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:           dialWithDoHFallback,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          16,
 		IdleConnTimeout:       90 * time.Second,
@@ -703,6 +703,84 @@ func appendQuery(endpoint, key, value string) string {
 		separator = "&"
 	}
 	return trimmed + separator + key + "=" + url.QueryEscape(value)
+}
+
+// dohEndpoint is the DNS-over-HTTPS resolver used only when the system
+// resolver fails. A browser often reaches a site the OS resolver is blocked on
+// because the browser resolves over HTTPS; this gives the web tools the same
+// path instead of failing on a blocked or poisoned ISP DNS.
+var dohEndpoint = "https://cloudflare-dns.com/dns-query"
+
+var dohClient = &http.Client{Timeout: 10 * time.Second}
+
+// dialWithDoHFallback dials an address, and when the host name cannot be
+// resolved by the system resolver it resolves over HTTPS and dials the pinned
+// IP. A literal address and a successful system lookup use the plain dialer,
+// so the fallback only runs where DNS is actually broken.
+func dialWithDoHFallback(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || net.ParseIP(host) != nil {
+		return dialer.DialContext(ctx, network, addr)
+	}
+	conn, dialErr := dialer.DialContext(ctx, network, addr)
+	if dialErr == nil {
+		return conn, nil
+	}
+	if !isDNSFailure(dialErr) {
+		return nil, dialErr
+	}
+	ips, resolveErr := dohResolve(ctx, host)
+	if resolveErr != nil || len(ips) == 0 {
+		return nil, dialErr
+	}
+	lastErr := dialErr
+	for _, ip := range ips {
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip, port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+// dohResolve resolves a host over the DNS-over-HTTPS JSON API.
+func dohResolve(ctx context.Context, host string) ([]string, error) {
+	link := dohEndpoint + "?name=" + url.QueryEscape(host) + "&type=A"
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("accept", "application/dns-json")
+	response, err := dohClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("doh returned %s", response.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	var parsed struct {
+		Answer []struct {
+			Type int    `json:"type"`
+			Data string `json:"data"`
+		} `json:"Answer"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, err
+	}
+	var ips []string
+	for _, answer := range parsed.Answer {
+		if answer.Type == 1 && net.ParseIP(answer.Data) != nil {
+			ips = append(ips, answer.Data)
+		}
+	}
+	return ips, nil
 }
 
 // isDNSFailure reports a name-resolution failure. It is a subset of

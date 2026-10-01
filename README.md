@@ -401,6 +401,11 @@ your DNS blocks still reads. Pass `reader: true` to force the reader for a
 JavaScript page. A search that finds nothing does not claim the machine is
 offline: that message appears only when no source could be reached at all.
 
+When the system resolver cannot resolve a host, the web tools resolve it over
+DNS-over-HTTPS (Cloudflare) and connect to the resolved address, the same way a
+browser escapes an ISP DNS block. This keeps keyless search working where the
+router returns NXDOMAIN for DuckDuckGo.
+
 For questions with a fixed source, `lookup` answers directly without a search:
 
 ```

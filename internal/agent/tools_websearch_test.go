@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +19,34 @@ func restoreSearchEndpoints() {
 	webSearchGitHubEndpoint = "https://api.github.com/search/repositories"
 	webSearchTavilyEndpoint = "https://api.tavily.com/search"
 	webSearchBraveEndpoint = "https://api.search.brave.com/res/v1/web/search"
+}
+
+// TestDialFallsBackToDoH is the DNS-block fix: when the system resolver cannot
+// resolve a name, the dialer resolves it over HTTPS and connects to the pinned
+// IP, which is what lets keyless search work behind an ISP that blocks a host.
+func TestDialFallsBackToDoH(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	doh := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/dns-json")
+		fmt.Fprint(writer, `{"Status":0,"Answer":[{"name":"blocked.invalid","type":1,"data":"127.0.0.1"}]}`)
+	}))
+	t.Cleanup(func() {
+		doh.Close()
+		dohEndpoint = "https://cloudflare-dns.com/dns-query"
+	})
+	dohEndpoint = doh.URL
+
+	conn, err := dialWithDoHFallback(context.Background(), "tcp", fmt.Sprintf("blocked.invalid:%d", port))
+	if err != nil {
+		t.Fatalf("dial through DoH: %v", err)
+	}
+	conn.Close()
 }
 
 // TestWebSearchPrefersAConfiguredTavilyKey proves a keyed provider answers

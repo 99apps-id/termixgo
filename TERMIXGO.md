@@ -162,7 +162,10 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   A question with a fixed source (weather, exchange rate, crypto price, a
   Wikipedia summary) goes through the `lookup` tool's keyless endpoints, not a
   search: routing those through a search returns a list where the source would
-  return the answer.
+  return the answer. The web transport resolves a host over DNS-over-HTTPS when
+  the system resolver fails, so an ISP DNS block does not take the keyless paths
+  with it; the fallback runs only on a resolution failure, never on the happy
+  path.
 - Cancellation flows through a context: `signal.NotifyContext` in the command,
   through `App.RunTurn`, into `Runner.Run`, and out to the HTTP request. The
   run loop checks the context between steps, so a stop is prompt and saves
