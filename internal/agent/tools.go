@@ -158,6 +158,7 @@ func DefaultRegistry() *Registry {
 		&gitBranchTool{},
 		&gitRestoreTool{},
 		&gitWorktreeTool{},
+		&codeWorkerTool{},
 		&checkpointTool{},
 		&rewindTool{},
 	)

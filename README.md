@@ -362,11 +362,12 @@ ecosystem tools out of every request and loads them on demand through
 | --- | --- |
 | `todo_write`, `todo_read` | the plan |
 | `remember` | append a learned fact |
-| `use_skill`, `find_skill`, `install_skill` | load and install skills |
+| `use_skill`, `find_skill`, `install_skill`, `propose_skill` | load, install or propose skills |
 | `ask_user` | ask a question when a decision cannot be made from the code |
 | `think` | reason without acting |
 | `subagent` | delegate a typed, self-contained task |
 | `orchestrate`, `list_pipelines` | run a multi-agent pipeline |
+| `code_worker` | hand a coding task to an external agent in its own worktree |
 
 | Tool | Purpose |
 | --- | --- |
@@ -400,6 +401,19 @@ others ready at the same time. `{{step.field}}` interpolates an earlier result.
 
 `list_pipelines` names them and `orchestrate` runs one. A step whose dependency
 failed is skipped, and the result reports what completed, failed and was skipped.
+
+### Background coding workers
+
+`code_worker` hands a self-contained coding task to an external coding agent,
+`claude`, `codex` or `opencode`, running in its own git worktree. It is a
+detached process, not a second in-process turn: the run loop stays single-turn,
+the worker survives the turn that started it, and it never edits the main tree.
+When it finishes, the result is announced in the transcript and sent to the
+paired Telegram chat.
+
+The worker binary must be on `PATH`; a missing one is named rather than reported
+as a bare command error. The tool is approval gated like any other command,
+because it runs a coding agent with permission to write.
 
 ## Trust and approval
 

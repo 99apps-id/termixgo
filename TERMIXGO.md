@@ -142,6 +142,12 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   with `/skills apply`, and an update whose target hash moved since the proposal
   is refused as stale. A path that writes the live `SKILL.md` directly would
   defeat that, so the write stays behind the operator.
+- A background coding worker is an external process owned by `ProcessManager`,
+  never a second in-process turn: the run loop is single-turn by design, so a
+  worker has to be detached to survive the turn. It runs in its own git worktree
+  so it cannot edit the main tree; the worker argv is explicit, never a shell
+  string, a missing binary is named before a worktree is created, and its
+  completion is an `EventProcessEnd` the app forwards to chat.
 - Cancellation flows through a context: `signal.NotifyContext` in the command,
   through `App.RunTurn`, into `Runner.Run`, and out to the HTTP request. The
   run loop checks the context between steps, so a stop is prompt and saves

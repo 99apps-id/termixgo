@@ -775,6 +775,14 @@ func (a *App) Shutdown() {
 
 func (a *App) emit(event agent.Event) {
 	a.recordAudit(event)
+	if event.Kind == agent.EventProcessEnd {
+		// A worker announced completion; forward it to chat so a 24/7
+		// operator hears about it without watching the terminal. Delivery
+		// runs off the emit path so a slow send never blocks a turn.
+		go func(text string) {
+			_ = a.Notify(context.Background(), text)
+		}(event.Text)
+	}
 	if event.Kind == agent.EventUsage {
 		a.AddUsage(event.Usage)
 	}

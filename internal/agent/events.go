@@ -37,6 +37,9 @@ const (
 	EventTurnEnd EventKind = "turn-end"
 	// EventUsage reports token accounting.
 	EventUsage EventKind = "usage"
+	// EventProcessEnd reports a worker process that asked to be announced when
+	// it finishes. ToolName carries the process handle; Text is the notice.
+	EventProcessEnd EventKind = "process-end"
 )
 
 // Event is one unit of agent activity.

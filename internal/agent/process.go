@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -44,6 +46,11 @@ type Process struct {
 	Command string
 	Dir     string
 	Started time.Time
+	// Label names the process in a completion notice, for example a code
+	// worker. Notify asks the manager to announce completion as an
+	// EventProcessEnd the app can forward to the operator.
+	Label  string
+	Notify bool
 
 	mu      sync.Mutex
 	buffer  *ringBuffer
@@ -163,13 +170,55 @@ func (m *ProcessManager) SetEmitter(emit Emitter) {
 // measure the manager, not the shell's startup time.
 var shellForProcess = shellInvocation
 
-// Start launches a command in the background and returns its handle.
+// Start launches a shell command in the background and returns its handle.
 func (m *ProcessManager) Start(ctx context.Context, command, dir string) (*Process, error) {
 	trimmed := strings.TrimSpace(command)
 	if trimmed == "" {
 		return nil, errors.New("command is required")
 	}
+	shell, args := shellForProcess(trimmed)
+	return m.start(ctx, dir, shell, args, trimmed, "", false)
+}
 
+// StartWorker launches a worker from an explicit argv, without a shell. The
+// program is resolved through PATH and, on Windows, an npm-style .cmd/.bat shim
+// is run through the command interpreter, because CreateProcess cannot start a
+// batch file directly. label names the worker in the completion notice; notify
+// asks for an EventProcessEnd when it finishes.
+func (m *ProcessManager) StartWorker(ctx context.Context, dir string, argv []string, label string, notify bool) (*Process, error) {
+	shell, args, display, err := resolveArgv(argv)
+	if err != nil {
+		return nil, err
+	}
+	return m.start(ctx, dir, shell, args, display, label, notify)
+}
+
+// resolveArgv turns a worker argv into an executable and arguments. A missing
+// program is named, so the operator reads "claude is not installed" rather than
+// a bare exec error.
+func resolveArgv(argv []string) (shell string, args []string, display string, err error) {
+	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
+		return "", nil, "", errors.New("the worker command is empty")
+	}
+	binary, lookErr := exec.LookPath(argv[0])
+	if lookErr != nil {
+		return "", nil, "", fmt.Errorf("the worker %q is not installed or not on PATH", argv[0])
+	}
+	display = strings.Join(argv, " ")
+	if runtime.GOOS == "windows" {
+		lower := strings.ToLower(binary)
+		if strings.HasSuffix(lower, ".cmd") || strings.HasSuffix(lower, ".bat") {
+			comspec := os.Getenv("COMSPEC")
+			if comspec == "" {
+				comspec = "cmd.exe"
+			}
+			return comspec, append([]string{"/c", binary}, argv[1:]...), display, nil
+		}
+	}
+	return binary, argv[1:], display, nil
+}
+
+func (m *ProcessManager) start(ctx context.Context, dir, shell string, args []string, display, label string, notify bool) (*Process, error) {
 	m.mu.Lock()
 	// Only a process that has not exited counts against the cap: a finished
 	// handle is kept so its output is still readable, and counting it made the
@@ -188,13 +237,14 @@ func (m *ProcessManager) Start(ctx context.Context, command, dir string) (*Proce
 	emit := m.emit
 	m.mu.Unlock()
 
-	shell, args := shellForProcess(trimmed)
 	processCtx, cancel := context.WithCancel(context.Background())
 	process := &Process{
 		ID:      id,
-		Command: trimmed,
+		Command: display,
 		Dir:     dir,
 		Started: time.Now(),
+		Label:   label,
+		Notify:  notify,
 		buffer:  newRingBuffer(processBufferBytes),
 		done:    make(chan struct{}),
 	}
@@ -244,7 +294,7 @@ func (m *ProcessManager) Start(ctx context.Context, command, dir string) (*Proce
 	m.mu.Unlock()
 
 	if emit != nil {
-		emit(Event{Kind: EventNotice, Text: fmt.Sprintf("Started %s in the background: %s", id, Shorten(trimmed, 80))})
+		emit(Event{Kind: EventNotice, Text: fmt.Sprintf("Started %s in the background: %s", id, Shorten(display, 80))})
 	}
 
 	go func() {
@@ -257,17 +307,35 @@ func (m *ProcessManager) Start(ctx context.Context, command, dir string) (*Proce
 		cancel()
 
 		if emit != nil {
-			note := fmt.Sprintf("Background process %s exited with code %d", id, process.ExitCode())
-			if process.ExitCode() != 0 {
-				// A failed background process is worth seeing without being
-				// asked for; that is often the whole reason the operator
-				// checked the transcript.
-				tail := Shorten(lastLines(process.LogsAll(), 5), 300)
-				if tail != "" {
-					note += "\n" + tail
+			exitCode := process.ExitCode()
+			if process.Notify {
+				// A worker asked to be announced: the operator may be far from
+				// the terminal, so completion is its own event the app can
+				// forward to chat.
+				label := strings.TrimSpace(process.Label)
+				if label == "" {
+					label = "Background worker " + id
 				}
+				note := fmt.Sprintf("%s finished with exit code %d.", label, exitCode)
+				if exitCode != 0 {
+					if tail := Shorten(lastLines(process.LogsAll(), 5), 300); tail != "" {
+						note += "\n" + tail
+					}
+				}
+				emit(Event{Kind: EventProcessEnd, ToolName: process.ID, ToolOK: exitCode == 0, Text: note})
+			} else {
+				note := fmt.Sprintf("Background process %s exited with code %d", id, exitCode)
+				if exitCode != 0 {
+					// A failed background process is worth seeing without being
+					// asked for; that is often the whole reason the operator
+					// checked the transcript.
+					tail := Shorten(lastLines(process.LogsAll(), 5), 300)
+					if tail != "" {
+						note += "\n" + tail
+					}
+				}
+				emit(Event{Kind: EventNotice, Text: note})
 			}
-			emit(Event{Kind: EventNotice, Text: note})
 		}
 	}()
 	return process, nil
