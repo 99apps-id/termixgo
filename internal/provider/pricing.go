@@ -183,6 +183,7 @@ var planProviders = map[string]PlanInfo{
 	"openai-codex": {Name: "ChatGPT (Codex)", CreditUnit: "subscription"},
 	"xai-oauth":    {Name: "SuperGrok", CreditUnit: "subscription"},
 	"claude-oauth": {Name: "Claude", CreditUnit: "subscription"},
+	"antigravity":  {Name: "Google Antigravity", CreditUnit: "subscription"},
 }
 
 // Plan returns the subscription a model is served under, when its provider

@@ -48,6 +48,9 @@ func newHTTPClient(info Provider, baseURL, apiKey string) (Client, error) {
 	if info.ID == "openai-codex" {
 		return &codexClient{httpClient: base}, nil
 	}
+	if info.Kind == KindAntigravity {
+		return &antigravityClient{httpClient: base}, nil
+	}
 	switch info.Kind {
 	case KindAnthropic:
 		return &anthropicClient{httpClient: base}, nil

@@ -12,6 +12,7 @@ import (
 	"time"
 )
 
+
 // client is the shared HTTP client for the login flows.
 var client = &http.Client{Timeout: 30 * time.Second}
 
@@ -69,8 +70,13 @@ func send(request *http.Request) ([]byte, int, error) {
 	return body, response.StatusCode, nil
 }
 
-// statusError names a non-success response with a little of its body.
+// statusError names a non-success response with a little of its body. A body
+// that says the grant itself is dead comes back as a *GrantError instead, so a
+// caller can tell "retry later" from "log in again" without parsing text.
 func statusError(endpoint string, status int, body []byte) error {
+	if grant := grantError(body); grant != nil {
+		return grant
+	}
 	text := strings.TrimSpace(string(body))
 	if len(text) > 200 {
 		text = text[:200]

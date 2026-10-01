@@ -1,0 +1,482 @@
+package provider
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+)
+
+// antigravityClient speaks Google's Cloud Code API behind an Antigravity OAuth
+// login. It is not chat-completions or the Gemini REST surface: the request is
+// a Cloud Code envelope and the stream is a wrapped Gemini candidate feed.
+//
+// The wire shapes follow the 9router reference (open-sse/executors/
+// antigravity.js): one project id, a per-connection session id, and a
+// streamGenerateContent call on the daily host.
+type antigravityClient struct {
+	*httpClient
+
+	mu      sync.Mutex
+	project string
+	// signatures remembers a functionCall's thoughtSignature so it can be
+	// replayed on the next request, which Gemini 3 requires for a tool loop.
+	signatures map[string]string
+	sessionID  string
+}
+
+const (
+	agUserAgent      = "antigravity/ide/2.11.0 darwin/arm64"
+	agMaxOutputToken = 64000
+)
+
+// The onboarding endpoints are variables so tests can point them at a server.
+var (
+	agLoadAssistURL = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+	agOnboardURL    = "https://cloudcode-pa.googleapis.com/v1internal:onboardUser"
+)
+
+func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit func(StreamEvent) error) error {
+	project, err := c.ensureProject(ctx)
+	if err != nil {
+		return err
+	}
+	session := c.session()
+	body := map[string]any{
+		"project":   project,
+		"model":     req.Model,
+		"userAgent": "antigravity",
+		"requestId": agRequestID(session, req.Model, len(req.Messages)),
+		"request": map[string]any{
+			"contents":         c.encodeContents(req),
+			"sessionId":        session,
+			"generationConfig": agGenerationConfig(req),
+		},
+	}
+	request := body["request"].(map[string]any)
+	if strings.TrimSpace(req.System) != "" {
+		request["systemInstruction"] = map[string]any{
+			"role":  "user",
+			"parts": []map[string]any{{"text": req.System}},
+		}
+	}
+	if len(req.Tools) > 0 {
+		request["tools"] = []map[string]any{{"functionDeclarations": agTools(req.Tools)}}
+		request["toolConfig"] = map[string]any{"functionCallingConfig": map[string]any{"mode": "VALIDATED"}}
+	}
+
+	headers := map[string]string{
+		"Authorization": "Bearer " + c.apiKey,
+		"User-Agent":    agUserAgent,
+	}
+	response, err := c.post(ctx, c.baseURL+"/v1internal:streamGenerateContent?alt=sse", headers, body)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+
+	reader := newSSEReader(response.Body)
+	usage := &cumulativeUsage{}
+	for {
+		payload, err := reader.next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return wrapStreamError(c.info.Label, err)
+		}
+		if strings.TrimSpace(payload) == "" {
+			continue
+		}
+		// Each event is {"response": {...}} on the daily host, but tolerate a
+		// bare candidate object too.
+		var envelope struct {
+			Response json.RawMessage `json:"response"`
+		}
+		candidate := []byte(payload)
+		if json.Unmarshal([]byte(payload), &envelope) == nil && len(envelope.Response) > 0 {
+			candidate = envelope.Response
+		}
+		var chunk agResponse
+		if json.Unmarshal(candidate, &chunk) != nil {
+			continue
+		}
+		if chunk.UsageMetadata != nil {
+			if step, ok := usage.step(Usage{
+				PromptTokens:     chunk.UsageMetadata.PromptTokenCount,
+				CompletionTokens: chunk.UsageMetadata.CandidatesTokenCount,
+				TotalTokens:      chunk.UsageMetadata.TotalTokenCount,
+			}); ok {
+				if err := emit(StreamEvent{Type: EventUsage, Usage: &step}); err != nil {
+					return err
+				}
+			}
+		}
+		if len(chunk.Candidates) == 0 {
+			continue
+		}
+		for _, part := range chunk.Candidates[0].Content.Parts {
+			if part.FunctionCall != nil {
+				c.rememberSignature(part.FunctionCall.ID, part.ThoughtSignature)
+				arguments, _ := json.Marshal(part.FunctionCall.Args)
+				call := ToolCall{ID: part.FunctionCall.ID, Name: part.FunctionCall.Name, Arguments: string(arguments)}
+				if err := emit(StreamEvent{Type: EventToolCall, ToolCall: &call}); err != nil {
+					return err
+				}
+				continue
+			}
+			if part.Text == "" {
+				continue
+			}
+			kind := EventTextDelta
+			if part.Thought {
+				kind = EventReasoningDelta
+			}
+			if err := emit(StreamEvent{Type: kind, Text: part.Text}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// ensureProject resolves the Cloud Code project id, onboarding the account the
+// first time. The id is cached for the life of the client.
+func (c *antigravityClient) ensureProject(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.project != "" {
+		return c.project, nil
+	}
+	if strings.TrimSpace(c.accountID) != "" {
+		c.project = c.accountID
+		return c.project, nil
+	}
+	metadata := map[string]any{"ideType": 9, "platform": agPlatform(), "pluginType": 2}
+	raw, err := c.doJSON(ctx, agLoadAssistURL, map[string]any{"metadata": metadata})
+	if err != nil {
+		return "", err
+	}
+	var loaded struct {
+		Project json.RawMessage `json:"cloudaicompanionProject"`
+		Tiers   []struct {
+			ID        string `json:"id"`
+			IsDefault bool   `json:"isDefault"`
+		} `json:"allowedTiers"`
+	}
+	_ = json.Unmarshal(raw, &loaded)
+	project := agProjectID(loaded.Project)
+	tier := "legacy-tier"
+	for _, candidate := range loaded.Tiers {
+		if candidate.IsDefault {
+			tier = candidate.ID
+			break
+		}
+	}
+	if project == "" {
+		for attempt := 0; attempt < 3 && project == ""; attempt++ {
+			onboard, err := c.doJSON(ctx, agOnboardURL, map[string]any{"tierId": tier, "metadata": metadata})
+			if err != nil {
+				break
+			}
+			var parsed struct {
+				Done     bool `json:"done"`
+				Response struct {
+					Project json.RawMessage `json:"cloudaicompanionProject"`
+				} `json:"response"`
+			}
+			_ = json.Unmarshal(onboard, &parsed)
+			project = agProjectID(parsed.Response.Project)
+			if parsed.Done && project != "" {
+				break
+			}
+			time.Sleep(2 * time.Second)
+		}
+	}
+	if project == "" {
+		project = "termixgo-" + randomHex(8)
+	}
+	c.project = project
+	return project, nil
+}
+
+func (c *antigravityClient) doJSON(ctx context.Context, endpoint string, payload any) ([]byte, error) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+c.apiKey)
+	request.Header.Set("User-Agent", agUserAgent)
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("%s returned %d: %s", endpoint, response.StatusCode, clipRunes(strings.TrimSpace(string(body)), 200))
+	}
+	return body, nil
+}
+
+func (c *antigravityClient) session() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sessionID == "" {
+		sum := sha256.Sum256([]byte(randomHex(16)))
+		c.sessionID = fmt.Sprintf("%d", int64(binary.BigEndian.Uint64(sum[:8])))
+	}
+	return c.sessionID
+}
+
+func (c *antigravityClient) rememberSignature(callID, signature string) {
+	if callID == "" || signature == "" {
+		return
+	}
+	c.mu.Lock()
+	if c.signatures == nil {
+		c.signatures = map[string]string{}
+	}
+	c.signatures[callID] = signature
+	c.mu.Unlock()
+}
+
+func (c *antigravityClient) signatureFor(callID string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.signatures[callID]
+}
+
+// encodeContents maps the shared message list to Gemini contents.
+func (c *antigravityClient) encodeContents(req ChatRequest) []map[string]any {
+	contents := make([]map[string]any, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		switch message.Role {
+		case RoleUser:
+			parts := make([]map[string]any, 0, len(message.Images)+1)
+			if strings.TrimSpace(message.Content) != "" {
+				parts = append(parts, map[string]any{"text": message.Content})
+			}
+			for _, image := range message.Images {
+				parts = append(parts, map[string]any{"inlineData": map[string]any{"mimeType": image.MediaType, "data": image.Data}})
+			}
+			if len(parts) == 0 {
+				continue
+			}
+			contents = append(contents, map[string]any{"role": "user", "parts": parts})
+		case RoleAssistant:
+			parts := make([]map[string]any, 0, len(message.ToolCalls)+1)
+			if strings.TrimSpace(message.Content) != "" {
+				parts = append(parts, map[string]any{"text": message.Content})
+			}
+			for _, call := range message.ToolCalls {
+				args := map[string]any{}
+				_ = json.Unmarshal([]byte(call.Arguments), &args)
+				part := map[string]any{"functionCall": map[string]any{"id": call.ID, "name": call.Name, "args": args}}
+				if signature := c.signatureFor(call.ID); signature != "" {
+					part["thoughtSignature"] = signature
+				}
+				parts = append(parts, part)
+			}
+			if len(parts) == 0 {
+				continue
+			}
+			contents = append(contents, map[string]any{"role": "model", "parts": parts})
+		case RoleTool:
+			// Gemini answers a functionCall with a functionResponse on a user turn.
+			contents = append(contents, map[string]any{"role": "user", "parts": []map[string]any{{
+				"functionResponse": map[string]any{
+					"id":       message.ToolID,
+					"name":     message.Name,
+					"response": map[string]any{"result": message.Content},
+				},
+			}}})
+		}
+	}
+	return contents
+}
+
+func agGenerationConfig(req ChatRequest) map[string]any {
+	config := map[string]any{}
+	if req.Temperature != nil {
+		config["temperature"] = *req.Temperature
+	}
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 || maxTokens > agMaxOutputToken {
+		maxTokens = agMaxOutputToken
+	}
+	config["maxOutputTokens"] = maxTokens
+	// Gemini 3 models cannot disable thinking; ask for a thought summary so the
+	// transcript shows the reasoning rather than dropping it.
+	config["thinkingConfig"] = map[string]any{"thinkingLevel": "medium", "includeThoughts": true}
+	return config
+}
+
+func agTools(tools []ToolDef) []map[string]any {
+	out := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		schema := cleanAntigravitySchema(tool.Schema)
+		out = append(out, map[string]any{
+			"name":        sanitizeFunctionName(tool.Name),
+			"description": tool.Description,
+			"parameters":  schema,
+		})
+	}
+	return out
+}
+
+// cleanAntigravitySchema strips JSON Schema keywords Gemini rejects and makes
+// sure the object carries a type and, for an empty object, a reason field.
+func cleanAntigravitySchema(schema map[string]any) map[string]any {
+	if schema == nil {
+		return map[string]any{"type": "object", "properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}
+	}
+	cleaned := stripSchemaKeys(schema).(map[string]any)
+	if cleaned["type"] == nil {
+		cleaned["type"] = "object"
+	}
+	properties, _ := cleaned["properties"].(map[string]any)
+	if cleaned["type"] == "object" && len(properties) == 0 {
+		cleaned["properties"] = map[string]any{"reason": map[string]any{"type": "string"}}
+		cleaned["required"] = []string{"reason"}
+	}
+	return cleaned
+}
+
+var antigravityUnsupportedKeys = map[string]bool{
+	"$schema": true, "additionalProperties": true, "default": true, "optional": true,
+	"uniqueItems": true, "examples": true, "$id": true, "$ref": true, "definitions": true,
+	"const": true, "oneOf": true, "anyOf": true, "allOf": true, "not": true,
+}
+
+func stripSchemaKeys(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, entry := range typed {
+			if antigravityUnsupportedKeys[key] || strings.HasPrefix(key, "x-") {
+				continue
+			}
+			out[key] = stripSchemaKeys(entry)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, entry := range typed {
+			out = append(out, stripSchemaKeys(entry))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func sanitizeFunctionName(name string) string {
+	var builder strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '.', r == ':', r == '-':
+			builder.WriteRune(r)
+		default:
+			builder.WriteRune('_')
+		}
+	}
+	clean := builder.String()
+	if clean == "" {
+		return "_unknown"
+	}
+	if clean[0] >= '0' && clean[0] <= '9' {
+		clean = "_" + clean
+	}
+	if len(clean) > 64 {
+		clean = clean[:64]
+	}
+	return clean
+}
+
+func agPlatform() int {
+	switch runtime.GOOS {
+	case "windows":
+		return 5
+	case "darwin":
+		return 2
+	default:
+		return 1
+	}
+}
+
+func agProjectID(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return strings.TrimSpace(text)
+	}
+	var object struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(raw, &object) == nil {
+		return strings.TrimSpace(object.ID)
+	}
+	return ""
+}
+
+func agRequestID(session, model string, messageCount int) string {
+	if messageCount < 1 {
+		messageCount = 1
+	}
+	step := messageCount*2 - 1
+	if step < 1 {
+		step = 1
+	}
+	return fmt.Sprintf("agent/%s/%d/%s/%d", randomHex(16), time.Now().UnixMilli(), randomHex(16), step)
+}
+
+func randomHex(bytes int) string {
+	buffer := make([]byte, bytes)
+	if _, err := rand.Read(buffer); err != nil {
+		return "00000000"
+	}
+	return hex.EncodeToString(buffer)
+}
+
+type agResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				Text             string `json:"text"`
+				Thought          bool   `json:"thought"`
+				ThoughtSignature string `json:"thoughtSignature"`
+				FunctionCall     *struct {
+					ID   string         `json:"id"`
+					Name string         `json:"name"`
+					Args map[string]any `json:"args"`
+				} `json:"functionCall"`
+			} `json:"parts"`
+		} `json:"content"`
+		FinishReason string `json:"finishReason"`
+	} `json:"candidates"`
+	UsageMetadata *struct {
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		TotalTokenCount         int `json:"totalTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount"`
+		ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
+	} `json:"usageMetadata"`
+}

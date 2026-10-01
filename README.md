@@ -332,6 +332,40 @@ termixgo endpoint                            # show the custom endpoints
 termixgo endpoint openai-compatible https://my-server/v1
 ```
 
+## OAuth logins
+
+Some providers log in with a device code or a browser instead of an API key.
+Run the login once; the token is stored in `~/.termixgo/secrets.json` (0600) and
+refreshed automatically:
+
+```sh
+termixgo login xai-oauth      # xAI/Grok, device code
+termixgo login openai-codex   # ChatGPT/Codex, device code
+termixgo login claude-oauth   # Claude, browser + loopback callback
+termixgo login antigravity    # Google Antigravity, browser + loopback callback
+termixgo logout <provider>
+```
+
+Then pick a model:
+
+```sh
+termixgo model xai-oauth/grok-4.7-oauth
+termixgo model openai-codex/codex-gpt-5.5
+termixgo model claude-oauth/claude-oauth-sonnet-5
+termixgo model antigravity/antigravity-gemini-3.8-flash
+```
+
+Antigravity reads its public client credentials from the environment, because
+GitHub secret scanning flags the Google pair:
+
+```sh
+export TERMIXGO_ANTIGRAVITY_CLIENT_ID=...
+export TERMIXGO_ANTIGRAVITY_CLIENT_SECRET=...
+```
+
+These endpoints are requested by the vendors' own CLIs and are not officially
+supported; a failure names the model id and the endpoint.
+
 ## Tools
 
 The agent can call more than fifty tools. `toolSearchEnabled` keeps the

@@ -22,11 +22,14 @@ const KeyPrefix = "oauth:"
 // Token is one OAuth credential. Access is the bearer sent to the provider,
 // Refresh renews it, and Expires is when Access stops being valid. AccountID
 // is the provider-side account a Codex token belongs to, needed in a header.
+// LastRefresh records when this credential was last renewed: some vendors age
+// a refresh token out long before its access token expires.
 type Token struct {
-	Access    string    `json:"access"`
-	Refresh   string    `json:"refresh,omitempty"`
-	Expires   time.Time `json:"expires,omitempty"`
-	AccountID string    `json:"accountId,omitempty"`
+	Access      string    `json:"access"`
+	Refresh     string    `json:"refresh,omitempty"`
+	Expires     time.Time `json:"expires,omitempty"`
+	AccountID   string    `json:"accountId,omitempty"`
+	LastRefresh time.Time `json:"lastRefresh,omitempty"`
 }
 
 // Valid reports whether the access token is usable at now, with room to spare.
@@ -38,6 +41,20 @@ func (t Token) Valid(now time.Time, skew time.Duration) bool {
 		return true
 	}
 	return now.Add(skew).Before(t.Expires)
+}
+
+// Stale reports whether the credential has been left unrefreshed for longer
+// than maxAge, which is how a provider with a short refresh-token life (OpenAI
+// ages a Codex grant out in about eight days) gets renewed before it dies. An
+// unknown age counts as stale so the first call refreshes it.
+func (t Token) Stale(now time.Time, maxAge time.Duration) bool {
+	if maxAge <= 0 {
+		return false
+	}
+	if t.LastRefresh.IsZero() {
+		return true
+	}
+	return !now.Before(t.LastRefresh.Add(maxAge))
 }
 
 // Store persists OAuth tokens in the secret store.

@@ -9,9 +9,10 @@ import (
 type Kind string
 
 const (
-	KindOpenAI    Kind = "openai"
-	KindAnthropic Kind = "anthropic"
-	KindGoogle    Kind = "google"
+	KindOpenAI      Kind = "openai"
+	KindAnthropic   Kind = "anthropic"
+	KindGoogle      Kind = "google"
+	KindAntigravity Kind = "antigravity"
 )
 
 // Provider describes one BYOK provider.
@@ -62,15 +63,19 @@ var contextWindows = map[string]int{
 	"gpt-5.3-codex": 400000,
 
 	// Anthropic: everything current is 1M.
-	"claude-fable-5-1":       1000000,
-	"claude-opus-5-5":        1000000,
-	"claude-opus-5":          1000000,
-	"claude-sonnet-5":        1000000,
-	"claude-sonnet-4-6":      1000000,
-	"claude-haiku-4-5":       200000,
-	"claude-oauth-opus-5":    1000000,
-	"claude-oauth-sonnet-5":  1000000,
-	"claude-oauth-haiku-4-5": 200000,
+	"claude-fable-5-1":              1000000,
+	"claude-opus-5-5":               1000000,
+	"claude-opus-5":                 1000000,
+	"claude-sonnet-5":               1000000,
+	"claude-sonnet-4-6":             1000000,
+	"claude-haiku-4-5":              200000,
+	"claude-oauth-opus-5":           1000000,
+	"claude-oauth-sonnet-5":         1000000,
+	"claude-oauth-haiku-4-5":        200000,
+	"antigravity-gemini-3.8-flash":  1048576,
+	"antigravity-gemini-3.5-flash":  1048576,
+	"antigravity-gemini-pro":        1048576,
+	"antigravity-claude-sonnet-4-6": 1000000,
 
 	// Google: the Flash and Pro lines are all around 1M.
 	"gemini-3.1-pro-preview": 1048576,
@@ -245,6 +250,7 @@ func Providers() []Provider {
 		{ID: "openai", Label: "OpenAI", Kind: KindOpenAI, DefaultBaseURL: "https://api.openai.com/v1", ConsoleURL: "https://platform.openai.com/api-keys", NeedsKey: true, KeyPrefix: "sk-", EnvKeys: []string{"OPENAI_API_KEY"}},
 		{ID: "anthropic", Label: "Anthropic", Kind: KindAnthropic, DefaultBaseURL: "https://api.anthropic.com", ConsoleURL: "https://console.anthropic.com/settings/keys", NeedsKey: true, KeyPrefix: "sk-ant-", EnvKeys: []string{"ANTHROPIC_API_KEY"}},
 		{ID: "claude-oauth", Label: "Claude (OAuth)", Kind: KindAnthropic, DefaultBaseURL: "https://api.anthropic.com", ConsoleURL: "https://claude.ai/", NeedsKey: true, OAuth: true},
+		{ID: "antigravity", Label: "Google Antigravity", Kind: KindAntigravity, DefaultBaseURL: "https://daily-cloudcode-pa.googleapis.com", ConsoleURL: "https://antigravity.google", NeedsKey: true, OAuth: true},
 		{ID: "google", Label: "Google Gemini", Kind: KindGoogle, DefaultBaseURL: "https://generativelanguage.googleapis.com", ConsoleURL: "https://aistudio.google.com/apikey", NeedsKey: true, EnvKeys: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 		{ID: "xai", Label: "xAI Grok", Kind: KindOpenAI, DefaultBaseURL: "https://api.x.ai/v1", ConsoleURL: "https://console.x.ai/", NeedsKey: true, KeyPrefix: "xai-", EnvKeys: []string{"XAI_API_KEY"}},
 		{ID: "xai-oauth", Label: "xAI Grok (OAuth)", Kind: KindOpenAI, DefaultBaseURL: "https://api.x.ai/v1", ConsoleURL: "https://x.ai/", NeedsKey: true, OAuth: true},
@@ -380,6 +386,12 @@ func Models() []Model {
 		{ID: "claude-oauth-opus-5", Provider: "claude-oauth", Label: "Claude Opus 5 (OAuth)", APIID: "claude-opus-5", Description: "Previous flagship through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-oauth-sonnet-5", Provider: "claude-oauth", Label: "Claude Sonnet 5 (OAuth)", APIID: "claude-sonnet-5", Description: "Balanced Claude through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-oauth-haiku-4-5", Provider: "claude-oauth", Label: "Claude 4.5 Haiku (OAuth)", APIID: "claude-haiku-4-5", Description: "Fast Claude through a Claude login.", Tags: []string{"fast", "tools"}},
+		// Google Antigravity serves Gemini and Claude models through its Cloud
+		// Code backend under an Antigravity login.
+		{ID: "antigravity-gemini-3.8-flash", Provider: "antigravity", Label: "Gemini 3.8 Flash (Antigravity)", APIID: "gemini-3.8-flash", Description: "Fast Gemini through an Antigravity login.", Tags: []string{"fast", "tools", "coding"}},
+		{ID: "antigravity-gemini-3.5-flash", Provider: "antigravity", Label: "Gemini 3.5 Flash (Antigravity)", APIID: "gemini-3.5-flash", Description: "Balanced Gemini through an Antigravity login.", Tags: []string{"fast", "tools"}},
+		{ID: "antigravity-gemini-pro", Provider: "antigravity", Label: "Gemini Pro (Antigravity)", APIID: "gemini-pro-agent", Description: "Flagship Gemini through an Antigravity login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "antigravity-claude-sonnet-4-6", Provider: "antigravity", Label: "Claude Sonnet 4.6 (Antigravity)", APIID: "claude-sonnet-4-6", Description: "Claude through an Antigravity login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-opus-5", Provider: "anthropic", Label: "Claude Opus 5", Description: "Previous flagship, still available.", Tags: []string{"reasoning", "tools"}},
 		{ID: "claude-sonnet-4-6", Provider: "anthropic", Label: "Claude Sonnet 4.6", Description: "Previous Sonnet generation.", Tags: []string{"tools", "coding"}},
 
