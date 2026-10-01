@@ -698,12 +698,12 @@ func (t *webFetchTool) DoneLabel(a map[string]any) string {
 	return "Fetched " + Shorten(argString(a, "url"), 50)
 }
 func (t *webFetchTool) Description() string {
-	return "Fetch an http or https URL and return its readable text. HTML tags are stripped. Use it to read documentation."
+	return "Read the content of one known URL (a documentation page, changelog or article) as readable text. HTML is reduced to text. If the direct fetch is blocked by DNS it automatically retries through the r.jina.ai reader; set reader=true to force the reader for a JavaScript page. To find a URL for a question, use web_search first."
 }
 func (t *webFetchTool) Schema() map[string]any {
 	return object(map[string]any{
 		"url":    strProp("Absolute http or https URL."),
-		"reader": boolProp("Fetch through the r.jina.ai reader instead of directly. Use it when a direct fetch fails (a host blocked by DNS, or a JavaScript page): the reader fetches server-side and returns clean markdown."),
+		"reader": boolProp("Force the r.jina.ai reader instead of a direct fetch. The tool already falls back to the reader automatically when a direct fetch is blocked or bot-blocked; set this for a JavaScript page."),
 	}, "url")
 }
 
@@ -759,46 +759,79 @@ func (t *webFetchTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	if isBlockedHost(parsed.Hostname()) {
 		return Result{Output: "That host is a link-local or cloud metadata address, which the agent does not fetch.", IsError: true}, nil
 	}
+	forcedReader := argBool(args, "reader", false)
+
+	result, status, transportErr := fetchOnce(ctx, raw, forcedReader)
+	if transportErr == nil {
+		// A direct fetch that came back empty or bot-blocked (403/429) is what
+		// the reader fixes, so it is retried automatically rather than asking
+		// the model to know about the flag.
+		blocked := status == http.StatusForbidden || status == http.StatusTooManyRequests
+		if !forcedReader && (blocked || strings.TrimSpace(result.Output) == "") {
+			if viaReader, _, readerErr := fetchOnce(ctx, raw, true); readerErr == nil {
+				return viaReader, nil
+			}
+		}
+		return result, nil
+	}
+	if errors.Is(transportErr, errBlockedRedirect) {
+		return Result{Output: "That URL redirects to a link-local or cloud metadata address, which the agent does not fetch.", IsError: true}, nil
+	}
+	if !forcedReader && isNetworkUnreachable(transportErr) {
+		if viaReader, _, readerErr := fetchOnce(ctx, raw, true); readerErr == nil {
+			return viaReader, nil
+		}
+	}
+	if isNetworkUnreachable(transportErr) {
+		return Result{
+			Output:  fmt.Sprintf("fetch failed: %v\nHint: that host could not be reached directly or through the reader (a blocked or misspelled name, or the machine is offline). Continue with local files and tools.", transportErr),
+			IsError: true,
+		}, nil
+	}
+	return Result{Output: fmt.Sprintf("fetch failed: %v", transportErr), IsError: true}, nil
+}
+
+// fetchOnce performs one fetch. A non-nil error is a transport failure, so the
+// caller can decide whether to retry through the reader; an HTTP status or a
+// refused host is returned as an error Result instead. status is 0 when the
+// request never reached the server.
+func fetchOnce(ctx context.Context, raw string, reader bool) (Result, int, error) {
 	target := raw
-	if argBool(args, "reader", false) {
+	if reader {
 		target = strings.TrimRight(webReaderBase, "/") + "/" + raw
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, target, nil)
 	if err != nil {
-		return Result{Output: err.Error(), IsError: true}, nil
+		return Result{}, 0, err
 	}
 	request.Header.Set("User-Agent", "Termixgo/0.1 (+https://github.com/99apps-id/termixgo)")
 	response, err := fetchClient.Do(request)
 	if err != nil {
-		if errors.Is(err, errBlockedRedirect) {
-			return Result{Output: "That URL redirects to a link-local or cloud metadata address, which the agent does not fetch.", IsError: true}, nil
-		}
-		if isNetworkUnreachable(err) {
-			return Result{
-				Output:  fmt.Sprintf("fetch failed: %v\nHint: that host could not be reached (a blocked or misspelled name, or the machine is offline). Retry once with reader=true, which fetches through r.jina.ai and is not blocked by a local DNS block; otherwise continue with local files and tools.", err),
-				IsError: true,
-			}, nil
-		}
-		return Result{Output: fmt.Sprintf("fetch failed: %v", err), IsError: true}, nil
+		return Result{}, 0, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return Result{Output: fmt.Sprintf("fetch returned %s", response.Status), IsError: true}, nil
+		return Result{Output: fmt.Sprintf("fetch returned %s", response.Status), IsError: true}, response.StatusCode, nil
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, 2*1024*1024))
 	if err != nil {
-		return Result{Output: fmt.Sprintf("read body: %v", err), IsError: true}, nil
+		return Result{}, 0, err
 	}
 	text := string(body)
-	if looksLikeHtml(response.Header.Get("Content-Type"), text) {
+	if !reader && looksLikeHtml(response.Header.Get("Content-Type"), text) {
 		text = htmlToText(text)
 	}
 	if len(text) > 20000 {
 		text = clipBytes(text, 20000) + "\n... [truncated]"
 	}
-	return Result{Output: text}, nil
+	if reader {
+		// Name the source, so the model knows a reader service, not the local
+		// machine, read the page.
+		text = "Source: reader (r.jina.ai)\n\n" + text
+	}
+	return Result{Output: text}, response.StatusCode, nil
 }
 
 // isBlockedHost refuses the cloud metadata addresses and the link-local range,

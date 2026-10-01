@@ -156,8 +156,9 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   A DNS failure is not retried, since the name will not resolve on a second
   attempt; only a transient connect failure is. An empty result from a source
   that answered is never reported as the machine being offline. `web_fetch`
-  with `reader: true` routes through r.jina.ai, which reads a host a local DNS
-  block hides.
+  retries through r.jina.ai automatically when a direct fetch cannot resolve or
+  is bot-blocked, and `reader: true` forces the reader for a JavaScript page, so
+  a host a local DNS block hides still reads without the model knowing the flag.
 - Cancellation flows through a context: `signal.NotifyContext` in the command,
   through `App.RunTurn`, into `Runner.Run`, and out to the HTTP request. The
   run loop checks the context between steps, so a stop is prompt and saves

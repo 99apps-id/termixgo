@@ -419,6 +419,10 @@ func TestHTMLToTextKeepsBlockBoundaries(t *testing.T) {
 func TestWebFetchReportsAnUnreachableHost(t *testing.T) {
 	tool := &webFetchTool{}
 	env := testEnv(t)
+	// The reader is pointed at a dead address too, so both the direct fetch and
+	// the automatic reader retry fail deterministically without the network.
+	t.Cleanup(func() { webReaderBase = "https://r.jina.ai/" })
+	webReaderBase = "http://127.0.0.1:9/"
 
 	// A port nothing is listening on. 127.0.0.1 is not a blocked host, so the
 	// failure comes from the connection rather than the guard.
@@ -431,6 +435,31 @@ func TestWebFetchReportsAnUnreachableHost(t *testing.T) {
 	}
 	if !strings.Contains(result.Output, "fetch failed") {
 		t.Errorf("output = %q, want it to name the failure", result.Output)
+	}
+}
+
+// TestWebFetchFallsBackToReaderWhenDirectFails is the reliability contract: a
+// host the local machine cannot resolve is retried through the reader without
+// the model having to pass reader=true.
+func TestWebFetchFallsBackToReaderWhenDirectFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(writer, "READER CONTENT")
+	}))
+	t.Cleanup(func() {
+		server.Close()
+		webReaderBase = "https://r.jina.ai/"
+	})
+	webReaderBase = server.URL + "/"
+
+	result, err := (&webFetchTool{}).Run(context.Background(), testEnv(t), map[string]any{
+		"url": "https://blocked.invalid/page",
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("Run: err=%v result=%+v", err, result)
+	}
+	if !strings.Contains(result.Output, "READER CONTENT") {
+		t.Errorf("output = %q, want the reader fallback content", result.Output)
 	}
 }
 

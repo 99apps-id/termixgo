@@ -394,10 +394,11 @@ termixgo secret tavily     # prompts, input hidden
 termixgo secret brave
 ```
 
-`web_fetch` reads a page directly; pass `reader: true` to fetch through
-`r.jina.ai` instead, which works for a host your DNS blocks and for JavaScript
-pages. A search that finds nothing does not claim the machine is offline: that
-message appears only when no source could be reached at all.
+`web_fetch` reads a page directly and automatically retries through `r.jina.ai`
+when the direct fetch is DNS-blocked or bot-blocked (a 403 or 429), so a host
+your DNS blocks still reads. Pass `reader: true` to force the reader for a
+JavaScript page. A search that finds nothing does not claim the machine is
+offline: that message appears only when no source could be reached at all.
 
 ## Orchestration pipelines
 
