@@ -230,45 +230,9 @@ func TestRunApprovalSessionAllowanceSkipsSecondPrompt(t *testing.T) {
 	}
 }
 
-func TestRunContinuesPastTheStepBudgetWhileProgressing(t *testing.T) {
-	// An interactive turn is segmented: when a segment of MaxSteps still ends by
-	// asking for tools, the next segment runs. A small configured MaxSteps used to
-	// pause a working task mid-way, which the operator saw as the agent giving up
-	// while the context window was barely used.
-	client := &fakeClient{steps: [][]provider.StreamEvent{
-		{callChunk("c1", "list_directory", `{"path":"."}`)},
-		{callChunk("c2", "list_directory", `{"path":"./"}`)},
-		{callChunk("c3", "list_directory", `{"path":"./."}`)},
-		{callChunk("c4", "list_directory", `{"path":"././"}`)},
-		{callChunk("c5", "list_directory", `{"path":"././."}`)},
-		{textChunk("done")},
-	}}
-	runner, _, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
-	runner.MaxSteps = 3
-	runner.TurnSegments = 3
-	session := NewSession(t.TempDir(), "test-model")
-
-	if err := runner.Run(context.Background(), session, "keep working"); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	client.mu.Lock()
-	calls := client.calls
-	client.mu.Unlock()
-	if calls <= 3 {
-		t.Errorf("provider calls = %d, want the turn to continue past the 3-step segment", calls)
-	}
-	recorder.mu.Lock()
-	defer recorder.mu.Unlock()
-	for _, event := range recorder.events {
-		if event.Kind == EventTurnEnd && event.StopReason != "stop" {
-			t.Errorf("stop reason = %q, want stop after the model answered", event.StopReason)
-		}
-	}
-}
-
 func TestRunStillPausesAtTheStepCeiling(t *testing.T) {
-	// The segment count is the absolute ceiling: a run that is always ready to
-	// dispatch another call still ends, so nothing loops forever.
+	// MaxSteps is the absolute ceiling: a run that is always ready to dispatch
+	// another call still ends, so nothing loops forever.
 	client := &fakeClient{steps: [][]provider.StreamEvent{
 		{callChunk("c1", "list_directory", `{"path":"."}`)},
 		{callChunk("c2", "list_directory", `{"path":"./"}`)},
@@ -279,7 +243,6 @@ func TestRunStillPausesAtTheStepCeiling(t *testing.T) {
 	}}
 	runner, _, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
 	runner.MaxSteps = 2
-	runner.TurnSegments = 2
 	session := NewSession(t.TempDir(), "test-model")
 
 	if err := runner.Run(context.Background(), session, "never stop"); err != nil {
@@ -288,8 +251,8 @@ func TestRunStillPausesAtTheStepCeiling(t *testing.T) {
 	client.mu.Lock()
 	calls := client.calls
 	client.mu.Unlock()
-	if calls > 4 {
-		t.Errorf("provider calls = %d, want the ceiling of 2 segments of 2 steps", calls)
+	if calls > 2 {
+		t.Errorf("provider calls = %d, want the ceiling of 2 steps", calls)
 	}
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
@@ -301,8 +264,8 @@ func TestRunStillPausesAtTheStepCeiling(t *testing.T) {
 }
 
 // TestHarnessStepCapIsAHardCap pins that a profile which caps the loop means
-// that cap. The "shorter loop" profile exists to bound a turn, so segmenting it
-// would let one turn run four times its stated budget and make its label false.
+// that cap. The "shorter loop" profile exists to bound a turn, so its cap is
+// the whole per-turn ceiling, not a segment of a larger one.
 func TestHarnessStepCapIsAHardCap(t *testing.T) {
 	profile := BuiltinHarnessProfiles["shorter_loop"]
 	if profile.StepBudgetCap <= 0 {
@@ -321,8 +284,6 @@ func TestHarnessStepCapIsAHardCap(t *testing.T) {
 	runner, _, _ := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
 	runner.Harness = "shorter_loop"
 	runner.MaxSteps = 100
-	// A segmented turn is what the cap must override.
-	runner.TurnSegments = 4
 	session := NewSession(t.TempDir(), "test-model")
 
 	if err := runner.Run(context.Background(), session, "keep going"); err != nil {

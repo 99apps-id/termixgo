@@ -25,8 +25,9 @@ const DefaultHarnessProfile = "critical"
 // DefaultStepBudget bounds one turn when nothing else is configured. It is
 // generous because the budget pauses a turn rather than ending a task: the
 // operator replies and the work continues, while the loop guard and the cost
-// cap stay the real stops for a run that goes nowhere.
-const DefaultStepBudget = 100
+// cap stay the real stops for a run that goes nowhere. It is the whole turn's
+// ceiling, so it is set high enough that one long task finishes in one reply.
+const DefaultStepBudget = 300
 
 // BuiltinHarnessProfiles ships the named profiles.
 var BuiltinHarnessProfiles = map[string]HarnessProfile{
@@ -75,8 +76,8 @@ var BuiltinHarnessProfiles = map[string]HarnessProfile{
 			"- Never assume a path, symbol or dependency exists without reading it first.\n" +
 			"- On error or timeout, diagnose, pivot to an alternative, and continue. Do not stop early.\n" +
 			"- Verify with inspection, test or lint before concluding.",
-		StepBudgetDelta: 25,
-		StepBudgetCap:   100,
+		StepBudgetDelta: 200,
+		StepBudgetCap:   1000,
 	},
 	"critical": {
 		ID:          "critical",

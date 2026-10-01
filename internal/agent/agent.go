@@ -14,17 +14,6 @@ import (
 // toolTimeoutCap bounds a single tool call so a hung tool cannot wedge a run.
 const toolTimeoutCap = 15 * time.Minute
 
-// DefaultTurnSegments is how many step segments an interactive turn may run.
-//
-// A segment is MaxSteps long, and the next one starts only when the previous
-// segment was still dispatching tools when it ran out. The pause exists to stop
-// a run that goes nowhere, so a long task should not hit it: with a small
-// configured MaxSteps the operator saw "paused" in the middle of real work while
-// the context window was barely touched. The loop guard and the cost cap inside
-// a segment are still the real stops, and the segment count keeps the whole turn
-// bounded. A subagent leaves this at zero because its budget must stay hard.
-const DefaultTurnSegments = 4
-
 // SteerPrefix marks an operator message that arrived while the turn was
 // already running, so the model can tell a course correction from the original
 // request.
@@ -37,19 +26,17 @@ const SteerPrefix = "[Operator steer]"
 // runs directly on the operator machine. Folder trust is the gate that keeps
 // that safe, so a mutating tool in an untrusted folder always asks first.
 type Runner struct {
-	Client   provider.Client
-	Model    string
-	Config   config.Config
-	Env      *Env
-	Tools    *Registry
-	Policy   *ApprovalPolicy
+	Client provider.Client
+	Model  string
+	Config config.Config
+	Env    *Env
+	Tools  *Registry
+	Policy *ApprovalPolicy
+	// MaxSteps is the number of steps one turn may run before it pauses. It is
+	// the operator's whole per-turn ceiling, not a segment of a larger one.
 	MaxSteps int
 	// Harness selects the agent harness profile. Empty means critical.
 	Harness string
-	// TurnSegments is how many step segments one turn may run. Zero or one
-	// makes the turn bounded by MaxSteps alone, which is what a subagent
-	// needs; DefaultTurnSegments is what an interactive turn uses.
-	TurnSegments int
 	// ContextBudget overrides the token budget for history compaction.
 	ContextBudget int
 	// Pricing is the model's cost per million tokens. Costs are reported
@@ -123,140 +110,116 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	sessionCost := session.Cost()
 	costKnown := r.CostKnown || r.Pricing.Known()
 
-	// A turn runs in segments of MaxSteps. A segment that was still doing work
-	// when its steps ran out continues into the next one instead of pausing, and
-	// the segment count is the absolute ceiling for the whole turn.
+	// One turn runs up to maxSteps steps, and that number is the operator's
+	// maxSteps: the ceiling is explicit rather than a hidden multiple of the
+	// setting. The loop guard and the cost cap stay the stops for a run that
+	// goes nowhere; this is only the bound that keeps one reply from spending
+	// forever.
 	//
-	// A profile that sets an explicit step cap means that cap, not one segment's
-	// worth of it: the "shorter loop" profile exists to bound a turn, so letting
-	// it run four segments would make its label a lie.
-	totalSteps := 0
-	segments := r.TurnSegments
-	if profile.StepBudgetCap > 0 {
-		segments = 1
-	}
-	if segments < 1 {
-		segments = 1
-	}
-	// Usage is summed across every segment, so the turn total reported at the
-	// end is the whole turn rather than its last step.
+	// Usage is summed across every step, so the turn total reported at the end
+	// is the whole turn rather than its last step.
 	var turnUsage provider.Usage
 runLoop:
-	for segment := 0; segment < segments; segment++ {
-		segmentWorked := false
-		for step := 0; step < maxSteps; step++ {
-			totalSteps++
+	for step := 0; step < maxSteps; step++ {
+		if ctx.Err() != nil {
+			stopReason = "aborted"
+			break runLoop
+		}
+		if overBudget(r.CostBudgetUSD, sessionCost) {
+			stopReason = "cost-cap"
+			emit(Event{
+				Kind:    EventError,
+				Err:     fmt.Errorf("stopped: estimated spend reached $%.4f of the $%.2f budget (config costBudgetUsd)", sessionCost, r.CostBudgetUSD),
+				CostUSD: sessionCost,
+			},
+			)
+			break runLoop
+		}
+
+		// A steer typed while the turn is running is new information, so it also
+		// clears the repetition guard: the operator has a reason for the model to
+		// try again, and the turn should not close just because it was looping.
+		if step > 0 && r.Steer != nil && r.injectSteering(session) {
+			*guard = loopGuard{}
+		}
+
+		request := provider.ChatRequest{
+			Model:    r.Model,
+			System:   r.system(session),
+			Messages: compactForModel(session.Messages(), r.ContextBudget),
+			Tools:    r.stepTools(discovered).Definitions(),
+		}
+
+		var answer strings.Builder
+		var reasoning strings.Builder
+		var calls []provider.ToolCall
+		var reasoningStart time.Time
+
+		streamErr := r.Client.Stream(ctx, request, func(event provider.StreamEvent) error {
+			switch event.Type {
+			case provider.EventTextDelta:
+				answer.WriteString(event.Text)
+				emit(Event{Kind: EventText, Text: event.Text})
+			case provider.EventReasoningDelta:
+				if reasoning.Len() == 0 {
+					reasoningStart = time.Now()
+				}
+				reasoning.WriteString(event.Text)
+				emit(Event{Kind: EventThinking, Text: event.Text})
+			case provider.EventToolCall:
+				if event.ToolCall != nil {
+					calls = append(calls, *event.ToolCall)
+				}
+			case provider.EventUsage:
+				if event.Usage != nil {
+					turnUsage = turnUsage.Add(*event.Usage)
+					sessionCost += r.Pricing.Cost(*event.Usage)
+					emit(Event{Kind: EventUsage, Usage: *event.Usage, CostUSD: sessionCost, CostKnown: costKnown})
+				}
+			}
+			return nil
+		})
+
+		if reasoning.Len() > 0 {
+			millis := int64(0)
+			if !reasoningStart.IsZero() {
+				millis = durationMillis(time.Since(reasoningStart))
+			}
+			emit(Event{Kind: EventReasoned, Text: reasoning.String(), ToolMillis: millis})
+		}
+
+		if streamErr != nil {
 			if ctx.Err() != nil {
 				stopReason = "aborted"
 				break runLoop
 			}
-			if overBudget(r.CostBudgetUSD, sessionCost) {
-				stopReason = "cost-cap"
-				emit(Event{
-					Kind:    EventError,
-					Err:     fmt.Errorf("stopped: estimated spend reached $%.4f of the $%.2f budget (config costBudgetUsd)", sessionCost, r.CostBudgetUSD),
-					CostUSD: sessionCost,
-				},
-				)
-				break runLoop
-			}
+			emit(Event{Kind: EventError, Err: streamErr})
+			stopReason = "error"
+			break runLoop
+		}
 
-			// A steer typed while the turn is running is new information, so it also
-			// clears the repetition guard: the operator has a reason for the model to
-			// try again, and the turn should not close just because it was looping.
-			if step > 0 && r.Steer != nil && r.injectSteering(session) {
-				*guard = loopGuard{}
-			}
+		// A step that produced no text and no tool call is not a turn worth
+		// keeping. Storing it would put an empty assistant message, or two
+		// in a row when the model is idle, into the history: a weaker
+		// OpenAI-compatible model reads that as a malformed turn and can
+		// answer an earlier message instead of the operator's latest one.
+		// The guard below still counts the idle step, so the loop stops.
+		if strings.TrimSpace(answer.String()) != "" || len(calls) > 0 {
+			session.AddAssistant(answer.String(), reasoning.String(), calls)
+		}
 
-			request := provider.ChatRequest{
-				Model:    r.Model,
-				System:   r.system(session),
-				Messages: compactForModel(session.Messages(), r.ContextBudget),
-				Tools:    r.stepTools(discovered).Definitions(),
-			}
-
-			var answer strings.Builder
-			var reasoning strings.Builder
-			var calls []provider.ToolCall
-			var reasoningStart time.Time
-
-			streamErr := r.Client.Stream(ctx, request, func(event provider.StreamEvent) error {
-				switch event.Type {
-				case provider.EventTextDelta:
-					answer.WriteString(event.Text)
-					emit(Event{Kind: EventText, Text: event.Text})
-				case provider.EventReasoningDelta:
-					if reasoning.Len() == 0 {
-						reasoningStart = time.Now()
-					}
-					reasoning.WriteString(event.Text)
-					emit(Event{Kind: EventThinking, Text: event.Text})
-				case provider.EventToolCall:
-					if event.ToolCall != nil {
-						calls = append(calls, *event.ToolCall)
-					}
-				case provider.EventUsage:
-					if event.Usage != nil {
-						turnUsage = turnUsage.Add(*event.Usage)
-						sessionCost += r.Pricing.Cost(*event.Usage)
-						emit(Event{Kind: EventUsage, Usage: *event.Usage, CostUSD: sessionCost, CostKnown: costKnown})
-					}
-				}
-				return nil
-			})
-
-			if reasoning.Len() > 0 {
-				millis := int64(0)
-				if !reasoningStart.IsZero() {
-					millis = durationMillis(time.Since(reasoningStart))
-				}
-				emit(Event{Kind: EventReasoned, Text: reasoning.String(), ToolMillis: millis})
-			}
-
-			if streamErr != nil {
-				if ctx.Err() != nil {
-					stopReason = "aborted"
+		if len(calls) == 0 {
+			if strings.TrimSpace(answer.String()) == "" {
+				// Silence is not success: a model that returns no text
+				// and no calls is stuck, so ask again up to the guard
+				// instead of filing an empty turn as done.
+				if stop, reason := guard.noteEmptyStep(); stop {
+					stopReason = "loop-guard"
+					emit(Event{Kind: EventNotice, Text: reason})
 					break runLoop
 				}
-				emit(Event{Kind: EventError, Err: streamErr})
-				stopReason = "error"
-				break runLoop
-			}
-
-			// A step that produced no text and no tool call is not a turn worth
-			// keeping. Storing it would put an empty assistant message, or two
-			// in a row when the model is idle, into the history: a weaker
-			// OpenAI-compatible model reads that as a malformed turn and can
-			// answer an earlier message instead of the operator's latest one.
-			// The guard below still counts the idle step, so the loop stops.
-			if strings.TrimSpace(answer.String()) != "" || len(calls) > 0 {
-				session.AddAssistant(answer.String(), reasoning.String(), calls)
-			}
-
-			if len(calls) == 0 {
-				if strings.TrimSpace(answer.String()) == "" {
-					// Silence is not success: a model that returns no text
-					// and no calls is stuck, so ask again up to the guard
-					// instead of filing an empty turn as done.
-					if stop, reason := guard.noteEmptyStep(); stop {
-						stopReason = "loop-guard"
-						emit(Event{Kind: EventNotice, Text: reason})
-						break runLoop
-					}
-					if ledger.ShouldNudgeVerification(false) && nudges < MaxVerifyNudges {
-						nudge := ledger.BuildVerifyNudge(nudges, false)
-						if strings.TrimSpace(nudge) != "" {
-							nudges++
-							session.AddUser(nudge)
-							emit(Event{Kind: EventNotice, Text: "Verifying the change before finishing."})
-							continue
-						}
-					}
-					continue
-				}
-				guard.noteProgress()
-				if ledger.ShouldNudgeVerification(ClaimsVerification(answer.String())) && nudges < MaxVerifyNudges {
-					nudge := ledger.BuildVerifyNudge(nudges, ClaimsVerification(answer.String()))
+				if ledger.ShouldNudgeVerification(false) && nudges < MaxVerifyNudges {
+					nudge := ledger.BuildVerifyNudge(nudges, false)
 					if strings.TrimSpace(nudge) != "" {
 						nudges++
 						session.AddUser(nudge)
@@ -264,93 +227,90 @@ runLoop:
 						continue
 					}
 				}
-				// The emitter is the single accumulator: App.emit folds every
-				// EventUsage into the app total and the session together. Adding
-				// the turn total here as well recorded the last step's tokens a
-				// second time, so a one step turn persisted twice its usage and
-				// the session file disagreed with the status line.
-				session.SetCost(sessionCost)
-				emit(Event{Kind: EventTurnEnd, StopReason: "stop", Usage: turnUsage, CostUSD: sessionCost, CostKnown: costKnown})
-				return nil
-			}
-			guard.noteProgress()
-
-			// A task that moves to completed is the boundary verification belongs to:
-			// the next task would otherwise build on a change nobody checked.
-			pendingVerify := ""
-			var pendingImages []provider.Image
-			for index, call := range calls {
-				if ctx.Err() != nil {
-					stopReason = "aborted"
-					answerSkippedCalls(session, calls[index:], "the turn was stopped")
-					break
-				}
-				if stop, reason := guard.noteCall(call.Name, call.Arguments); stop {
-					stopReason = "loop-guard"
-					emit(Event{Kind: EventNotice, Text: reason})
-					answerSkippedCalls(session, calls[index:], reason)
-					break
-				}
-				before := r.todoSnapshot()
-				result := r.execute(ctx, call)
-				if result.IsError && ctx.Err() != nil {
-					result.Output = "stopped: " + ctx.Err().Error()
-				}
-				r.observeToolResult(&ledger, guard, call.Name, call.Arguments, result)
-				if result.IsError && r.Journal != nil {
-					r.Journal.Record(call.Name, call.Arguments, result.Output)
-				}
-				session.AddToolResult(call.ID, call.Name, result.Output)
-				if len(result.Images) > 0 {
-					pendingImages = append(pendingImages, result.Images...)
-				}
-				if !result.IsError && taskJustCompleted(before, r.todoSnapshot()) {
-					pendingVerify = ledger.BuildVerifyNudge(nudges, false)
-				}
-				if stop, reason := guard.noteResult(result.IsError); stop {
-					stopReason = "loop-guard"
-					emit(Event{Kind: EventNotice, Text: reason})
-					answerSkippedCalls(session, calls[index+1:], reason)
-					break
-				}
-				if ctx.Err() != nil {
-					stopReason = "aborted"
-					answerSkippedCalls(session, calls[index+1:], "the turn was stopped")
-					break
-				}
-			}
-			// Images from a tool in this batch go on one user message after all
-			// the tool results, so every provider keeps the results adjacent to
-			// the assistant call that requested them.
-			if len(pendingImages) > 0 {
-				session.AddImages("Image data read by the tools above is attached for you to see.", pendingImages)
-			}
-			if stopReason == "loop-guard" || stopReason == "aborted" {
-				break runLoop
-			}
-			if ctx.Err() != nil {
-				break runLoop
-			}
-			// Every call in the batch was dispatched without the guard tripping, so
-			// this segment was still doing work: it earns the next one when it runs
-			// out of steps.
-			segmentWorked = true
-			if strings.TrimSpace(pendingVerify) != "" && nudges < MaxVerifyNudges {
-				nudges++
-				session.AddUser(pendingVerify)
-				emit(Event{Kind: EventNotice, Text: "Task finished. Verifying before the next one."})
 				continue
 			}
+			guard.noteProgress()
+			if ledger.ShouldNudgeVerification(ClaimsVerification(answer.String())) && nudges < MaxVerifyNudges {
+				nudge := ledger.BuildVerifyNudge(nudges, ClaimsVerification(answer.String()))
+				if strings.TrimSpace(nudge) != "" {
+					nudges++
+					session.AddUser(nudge)
+					emit(Event{Kind: EventNotice, Text: "Verifying the change before finishing."})
+					continue
+				}
+			}
+			// The emitter is the single accumulator: App.emit folds every
+			// EventUsage into the app total and the session together. Adding
+			// the turn total here as well recorded the last step's tokens a
+			// second time, so a one step turn persisted twice its usage and
+			// the session file disagreed with the status line.
+			session.SetCost(sessionCost)
+			emit(Event{Kind: EventTurnEnd, StopReason: "stop", Usage: turnUsage, CostUSD: sessionCost, CostKnown: costKnown})
+			return nil
 		}
-		// The step loop ended on its own. Continue only when the segment was
-		// still making progress, so a run that goes nowhere still stops here.
-		if stopReason != "stop" || !segmentWorked {
-			break
+		guard.noteProgress()
+
+		// A task that moves to completed is the boundary verification belongs to:
+		// the next task would otherwise build on a change nobody checked.
+		pendingVerify := ""
+		var pendingImages []provider.Image
+		for index, call := range calls {
+			if ctx.Err() != nil {
+				stopReason = "aborted"
+				answerSkippedCalls(session, calls[index:], "the turn was stopped")
+				break
+			}
+			if stop, reason := guard.noteCall(call.Name, call.Arguments); stop {
+				stopReason = "loop-guard"
+				emit(Event{Kind: EventNotice, Text: reason})
+				answerSkippedCalls(session, calls[index:], reason)
+				break
+			}
+			before := r.todoSnapshot()
+			result := r.execute(ctx, call)
+			if result.IsError && ctx.Err() != nil {
+				result.Output = "stopped: " + ctx.Err().Error()
+			}
+			r.observeToolResult(&ledger, guard, call.Name, call.Arguments, result)
+			if result.IsError && r.Journal != nil {
+				r.Journal.Record(call.Name, call.Arguments, result.Output)
+			}
+			session.AddToolResult(call.ID, call.Name, result.Output)
+			if len(result.Images) > 0 {
+				pendingImages = append(pendingImages, result.Images...)
+			}
+			if !result.IsError && taskJustCompleted(before, r.todoSnapshot()) {
+				pendingVerify = ledger.BuildVerifyNudge(nudges, false)
+			}
+			if stop, reason := guard.noteResult(result.IsError); stop {
+				stopReason = "loop-guard"
+				emit(Event{Kind: EventNotice, Text: reason})
+				answerSkippedCalls(session, calls[index+1:], reason)
+				break
+			}
+			if ctx.Err() != nil {
+				stopReason = "aborted"
+				answerSkippedCalls(session, calls[index+1:], "the turn was stopped")
+				break
+			}
 		}
-		if segment+1 < segments {
-			emit(Event{Kind: EventNotice, Text: fmt.Sprintf(
-				"Step budget for this segment reached after %d steps; the run is still making progress, so it continues (ceiling %d steps).",
-				totalSteps, maxSteps*segments)})
+		// Images from a tool in this batch go on one user message after all
+		// the tool results, so every provider keeps the results adjacent to
+		// the assistant call that requested them.
+		if len(pendingImages) > 0 {
+			session.AddImages("Image data read by the tools above is attached for you to see.", pendingImages)
+		}
+		if stopReason == "loop-guard" || stopReason == "aborted" {
+			break runLoop
+		}
+		if ctx.Err() != nil {
+			break runLoop
+		}
+		if strings.TrimSpace(pendingVerify) != "" && nudges < MaxVerifyNudges {
+			nudges++
+			session.AddUser(pendingVerify)
+			emit(Event{Kind: EventNotice, Text: "Task finished. Verifying before the next one."})
+			continue
 		}
 	}
 
@@ -361,7 +321,7 @@ runLoop:
 			"Paused after %d steps: one turn is capped so a single reply cannot spend forever. "+
 				"Nothing is lost, the work so far stays in the transcript. "+
 				"Send \"continue\" to pick up exactly where it stopped, or set a larger maxSteps in the settings file "+
-				"(the /harness autonomous profile also grants a longer turn).", totalSteps)})
+				"(the /harness autonomous profile also grants a longer turn).", maxSteps)})
 	}
 	if stopReason == "aborted" {
 		emit(Event{Kind: EventNotice, Text: "Stopped."})

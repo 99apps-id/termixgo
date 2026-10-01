@@ -869,19 +869,17 @@ func (a *App) runTurnWithImages(ctx context.Context, input string, images []prov
 
 	cfg := a.Config()
 	runner := &agent.Runner{
-		Client:        client,
-		Model:         model,
-		Config:        cfg,
-		Env:           a.env(),
-		Tools:         a.tools,
-		Policy:        a.Policy(),
+		Client: client,
+		Model:  model,
+		Config: cfg,
+		Env:    a.env(),
+		Tools:  a.tools,
+		Policy: a.Policy(),
+		// cfg.MaxSteps is the whole per-turn ceiling, so an interactive turn
+		// pauses once, at the number the operator configured.
 		MaxSteps:      cfg.MaxSteps,
 		Harness:       cfg.HarnessProfile,
 		ContextBudget: agent.HistoryBudget(window),
-		// An interactive turn continues past its step budget while it is still
-		// making progress, so a small configured MaxSteps cannot pause real work
-		// mid-task. A subagent leaves this unset and keeps a hard budget.
-		TurnSegments:  agent.DefaultTurnSegments,
 		Pricing:       price,
 		CostKnown:     costKnown,
 		CostBudgetUSD: cfg.CostBudgetUSD,

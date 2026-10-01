@@ -229,7 +229,7 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
   "approvalMode": "all",
   "showReasoning": true,
   "language": "en",
-  "maxSteps": 100,
+  "maxSteps": 300,
   "harnessProfile": "critical",
   "toolSearchEnabled": false,
   "costBudgetUsd": 2.0,
@@ -248,7 +248,7 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
 | --- | --- |
 | `defaultModel` | the model a new session starts with |
 | `approvalMode` | `ask`, `edits`, `all` or `plan` |
-| `maxSteps` | steps in one turn segment before it pauses |
+| `maxSteps` | the whole per-turn ceiling: the agent pauses after this many steps and continues when you reply |
 | `harnessProfile` | `balanced`, `plan_briefly`, `verify_before_finish`, `terminal_first`, `shorter_loop`, `no_todo`, `autonomous` or `critical` |
 | `toolSearchEnabled` | load the ecosystem tools on demand instead of every request |
 | `costBudgetUsd` | stop the run once estimated session spend passes this |

@@ -35,8 +35,8 @@ func TestHarnessBudgetNeverCollapsesToZero(t *testing.T) {
 // turn rather than the task, so an unset value must resolve to the generous
 // default instead of a small number that pauses long work early.
 func TestDefaultStepBudgetIsGenerous(t *testing.T) {
-	if DefaultStepBudget != 100 {
-		t.Errorf("DefaultStepBudget = %d, want 100", DefaultStepBudget)
+	if DefaultStepBudget != 300 {
+		t.Errorf("DefaultStepBudget = %d, want 300", DefaultStepBudget)
 	}
 	profile := GetHarnessProfile(DefaultHarnessProfile)
 	if got := ApplyHarnessToBudget(0, profile); got < DefaultStepBudget {

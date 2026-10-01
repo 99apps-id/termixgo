@@ -122,8 +122,8 @@ func TestLoadRepairsInvalidValues(t *testing.T) {
 	if cfg.ApprovalMode != ApprovalAll {
 		t.Errorf("ApprovalMode = %q, want the default all", cfg.ApprovalMode)
 	}
-	if cfg.MaxSteps != 100 {
-		t.Errorf("MaxSteps = %d, want 100", cfg.MaxSteps)
+	if cfg.MaxSteps != 300 {
+		t.Errorf("MaxSteps = %d, want 300", cfg.MaxSteps)
 	}
 	if cfg.Language != "en" {
 		t.Errorf("Language = %q, want en", cfg.Language)

@@ -96,7 +96,10 @@ type Config struct {
 	ApprovalMode  ApprovalMode `json:"approvalMode"`
 	ShowReasoning bool         `json:"showReasoning"`
 	Language      string       `json:"language"`
-	MaxSteps      int          `json:"maxSteps"`
+	// MaxSteps is the whole per-turn ceiling: the agent pauses after this many
+	// steps in one reply, and the operator continues if the work is not done.
+	// It is one explicit number, not a segment of a larger hidden budget.
+	MaxSteps int `json:"maxSteps"`
 
 	// CostBudgetUSD stops a run once the estimated spend for the session
 	// passes it. Zero means no limit, which is the default so nothing
@@ -152,7 +155,7 @@ func Default() Config {
 		ApprovalMode:  ApprovalAll,
 		ShowReasoning: true,
 		Language:      "en",
-		MaxSteps:      100,
+		MaxSteps:      300,
 		BaseURLs:      map[string]string{},
 	}
 }
@@ -221,7 +224,7 @@ func (c *Config) normalise() {
 	// budget only bounds one turn: a long task continues when the operator
 	// replies, and the loop guard and cost cap remain the real runaway stops.
 	if c.MaxSteps <= 0 {
-		c.MaxSteps = 100
+		c.MaxSteps = 300
 	}
 	if c.Language == "" {
 		c.Language = "en"

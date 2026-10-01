@@ -146,7 +146,7 @@ func TestLoadReturnsDefaultsWhenTheFileIsAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.MaxSteps != 100 || cfg.ApprovalMode != ApprovalAll {
+	if cfg.MaxSteps != 300 || cfg.ApprovalMode != ApprovalAll {
 		t.Errorf("cfg = %+v, want defaults", cfg)
 	}
 }
@@ -172,8 +172,8 @@ func TestNormaliseRepairsAHandEditedFile(t *testing.T) {
 	if cfg.ApprovalMode != ApprovalAll {
 		t.Errorf("approvalMode = %q, want it repaired to all", cfg.ApprovalMode)
 	}
-	if cfg.MaxSteps != 100 {
-		t.Errorf("maxSteps = %d, want 100", cfg.MaxSteps)
+	if cfg.MaxSteps != 300 {
+		t.Errorf("maxSteps = %d, want 300", cfg.MaxSteps)
 	}
 	if cfg.Language != "en" {
 		t.Errorf("language = %q, want en", cfg.Language)
