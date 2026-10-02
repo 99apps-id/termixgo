@@ -6,6 +6,8 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+## 0.1.0 - 2026-10-02
+
 ### Added
 
 - Folder trust. A fresh folder is untrusted, so writes and commands wait for
@@ -406,8 +408,4 @@ All notable changes to Termixgo are recorded here. The format follows
   guard only covered the offset itself, so an update Telegram resent was handed
   to a handler a second time and the command ran twice. The gate also cross
   builds for Linux and macOS now, which catches a build tag that only breaks
-  on a platform nobody tested locally.
-
-## 0.1.0-dev
-
-Initial development. Not released.
+   on a platform nobody tested locally.

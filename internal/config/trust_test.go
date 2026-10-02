@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -38,6 +39,24 @@ func TestCleanFolderKeepsCaseAndResolves(t *testing.T) {
 	}
 	if got := CleanFolder("  "); got != "" {
 		t.Errorf("blank input should yield an empty string, got %q", got)
+	}
+}
+
+// TestTrustCoversAChildThatDoesNotExistYet pins the symlink case: a child of a
+// trusted folder is often not created until later, and resolving the child's
+// symlink directly fails. The trusted root still resolves through the link, so
+// the child has to resolve through its existing ancestor or it looks untrusted.
+func TestTrustCoversAChildThatDoesNotExistYet(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+	cfg := Default().Trust(link)
+
+	child := filepath.Join(link, "new", "package")
+	if !cfg.IsTrusted(child) {
+		t.Fatalf("a folder under a symlinked trusted root should be trusted: %s", child)
 	}
 }
 

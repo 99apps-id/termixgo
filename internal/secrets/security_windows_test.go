@@ -75,6 +75,17 @@ func TestInspectTreatsAnEmptyDACLAsUnexpected(t *testing.T) {
 	if err != nil {
 		t.Skipf("this filesystem will not accept an empty DACL: %v", err)
 	}
+	// An empty DACL denies everyone, this process included, so the file cannot
+	// be deleted. Grant full control again before TempDir's cleanup runs, or it
+	// fails with "Access is denied" on a machine that was not the creator.
+	t.Cleanup(func() {
+		_ = windows.SetNamedSecurityInfo(
+			path,
+			windows.SE_FILE_OBJECT,
+			windows.DACL_SECURITY_INFORMATION,
+			nil, nil, nil, nil,
+		)
+	})
 
 	access, err := inspect(path)
 	if err != nil {

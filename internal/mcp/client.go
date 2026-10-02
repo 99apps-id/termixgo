@@ -108,7 +108,18 @@ func Start(ctx context.Context, options Options) (*Client, error) {
 	go client.read(stdout)
 
 	if err := client.initialize(ctx); err != nil {
+		// Close reaps the process, which also drains the goroutine copying its
+		// stderr. That copy is asynchronous, so on a crash during the handshake
+		// the error can be built before the server's explanation reaches the
+		// buffer. Rebuild it now that the buffer is complete, so the operator
+		// sees the missing module instead of a bare closed pipe.
 		client.Close()
+		if detail := strings.TrimSpace(client.Stderr()); detail != "" {
+			short := shortLine(detail)
+			if !strings.Contains(err.Error(), short) {
+				return nil, fmt.Errorf("%w: %s", err, short)
+			}
+		}
 		return nil, err
 	}
 	return client, nil

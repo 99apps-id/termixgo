@@ -18,10 +18,34 @@ func CleanFolder(path string) string {
 	if err != nil {
 		absolute = filepath.Clean(path)
 	}
+	return filepath.Clean(resolveExistingPrefix(absolute))
+}
+
+// resolveExistingPrefix resolves symlinks in the longest existing ancestor of a
+// path and re-appends the components that do not exist yet.
+//
+// A path that does not exist cannot be resolved directly, and its unresolved
+// tail would then compare unequal to its own resolved parent: on macOS /var is
+// a symlink to /private/var, and on Windows a short name like RUNNER~1 differs
+// from the long name the filesystem reports. Either would make a folder under a
+// trusted root look untrusted until it is created.
+func resolveExistingPrefix(absolute string) string {
 	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
-		absolute = resolved
+		return resolved
 	}
-	return filepath.Clean(absolute)
+	current := absolute
+	suffix := ""
+	for {
+		parent := filepath.Dir(current)
+		if parent == current {
+			return absolute
+		}
+		suffix = filepath.Join(filepath.Base(current), suffix)
+		current = parent
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			return filepath.Join(resolved, suffix)
+		}
+	}
 }
 
 // TrustKey is the string two folders are compared by.

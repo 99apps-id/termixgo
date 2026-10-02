@@ -19,6 +19,8 @@ vendor/
 
 # Local state that must never be committed
 .termixgo/
+# A lock file an agent test leaves in its package directory.
+internal/agent/.lock
 # The pre-rename state directory. The code stopped writing here when the
 # project became Termixgo, but a tree that still has one must not commit it.
 .termigo/

@@ -1906,7 +1906,10 @@ func TestCheckpointSlashRoundTrip(t *testing.T) {
 func TestCheckpointSlashOutsideGitExplainsItself(t *testing.T) {
 	model := chatModel(t)
 	next, _ := model.runSlash("checkpoint", "")
-	if view := display(next.(*Model)); !strings.Contains(view, "not a git repository") {
+	// The message wraps mid-sentence on a runner whose temp path is long, so
+	// collapse the whitespace before looking for it.
+	view := strings.Join(strings.Fields(display(next.(*Model))), " ")
+	if !strings.Contains(view, "not a git repository") {
 		t.Errorf("outside git the command should explain itself:\n%s", view)
 	}
 }

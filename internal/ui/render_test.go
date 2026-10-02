@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -404,7 +405,10 @@ func TestPickerViewRendersFilterAndEmptyState(t *testing.T) {
 func TestViewHeaderNamesFolderModelAndTrust(t *testing.T) {
 	model := chatModel(t)
 	header := stripANSI(model.viewHeader())
-	if !strings.Contains(header, "Termixgo") || !strings.Contains(header, model.app.Workspace()) {
+	// The header clips a long folder from the left, so the full path need not
+	// survive on a CI runner whose temp directory is deep. The basename is the
+	// part that must always show, since it is what names the project.
+	if !strings.Contains(header, "Termixgo") || !strings.Contains(header, filepath.Base(model.app.Workspace())) {
 		t.Errorf("header = %q", header)
 	}
 	if !strings.Contains(header, "untrusted") {
