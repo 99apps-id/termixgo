@@ -302,6 +302,14 @@ func (m *Model) slashExport(args string) (tea.Model, tea.Cmd) {
 	} else if !filepath.IsAbs(targetPath) {
 		targetPath = filepath.Join(m.app.Workspace(), targetPath)
 	}
+	// The transcript holds tool output, so it stays inside the workspace the
+	// same way a write_file does. A path the operator typed is not trusted
+	// more than one the model chose.
+	if err := agent.CheckWorkspacePath(m.app.Workspace(), targetPath); err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		m.refresh()
+		return m, nil
+	}
 
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 		m.blocks = append(m.blocks, block{kind: blockError, text: fmt.Sprintf("Create dir failed: %v", err)})

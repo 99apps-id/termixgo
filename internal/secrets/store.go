@@ -179,6 +179,12 @@ func (s *Store) save() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if strings.TrimSpace(s.path) == "" {
+		// A store built in memory has nothing to merge against, and its pending
+		// changes are already in data. Persisting would need a path.
+		s.pending = map[string]*string{}
+		return nil
+	}
 	dir := filepath.Dir(s.path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)

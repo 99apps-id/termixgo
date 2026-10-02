@@ -40,10 +40,17 @@ func displayPath(env *Env, path string) string {
 	return filepath.ToSlash(relative)
 }
 
+// CheckWorkspacePath reports whether an absolute path stays inside the
+// workspace. Callers outside the agent package use it for the same guard the
+// file tools apply, so a slash command cannot write somewhere a tool cannot.
+func CheckWorkspacePath(workspace, path string) error {
+	return checkWorkspacePath(&Env{Workspace: workspace}, path)
+}
+
 // checkWorkspacePath returns an error if the resolved path escapes the
 // workspace. When there is no workspace the path is accepted as-is.
 func checkWorkspacePath(env *Env, path string) error {
-	if strings.TrimSpace(env.Workspace) == "" {
+	if env == nil || strings.TrimSpace(env.Workspace) == "" {
 		return nil
 	}
 	workspace, err := filepath.Abs(env.Workspace)

@@ -80,8 +80,8 @@ func TestSlashExportExportsCurrentSession(t *testing.T) {
 		t.Errorf("output should report export: %s", output)
 	}
 
-	// 2. Export with custom path
-	exportFile := filepath.Join(t.TempDir(), "exported.md")
+	// 2. Export with a path inside the workspace
+	exportFile := filepath.Join(model.app.Workspace(), "exported.md")
 	_, output = runSlash(t, model, "/export "+exportFile)
 	if !strings.Contains(output, "Exported session") {
 		t.Errorf("output should report export: %s", output)
@@ -92,6 +92,16 @@ func TestSlashExportExportsCurrentSession(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "# My Export Test Session") || !strings.Contains(string(data), "Hello agent") {
 		t.Errorf("exported file content invalid: %s", string(data))
+	}
+
+	// 3. A transcript holds tool output, so it must not land outside the workspace.
+	outside := filepath.Join(t.TempDir(), "leaked.md")
+	_, output = runSlash(t, model, "/export "+outside)
+	if !hasBlockKind(model, blockError) {
+		t.Errorf("an export outside the workspace should be refused, got: %s", output)
+	}
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Errorf("the refused export wrote %s: %v", outside, err)
 	}
 }
 

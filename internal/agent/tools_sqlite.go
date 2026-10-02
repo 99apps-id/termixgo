@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -27,14 +29,13 @@ func (t *sqliteQueryTool) DoneLabel(a map[string]any) string {
 	return "Queried SQLite " + Shorten(argString(a, "path", "db"), 40)
 }
 func (t *sqliteQueryTool) Description() string {
-	return "Execute a SQL query against a local SQLite database file using the bundled pure-Go SQLite engine. Formats query results as a markdown table."
+	return "Run one read-only SQL statement against a local SQLite database inside the workspace. Writes, ATTACH and multiple statements are refused. Results come back as a markdown table."
 }
 func (t *sqliteQueryTool) Schema() map[string]any {
 	return object(map[string]any{
-		"path":     strProp("Path to the SQLite database file (.db, .sqlite, .sqlite3)."),
-		"query":    strProp("SQL statement to execute (e.g. SELECT, PRAGMA, CREATE, INSERT)."),
+		"path":     strProp("Path to the SQLite database file (.db, .sqlite, .sqlite3), inside the workspace."),
+		"query":    strProp("One read-only SQL statement (SELECT, PRAGMA, EXPLAIN, or WITH)."),
 		"max_rows": intProp("Maximum rows to return, 1 to 500. Defaults to 50."),
-		"readonly": boolProp("Enforce read-only execution with PRAGMA query_only."),
 	}, "path", "query")
 }
 
@@ -47,52 +48,34 @@ func (t *sqliteQueryTool) Run(ctx context.Context, env *Env, args map[string]any
 	if query == "" {
 		return Result{Output: "Query is required.", IsError: true}, nil
 	}
+	if err := sqliteReadOnlyQuery(query); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 
 	resolved := resolvePath(env, path)
 	if err := checkWorkspacePath(env, resolved); err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
-
-	readonly := argBool(args, "readonly", false)
-	_, statErr := os.Stat(resolved)
-	if os.IsNotExist(statErr) && readonly {
-		return Result{Output: fmt.Sprintf("database file does not exist: %s", displayPath(env, resolved)), IsError: true}, nil
+	info, statErr := os.Stat(resolved)
+	if statErr != nil {
+		return Result{Output: openError(statErr, displayPath(env, resolved)), IsError: true}, nil
+	}
+	if info.IsDir() {
+		return Result{Output: fmt.Sprintf("%s is a directory, not a database file", displayPath(env, resolved)), IsError: true}, nil
 	}
 
 	dbCtx, cancel := context.WithTimeout(ctx, sqliteTimeout)
 	defer cancel()
 
-	db, err := sql.Open("sqlite", resolved)
+	// mode=ro is only honoured on a file: URI, and it cannot be turned off by
+	// the statement the way PRAGMA query_only can. A missing file then fails
+	// instead of being created.
+	db, err := sql.Open("sqlite", sqliteReadOnlyDSN(resolved))
 	if err != nil {
 		return Result{Output: fmt.Sprintf("open database: %v", err), IsError: true}, nil
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
-
-	if readonly {
-		if _, err := db.ExecContext(dbCtx, "PRAGMA query_only = ON;"); err != nil {
-			return Result{Output: fmt.Sprintf("set readonly pragma: %v", err), IsError: true}, nil
-		}
-	}
-
-	firstWord := strings.ToUpper(strings.Fields(query)[0])
-	isQuery := firstWord == "SELECT" || firstWord == "PRAGMA" || firstWord == "EXPLAIN" || firstWord == "WITH"
-
-	if !isQuery {
-		res, err := db.ExecContext(dbCtx, query)
-		if err != nil {
-			return Result{Output: fmt.Sprintf("execute query: %v", err), IsError: true}, nil
-		}
-		affected, _ := res.RowsAffected()
-		lastID, _ := res.LastInsertId()
-		var msg string
-		if lastID > 0 {
-			msg = fmt.Sprintf("Statement executed successfully. Rows affected: %d, Last insert ID: %d.", affected, lastID)
-		} else {
-			msg = fmt.Sprintf("Statement executed successfully. Rows affected: %d.", affected)
-		}
-		return Result{Output: msg}, nil
-	}
 
 	rows, err := db.QueryContext(dbCtx, query)
 	if err != nil {
@@ -169,4 +152,126 @@ func (t *sqliteQueryTool) Run(ctx context.Context, env *Env, args map[string]any
 		output += fmt.Sprintf("\n\n... (truncated at %d rows)", maxRows)
 	}
 	return Result{Output: output}, nil
+}
+
+// sqliteReadOnlyDSN opens one database file and nothing else.
+//
+// modernc.org/sqlite only honours mode=ro on a name that starts with "file:",
+// and a plain path plus "?mode=ro" opens read-write and creates a missing file.
+// The URI form is also what stops a query from attaching or writing a second
+// database: PRAGMA query_only can be turned off again by the same statement
+// that writes, so it is not a sandbox.
+func sqliteReadOnlyDSN(path string) string {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		absolute = path
+	}
+	// Three slashes, not two. url.URL treats file://C:/... as host "C:", which
+	// SQLite rejects as an invalid URI authority on Windows.
+	return (&url.URL{Scheme: "file", Path: "/" + filepath.ToSlash(absolute), RawQuery: "mode=ro&_query_only=1"}).String()
+}
+
+// sqliteReadOnlyQuery refuses anything that is not one read statement.
+//
+// The first word is not enough: "WITH x AS (SELECT 1) INSERT" writes, and a
+// second statement after a semicolon runs too. Stripping comments and quoted
+// text first keeps a keyword hiding in a string literal from looking like one.
+func sqliteReadOnlyQuery(query string) error {
+	stripped := strings.TrimSpace(sqliteStripLiterals(query))
+	// A trailing semicolon ends the statement; one in the middle starts another.
+	stripped = strings.TrimRight(stripped, ";")
+	if strings.Contains(strings.TrimSpace(stripped), ";") {
+		return fmt.Errorf("only one statement is allowed")
+	}
+	fields := strings.Fields(stripped)
+	if len(fields) == 0 {
+		return fmt.Errorf("query is empty")
+	}
+	switch strings.ToUpper(strings.TrimRight(fields[0], ";")) {
+	case "SELECT", "PRAGMA", "EXPLAIN", "WITH":
+	default:
+		return fmt.Errorf("only a read-only statement is allowed (SELECT, PRAGMA, EXPLAIN, WITH); %s writes", fields[0])
+	}
+	for _, word := range fields {
+		switch strings.ToUpper(word) {
+		case "INSERT", "UPDATE", "DELETE", "REPLACE", "ATTACH", "DETACH",
+			"CREATE", "DROP", "ALTER", "REINDEX", "VACUUM", "BEGIN", "COMMIT", "ROLLBACK":
+			return fmt.Errorf("statement contains %s, which is not read-only", word)
+		}
+	}
+	return nil
+}
+
+// sqliteStripLiterals blanks comments and quoted text so a keyword scan sees
+// only the statement structure.
+func sqliteStripLiterals(query string) string {
+	var builder strings.Builder
+	inSingle, inDouble, inLine, inBlock := false, false, false, false
+	for index := 0; index < len(query); index++ {
+		char := query[index]
+		next := byte(0)
+		if index+1 < len(query) {
+			next = query[index+1]
+		}
+		switch {
+		case inLine:
+			if char == '\n' {
+				inLine = false
+				builder.WriteByte('\n')
+			} else {
+				builder.WriteByte(' ')
+			}
+		case inBlock:
+			if char == '*' && next == '/' {
+				inBlock = false
+				builder.WriteString("  ")
+				index++
+			} else if char == '\n' {
+				builder.WriteByte('\n')
+			} else {
+				builder.WriteByte(' ')
+			}
+		case inSingle:
+			if char == '\'' && next == '\'' {
+				builder.WriteString("  ")
+				index++
+			} else if char == '\'' {
+				inSingle = false
+				builder.WriteByte(' ')
+			} else if char == '\n' {
+				builder.WriteByte('\n')
+			} else {
+				builder.WriteByte(' ')
+			}
+		case inDouble:
+			if char == '"' && next == '"' {
+				builder.WriteString("  ")
+				index++
+			} else if char == '"' {
+				inDouble = false
+				builder.WriteByte(' ')
+			} else if char == '\n' {
+				builder.WriteByte('\n')
+			} else {
+				builder.WriteByte(' ')
+			}
+		case char == '-' && next == '-':
+			inLine = true
+			builder.WriteString("  ")
+			index++
+		case char == '/' && next == '*':
+			inBlock = true
+			builder.WriteString("  ")
+			index++
+		case char == '\'':
+			inSingle = true
+			builder.WriteByte(' ')
+		case char == '"':
+			inDouble = true
+			builder.WriteByte(' ')
+		default:
+			builder.WriteByte(char)
+		}
+	}
+	return builder.String()
 }
