@@ -401,6 +401,18 @@ func stripSchemaKeys(value any) any {
 					continue
 				}
 			}
+			// JSON Schema allows a type union, for example ["string","null"],
+			// but the Gemini Schema proto wants one type string plus nullable.
+			// A list there answers "Proto field is not repeating".
+			if key == "type" {
+				if chosen, nullable, ok := reduceTypeList(entry); ok {
+					out["type"] = chosen
+					if nullable {
+						out["nullable"] = true
+					}
+					continue
+				}
+			}
 			out[key] = stripSchemaKeys(entry)
 		}
 		return out
@@ -477,6 +489,42 @@ func definedRequired(required any, properties map[string]any) (any, bool) {
 	default:
 		return nil, false
 	}
+}
+
+// reduceTypeList collapses a JSON Schema type union to a single Gemini type,
+// reporting whether "null" was one of the members so the caller can set
+// nullable. ok is false when the value is not a list, which means it already is
+// a plain type string.
+func reduceTypeList(value any) (chosen string, nullable bool, ok bool) {
+	var names []string
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			if name, isString := item.(string); isString {
+				names = append(names, name)
+			}
+		}
+	case []string:
+		names = typed
+	default:
+		return "", false, false
+	}
+	if len(names) == 0 {
+		return "", false, false
+	}
+	for _, name := range names {
+		if strings.EqualFold(name, "null") {
+			nullable = true
+			continue
+		}
+		if chosen == "" {
+			chosen = name
+		}
+	}
+	if chosen == "" {
+		chosen = "string"
+	}
+	return chosen, nullable, true
 }
 
 func sanitizeFunctionName(name string) string {

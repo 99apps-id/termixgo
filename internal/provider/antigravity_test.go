@@ -165,6 +165,31 @@ func TestCleanAntigravitySchemaPrunesUndefinedRequired(t *testing.T) {
 	}
 }
 
+// TestCleanAntigravitySchemaCollapsesTypeUnion covers the live 400 "Proto field
+// is not repeating": a JSON Schema type union must become one type plus
+// nullable.
+func TestCleanAntigravitySchemaCollapsesTypeUnion(t *testing.T) {
+	cleaned := cleanAntigravitySchema(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path":   map[string]any{"type": []any{"string", "null"}},
+			"counts": map[string]any{"type": []string{"integer"}},
+		},
+	})
+	properties := cleaned["properties"].(map[string]any)
+	path := properties["path"].(map[string]any)
+	if path["type"] != "string" || path["nullable"] != true {
+		t.Errorf("path = %#v, want type string and nullable true", path)
+	}
+	counts := properties["counts"].(map[string]any)
+	if counts["type"] != "integer" {
+		t.Errorf("counts type = %#v, want integer", counts["type"])
+	}
+	if _, present := counts["nullable"]; present {
+		t.Errorf("counts must not be nullable")
+	}
+}
+
 func TestCleanAntigravitySchemaDropsPropertyNames(t *testing.T) {
 	cleaned := cleanAntigravitySchema(map[string]any{
 		"type": "object",
