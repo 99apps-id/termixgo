@@ -38,6 +38,9 @@ type Spec struct {
 	// Empty means the refresh carries no scope, as Claude and Google expect.
 	RefreshScope string
 
+	// CopilotTokenURL is the GitHub Copilot token minting endpoint.
+	CopilotTokenURL string
+
 	// RefreshLead overrides how early the access token is renewed; zero is
 	// the five-minute default. MaxRefreshAge renews a credential that has
 	// gone unrenewed for that long even while its access token still looks
@@ -93,6 +96,7 @@ var specs = map[string]Spec{
 		Scopes:       []string{"org:create_api_key", "user:profile", "user:inference"},
 		RedirectPort: 54545,
 		RedirectPath: "/callback",
+		ExtraAuth:    map[string]string{"code": "true"},
 		ExchangeJSON: true,
 		RefreshJSON:  true,
 		RefreshLead:  4 * time.Hour, // 9router refreshLeadMs
@@ -118,6 +122,17 @@ var specs = map[string]Spec{
 		RedirectPath: "/auth/callback",
 		ExtraAuth:    map[string]string{"access_type": "offline", "prompt": "consent"},
 	},
+	"github-copilot": {
+		Provider:        "github-copilot",
+		Kind:            "copilot",
+		ClientID:        "Iv1.b507a08c87ecfe98",
+		Scope:           "read:user",
+		DeviceURL:       "https://github.com/login/device/code",
+		TokenURL:        "https://github.com/login/oauth/access_token",
+		VerifyHint:      "https://github.com/login/device",
+		CopilotTokenURL: "https://api.github.com/copilot_internal/v2/token",
+		RefreshLead:     5 * time.Minute,
+	},
 }
 
 // AntigravityClientID and AntigravityClientSecret are Google's public
@@ -139,6 +154,9 @@ var (
 // pair from the build stamp when the binary carried one.
 func SpecFor(provider string) (Spec, bool) {
 	spec, ok := specs[provider]
+	if !ok && provider == "github" {
+		spec, ok = specs["github-copilot"]
+	}
 	if !ok {
 		return Spec{}, false
 	}

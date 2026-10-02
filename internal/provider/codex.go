@@ -33,11 +33,16 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 		payload["tool_choice"] = "auto"
 	}
 
+	key := c.currentKey()
 	headers := map[string]string{
-		"Authorization": "Bearer " + c.apiKey,
+		"Authorization": "Bearer " + key,
 		"originator":    "codex_cli_rs",
 		"User-Agent":    "codex_cli_rs/" + codexCLIVersion,
 		"version":       codexCLIVersion,
+		"session_id":    c.SessionID(),
+	}
+	if isCodexResponsesLiteModel(req.Model) {
+		headers["x-openai-internal-codex-responses-lite"] = "true"
 	}
 	if strings.TrimSpace(c.accountID) != "" {
 		headers["ChatGPT-Account-ID"] = c.accountID
@@ -208,4 +213,9 @@ func (e responsesEvent) message() string {
 		return e.Error.Message
 	}
 	return e.Type
+}
+
+func isCodexResponsesLiteModel(model string) bool {
+	m := strings.ToLower(model)
+	return strings.Contains(m, "gpt-6.1-sol") || strings.Contains(m, "gpt-6-sol") || strings.Contains(m, "gpt-6-luna")
 }

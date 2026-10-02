@@ -14,7 +14,7 @@ import (
 // TestCodexStreamUsesTheResponsesAPI proves the Codex client posts to
 // /responses with the account header and decodes the typed event feed.
 func TestCodexStreamUsesTheResponsesAPI(t *testing.T) {
-	var gotPath, gotAuth, gotAccount, gotOriginator, gotVersion, gotAgent string
+	var gotPath, gotAuth, gotAccount, gotOriginator, gotVersion, gotAgent, gotSessionID, gotLite string
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		gotPath = request.URL.Path
@@ -23,6 +23,8 @@ func TestCodexStreamUsesTheResponsesAPI(t *testing.T) {
 		gotOriginator = request.Header.Get("originator")
 		gotVersion = request.Header.Get("version")
 		gotAgent = request.Header.Get("User-Agent")
+		gotSessionID = request.Header.Get("session_id")
+		gotLite = request.Header.Get("x-openai-internal-codex-responses-lite")
 		raw, _ := io.ReadAll(request.Body)
 		_ = json.Unmarshal(raw, &gotBody)
 
@@ -48,7 +50,7 @@ func TestCodexStreamUsesTheResponsesAPI(t *testing.T) {
 	var calls []ToolCall
 	var usage Usage
 	err = codex.Stream(context.Background(), ChatRequest{
-		Model:  "gpt-5.3-codex",
+		Model:  "gpt-6.1-sol",
 		System: "be brief",
 		Messages: []Message{
 			{Role: RoleUser, Content: "read a"},
@@ -82,6 +84,12 @@ func TestCodexStreamUsesTheResponsesAPI(t *testing.T) {
 	// header and User-Agent must carry a real release, not a placeholder.
 	if gotVersion != codexCLIVersion || gotAgent != "codex_cli_rs/"+codexCLIVersion {
 		t.Errorf("identity headers: version=%q user-agent=%q", gotVersion, gotAgent)
+	}
+	if gotSessionID == "" {
+		t.Errorf("session_id header missing")
+	}
+	if gotLite != "true" {
+		t.Errorf("x-openai-internal-codex-responses-lite = %q, want true", gotLite)
 	}
 	if gotBody["instructions"] != "be brief" || gotBody["store"] != false {
 		t.Errorf("body = %v", gotBody)

@@ -65,6 +65,23 @@ func Login(ctx context.Context, store *Store, provider string, in io.Reader, out
 			openBrowser(authURL)
 			token, err = session.Wait(ctx, clock)
 		}
+	case "copilot":
+		flow := DeviceFlow{ClientID: spec.ClientID, Scope: spec.Scope, DeviceURL: spec.DeviceURL, TokenURL: spec.TokenURL, VerifyHint: spec.VerifyHint}
+		var code DeviceCode
+		code, err = StartDevice(ctx, flow)
+		if err == nil {
+			target := code.VerificationURIComplete
+			if strings.TrimSpace(target) == "" {
+				target = code.VerificationURI
+			}
+			fmt.Fprintf(out, "Open %s and enter code %s\n", target, code.UserCode)
+			openBrowser(target)
+			var ghToken Token
+			ghToken, err = WaitDevice(ctx, flow, code, clock)
+			if err == nil {
+				token, err = FetchCopilotToken(ctx, spec.CopilotTokenURL, ghToken.Access, clock)
+			}
+		}
 	default:
 		flow := DeviceFlow{ClientID: spec.ClientID, Scope: spec.Scope, DeviceURL: spec.DeviceURL, TokenURL: spec.TokenURL, VerifyHint: spec.VerifyHint}
 		var code DeviceCode
@@ -204,6 +221,8 @@ func refreshTokenOnce(ctx context.Context, store *Store, spec Spec, token Token)
 	var refreshed Token
 	var err error
 	switch spec.Kind {
+	case "copilot":
+		refreshed, err = FetchCopilotToken(ctx, spec.CopilotTokenURL, token.Refresh, clock)
 	case "codex":
 		refreshed, err = RefreshCodex(ctx, CodexFlow{ClientID: spec.ClientID, Issuer: spec.Issuer}, token.Refresh, clock)
 	case "pkce":
@@ -219,6 +238,9 @@ func refreshTokenOnce(ctx context.Context, store *Store, spec Spec, token Token)
 	}
 	if err != nil || strings.TrimSpace(refreshed.Access) == "" {
 		return Token{}, err
+	}
+	if refreshed.AccountID == "" {
+		refreshed.AccountID = token.AccountID
 	}
 	refreshed.LastRefresh = clock.now()
 	if err := store.Save(spec.Provider, refreshed); err != nil {

@@ -163,7 +163,7 @@ func (s *pkceSession) authorizeURL() (string, error) {
 	for key, value := range s.flow.ExtraAuth {
 		query.Set(key, value)
 	}
-	endpoint.RawQuery = query.Encode()
+	endpoint.RawQuery = strings.ReplaceAll(query.Encode(), "+", "%20")
 	return endpoint.String(), nil
 }
 
@@ -182,12 +182,23 @@ func (s *pkceSession) Wait(ctx context.Context, clock Clock) (Token, error) {
 }
 
 func (s *pkceSession) exchange(ctx context.Context, code string, clock Clock) (Token, error) {
+	authCode := code
+	codeState := s.state
+	if idx := strings.Index(authCode, "#"); idx >= 0 {
+		if fragmentState := authCode[idx+1:]; fragmentState != "" {
+			codeState = fragmentState
+		}
+		authCode = authCode[:idx]
+	}
 	payload := map[string]string{
 		"grant_type":    "authorization_code",
-		"code":          code,
+		"code":          authCode,
 		"redirect_uri":  s.redirectURI,
 		"client_id":     s.flow.ClientID,
 		"code_verifier": s.verifier,
+	}
+	if codeState != "" {
+		payload["state"] = codeState
 	}
 	if s.flow.ClientSecret != "" {
 		payload["client_secret"] = s.flow.ClientSecret

@@ -13,6 +13,7 @@ const (
 	KindAnthropic   Kind = "anthropic"
 	KindGoogle      Kind = "google"
 	KindAntigravity Kind = "antigravity"
+	KindCopilot     Kind = "copilot"
 )
 
 // Provider describes one BYOK provider.
@@ -69,7 +70,11 @@ var contextWindows = map[string]int{
 	"claude-sonnet-5":               1000000,
 	"claude-sonnet-4-6":             1000000,
 	"claude-haiku-4-5":              200000,
+	"claude-oauth-opus-5-5":         1000000,
 	"claude-oauth-opus-5":           1000000,
+	"claude-oauth-fable-5-1":        1000000,
+	"claude-oauth-fable-5":          1000000,
+	"claude-oauth-sonnet-5-5":       1000000,
 	"claude-oauth-sonnet-5":         1000000,
 	"claude-oauth-haiku-4-5":        200000,
 	"antigravity-gemini-3.8-flash":  1048576,
@@ -86,18 +91,34 @@ var contextWindows = map[string]int{
 
 	// OAuth catalogue entries keep a distinct local id; their window follows
 	// the model they map to.
-	"codex-gpt-6-astra":         1050000,
-	"codex-gpt-6-sol":           1050000,
-	"codex-gpt-6-luna":          1050000,
-	"codex-gpt-5.6-terra":       1050000,
-	"codex-gpt-5.6-sol":         1050000,
-	"codex-gpt-5.6-luna":        1050000,
-	"codex-gpt-5.5":             1050000,
-	"codex-gpt-5.4":             1050000,
-	"codex-gpt-5.4-codex":       400000,
-	"codex-gpt-5.3-codex":       400000,
-	"codex-gpt-5.3-codex-spark": 400000,
-	"codex-gpt-5.2-codex":       400000,
+	"codex-gpt-6.1-sol":              1050000,
+	"codex-gpt-6-astra":              1050000,
+	"codex-gpt-6-sol":                1050000,
+	"codex-gpt-6-luna":               1050000,
+	"codex-gpt-5.6-terra":            1050000,
+	"codex-gpt-5.6-sol":              1050000,
+	"codex-gpt-5.6-luna":             1050000,
+	"codex-gpt-5.5":                  1050000,
+	"codex-gpt-daybreak-blue-latest": 1050000,
+	"codex-gpt-reserve":              1050000,
+	"codex-auto-review":              1050000,
+	"codex-gpt-5.4":                  1050000,
+	"codex-gpt-5.4-codex":            400000,
+	"codex-gpt-5.3-codex":            400000,
+	"codex-gpt-5.3-codex-spark":      400000,
+	"codex-gpt-5.2-codex":            400000,
+
+	// GitHub Copilot models
+	"copilot-gpt-5.4":           1050000,
+	"copilot-gpt-5.3-codex":     400000,
+	"copilot-gpt-5.2":           1050000,
+	"copilot-claude-sonnet-4.6": 1000000,
+	"copilot-claude-opus-4.7":   1000000,
+	"copilot-claude-opus-4.6":   1000000,
+	"copilot-claude-haiku-4.5":  200000,
+	"copilot-gemini-3.1-pro":    1048576,
+	"copilot-gemini-2.5-pro":    1048576,
+	"copilot-grok-code-fast-1":  256000,
 	"codex-gpt-5.1-codex-max":   400000,
 	"codex-gpt-5.1-codex":       400000,
 	"codex-gpt-5-codex":         400000,
@@ -255,6 +276,7 @@ func Providers() []Provider {
 		{ID: "xai", Label: "xAI Grok", Kind: KindOpenAI, DefaultBaseURL: "https://api.x.ai/v1", ConsoleURL: "https://console.x.ai/", NeedsKey: true, KeyPrefix: "xai-", EnvKeys: []string{"XAI_API_KEY"}},
 		{ID: "xai-oauth", Label: "xAI Grok (OAuth)", Kind: KindOpenAI, DefaultBaseURL: "https://api.x.ai/v1", ConsoleURL: "https://x.ai/", NeedsKey: true, OAuth: true},
 		{ID: "openai-codex", Label: "OpenAI Codex (ChatGPT)", Kind: KindOpenAI, DefaultBaseURL: "https://chatgpt.com/backend-api/codex", ConsoleURL: "https://chatgpt.com/", NeedsKey: true, OAuth: true},
+		{ID: "github-copilot", Label: "GitHub Copilot", Kind: KindCopilot, DefaultBaseURL: "https://api.githubcopilot.com", ConsoleURL: "https://github.com/features/copilot", NeedsKey: true, OAuth: true},
 
 		// Vendors that matter most for agentic coding, cheapest strong models
 		// first so the wizard's default order is also a sensible one.
@@ -361,6 +383,7 @@ func Models() []Model {
 		// The models served through a ChatGPT login (Codex OAuth). The local id
 		// is distinct because the catalogue keys by id alone; APIID is what goes
 		// on the wire. The newest Codex generation first.
+		{ID: "codex-gpt-6.1-sol", Provider: "openai-codex", Label: "GPT-6.1 Sol (ChatGPT)", APIID: "gpt-6.1-sol", Description: "Newest Sol tier through a ChatGPT login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "codex-gpt-6-astra", Provider: "openai-codex", Label: "GPT-6 Astra (ChatGPT)", APIID: "gpt-6-astra", Description: "Flagship through a ChatGPT login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "codex-gpt-6-sol", Provider: "openai-codex", Label: "GPT-6 Sol (ChatGPT)", APIID: "gpt-6-sol", Description: "Balanced through a ChatGPT login.", Tags: []string{"reasoning", "tools"}},
 		{ID: "codex-gpt-6-luna", Provider: "openai-codex", Label: "GPT-6 Luna (ChatGPT)", APIID: "gpt-6-luna", Description: "Efficient through a ChatGPT login.", Tags: []string{"fast", "tools"}},
@@ -368,6 +391,9 @@ func Models() []Model {
 		{ID: "codex-gpt-5.6-sol", Provider: "openai-codex", Label: "GPT-5.6 Sol (ChatGPT)", APIID: "gpt-5.6-sol", Description: "Previous balanced generation through a ChatGPT login.", Tags: []string{"reasoning", "tools"}},
 		{ID: "codex-gpt-5.6-luna", Provider: "openai-codex", Label: "GPT-5.6 Luna (ChatGPT)", APIID: "gpt-5.6-luna", Description: "Previous efficient generation through a ChatGPT login.", Tags: []string{"fast", "tools"}},
 		{ID: "codex-gpt-5.5", Provider: "openai-codex", Label: "GPT-5.5 (ChatGPT)", APIID: "gpt-5.5", Description: "Latest frontier generation through a ChatGPT login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "codex-gpt-daybreak-blue-latest", Provider: "openai-codex", Label: "GPT Daybreak Blue (ChatGPT)", APIID: "gpt-daybreak-blue-latest", Description: "Live experimental codex model.", Tags: []string{"reasoning", "coding"}},
+		{ID: "codex-gpt-reserve", Provider: "openai-codex", Label: "GPT Reserve (ChatGPT)", APIID: "gpt-reserve", Description: "Reserve capacity model through a ChatGPT login.", Tags: []string{"reasoning", "coding"}},
+		{ID: "codex-auto-review", Provider: "openai-codex", Label: "Codex Auto Review (ChatGPT)", APIID: "codex-auto-review", Description: "Virtual auto-review model through a ChatGPT login.", Tags: []string{"coding"}},
 		// gpt-5.4, gpt-5.4-mini and gpt-5.3-codex-spark are gone from
 		// backend-api/codex/models for ChatGPT accounts and return HTTP 400
 		// "model is not supported", so they are not offered (9router #4202).
@@ -383,9 +409,25 @@ func Models() []Model {
 		{ID: "claude-sonnet-5", Provider: "anthropic", Label: "Claude Sonnet 5", Description: "Best combination of speed and intelligence.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-haiku-4-5", Provider: "anthropic", Label: "Claude Haiku 4.5", Description: "Fastest Claude, near-frontier.", Tags: []string{"fast", "tools"}},
 		// The Claude models served through a Claude login (OAuth).
+		{ID: "claude-oauth-opus-5-5", Provider: "claude-oauth", Label: "Claude Opus 5.5 (OAuth)", APIID: "claude-opus-5-5", Description: "Flagship reasoning and coding through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-oauth-opus-5", Provider: "claude-oauth", Label: "Claude Opus 5 (OAuth)", APIID: "claude-opus-5", Description: "Previous flagship through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "claude-oauth-fable-5-1", Provider: "claude-oauth", Label: "Claude Fable 5.1 (OAuth)", APIID: "claude-fable-5-1", Description: "Deepest reasoning and agentic work through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "claude-oauth-fable-5", Provider: "claude-oauth", Label: "Claude Fable 5 (OAuth)", APIID: "claude-fable-5", Description: "Mythos tier reasoning through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "claude-oauth-sonnet-5-5", Provider: "claude-oauth", Label: "Claude Sonnet 5.5 (OAuth)", APIID: "claude-sonnet-5-5", Description: "Frontier speed and intelligence through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-oauth-sonnet-5", Provider: "claude-oauth", Label: "Claude Sonnet 5 (OAuth)", APIID: "claude-sonnet-5", Description: "Balanced Claude through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-oauth-haiku-4-5", Provider: "claude-oauth", Label: "Claude 4.5 Haiku (OAuth)", APIID: "claude-haiku-4-5-20251001", Description: "Fast Claude through a Claude login.", Tags: []string{"fast", "tools"}},
+
+		// GitHub Copilot models served through a GitHub login (OAuth).
+		{ID: "copilot-gpt-5.4", Provider: "github-copilot", Label: "GPT-5.4 (Copilot)", APIID: "gpt-5.4", Description: "Long-context frontier model through GitHub Copilot.", Tags: []string{"tools", "coding"}},
+		{ID: "copilot-gpt-5.3-codex", Provider: "github-copilot", Label: "GPT-5.3 Codex (Copilot)", APIID: "gpt-5.3-codex", Description: "Agentic coding model through GitHub Copilot.", Tags: []string{"coding", "tools"}},
+		{ID: "copilot-gpt-5.2", Provider: "github-copilot", Label: "GPT-5.2 (Copilot)", APIID: "gpt-5.2", Description: "Balanced model through GitHub Copilot.", Tags: []string{"reasoning", "tools"}},
+		{ID: "copilot-claude-sonnet-4.6", Provider: "github-copilot", Label: "Claude Sonnet 4.6 (Copilot)", APIID: "claude-sonnet-4.6", Description: "Claude Sonnet through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-claude-opus-4.7", Provider: "github-copilot", Label: "Claude Opus 4.7 (Copilot)", APIID: "claude-opus-4.7", Description: "Flagship Claude Opus through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-claude-opus-4.6", Provider: "github-copilot", Label: "Claude Opus 4.6 (Copilot)", APIID: "claude-opus-4.6", Description: "Claude Opus through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-claude-haiku-4.5", Provider: "github-copilot", Label: "Claude Haiku 4.5 (Copilot)", APIID: "claude-haiku-4.5", Description: "Fast Claude through GitHub Copilot.", Tags: []string{"fast", "tools"}},
+		{ID: "copilot-gemini-3.1-pro", Provider: "github-copilot", Label: "Gemini 3.1 Pro (Copilot)", APIID: "gemini-3.1-pro-preview", Description: "Frontier Gemini through GitHub Copilot.", Tags: []string{"reasoning", "tools"}},
+		{ID: "copilot-gemini-2.5-pro", Provider: "github-copilot", Label: "Gemini 2.5 Pro (Copilot)", APIID: "gemini-2.5-pro", Description: "Balanced Gemini through GitHub Copilot.", Tags: []string{"reasoning", "tools"}},
+		{ID: "copilot-grok-code-fast-1", Provider: "github-copilot", Label: "Grok Code Fast 1 (Copilot)", APIID: "grok-code-fast-1", Description: "Fast coding model through GitHub Copilot.", Tags: []string{"coding", "fast"}},
 		// Google Antigravity serves Gemini and Claude models through its Cloud
 		// Code backend under an Antigravity login.
 		// The Cloud Code backend keys models by an upstream id that differs

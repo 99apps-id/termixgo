@@ -180,10 +180,11 @@ var planProviders = map[string]PlanInfo{
 	// An OAuth login is a subscription, not a per-token bill: a ChatGPT or
 	// SuperGrok plan has no dollar rate per model, and inventing one would be
 	// money the operator never pays.
-	"openai-codex": {Name: "ChatGPT (Codex)", CreditUnit: "subscription"},
-	"xai-oauth":    {Name: "SuperGrok", CreditUnit: "subscription"},
-	"claude-oauth": {Name: "Claude", CreditUnit: "subscription"},
-	"antigravity":  {Name: "Google Antigravity", CreditUnit: "subscription"},
+	"openai-codex":   {Name: "ChatGPT (Codex)", CreditUnit: "subscription"},
+	"xai-oauth":      {Name: "SuperGrok", CreditUnit: "subscription"},
+	"claude-oauth":   {Name: "Claude", CreditUnit: "subscription"},
+	"antigravity":    {Name: "Google Antigravity", CreditUnit: "subscription"},
+	"github-copilot": {Name: "GitHub Copilot", CreditUnit: "subscription"},
 }
 
 // Plan returns the subscription a model is served under, when its provider

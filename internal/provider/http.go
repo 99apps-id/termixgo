@@ -2,6 +2,8 @@ package provider
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,12 +22,46 @@ type httpClient struct {
 	apiKey  string
 	// accountID is the provider-side account a Codex token belongs to, sent in
 	// the ChatGPT-Account-ID header. Empty for every other provider.
-	accountID string
-	http      *http.Client
+	accountID  string
+	sessionID  string
+	resolveKey KeyResolver
+	http       *http.Client
 }
 
 // SetAccountID records the account a Codex token belongs to.
 func (c *httpClient) SetAccountID(id string) { c.accountID = strings.TrimSpace(id) }
+
+// SetSessionID records the conversation or client session id.
+func (c *httpClient) SetSessionID(id string) { c.sessionID = strings.TrimSpace(id) }
+
+// SetKeyResolver sets the dynamic key resolver callback.
+func (c *httpClient) SetKeyResolver(fn KeyResolver) { c.resolveKey = fn }
+
+// currentKey returns the most current API key or OAuth access token,
+// dynamically resolving via KeyResolver if available.
+func (c *httpClient) currentKey() string {
+	if c.resolveKey != nil {
+		if fresh := strings.TrimSpace(c.resolveKey(c.info.ID)); fresh != "" {
+			c.apiKey = fresh
+			return fresh
+		}
+	}
+	return c.apiKey
+}
+
+// SessionID returns the current session ID, or generates a stable binary-style ID.
+func (c *httpClient) SessionID() string {
+	if c.sessionID != "" {
+		return c.sessionID
+	}
+	c.sessionID = deriveSessionID(c.apiKey)
+	return c.sessionID
+}
+
+func deriveSessionID(seed string) string {
+	sum := sha256.Sum256([]byte(seed + fmt.Sprintf("%d", time.Now().UnixNano())))
+	return hex.EncodeToString(sum[:16]) + fmt.Sprintf("%d", time.Now().UnixMilli())
+}
 
 func newHTTPClient(info Provider, baseURL, apiKey string) (Client, error) {
 	shared := &http.Client{
@@ -50,6 +86,9 @@ func newHTTPClient(info Provider, baseURL, apiKey string) (Client, error) {
 	}
 	if info.Kind == KindAntigravity {
 		return &antigravityClient{httpClient: base}, nil
+	}
+	if info.Kind == KindCopilot || info.ID == "github-copilot" {
+		return &copilotClient{httpClient: base}, nil
 	}
 	switch info.Kind {
 	case KindAnthropic:

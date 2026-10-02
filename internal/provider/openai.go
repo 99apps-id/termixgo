@@ -38,12 +38,17 @@ func (c *openAIClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 	}
 
 	headers := map[string]string{}
-	if c.apiKey != "" {
-		headers["Authorization"] = "Bearer " + c.apiKey
+	key := c.currentKey()
+	if key != "" {
+		headers["Authorization"] = "Bearer " + key
 	}
 	extraHeaders(headers, c.info.ID)
 
-	response, err := c.post(ctx, c.baseURL+"/chat/completions", headers, payload)
+	return c.streamWithURL(ctx, c.baseURL+"/chat/completions", headers, payload, emit)
+}
+
+func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers map[string]string, payload map[string]any, emit func(StreamEvent) error) error {
+	response, err := c.post(ctx, url, headers, payload)
 	if err != nil {
 		return err
 	}

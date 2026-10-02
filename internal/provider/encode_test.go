@@ -181,6 +181,15 @@ func TestAnthropicOAuthUsesTheClaudeCodeIdentity(t *testing.T) {
 	if recorder.headers.Get("x-api-key") != "" {
 		t.Errorf("an OAuth request must not send x-api-key")
 	}
+	if recorder.headers.Get("anthropic-dangerous-direct-browser-access") != "true" {
+		t.Errorf("anthropic-dangerous-direct-browser-access header missing")
+	}
+	if recorder.headers.Get("X-Stainless-Helper-Method") != "stream" {
+		t.Errorf("X-Stainless-Helper-Method = %q, want stream", recorder.headers.Get("X-Stainless-Helper-Method"))
+	}
+	if meta, ok := recorder.body["metadata"].(map[string]any); !ok || !strings.Contains(fmt.Sprint(meta["user_id"]), "device_id") {
+		t.Errorf("expected metadata.user_id in payload, got %v", recorder.body["metadata"])
+	}
 }
 
 // TestAnthropicDefaultsMaxTokens guards the value that keeps a thinking model

@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,7 +16,7 @@ import (
 const (
 	claudeCLIVersion   = "2.1.280"
 	claudeCLIUserAgent = "claude-cli/" + claudeCLIVersion + " (external, sdk-cli)"
-	claudeOAuthBeta    = "claude-code-20250219,oauth-2025-04-20"
+	claudeOAuthBeta    = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24,structured-outputs-2025-12-15,fast-mode-2026-02-01,redact-thinking-2026-02-12,token-efficient-tools-2026-03-28"
 )
 
 // anthropicClient speaks the Messages streaming protocol.
@@ -43,18 +45,36 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 
 	headers := map[string]string{"anthropic-version": "2023-06-01"}
 	url := c.baseURL + "/v1/messages"
+	key := c.currentKey()
 	if c.info.OAuth {
 		// A Claude Code OAuth login sends a bearer token under the claude-cli
 		// identity and needs the beta query plus the claude-code beta header;
 		// the API key header is not used.
-		headers["Authorization"] = "Bearer " + c.apiKey
+		headers["Authorization"] = "Bearer " + key
 		headers["anthropic-beta"] = claudeOAuthBeta
+		headers["anthropic-dangerous-direct-browser-access"] = "true"
 		headers["x-app"] = "cli"
 		headers["User-Agent"] = claudeCLIUserAgent
+		headers["X-Stainless-Helper-Method"] = "stream"
+		headers["X-Stainless-Retry-Count"] = "0"
+		headers["X-Stainless-Runtime-Version"] = "v24.14.0"
+		headers["X-Stainless-Package-Version"] = "0.80.0"
+		headers["X-Stainless-Runtime"] = "node"
+		headers["X-Stainless-Lang"] = "js"
+		headers["X-Stainless-Arch"] = "arm64"
+		headers["X-Stainless-Os"] = "MacOS"
+		headers["X-Stainless-Timeout"] = "600"
+		payload["metadata"] = map[string]any{
+			"user_id": claudeUserID(key, c.SessionID()),
+		}
 		url += "?beta=true"
 	} else {
-		headers["x-api-key"] = c.apiKey
+		headers["x-api-key"] = key
 	}
+	return c.streamWithURL(ctx, url, headers, payload, emit)
+}
+
+func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers map[string]string, payload map[string]any, emit func(StreamEvent) error) error {
 	response, err := c.post(ctx, url, headers, payload)
 	if err != nil {
 		return err
@@ -275,4 +295,22 @@ type anthropicEvent struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+func claudeUserID(apiKey, sessionID string) string {
+	hDevice := sha256.Sum256([]byte("device:" + apiKey))
+	deviceID := hex.EncodeToString(hDevice[:])
+	accountUUID := deriveUUIDFromSeed("account:" + apiKey)
+	sessionUUID := deriveUUIDFromSeed("session:" + sessionID)
+	if sessionID == "" {
+		sessionUUID = deriveUUIDFromSeed(deviceID)
+	}
+	return fmt.Sprintf(`{"device_id":"%s","account_uuid":"%s","session_id":"%s"}`, deviceID, accountUUID, sessionUUID)
+}
+
+func deriveUUIDFromSeed(seed string) string {
+	h := sha256.Sum256([]byte(seed))
+	hexStr := hex.EncodeToString(h[:])
+	b16 := (h[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%s-%s-4%s-%02x%s-%s", hexStr[0:8], hexStr[8:12], hexStr[13:16], b16, hexStr[17:20], hexStr[20:32])
 }

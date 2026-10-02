@@ -137,5 +137,12 @@ func NewClient(id, baseURL string, resolveKey KeyResolver) (Client, error) {
 		}
 		return nil, fmt.Errorf("no API key for %s; run /setup to add one", info.Label)
 	}
-	return newHTTPClient(info, endpoint, key)
+	client, err := newHTTPClient(info, endpoint, key)
+	if err != nil {
+		return nil, err
+	}
+	if setter, ok := client.(interface{ SetKeyResolver(KeyResolver) }); ok {
+		setter.SetKeyResolver(resolveKey)
+	}
+	return client, nil
 }
