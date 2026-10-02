@@ -297,15 +297,24 @@ func TestWizardEscClosesFromTheFirstStep(t *testing.T) {
 // TestWizardEscFromTheKeyStepIsNotAnExit is the safety rule: escape in the
 // middle of the wizard must not silently abandon a stored key, so it is left
 // to the later steps where there is a defined meaning.
+// TestWizardEscFromTheKeyStepIsNotAnExit pins the rule: Escape steps back to
+// the provider list rather than abandoning the wizard, so nothing is lost and
+// the operator is never trapped on an input step.
 func TestWizardEscFromTheKeyStepIsNotAnExit(t *testing.T) {
 	model := wizardModel(t)
 	atKey := chooseID(t, model, "anthropic")
 
-	stuck := press(t, atKey, "esc")
-	if stuck.setup.step != setupKey {
-		t.Errorf("step = %d, want the wizard to stay on the key step", stuck.setup.step)
+	back := press(t, atKey, "esc")
+	if back.setup.step != setupProvider {
+		t.Errorf("step = %d, want the provider step", back.setup.step)
 	}
-	if stuck.app.Secrets().Has(secrets.ProviderKey("anthropic")) {
+	if back.current != modePicker {
+		t.Errorf("mode = %d, want the provider picker", back.current)
+	}
+	if !back.app.NeedsSetup() {
+		t.Errorf("Escape must not pretend the setup happened")
+	}
+	if back.app.Secrets().Has(secrets.ProviderKey("anthropic")) {
 		t.Errorf("nothing should have been stored")
 	}
 }

@@ -38,6 +38,17 @@ func TestWizardSendsAnOAuthProviderToLogin(t *testing.T) {
 	if !strings.Contains(confirmed.setup.errText, "termixgo login xai-oauth") {
 		t.Errorf("errText = %q, want the login instruction", confirmed.setup.errText)
 	}
+
+	// Escape must be a way back to the provider list, not a dead key: the
+	// login instruction tells the operator to leave to a shell, so they need
+	// a way out of the step.
+	back := press(t, confirmed, "esc")
+	if back.setup.step != setupProvider {
+		t.Errorf("Escape left step = %d, want the provider step", back.setup.step)
+	}
+	if back.current != modePicker {
+		t.Errorf("Escape left mode = %d, want the provider picker", back.current)
+	}
 }
 
 // TestProviderItemsMarkOAuthAsLogin keeps the picker honest: an OAuth provider

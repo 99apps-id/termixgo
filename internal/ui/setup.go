@@ -93,8 +93,17 @@ func setupModelItems(providerID string) []pickerItem {
 
 // handleSetupKey drives the wizard's input steps.
 func (m *Model) handleSetupKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if key.String() == "esc" && m.setup.step == setupProvider {
-		return m, m.enterChat()
+	// Escape is a way back, never a trap. At the provider list it leaves the
+	// wizard; on a provider sub-step it returns to the list so the operator can
+	// choose another provider instead of being stuck on an input or login step.
+	if key.String() == "esc" {
+		switch m.setup.step {
+		case setupProvider:
+			return m, m.enterChat()
+		case setupEndpoint, setupKey, setupOAuth, setupCustomModel:
+			m.stepBackToProvider()
+			return m, nil
+		}
 	}
 
 	switch m.setup.step {
@@ -207,6 +216,21 @@ func (m *Model) saveEndpoint() (tea.Model, tea.Cmd) {
 	m.input.Focus()
 	m.current = modeSetup
 	return m, textareaBlink()
+}
+
+// stepBackToProvider returns a provider sub-step to the provider list, so the
+// operator can pick another provider. It keeps the wizard open, which is why
+// Escape here is a step back rather than an exit.
+func (m *Model) stepBackToProvider() {
+	m.setup.step = setupProvider
+	m.setup.errText = ""
+	m.setup.message = "Choose the provider that will run your models."
+	m.input.SetValue("")
+	m.input.Blur()
+	m.input.EchoMode = textinput.EchoNormal
+	m.picker = picker{title: setupPickerTitle("Provider"), action: "setup-provider", items: setupProviderItems()}
+	m.picker.applyFilter()
+	m.current = modePicker
 }
 
 // confirmOAuthLogin checks that a login exists before moving on. The login
