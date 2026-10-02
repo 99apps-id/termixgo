@@ -271,6 +271,26 @@ func TestSpecForCarriesStampedAntigravityCredentials(t *testing.T) {
 	}
 }
 
+// TestPersistClientCredentialsStoresTheResolvedPair keeps a refresh working
+// after the first login even from a build without the credentials stamp.
+func TestPersistClientCredentialsStoresTheResolvedPair(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	store, err := secrets.Load()
+	if err != nil {
+		t.Fatalf("secrets.Load: %v", err)
+	}
+	tokens := NewStore(store)
+	persistClientCredentials(tokens, "antigravity", PKCEFlow{ClientID: "cid", ClientSecret: "csecret"})
+	if id, secret := tokens.LoadClient("antigravity"); id != "cid" || secret != "csecret" {
+		t.Errorf("stored = %q %q, want cid csecret", id, secret)
+	}
+	// A second call must not overwrite the pair already stored.
+	persistClientCredentials(tokens, "antigravity", PKCEFlow{ClientID: "other", ClientSecret: "other"})
+	if id, _ := tokens.LoadClient("antigravity"); id != "cid" {
+		t.Errorf("id = %q, want the original cid", id)
+	}
+}
+
 // TestPKCEFlow drives the loopback authorization-code flow end to end against
 // a fake token endpoint: start, visit the redirect with a code, exchange.
 func TestPKCEFlow(t *testing.T) {

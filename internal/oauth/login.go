@@ -57,6 +57,10 @@ func Login(ctx context.Context, store *Store, provider string, in io.Reader, out
 			}
 			flow = pkceFlowFromSpec(spec, store)
 		}
+		// Persist the pair a release build stamped in, so a later refresh works
+		// from a build that carries no stamp (a plain go build or an older
+		// binary) without asking the operator to log in again.
+		persistClientCredentials(store, provider, flow)
 		var session *pkceSession
 		var authURL string
 		session, authURL, err = StartPKCE(flow)
@@ -105,6 +109,23 @@ func Login(ctx context.Context, store *Store, provider string, in io.Reader, out
 	}
 	fmt.Fprintf(out, "Logged in to %s.\n", provider)
 	return nil
+}
+
+// persistClientCredentials saves the resolved client pair to the secret store
+// when it is not already there, so a refresh never depends on the build stamp
+// or the environment after the first login.
+func persistClientCredentials(store *Store, provider string, flow PKCEFlow) {
+	if store == nil || strings.TrimSpace(flow.ClientID) == "" {
+		return
+	}
+	id, secret := store.LoadClient(provider)
+	if strings.TrimSpace(id) == "" {
+		_ = store.SaveClient(provider, flow.ClientID, flow.ClientSecret)
+		return
+	}
+	if strings.TrimSpace(secret) == "" && strings.TrimSpace(flow.ClientSecret) != "" {
+		_ = store.SaveClient(provider, id, flow.ClientSecret)
+	}
 }
 
 // pkceFlowFromSpec maps a spec to the PKCE flow, resolving a client credential
