@@ -6,6 +6,15 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+## 0.1.2 - 2026-10-03
+
+### Fixed
+
+- Meta Muse Code failed after the first exchange with `404 model_not_found`.
+  A replayed `function_call` input item now carries the `id` and `status` Meta
+  requires, and a stale key (which Meta reports as `404`, not `401`) is minted
+  again and the request replayed once before giving up.
+
 ## 0.1.1 - 2026-10-02
 
 ### Added
