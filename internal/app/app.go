@@ -898,17 +898,47 @@ func (a *App) runSubagent(ctx context.Context, subType, prompt string) (string, 
 	a.mu.Lock()
 	client := a.client
 	model := a.model
-	target, mapped := a.cfg.SubagentModels[strings.ToLower(strings.TrimSpace(subType))]
+	primary := strings.TrimSpace(a.cfg.SubagentModels[strings.ToLower(strings.TrimSpace(subType))])
+	fallbacks := append([]string(nil), a.cfg.SubagentFallbacks...)
 	a.mu.Unlock()
 	if client == nil {
 		return "", errors.New("no provider client is available")
 	}
 
-	// A role may run on its own model. When that provider has no credential, or
-	// the run exhausts its quota, the delegation falls back to the active model
-	// so the task still gets done instead of failing outright.
-	if mapped && strings.TrimSpace(target) != "" {
-		if roleClient, roleModel, err := a.subagentClient(target); err == nil && roleModel.ID != model.ID {
+	// An explicit fallback chain is authoritative: a subagent stays on the
+	// providers the operator listed and never silently lands on another one.
+	if len(fallbacks) > 0 {
+		var lastErr error
+		seen := map[string]bool{}
+		for _, query := range subagentChain(primary, fallbacks) {
+			roleClient, roleModel, err := a.subagentClient(query)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			key := roleModel.Provider + ":" + roleModel.ID
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			report, runErr := agent.RunSubagent(ctx, a.env(), roleClient, roleModel, subType, prompt, agent.SubagentMaxSteps)
+			if runErr == nil {
+				return report, nil
+			}
+			if !subagentFallback(runErr) {
+				return "", runErr
+			}
+			lastErr = runErr
+		}
+		if lastErr == nil {
+			lastErr = errors.New("no subagent model is available")
+		}
+		return "", lastErr
+	}
+
+	// No chain: the role model, then the active model.
+	if primary != "" {
+		if roleClient, roleModel, err := a.subagentClient(primary); err == nil && roleModel.ID != model.ID {
 			report, runErr := agent.RunSubagent(ctx, a.env(), roleClient, roleModel, subType, prompt, agent.SubagentMaxSteps)
 			if runErr == nil {
 				return report, nil
@@ -919,6 +949,21 @@ func (a *App) runSubagent(ctx context.Context, subType, prompt string) (string, 
 		}
 	}
 	return agent.RunSubagent(ctx, a.env(), client, model, subType, prompt, agent.SubagentMaxSteps)
+}
+
+// subagentChain is the role's model followed by the fallbacks, blank entries
+// dropped, so the caller can iterate one ordered list.
+func subagentChain(primary string, fallbacks []string) []string {
+	chain := make([]string, 0, len(fallbacks)+1)
+	if strings.TrimSpace(primary) != "" {
+		chain = append(chain, primary)
+	}
+	for _, entry := range fallbacks {
+		if strings.TrimSpace(entry) != "" {
+			chain = append(chain, entry)
+		}
+	}
+	return chain
 }
 
 // subagentClient resolves a subagent's configured model and returns a cached

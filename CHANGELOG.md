@@ -162,9 +162,10 @@ All notable changes to Termixgo are recorded here. The format follows
   are retried on the OpenAI Responses endpoint (`/responses`) and remembered, so
   models such as the MAI, Grok and some GPT entries work.
 - `subagentModels` runs a delegated role (`explore`, `general`, `builder`,
-  `code-review`, `security`) on its own model. When that provider has no
-  credential or runs out of quota, the delegation falls back to the active model
-  so the task still runs.
+  `code-review`, `security`) on its own model. `subagentFallbacks` is an ordered
+  chain of providers a subagent falls through when one has no credential or runs
+  out of quota; when set it is the complete set, so a subagent never lands on a
+  provider the operator did not list.
 
 ### Fixed
 

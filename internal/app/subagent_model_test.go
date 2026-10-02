@@ -2,10 +2,23 @@ package app
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/99apps-id/termixgo/internal/config"
 )
+
+func TestSubagentChainOrdersPrimaryThenFallbacks(t *testing.T) {
+	got := subagentChain("antigravity-gemini-3.8-flash", []string{"deepseek-v4-pro", "  ", "qwen-token-plan/qwen3.8-flash"})
+	want := []string{"antigravity-gemini-3.8-flash", "deepseek-v4-pro", "qwen-token-plan/qwen3.8-flash"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("subagentChain = %v, want %v", got, want)
+	}
+	got = subagentChain("", []string{"deepseek-v4-pro"})
+	if !reflect.DeepEqual(got, []string{"deepseek-v4-pro"}) {
+		t.Errorf("subagentChain with no primary = %v", got)
+	}
+}
 
 func TestResolveSubagentModelForms(t *testing.T) {
 	cases := []struct {

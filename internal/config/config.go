@@ -148,10 +148,16 @@ type Config struct {
 
 	// SubagentModels maps a subagent role (explore, general, builder,
 	// code-review, security) to the model that role should use, as a catalogue
-	// id or "provider:model". A role with no entry uses the active model. If the
-	// mapped provider is unavailable or out of quota, the delegation falls back
-	// to the active model so the task still runs.
+	// id or "provider:model". A role with no entry uses the active model.
 	SubagentModels map[string]string `json:"subagentModels,omitempty"`
+
+	// SubagentFallbacks is an ordered model chain a subagent falls through when
+	// a provider has no credential or runs out of quota. When it is set it is
+	// the complete set of subagent providers: the delegation never falls back to
+	// the active model, so a subagent does not land on a provider the operator
+	// did not list. With no chain, the role model is tried, then the active
+	// model.
+	SubagentFallbacks []string `json:"subagentFallbacks,omitempty"`
 
 	// TrustedFolders is the canonical list of folders where the agent may
 	// write and run commands without per-action approval.

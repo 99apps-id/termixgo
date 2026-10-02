@@ -252,7 +252,8 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
   "baseUrls": { "openai-compatible": "https://my-server/v1" },
   "modelOverrides": {},
   "modelPricing": { "my-model": { "inputPerMillion": 3.0, "outputPerMillion": 9.0 } },
-  "subagentModels": { "code-review": "github-copilot:claude-sonnet-5.5" },
+  "subagentModels": { "code-review": "antigravity-gemini-3.8-flash" },
+  "subagentFallbacks": ["deepseek-v4-pro", "qwen-token-plan/qwen3.8-flash", "stepfun-plan/step-3.7-flash"],
   "trustedFolders": [],
   "alwaysAllowedTools": [],
   "mcpServers": [],
@@ -273,7 +274,8 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
 | `modelPricing` | give an unpriced model a price so a budget can fire |
 | `mcpServers` | MCP servers to start with a session |
 | `workerCommands` | override a background worker's argv, keyed by worker id |
-| `subagentModels` | run a subagent role (`explore`, `general`, `builder`, `code-review`, `security`) on another model, as a catalogue id or `provider:model`; falls back to the active model when that provider has no credential or runs out of quota |
+| `subagentModels` | run a subagent role (`explore`, `general`, `builder`, `code-review`, `security`) on another model, as a catalogue id, `provider:model` or `provider/model` |
+| `subagentFallbacks` | ordered subagent model chain tried when a provider has no credential or runs out of quota; when set it is the complete set, so a subagent never falls back to the active model |
 | `heartbeat` | `{ "enabled": true, "interval": "30m" }` for the periodic self-check |
 
 Set `TERMIXGO_HOME` to move the whole state directory, which is useful for tests
