@@ -25,6 +25,12 @@ type scriptedAgent struct {
 	lastMediaType string
 	lastImageData string
 	progressLines []string
+	diffOutput    string
+	diffErr       error
+}
+
+func (a *scriptedAgent) GitDiff(ctx context.Context) (string, error) {
+	return a.diffOutput, a.diffErr
 }
 
 func (a *scriptedAgent) RunPrompt(ctx context.Context, prompt string, progress func(string)) (string, error) {
@@ -647,4 +653,56 @@ func TestReplyLogsAFailureWithoutPanicking(t *testing.T) {
 	// plain CLI.
 	bot.Log = nil
 	bot.reply(context.Background(), 7, "hello")
+}
+
+func TestDiffCommandSendsDiff(t *testing.T) {
+	agent := &scriptedAgent{diffOutput: "+ line added\n- line removed"}
+	bot, api := pairedBot(t, agent)
+
+	bot.handleMessage(context.Background(), message("/diff"))
+	got := lastText(t, api, "sendMessage")
+	if !strings.Contains(got, "+ line added") {
+		t.Errorf("expected diff in message, got %q", got)
+	}
+}
+
+func TestDiffCommandReportsNoChanges(t *testing.T) {
+	agent := &scriptedAgent{diffOutput: ""}
+	bot, api := pairedBot(t, agent)
+
+	bot.handleMessage(context.Background(), message("/diff"))
+	got := lastText(t, api, "sendMessage")
+	if !strings.Contains(got, "No git changes") {
+		t.Errorf("expected no changes message, got %q", got)
+	}
+}
+
+func TestRequestApprovalReceivesCallback(t *testing.T) {
+	agent := &scriptedAgent{}
+	bot, api := pairedBot(t, agent)
+
+	go func() {
+		// Wait for sendMessage to be called, then answer callback
+		time.Sleep(50 * time.Millisecond)
+		bot.handleCallback(context.Background(), &CallbackQuery{
+			ID:   "cb_1",
+			From: &User{ID: 9},
+			Data: "appr:once:1",
+			Message: &Message{
+				Chat:      Chat{ID: 7},
+				MessageID: 101,
+			},
+		})
+	}()
+
+	decision, err := bot.RequestApproval(context.Background(), "run_command", "npm test", "high")
+	if err != nil {
+		t.Fatalf("RequestApproval: %v", err)
+	}
+	if decision != "once" {
+		t.Errorf("decision = %q, want once", decision)
+	}
+	if !api.called("answerCallbackQuery") {
+		t.Errorf("answerCallbackQuery should be called")
+	}
 }

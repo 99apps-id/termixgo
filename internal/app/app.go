@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -371,6 +372,9 @@ func (a *App) applyModel(model provider.Model) error {
 		return err
 	}
 	if info.OAuth {
+		if setter, ok := client.(interface{ SetForceKeyResolver(provider.KeyResolver) }); ok {
+			setter.SetForceKeyResolver(provider.ForceResolverFor(a.store))
+		}
 		// A Codex request must name the ChatGPT account the token belongs to.
 		if token, ok := provider.OAuthStore(a.store).Load(info.ID); ok {
 			if setter, ok := client.(interface{ SetAccountID(string) }); ok {
@@ -999,6 +1003,18 @@ func (a *App) runOn(ctx context.Context, input string, images []provider.Image, 
 		return nil
 	}
 	return session.Save()
+}
+
+// GitDiff returns the current git diff of the workspace.
+func (a *App) GitDiff(ctx context.Context) (string, error) {
+	env := a.env()
+	cmd := exec.CommandContext(ctx, "git", "diff")
+	cmd.Dir = env.Workspace
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git diff failed: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
 }
 
 // RunPrompt runs one turn for the Telegram bridge, forwarding short progress

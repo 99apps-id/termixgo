@@ -909,8 +909,7 @@ func serviceInstallWindows(stdout io.Writer, binary string) error {
 		"/Create",
 		"/TN", serviceTaskName,
 		"/TR", command,
-		"/SC", "ONSTART",
-		"/RU", "SYSTEM",
+		"/SC", "ONLOGON",
 		"/F",
 	}...)
 	cmd.Stdout = stdout
@@ -918,11 +917,14 @@ func serviceInstallWindows(stdout io.Writer, binary string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("install failed: %v", err)
 	}
-	fmt.Fprintf(stdout, "Service installed. Termixgo will start automatically after reboot.\n")
+	fmt.Fprintf(stdout, "Service installed. Starting assistant now in background...\n")
+	_ = exec.Command("schtasks.exe", "/Run", "/TN", serviceTaskName).Run()
+	fmt.Fprintf(stdout, "Termixgo will run as a 24/7 background companion and start automatically on login.\n")
 	return nil
 }
 
 func serviceUninstallWindows(stdout io.Writer) error {
+	_ = exec.Command("schtasks.exe", "/End", "/TN", serviceTaskName).Run()
 	cmd := exec.Command("schtasks.exe", []string{
 		"/Delete",
 		"/TN", serviceTaskName,
@@ -1068,7 +1070,10 @@ WantedBy=default.target
 			return fmt.Errorf("%s failed: %v", strings.Join(args, " "), err)
 		}
 	}
-	fmt.Fprintf(stdout, "Service installed. Termixgo will start automatically after login.\n")
+	// Enable user lingering so the service keeps running 24/7 on headless VPS servers
+	// even after closing SSH sessions.
+	_ = exec.Command("loginctl", "enable-linger").Run()
+	fmt.Fprintf(stdout, "Service installed. Termixgo will run 24/7 as a background service.\n")
 	return nil
 }
 

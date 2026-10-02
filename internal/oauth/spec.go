@@ -1,6 +1,8 @@
 package oauth
 
 import (
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -167,8 +169,46 @@ func SpecFor(provider string) (Spec, bool) {
 		if strings.TrimSpace(spec.ClientSecret) == "" {
 			spec.ClientSecret = strings.TrimSpace(AntigravityClientSecret)
 		}
+		if strings.TrimSpace(spec.ClientID) == "" || strings.TrimSpace(spec.ClientSecret) == "" {
+			if id, secret := readEnvLocalAntigravity(); id != "" && secret != "" {
+				if strings.TrimSpace(spec.ClientID) == "" {
+					spec.ClientID = id
+				}
+				if strings.TrimSpace(spec.ClientSecret) == "" {
+					spec.ClientSecret = secret
+				}
+			}
+		}
 	}
 	return spec, true
+}
+
+// readEnvLocalAntigravity attempts to read Antigravity client credentials from
+// a local .env.local file if present in the workspace or next to the executable.
+func readEnvLocalAntigravity() (string, string) {
+	candidates := []string{".env.local"}
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), ".env.local"))
+	}
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var id, secret string
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if after, ok := strings.CutPrefix(line, "TERMIXGO_ANTIGRAVITY_CLIENT_ID="); ok {
+				id = strings.Trim(strings.TrimSpace(after), `"'`)
+			} else if after, ok := strings.CutPrefix(line, "TERMIXGO_ANTIGRAVITY_CLIENT_SECRET="); ok {
+				secret = strings.Trim(strings.TrimSpace(after), `"'`)
+			}
+		}
+		if id != "" && secret != "" {
+			return id, secret
+		}
+	}
+	return "", ""
 }
 
 // Supported lists the providers with a login, sorted.

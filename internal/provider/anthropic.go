@@ -34,12 +34,30 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 		"stream":     true,
 		"messages":   messages,
 	}
-	if strings.TrimSpace(req.System) != "" {
+	if len(req.SystemParts) > 0 {
+		var blocks []map[string]any
+		for i, part := range req.SystemParts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed == "" {
+				continue
+			}
+			block := map[string]any{"type": "text", "text": trimmed}
+			if i == 0 {
+				block["cache_control"] = map[string]any{"type": "ephemeral"}
+			}
+			blocks = append(blocks, block)
+		}
+		if len(blocks) > 0 {
+			payload["system"] = blocks
+		}
+	} else if strings.TrimSpace(req.System) != "" {
 		payload["system"] = req.System
 	}
 	if req.Temperature != nil {
 		payload["temperature"] = *req.Temperature
 	}
+
+	applyPromptCacheToMessages(messages)
 
 	headers := map[string]string{"anthropic-version": "2023-06-01"}
 	url := c.baseURL + "/v1/messages"
@@ -66,7 +84,11 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 		// The endpoint expects the Claude Code tool names, so client tools are
 		// suffixed and the CLI's own tools are offered as unavailable decoys.
 		if len(req.Tools) > 0 {
-			cloaked, names := cloakClaudeTools(encodeAnthropicTools(req.Tools))
+			tools := encodeAnthropicTools(req.Tools)
+			if len(tools) > 0 {
+				tools[len(tools)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
+			}
+			cloaked, names := cloakClaudeTools(tools)
 			payload["tools"] = cloaked
 			aliases = names
 			cloakClaudeMessages(messages)
@@ -78,8 +100,13 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 		url += "?beta=true"
 	} else {
 		headers["x-api-key"] = key
+		headers["anthropic-beta"] = "prompt-caching-2024-07-31"
 		if len(req.Tools) > 0 {
-			payload["tools"] = encodeAnthropicTools(req.Tools)
+			tools := encodeAnthropicTools(req.Tools)
+			if len(tools) > 0 {
+				tools[len(tools)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
+			}
+			payload["tools"] = tools
 		}
 	}
 	return c.streamWithURL(ctx, url, headers, payload, emit, aliases)
@@ -112,7 +139,14 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 		switch event.Type {
 		case "message_start":
 			if event.Message != nil && event.Message.Usage != nil {
-				usage := Usage{PromptTokens: event.Message.Usage.InputTokens}
+				promptTokens := event.Message.Usage.InputTokens
+				cacheRead := event.Message.Usage.CacheReadInputTokens
+				cacheWrite := event.Message.Usage.CacheCreationInputTokens
+				usage := Usage{
+					PromptTokens:     promptTokens + cacheRead,
+					CacheReadTokens:  cacheRead,
+					CacheWriteTokens: cacheWrite,
+				}
 				if err := emit(StreamEvent{Type: EventUsage, Usage: &usage}); err != nil {
 					return err
 				}
@@ -283,6 +317,31 @@ func rawObject(arguments string) any {
 	return decoded
 }
 
+// applyPromptCacheToMessages marks the second-to-last turn with ephemeral cache_control
+// so multi-turn conversation prefix is cached by Anthropic.
+func applyPromptCacheToMessages(messages []map[string]any) {
+	if len(messages) < 2 {
+		return
+	}
+	target := messages[len(messages)-2]
+	switch content := target["content"].(type) {
+	case string:
+		if strings.TrimSpace(content) != "" {
+			target["content"] = []map[string]any{
+				{
+					"type":          "text",
+					"text":          content,
+					"cache_control": map[string]any{"type": "ephemeral"},
+				},
+			}
+		}
+	case []map[string]any:
+		if len(content) > 0 {
+			content[len(content)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
+		}
+	}
+}
+
 type anthropicEvent struct {
 	Type  string `json:"type"`
 	Index int    `json:"index"`
@@ -300,13 +359,17 @@ type anthropicEvent struct {
 	} `json:"content_block"`
 	Message *struct {
 		Usage *struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
 	Usage *struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	} `json:"usage"`
 	Error *struct {
 		Type    string `json:"type"`

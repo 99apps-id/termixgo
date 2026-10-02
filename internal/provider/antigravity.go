@@ -75,13 +75,33 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 		request["toolConfig"] = map[string]any{"functionCallingConfig": map[string]any{"mode": "VALIDATED"}}
 	}
 
+	key := c.currentKey()
 	headers := map[string]string{
-		"Authorization": "Bearer " + c.apiKey,
-		"User-Agent":    agUserAgent,
+		"Authorization":        "Bearer " + key,
+		"User-Agent":           agUserAgent,
+		"X-Machine-Session-Id": session,
 	}
-	response, err := c.post(ctx, c.baseURL+"/v1internal:streamGenerateContent?alt=sse", headers, body)
+	endpoint := c.baseURL + "/v1internal:streamGenerateContent?alt=sse"
+	response, err := c.post(ctx, endpoint, headers, body)
 	if err != nil {
-		return err
+		if isAuthOrSessionError(err) {
+			// Token expired or session invalidated on Google's backend: refresh token, reset session, and retry once.
+			newKey := c.refreshKey()
+			newSession := c.resetSession()
+			headers["Authorization"] = "Bearer " + newKey
+			headers["X-Machine-Session-Id"] = newSession
+			reqMap := body["request"].(map[string]any)
+			reqMap["sessionId"] = newSession
+			body["requestId"] = agRequestID(newSession, req.Model, len(req.Messages))
+			response, err = c.post(ctx, endpoint, headers, body)
+		}
+		if err != nil && isEndpointError(err) && !strings.Contains(c.baseURL, "cloudcode-pa.googleapis.com") {
+			fallbackURL := "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
+			response, err = c.post(ctx, fallbackURL, headers, body)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	defer response.Body.Close()
 
@@ -219,34 +239,50 @@ func (c *antigravityClient) ensureProject(ctx context.Context) (string, error) {
 		}
 	}
 	if project == "" {
-		project = "termixgo-" + randomHex(8)
+		return "termixgo-" + randomHex(8), nil
 	}
 	c.project = project
 	return project, nil
 }
 
 func (c *antigravityClient) doJSON(ctx context.Context, endpoint string, payload any) ([]byte, error) {
-	encoded, err := json.Marshal(payload)
+	key := c.currentKey()
+	body, status, err := c.doJSONWithKey(ctx, endpoint, payload, key)
+	if err == nil && status >= 200 && status < 300 {
+		return body, nil
+	}
+	if status == http.StatusUnauthorized {
+		freshKey := c.refreshKey()
+		body, status, err = c.doJSONWithKey(ctx, endpoint, payload, freshKey)
+		if err == nil && status >= 200 && status < 300 {
+			return body, nil
+		}
+	}
 	if err != nil {
 		return nil, err
+	}
+	return nil, fmt.Errorf("%s returned %d: %s", endpoint, status, clipRunes(strings.TrimSpace(string(body)), 200))
+}
+
+func (c *antigravityClient) doJSONWithKey(ctx context.Context, endpoint string, payload any, key string) ([]byte, int, error) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, 0, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", "Bearer "+c.apiKey)
+	request.Header.Set("Authorization", "Bearer "+key)
 	request.Header.Set("User-Agent", agUserAgent)
 	response, err := c.http.Do(request)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer response.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("%s returned %d: %s", endpoint, response.StatusCode, clipRunes(strings.TrimSpace(string(body)), 200))
-	}
-	return body, nil
+	return body, response.StatusCode, nil
 }
 
 func (c *antigravityClient) session() string {
@@ -254,8 +290,18 @@ func (c *antigravityClient) session() string {
 	defer c.mu.Unlock()
 	if c.sessionID == "" {
 		sum := sha256.Sum256([]byte(randomHex(16)))
-		c.sessionID = fmt.Sprintf("%d", int64(binary.BigEndian.Uint64(sum[:8])))
+		// Positive 63-bit integer string. Google Cloud Code requires a non-negative session ID.
+		c.sessionID = fmt.Sprintf("%d", binary.BigEndian.Uint64(sum[:8])&0x7FFFFFFFFFFFFFFF)
 	}
+	return c.sessionID
+}
+
+func (c *antigravityClient) resetSession() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	sum := sha256.Sum256([]byte(randomHex(16)))
+	c.sessionID = fmt.Sprintf("%d", binary.BigEndian.Uint64(sum[:8])&0x7FFFFFFFFFFFFFFF)
+	c.signatures = map[string]string{}
 	return c.sessionID
 }
 
@@ -582,15 +628,50 @@ func agProjectID(raw json.RawMessage) string {
 	}
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
-		return strings.TrimSpace(text)
+		trimmed := strings.TrimSpace(text)
+		return strings.TrimPrefix(trimmed, "projects/")
 	}
 	var object struct {
-		ID string `json:"id"`
+		ID        string `json:"id"`
+		ProjectID string `json:"projectId"`
+		Project   string `json:"project"`
+		Name      string `json:"name"`
 	}
 	if json.Unmarshal(raw, &object) == nil {
-		return strings.TrimSpace(object.ID)
+		for _, val := range []string{object.ID, object.ProjectID, object.Project, object.Name} {
+			trimmed := strings.TrimSpace(val)
+			if trimmed != "" {
+				return strings.TrimPrefix(trimmed, "projects/")
+			}
+		}
 	}
 	return ""
+}
+
+func isAuthOrSessionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "401") ||
+		strings.Contains(msg, "unauthenticated") ||
+		strings.Contains(msg, "unauthorized") ||
+		strings.Contains(msg, "session") ||
+		strings.Contains(msg, "token") ||
+		strings.Contains(msg, "expired")
+}
+
+func isEndpointError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "404") ||
+		strings.Contains(msg, "429") ||
+		strings.Contains(msg, "502") ||
+		strings.Contains(msg, "503") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "no such host")
 }
 
 func agRequestID(session, model string, messageCount int) string {

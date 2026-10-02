@@ -76,10 +76,15 @@ func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers ma
 			continue
 		}
 		if chunk.Usage != nil {
+			cached := 0
+			if chunk.Usage.PromptTokensDetails != nil {
+				cached = chunk.Usage.PromptTokensDetails.CachedTokens
+			}
 			if step, ok := usage.step(Usage{
 				PromptTokens:     chunk.Usage.PromptTokens,
 				CompletionTokens: chunk.Usage.CompletionTokens,
 				TotalTokens:      chunk.Usage.TotalTokens,
+				CacheReadTokens:  cached,
 			}); ok {
 				if err := emit(StreamEvent{Type: EventUsage, Usage: &step}); err != nil {
 					return err
@@ -241,8 +246,11 @@ type openAIChunk struct {
 		FinishReason string      `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		TotalTokens         int `json:"total_tokens"`
+		PromptTokensDetails *struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
 }

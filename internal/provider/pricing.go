@@ -262,18 +262,25 @@ func (m Model) PricingWith(overrides map[string]Pricing) Pricing {
 
 // Cost estimates the dollars a usage report costs at this price. An unknown
 // price yields zero, and callers use Known() to say unknown, not zero.
+// Cached prompt tokens are priced at a 90% discount (0.10x of the standard input rate).
 func (p Pricing) Cost(usage Usage) float64 {
-	return float64(usage.PromptTokens)/1_000_000*p.InputPerMillion +
-		float64(usage.CompletionTokens)/1_000_000*p.OutputPerMillion
+	inputTokens := usage.PromptTokens
+	cachedTokens := usage.CacheReadTokens
+	if cachedTokens > inputTokens {
+		cachedTokens = inputTokens
+	}
+	regularInput := inputTokens - cachedTokens
+
+	return (float64(regularInput)*p.InputPerMillion +
+		float64(cachedTokens)*p.InputPerMillion*0.10 +
+		float64(usage.CompletionTokens)*p.OutputPerMillion) / 1_000_000
 }
 
 // Cost estimates the dollars a usage report costs on this model. An unknown
 // price yields zero, and callers use Pricing().Known() to say "unknown"
 // rather than "$0.00".
 func (m Model) Cost(usage Usage) float64 {
-	price := m.Pricing()
-	return float64(usage.PromptTokens)/1_000_000*price.InputPerMillion +
-		float64(usage.CompletionTokens)/1_000_000*price.OutputPerMillion
+	return m.Pricing().Cost(usage)
 }
 
 // CostModel resolves the price to use for a model and whether a price is

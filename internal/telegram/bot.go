@@ -36,6 +36,22 @@ type Agent interface {
 	Status() string
 }
 
+// DiffProvider is an optional interface an Agent can implement to surface git diffs.
+type DiffProvider interface {
+	GitDiff(ctx context.Context) (string, error)
+}
+
+// PendingApproval tracks one in-flight approval request waiting for a callback query.
+type PendingApproval struct {
+	ID       string
+	Tool     string
+	Detail   string
+	Risk     string
+	ChatID   int64
+	MsgID    int64
+	Decision chan string
+}
+
 // Bot long-polls Telegram and forwards operator messages to the agent.
 type Bot struct {
 	client *Client
@@ -72,6 +88,10 @@ type Bot struct {
 	// answered while a turn is in flight.
 	runMu   sync.Mutex
 	running bool
+
+	approvalsMu sync.Mutex
+	approvals   map[string]*PendingApproval
+	nextApprID  int64
 }
 
 // New builds a bot for a token and agent.
@@ -198,6 +218,7 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	commands := []BotCommand{
 		{Command: "run", Description: "Run a prompt with live progress"},
+		{Command: "diff", Description: "Show current git diff or file changes"},
 		{Command: "stop", Description: "Stop the running turn"},
 		{Command: "new", Description: "Start a new session"},
 		{Command: "status", Description: "Show status"},
@@ -298,12 +319,110 @@ func (b *Bot) handleCallback(ctx context.Context, query *CallbackQuery) {
 		return
 	}
 	switch {
+	case strings.HasPrefix(query.Data, "appr:"):
+		b.handleApprovalCallback(ctx, query)
 	case strings.HasPrefix(query.Data, modelProviderPrefix):
 		b.showProviderModels(ctx, query, strings.TrimPrefix(query.Data, modelProviderPrefix))
 	case strings.HasPrefix(query.Data, modelSelectPrefix):
 		b.selectModel(ctx, query, strings.TrimPrefix(query.Data, modelSelectPrefix))
 	default:
 		_ = b.client.AnswerCallbackQuery(ctx, query.ID, "")
+	}
+}
+
+// RequestApproval posts an interactive inline confirmation dialog and blocks
+// until the operator selects Allow Once, Allow Always, or Deny (or timeout).
+func (b *Bot) RequestApproval(ctx context.Context, tool, detail, risk string) (string, error) {
+	chatID, _ := b.Pairing()
+	if chatID == 0 {
+		return "deny", errors.New("bot is not paired")
+	}
+
+	b.approvalsMu.Lock()
+	if b.approvals == nil {
+		b.approvals = make(map[string]*PendingApproval)
+	}
+	b.nextApprID++
+	id := strconv.FormatInt(b.nextApprID, 10)
+	ch := make(chan string, 1)
+	approval := &PendingApproval{
+		ID:       id,
+		Tool:     tool,
+		Detail:   detail,
+		Risk:     risk,
+		ChatID:   chatID,
+		Decision: ch,
+	}
+	b.approvals[id] = approval
+	b.approvalsMu.Unlock()
+
+	defer func() {
+		b.approvalsMu.Lock()
+		delete(b.approvals, id)
+		b.approvalsMu.Unlock()
+	}()
+
+	keyboard := &InlineKeyboard{
+		InlineKeyboard: [][]InlineButton{
+			{
+				{Text: "Allow Once", CallbackData: "appr:once:" + id},
+				{Text: "Always", CallbackData: "appr:always:" + id},
+				{Text: "Deny", CallbackData: "appr:deny:" + id},
+			},
+		},
+	}
+	header := fmt.Sprintf("Approval required for %s", tool)
+	if risk != "" {
+		header = fmt.Sprintf("Approval required (%s) for %s", risk, tool)
+	}
+	text := header
+	if strings.TrimSpace(detail) != "" {
+		text += "\n\n" + detail
+	}
+	msg, err := b.client.SendMessage(ctx, chatID, text, keyboard)
+	if err != nil {
+		return "deny", err
+	}
+	approval.MsgID = msg.MessageID
+
+	select {
+	case decision := <-ch:
+		return decision, nil
+	case <-time.After(3 * time.Minute):
+		_ = b.client.EditMessageText(ctx, chatID, msg.MessageID, fmt.Sprintf("Approval for %s timed out (denied).", tool))
+		return "deny", nil
+	case <-ctx.Done():
+		return "deny", ctx.Err()
+	}
+}
+
+func (b *Bot) handleApprovalCallback(ctx context.Context, query *CallbackQuery) {
+	parts := strings.Split(query.Data, ":")
+	if len(parts) != 3 {
+		_ = b.client.AnswerCallbackQuery(ctx, query.ID, "Invalid action.")
+		return
+	}
+	action := parts[1] // once, always, deny
+	id := parts[2]
+
+	b.approvalsMu.Lock()
+	appr, ok := b.approvals[id]
+	b.approvalsMu.Unlock()
+
+	if !ok {
+		_ = b.client.AnswerCallbackQuery(ctx, query.ID, "Approval request expired or already answered.")
+		return
+	}
+
+	_ = b.client.AnswerCallbackQuery(ctx, query.ID, "Recorded: "+action)
+	statusText := fmt.Sprintf("Decision: %s for %s", action, appr.Tool)
+	if query.Message != nil {
+		_ = b.client.EditMessageTextWithKeyboard(ctx, query.Message.Chat.ID, query.Message.MessageID, statusText, &InlineKeyboard{InlineKeyboard: [][]InlineButton{}})
+	}
+
+	select {
+	case appr.Decision <- action:
+	default:
 	}
 }
 
@@ -388,6 +507,30 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 			return
 		}
 		b.reply(ctx, chatID, "Model is now "+updated+".")
+	case "diff":
+		diffProv, ok := b.agent.(DiffProvider)
+		if !ok {
+			b.reply(ctx, chatID, "Diff is not supported by this agent.")
+			return
+		}
+		diff, err := diffProv.GitDiff(ctx)
+		if err != nil {
+			b.reply(ctx, chatID, "git diff error: "+err.Error())
+			return
+		}
+		trimmed := strings.TrimSpace(diff)
+		if trimmed == "" {
+			b.reply(ctx, chatID, "No git changes in the workspace.")
+			return
+		}
+		if len(trimmed) > 3000 {
+			_, sendErr := b.client.SendDocument(ctx, chatID, "changes.diff", []byte(trimmed), "Current git diff")
+			if sendErr != nil {
+				b.reply(ctx, chatID, "Could not send diff file: "+sendErr.Error())
+			}
+			return
+		}
+		b.reply(ctx, chatID, "```diff\n"+trimmed+"\n```")
 	case "run", "query":
 		prompt := strings.TrimSpace(argument)
 		if prompt == "" {
@@ -696,6 +839,7 @@ func helpText() string {
 		"Send any text to run it as a prompt.",
 		"Send a photo (with a caption) to ask about an image.",
 		"/run <prompt>  run with a live progress card",
+		"/diff          show current git diff",
 		"/stop          stop the running turn",
 		"/new           start a new session",
 		"/model [id]    choose a model, or switch by id",

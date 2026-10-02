@@ -22,10 +22,11 @@ type httpClient struct {
 	apiKey  string
 	// accountID is the provider-side account a Codex token belongs to, sent in
 	// the ChatGPT-Account-ID header. Empty for every other provider.
-	accountID  string
-	sessionID  string
-	resolveKey KeyResolver
-	http       *http.Client
+	accountID       string
+	sessionID       string
+	resolveKey      KeyResolver
+	forceResolveKey KeyResolver
+	http            *http.Client
 }
 
 // SetAccountID records the account a Codex token belongs to.
@@ -37,6 +38,9 @@ func (c *httpClient) SetSessionID(id string) { c.sessionID = strings.TrimSpace(i
 // SetKeyResolver sets the dynamic key resolver callback.
 func (c *httpClient) SetKeyResolver(fn KeyResolver) { c.resolveKey = fn }
 
+// SetForceKeyResolver sets the force key renewal callback.
+func (c *httpClient) SetForceKeyResolver(fn KeyResolver) { c.forceResolveKey = fn }
+
 // currentKey returns the most current API key or OAuth access token,
 // dynamically resolving via KeyResolver if available.
 func (c *httpClient) currentKey() string {
@@ -47,6 +51,17 @@ func (c *httpClient) currentKey() string {
 		}
 	}
 	return c.apiKey
+}
+
+// refreshKey unconditionally renews the OAuth access token (e.g. after receiving a 401).
+func (c *httpClient) refreshKey() string {
+	if c.forceResolveKey != nil {
+		if fresh := strings.TrimSpace(c.forceResolveKey(c.info.ID)); fresh != "" {
+			c.apiKey = fresh
+			return fresh
+		}
+	}
+	return c.currentKey()
 }
 
 // SessionID returns the current session ID, or generates a stable binary-style ID.

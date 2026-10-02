@@ -3,11 +3,13 @@ package app
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
 	"time"
 
+	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/secrets"
 	"github.com/99apps-id/termixgo/internal/telegram"
@@ -161,6 +163,9 @@ func (a *App) StartTelegram() error {
 	a.bot = bot
 	a.botCancel = cancel
 	a.botStatus = "connecting"
+	if a.interactor == nil {
+		a.interactor = &telegramInteractor{bot: bot}
+	}
 	a.mu.Unlock()
 
 	go func() {
@@ -200,6 +205,9 @@ func (a *App) StopTelegram() {
 	a.bot = nil
 	a.botCancel = nil
 	a.botStatus = ""
+	if _, ok := a.interactor.(*telegramInteractor); ok {
+		a.interactor = nil
+	}
 	a.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -252,4 +260,29 @@ func (a *App) TelegramChatID() int64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.cfg.Telegram.ChatID
+}
+
+type telegramInteractor struct {
+	bot *telegram.Bot
+}
+
+func (ti *telegramInteractor) Approve(request agent.ApprovalRequest) agent.Decision {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	decision, err := ti.bot.RequestApproval(ctx, request.Tool, request.Detail, request.Risk)
+	if err != nil {
+		return agent.DecisionDeny
+	}
+	switch decision {
+	case "once":
+		return agent.DecisionAllowOnce
+	case "always":
+		return agent.DecisionAllowAlways
+	default:
+		return agent.DecisionDeny
+	}
+}
+
+func (ti *telegramInteractor) Ask(question string, options []string) (string, error) {
+	return "", errors.New("interactive questions not supported via Telegram yet")
 }

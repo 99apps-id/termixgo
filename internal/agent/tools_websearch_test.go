@@ -265,6 +265,15 @@ func TestWebSearchReportsNoResults(t *testing.T) {
 // regression: a blocked DuckDuckGo host must not make an empty result read as
 // "the machine is offline" when Wikipedia or GitHub answered.
 func TestWebSearchDoesNotClaimOfflineWhenASourceWasReachable(t *testing.T) {
+	doh := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(func() {
+		doh.Close()
+		dohEndpoint = "https://cloudflare-dns.com/dns-query"
+	})
+	dohEndpoint = doh.URL
+
 	emptySources(t)
 	// A host that never resolves: the DNS failure the operator hits when an
 	// ISP blocks DuckDuckGo.

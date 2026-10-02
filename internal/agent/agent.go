@@ -144,10 +144,11 @@ runLoop:
 		}
 
 		request := provider.ChatRequest{
-			Model:    r.Model,
-			System:   r.system(session),
-			Messages: compactForModel(session.Messages(), r.ContextBudget),
-			Tools:    r.stepTools(discovered).Definitions(),
+			Model:       r.Model,
+			System:      r.system(session),
+			SystemParts: r.systemParts(session),
+			Messages:    compactForModel(session.Messages(), r.ContextBudget),
+			Tools:       r.stepTools(discovered).Definitions(),
 		}
 
 		var answer strings.Builder
@@ -408,6 +409,23 @@ func (r *Runner) system(session *Session) string {
 		prompt += "\n\n" + toolSearchHint
 	}
 	return prompt
+}
+
+// systemParts returns the static prompt and dynamic working plan separately
+// so provider implementations can mark the static prefix for prompt caching.
+func (r *Runner) systemParts(session *Session) []string {
+	if strings.TrimSpace(r.System) != "" {
+		return []string{r.System}
+	}
+	staticPrompt, dynamicPlan := BuildSystemParts(r.Env, r.Model)
+	staticWithHarness := ApplyHarnessToSystem(staticPrompt, GetHarnessProfile(r.Harness))
+	if r.ToolSearch {
+		staticWithHarness += "\n\n" + toolSearchHint
+	}
+	if strings.TrimSpace(dynamicPlan) != "" {
+		return []string{staticWithHarness, dynamicPlan}
+	}
+	return []string{staticWithHarness}
 }
 
 // observeToolResult folds one finished tool call into the verify ledger.

@@ -209,6 +209,29 @@ func AccessToken(ctx context.Context, store *Store, provider string) string {
 	return token.Access
 }
 
+// ForceRefreshToken forces a renewal of the access token using the stored refresh
+// token regardless of local expiration timestamps.
+func ForceRefreshToken(ctx context.Context, store *Store, provider string) string {
+	token, ok := store.Load(provider)
+	if !ok {
+		return ""
+	}
+	spec, ok := SpecFor(provider)
+	if !ok || strings.TrimSpace(token.Refresh) == "" {
+		return token.Access
+	}
+	refreshed, err := refreshTokenOnce(ctx, store, spec, token)
+	if err == nil && strings.TrimSpace(refreshed.Access) != "" {
+		return refreshed.Access
+	}
+	var grant *GrantError
+	if errors.As(err, &grant) {
+		_ = store.Delete(provider)
+		return ""
+	}
+	return token.Access
+}
+
 // refreshFlights serialises refreshes per provider, the way 9router's
 // withCredentialRefreshLock does. Refresh tokens rotate on use at these
 // vendors, and replaying an already-rotated token can invalidate the whole

@@ -21,6 +21,8 @@ func (c *cumulativeUsage) step(current Usage) (Usage, bool) {
 		PromptTokens:     growth(c.seen.PromptTokens, current.PromptTokens),
 		CompletionTokens: growth(c.seen.CompletionTokens, current.CompletionTokens),
 		TotalTokens:      growth(c.seen.TotalTokens, current.TotalTokens),
+		CacheReadTokens:  growth(c.seen.CacheReadTokens, current.CacheReadTokens),
+		CacheWriteTokens: growth(c.seen.CacheWriteTokens, current.CacheWriteTokens),
 	}
 	// The high-water mark, not the latest value: a chunk that reported less
 	// would otherwise re-count ground already charged when the counters climb
@@ -29,6 +31,8 @@ func (c *cumulativeUsage) step(current Usage) (Usage, bool) {
 		PromptTokens:     max(c.seen.PromptTokens, current.PromptTokens),
 		CompletionTokens: max(c.seen.CompletionTokens, current.CompletionTokens),
 		TotalTokens:      max(c.seen.TotalTokens, current.TotalTokens),
+		CacheReadTokens:  max(c.seen.CacheReadTokens, current.CacheReadTokens),
+		CacheWriteTokens: max(c.seen.CacheWriteTokens, current.CacheWriteTokens),
 	}
 	if increase == (Usage{}) {
 		return Usage{}, false

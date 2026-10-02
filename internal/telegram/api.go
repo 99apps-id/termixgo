@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -239,6 +241,62 @@ func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, key
 	var message Message
 	err := c.call(ctx, "sendMessage", payload, &message)
 	return message, err
+}
+
+// SendDocument uploads and posts a file as a document via multipart/form-data.
+func (c *Client) SendDocument(ctx context.Context, chatID int64, filename string, data []byte, caption string) (Message, error) {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	if err := writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
+		return Message{}, err
+	}
+	if caption != "" {
+		if err := writer.WriteField("caption", clampText(caption)); err != nil {
+			return Message{}, err
+		}
+	}
+	part, err := writer.CreateFormFile("document", filename)
+	if err != nil {
+		return Message{}, err
+	}
+	if _, err := part.Write(data); err != nil {
+		return Message{}, err
+	}
+	if err := writer.Close(); err != nil {
+		return Message{}, err
+	}
+
+	url := fmt.Sprintf("%s/bot%s/sendDocument", c.baseURL, c.token)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
+	if err != nil {
+		return Message{}, err
+	}
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response, err := c.http.Do(request)
+	if err != nil {
+		return Message{}, err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 4*1024*1024))
+	if err != nil {
+		return Message{}, err
+	}
+	var decoded apiResponse
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return Message{}, fmt.Errorf("telegram: unreadable reply (%s)", response.Status)
+	}
+	if !decoded.OK {
+		apiErr := &APIError{Code: decoded.ErrorCode, Description: decoded.Description}
+		if decoded.Parameters != nil {
+			apiErr.RetryAfter = decoded.Parameters.RetryAfter
+		}
+		return Message{}, apiErr
+	}
+	var message Message
+	if len(decoded.Result) > 0 {
+		_ = json.Unmarshal(decoded.Result, &message)
+	}
+	return message, nil
 }
 
 // EditMessageText updates a message in place, which is how the progress card

@@ -18,10 +18,9 @@ var projectMemoryFiles = []string{"TERMIXGO.md", "AGENTS.md", "CLAUDE.md"}
 // projectMemoryCap is how much of the project memory reaches the prompt.
 const projectMemoryCap = 10000
 
-// BuildSystem assembles the system prompt: the base instructions, the
-// environment, the project and learned memory, the skill list, the current
-// plan and any custom instructions.
-func BuildSystem(env *Env, model string) string {
+// BuildSystemParts separates the static prefix of the system prompt from the
+// dynamic working plan. This maximizes KV cache hit rates across turns and steps.
+func BuildSystemParts(env *Env, model string) (staticPrompt, dynamicPlan string) {
 	var builder strings.Builder
 	builder.WriteString(basePrompt)
 
@@ -50,14 +49,24 @@ func BuildSystem(env *Env, model string) string {
 	if block := skill.PromptBlock(env.Skills); block != "" {
 		builder.WriteString(block)
 	}
-	if env.Todos != nil {
-		builder.WriteString(env.Todos.PromptBlock())
-	}
 	if custom := strings.TrimSpace(env.Config.SystemPrompt); custom != "" {
 		builder.WriteString("\n\n## USER CUSTOM INSTRUCTIONS\n")
 		builder.WriteString(custom)
 	}
-	return builder.String()
+	staticPrompt = builder.String()
+
+	if env.Todos != nil {
+		dynamicPlan = env.Todos.PromptBlock()
+	}
+	return staticPrompt, dynamicPlan
+}
+
+// BuildSystem assembles the system prompt: the base instructions, the
+// environment, the project and learned memory, the skill list, any custom
+// instructions, and the current plan.
+func BuildSystem(env *Env, model string) string {
+	staticPrompt, dynamicPlan := BuildSystemParts(env, model)
+	return staticPrompt + dynamicPlan
 }
 
 func memoryName(workspace string) string {

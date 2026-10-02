@@ -238,3 +238,96 @@ func TestCleanAntigravitySchemaDropsPropertyNames(t *testing.T) {
 		t.Errorf("additionalProperties should be dropped")
 	}
 }
+
+func TestAntigravitySessionIDIsNonNegative(t *testing.T) {
+	client := &antigravityClient{httpClient: &httpClient{}}
+	for i := 0; i < 50; i++ {
+		client.sessionID = ""
+		sess := client.session()
+		if strings.HasPrefix(sess, "-") {
+			t.Fatalf("session ID must not be negative, got %s", sess)
+		}
+	}
+}
+
+func TestAntigravityAgProjectIDVariants(t *testing.T) {
+	// String with projects/ prefix
+	if got := agProjectID(json.RawMessage(`"projects/my-gcp-project"`)); got != "my-gcp-project" {
+		t.Errorf("agProjectID(string) = %q, want my-gcp-project", got)
+	}
+
+	// Bare string
+	if got := agProjectID(json.RawMessage(`"bare-project"`)); got != "bare-project" {
+		t.Errorf("agProjectID(bare) = %q, want bare-project", got)
+	}
+
+	// Object with projectId
+	if got := agProjectID(json.RawMessage(`{"projectId":"proj-from-obj"}`)); got != "proj-from-obj" {
+		t.Errorf("agProjectID(projectId) = %q, want proj-from-obj", got)
+	}
+
+	// Object with name (projects/...)
+	if got := agProjectID(json.RawMessage(`{"name":"projects/proj-name"}`)); got != "proj-name" {
+		t.Errorf("agProjectID(name) = %q, want proj-name", got)
+	}
+}
+
+func TestAntigravityRetriesOn401WithRefreshedKey(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case strings.Contains(request.URL.Path, "loadCodeAssist"):
+			writer.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(writer, `{"cloudaicompanionProject":"proj-1"}`)
+		case strings.Contains(request.URL.Path, "streamGenerateContent"):
+			attempts++
+			auth := request.Header.Get("Authorization")
+			if attempts == 1 {
+				// Simulate token expired on first attempt
+				http.Error(writer, `{"error":{"code":401,"message":"Request had invalid authentication credentials. Expected OAuth 2 access token."}}`, http.StatusUnauthorized)
+				return
+			}
+			if auth != "Bearer fresh-refreshed-token" {
+				t.Errorf("second attempt Authorization = %q, want Bearer fresh-refreshed-token", auth)
+			}
+			writer.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(writer, `data: {"response":{"candidates":[{"content":{"parts":[{"text":"recovered!"}]}}]}}`+"\n\n")
+		}
+	}))
+	defer server.Close()
+
+	original := agLoadAssistURL
+	agLoadAssistURL = server.URL + "/v1internal:loadCodeAssist"
+	t.Cleanup(func() { agLoadAssistURL = original })
+
+	rawClient, err := newHTTPClient(Provider{ID: "antigravity", Label: "Antigravity", Kind: KindAntigravity}, server.URL, "stale-token")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+
+	client := rawClient.(*antigravityClient)
+	client.SetForceKeyResolver(func(id string) string {
+		return "fresh-refreshed-token"
+	})
+
+	var answer strings.Builder
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "gemini-3.8-flash",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	}, func(event StreamEvent) error {
+		if event.Type == EventTextDelta {
+			answer.WriteString(event.Text)
+		}
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("Stream failed after 401 retry: %v", err)
+	}
+	if answer.String() != "recovered!" {
+		t.Errorf("answer = %q, want recovered!", answer.String())
+	}
+	if attempts != 2 {
+		t.Errorf("attempts = %d, want 2", attempts)
+	}
+}

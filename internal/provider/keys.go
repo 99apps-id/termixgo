@@ -42,6 +42,20 @@ func ResolveKey(store *secrets.Store, id string) string {
 	return EnvKey(id)
 }
 
+// ForceResolveKey forces a token renewal for OAuth providers, bypassing local
+// expiry timers.
+func ForceResolveKey(store *secrets.Store, id string) string {
+	if info, ok := ByID(id); ok && info.OAuth {
+		return oauth.ForceRefreshToken(context.Background(), oauth.NewStore(store), id)
+	}
+	return ResolveKey(store, id)
+}
+
+// ForceResolverFor returns a KeyResolver that forces an OAuth token renewal.
+func ForceResolverFor(store *secrets.Store) KeyResolver {
+	return func(id string) string { return ForceResolveKey(store, id) }
+}
+
 // UsesOAuth reports whether a provider logs in with a device code instead of
 // taking an API key.
 func UsesOAuth(id string) bool {

@@ -51,3 +51,40 @@ func TestOpenAIStreamCountsRepeatedUsageOnce(t *testing.T) {
 		t.Errorf("usage total = %d, want the final cumulative value 103 counted once", total)
 	}
 }
+
+func TestOpenAIStreamTracksCachedTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		chunks := []string{
+			`{"choices":[{"delta":{"content":"Hi"}}],"usage":{"prompt_tokens":100,"completion_tokens":1,"total_tokens":101,"prompt_tokens_details":{"cached_tokens":80}}}`,
+			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+			`[DONE]`,
+		}
+		for _, chunk := range chunks {
+			fmt.Fprintf(writer, "data: %s\n\n", chunk)
+		}
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "openai", Label: "OpenAI", Kind: KindOpenAI}, server.URL, "test-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	events := collect(t, client, ChatRequest{
+		Model:    "gpt-5.4-mini",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	})
+
+	var gotUsage *Usage
+	for _, event := range events {
+		if event.Type == EventUsage && event.Usage != nil {
+			gotUsage = event.Usage
+		}
+	}
+	if gotUsage == nil {
+		t.Fatalf("expected usage event")
+	}
+	if gotUsage.CacheReadTokens != 80 {
+		t.Errorf("CacheReadTokens = %d, want 80", gotUsage.CacheReadTokens)
+	}
+}

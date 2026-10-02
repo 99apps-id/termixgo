@@ -58,6 +58,8 @@ type Usage struct {
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
+	CacheReadTokens  int
+	CacheWriteTokens int
 }
 
 // Add sums two usage reports.
@@ -66,6 +68,8 @@ func (u Usage) Add(other Usage) Usage {
 		PromptTokens:     u.PromptTokens + other.PromptTokens,
 		CompletionTokens: u.CompletionTokens + other.CompletionTokens,
 		TotalTokens:      u.TotalTokens + other.TotalTokens,
+		CacheReadTokens:  u.CacheReadTokens + other.CacheReadTokens,
+		CacheWriteTokens: u.CacheWriteTokens + other.CacheWriteTokens,
 	}
 }
 
@@ -73,6 +77,7 @@ func (u Usage) Add(other Usage) Usage {
 type ChatRequest struct {
 	Model       string
 	System      string
+	SystemParts []string // optional structured system blocks for explicit prompt cache control
 	Messages    []Message
 	Tools       []ToolDef
 	Temperature *float64
