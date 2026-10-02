@@ -161,6 +161,10 @@ All notable changes to Termixgo are recorded here. The format follows
 - Copilot models that answer "not accessible via the /chat/completions endpoint"
   are retried on the OpenAI Responses endpoint (`/responses`) and remembered, so
   models such as the MAI, Grok and some GPT entries work.
+- `subagentModels` runs a delegated role (`explore`, `general`, `builder`,
+  `code-review`, `security`) on its own model. When that provider has no
+  credential or runs out of quota, the delegation falls back to the active model
+  so the task still runs.
 
 ### Fixed
 

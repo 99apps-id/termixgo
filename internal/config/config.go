@@ -146,6 +146,13 @@ type Config struct {
 	// with no entry uses the built-in command.
 	WorkerCommands map[string][]string `json:"workerCommands,omitempty"`
 
+	// SubagentModels maps a subagent role (explore, general, builder,
+	// code-review, security) to the model that role should use, as a catalogue
+	// id or "provider:model". A role with no entry uses the active model. If the
+	// mapped provider is unavailable or out of quota, the delegation falls back
+	// to the active model so the task still runs.
+	SubagentModels map[string]string `json:"subagentModels,omitempty"`
+
 	// TrustedFolders is the canonical list of folders where the agent may
 	// write and run commands without per-action approval.
 	TrustedFolders []string `json:"trustedFolders,omitempty"`

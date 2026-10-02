@@ -78,6 +78,10 @@ type App struct {
 	client    provider.Client
 	model     provider.Model
 	wireModel string
+	// subagentClients caches one client per provider a subagent role maps to,
+	// so a delegated role can run on a different model without rebuilding the
+	// client (and its token refresher) on every spawn.
+	subagentClients map[string]provider.Client
 	// modelErr is why the configured model has no usable client. Without it the
 	// only symptom was ErrNoModel, which read as "nothing is configured" even
 	// when a model id was set but its key or endpoint was missing.
@@ -894,11 +898,114 @@ func (a *App) runSubagent(ctx context.Context, subType, prompt string) (string, 
 	a.mu.Lock()
 	client := a.client
 	model := a.model
+	target, mapped := a.cfg.SubagentModels[strings.ToLower(strings.TrimSpace(subType))]
 	a.mu.Unlock()
 	if client == nil {
 		return "", errors.New("no provider client is available")
 	}
+
+	// A role may run on its own model. When that provider has no credential, or
+	// the run exhausts its quota, the delegation falls back to the active model
+	// so the task still gets done instead of failing outright.
+	if mapped && strings.TrimSpace(target) != "" {
+		if roleClient, roleModel, err := a.subagentClient(target); err == nil && roleModel.ID != model.ID {
+			report, runErr := agent.RunSubagent(ctx, a.env(), roleClient, roleModel, subType, prompt, agent.SubagentMaxSteps)
+			if runErr == nil {
+				return report, nil
+			}
+			if !subagentFallback(runErr) {
+				return "", runErr
+			}
+		}
+	}
 	return agent.RunSubagent(ctx, a.env(), client, model, subType, prompt, agent.SubagentMaxSteps)
+}
+
+// subagentClient resolves a subagent's configured model and returns a cached
+// client for its provider.
+func (a *App) subagentClient(query string) (provider.Client, provider.Model, error) {
+	model, err := resolveSubagentModel(a.cfg, query)
+	if err != nil {
+		return nil, provider.Model{}, err
+	}
+	info, ok := provider.ByID(model.Provider)
+	if !ok {
+		return nil, provider.Model{}, fmt.Errorf("unknown provider %q", model.Provider)
+	}
+	if info.NeedsKey && provider.KeySource(a.store, info.ID) == "" {
+		return nil, provider.Model{}, fmt.Errorf("%s has no credential", info.ID)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if cached, ok := a.subagentClients[info.ID]; ok {
+		return cached, model, nil
+	}
+	client, err := provider.NewClient(info.ID, provider.BaseURLFor(a.cfg, info.ID), provider.ResolverFor(a.store))
+	if err != nil {
+		return nil, provider.Model{}, err
+	}
+	if info.OAuth {
+		if setter, ok := client.(interface {
+			SetForceKeyResolver(provider.KeyResolver)
+		}); ok {
+			setter.SetForceKeyResolver(provider.ForceResolverFor(a.store))
+		}
+		if token, ok := provider.OAuthStore(a.store).Load(info.ID); ok {
+			if setter, ok := client.(interface{ SetAccountID(string) }); ok {
+				setter.SetAccountID(token.AccountID)
+			}
+		}
+	}
+	if a.subagentClients == nil {
+		a.subagentClients = map[string]provider.Client{}
+	}
+	a.subagentClients[info.ID] = client
+	return client, model, nil
+}
+
+// resolveSubagentModel turns "provider:model" or "provider/model" or a
+// catalogue id into a model.
+func resolveSubagentModel(cfg config.Config, query string) (provider.Model, error) {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return provider.Model{}, errors.New("the subagent model is empty")
+	}
+	if index := strings.Index(trimmed, ":"); index > 0 {
+		if _, ok := provider.ByID(trimmed[:index]); ok {
+			if model, ok := provider.ModelFromQuery(trimmed); ok {
+				return model, nil
+			}
+		}
+	}
+	if model, ok := provider.ModelFromQuery(trimmed); ok {
+		return model, nil
+	}
+	if index := strings.Index(trimmed, "/"); index > 0 {
+		if _, ok := provider.ByID(trimmed[:index]); ok {
+			wire := strings.TrimLeft(trimmed[index+1:], "/")
+			return provider.Model{ID: trimmed, Provider: trimmed[:index], Label: wire, APIID: wire}, nil
+		}
+	}
+	return provider.Model{}, fmt.Errorf("unknown subagent model %q", query)
+}
+
+// subagentFallback reports whether a delegated run failed in a way that another
+// model can cover: a spent quota or a provider that is briefly unavailable.
+func subagentFallback(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"quota", "rate limit", "too many requests", "429", "402",
+		"exhausted", "insufficient", "credit", "billing", "payment",
+		"overloaded", "unavailable", "502", "503", "504",
+	} {
+		if strings.Contains(message, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // RunTurn runs one operator turn, streaming events to the UI.
