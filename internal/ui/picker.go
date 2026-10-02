@@ -27,6 +27,9 @@ type picker struct {
 	visible []pickerItem
 	cursor  int
 	filter  string
+	// parent is the action to reopen on Escape, so a drilled-in list such as
+	// the model list returns to its provider list instead of closing.
+	parent string
 }
 
 func newPicker() picker { return picker{} }
@@ -72,6 +75,10 @@ func (m *Model) handlePickerKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if strings.HasPrefix(m.picker.action, "setup-") {
 			m.current = modeSetup
 			m.picker = picker{}
+			return m, nil
+		}
+		if m.picker.parent == "model-provider" {
+			m.openPicker("Choose a provider", "model-provider", m.activeProviderItems())
 			return m, nil
 		}
 		if strings.HasPrefix(m.picker.action, slashArgAction) {
@@ -128,6 +135,19 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 		return m.applySlashArg(name, item.ID)
 	}
 	switch action {
+	case "model-provider":
+		models := provider.ModelsFor(item.ID)
+		if len(models) == 0 {
+			m.blocks = append(m.blocks, block{kind: blockError, text: "No models are listed for " + item.Label + "."})
+			return m, m.enterChat()
+		}
+		items := make([]pickerItem, 0, len(models))
+		for _, model := range models {
+			items = append(items, pickerItem{ID: model.ID, Label: model.Label, Detail: model.Description})
+		}
+		m.openPicker("Choose a model", "model", items)
+		m.picker.parent = "model-provider"
+		return m, nil
 	case "model":
 		model, err := m.app.SetModelByQuery(item.ID)
 		if err != nil {

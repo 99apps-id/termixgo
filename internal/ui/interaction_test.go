@@ -524,8 +524,8 @@ func TestTabInSlashEntryRunsWithoutLeavingSlash(t *testing.T) {
 	if updated.current != modePicker {
 		t.Fatalf("Tab on /model should open the model picker, mode is %d", updated.current)
 	}
-	if updated.picker.action != "model" {
-		t.Fatalf("picker action = %q, want the model picker", updated.picker.action)
+	if updated.picker.action != "model-provider" {
+		t.Fatalf("picker action = %q, want the provider picker", updated.picker.action)
 	}
 	if got := updated.composer.Value(); got != "" {
 		t.Errorf("completing from the popup must not leave slash text, got %q", got)

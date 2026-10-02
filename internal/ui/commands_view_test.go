@@ -67,29 +67,60 @@ func hasBlockKind(model *Model, kind blockKind) bool {
 
 // ------------------------------------------------- /model
 
-func TestSlashModelOpensAPickerAndMarksTheCurrentProvider(t *testing.T) {
+func TestSlashModelOpensAProviderPickerFirst(t *testing.T) {
 	model := chatModel(t)
 	_, _ = runSlash(t, model, "/model")
 
 	if model.current != modePicker {
 		t.Fatalf("mode = %d, want the picker", model.current)
 	}
-	if model.picker.action != "model" {
-		t.Errorf("action = %q, want model", model.picker.action)
+	if model.picker.action != "model-provider" {
+		t.Errorf("action = %q, want model-provider", model.picker.action)
 	}
+	// The first list is providers, not the whole model catalogue, so it stays
+	// short even with hundreds of models.
 	marked := 0
 	for _, item := range model.picker.items {
-		if item.Extra == "current provider" {
+		if item.Extra == "current" {
 			marked++
 		}
 	}
-	if marked == 0 {
-		t.Errorf("the current provider should be marked in the list")
+	if marked != 1 {
+		t.Errorf("exactly the current provider should be marked, got %d", marked)
 	}
-	// The list is the whole catalogue, not just the current provider, because
-	// switching provider is the main reason to open it.
-	if len(model.picker.items) <= marked {
-		t.Errorf("the picker should list more than the current provider: %d items", len(model.picker.items))
+	if len(model.picker.items) < 1 {
+		t.Errorf("the provider list must not be empty")
+	}
+}
+
+func TestChoosingAModelProviderDrillsIntoItsModels(t *testing.T) {
+	model := chatModel(t)
+	_, _ = runSlash(t, model, "/model")
+
+	current := model.app.CurrentModel().Provider
+	var chosen pickerItem
+	found := false
+	for _, item := range model.picker.items {
+		if item.ID == current {
+			chosen = item
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("the current provider %q must be listed", current)
+	}
+
+	updated, _ := model.applyPickerChoice("model-provider", chosen)
+	after := updated.(*Model)
+	if after.picker.action != "model" {
+		t.Fatalf("action = %q, want the model list", after.picker.action)
+	}
+	if after.picker.parent != "model-provider" {
+		t.Errorf("the model list should remember its provider list for Escape")
+	}
+	if len(after.picker.items) == 0 {
+		t.Errorf("the model list for %q must not be empty", current)
 	}
 }
 

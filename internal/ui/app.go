@@ -20,7 +20,6 @@ import (
 	"github.com/99apps-id/termixgo/internal/app"
 	"github.com/99apps-id/termixgo/internal/command"
 	"github.com/99apps-id/termixgo/internal/config"
-	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/version"
 )
 
@@ -2119,6 +2118,3 @@ func (m *Model) Ask(question string, options []string) (string, error) {
 
 // appConfig exposes the config for the slash handlers.
 func (m *Model) appConfig() config.Config { return m.app.Config() }
-
-// providerModels lists the catalogue for the model picker.
-func (m *Model) providerModels() []provider.Model { return provider.Models() }

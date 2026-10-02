@@ -14,6 +14,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/app"
 	customcmd "github.com/99apps-id/termixgo/internal/command"
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/provider"
 )
 
 // mcpReloadTimeout bounds a /mcp reload, so a server that hangs on its
@@ -230,17 +231,40 @@ func (m *Model) runCustom(name, args string) (tea.Model, tea.Cmd) {
 	return m.startRun(item.Expand(args))
 }
 
+// activeProviderItems lists the providers the operator can use right now: the
+// current provider, local providers that need no key, and providers with a
+// stored key or login. /model drills from here into one provider's models, so
+// the menu stays short instead of pouring the whole catalogue into one list.
+func (m *Model) activeProviderItems() []pickerItem {
+	current := m.app.CurrentModel().Provider
+	store := m.app.Secrets()
+	items := make([]pickerItem, 0, 16)
+	for _, info := range provider.Providers() {
+		if len(provider.ModelsFor(info.ID)) == 0 {
+			continue
+		}
+		// KeySource reads the stored credential without refreshing a token, so
+		// opening the picker never blocks on the network.
+		if info.ID != current && info.NeedsKey && provider.KeySource(store, info.ID) == "" {
+			continue
+		}
+		extra := "local"
+		switch {
+		case info.ID == current:
+			extra = "current"
+		case info.OAuth:
+			extra = "login"
+		case info.NeedsKey:
+			extra = "API key"
+		}
+		items = append(items, pickerItem{ID: info.ID, Label: info.Label, Detail: info.DefaultBaseURL, Extra: extra})
+	}
+	return items
+}
+
 func (m *Model) slashModel(args string) (tea.Model, tea.Cmd) {
 	if strings.TrimSpace(args) == "" {
-		items := make([]pickerItem, 0, len(m.providerModels()))
-		for _, model := range m.providerModels() {
-			extra := ""
-			if model.Provider == m.app.CurrentModel().Provider {
-				extra = "current provider"
-			}
-			items = append(items, pickerItem{ID: model.ID, Label: model.Label, Detail: model.Description, Extra: extra})
-		}
-		m.openPicker("Choose a model", "model", items)
+		m.openPicker("Choose a provider", "model-provider", m.activeProviderItems())
 		return m, nil
 	}
 	model, err := m.app.SetModelByQuery(args)
