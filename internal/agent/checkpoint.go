@@ -267,16 +267,8 @@ func clearStashUntracked(ctx context.Context, workspace, ref string) {
 	}
 }
 
-func isGitWorkspace(ctx context.Context, workspace string) bool {
-	command := exec.CommandContext(ctx, "git", "rev-parse", "--is-inside-work-tree")
-	command.Dir = workspace
-	var buffer bytes.Buffer
-	command.Stdout = &buffer
-	command.Stderr = &buffer
-	if err := command.Run(); err != nil {
-		return false
-	}
-	return strings.TrimSpace(buffer.String()) == "true"
+func isGitWorkspace(_ context.Context, workspace string) bool {
+	return isGitRepository(workspace)
 }
 
 func gitOutput(ctx context.Context, workspace string, args ...string) (string, error) {
