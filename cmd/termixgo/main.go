@@ -108,6 +108,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runCron(args[1:], stdout)
 	case "heartbeat":
 		return runHeartbeat(args[1:], stdout)
+	case "sessions":
+		return runSessions(args[1:], stdout)
 	case "audit":
 		return runAudit(args[1:], stdout)
 	case "worker":
@@ -198,6 +200,53 @@ func runModel(args []string, stdout io.Writer) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+	if len(args) > 0 {
+		switch strings.ToLower(args[0]) {
+		case "voice":
+			if len(args) == 1 {
+				current := cfg.VoiceModel
+				if current == "" {
+					current = "none (using default Whisper)"
+				}
+				fmt.Fprintln(stdout, current)
+				return nil
+			}
+			val := strings.Join(args[1:], " ")
+			if strings.EqualFold(val, "off") || strings.EqualFold(val, "none") || strings.EqualFold(val, "clear") {
+				cfg.VoiceModel = ""
+				fmt.Fprintln(stdout, "cleared voice model (using default Whisper)")
+			} else {
+				cfg.VoiceModel = val
+				fmt.Fprintf(stdout, "voice model is now %s\n", cfg.VoiceModel)
+			}
+			return config.Save(cfg)
+		case "image":
+			if len(args) == 1 {
+				current := cfg.ImageModel
+				if current == "" {
+					current = "none (using active model)"
+				}
+				fmt.Fprintln(stdout, current)
+				return nil
+			}
+			val := strings.Join(args[1:], " ")
+			if strings.EqualFold(val, "off") || strings.EqualFold(val, "none") || strings.EqualFold(val, "clear") {
+				cfg.ImageModel = ""
+				if cfg.SubagentModels != nil {
+					delete(cfg.SubagentModels, "image")
+				}
+				fmt.Fprintln(stdout, "cleared image model")
+			} else {
+				cfg.ImageModel = val
+				if cfg.SubagentModels == nil {
+					cfg.SubagentModels = map[string]string{}
+				}
+				cfg.SubagentModels["image"] = val
+				fmt.Fprintf(stdout, "image model is now %s\n", cfg.ImageModel)
+			}
+			return config.Save(cfg)
+		}
 	}
 	if len(args) == 0 {
 		if cfg.DefaultModel == "" {
@@ -809,6 +858,96 @@ func runAudit(args []string, stdout io.Writer) error {
 	return nil
 }
 
+// runSessions manages saved sessions from the command line.
+func runSessions(args []string, stdout io.Writer) error {
+	action := "list"
+	if len(args) > 0 {
+		action = strings.ToLower(strings.TrimSpace(args[0]))
+	}
+	switch action {
+	case "list":
+		sessions, err := agent.ListSessions()
+		if err != nil {
+			return err
+		}
+		if len(sessions) == 0 {
+			fmt.Fprintln(stdout, "No saved sessions yet.")
+			return nil
+		}
+		fmt.Fprintf(stdout, "Saved sessions (%d):\n", len(sessions))
+		for _, s := range sessions {
+			title := s.Title
+			if title == "" {
+				title = "(untitled)"
+			}
+			fmt.Fprintf(stdout, "  %s  %-20s  %s (%d turns)\n", s.ID, s.UpdatedAt.Format("2006-01-02 15:04"), title, s.Turns)
+		}
+		return nil
+	case "search":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: termixgo sessions search <query>")
+		}
+		query := strings.Join(args[1:], " ")
+		sessions, err := agent.SearchSessions(query)
+		if err != nil {
+			return err
+		}
+		if len(sessions) == 0 {
+			fmt.Fprintf(stdout, "No sessions match %q.\n", query)
+			return nil
+		}
+		fmt.Fprintf(stdout, "Matching sessions (%d):\n", len(sessions))
+		for _, s := range sessions {
+			title := s.Title
+			if title == "" {
+				title = "(untitled)"
+			}
+			fmt.Fprintf(stdout, "  %s  %-20s  %s (%d turns)\n", s.ID, s.UpdatedAt.Format("2006-01-02 15:04"), title, s.Turns)
+		}
+		return nil
+	case "export":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: termixgo sessions export <id> [--format markdown|jsonl]")
+		}
+		id := args[1]
+		format := agent.SessionExportMarkdown
+		for i := 2; i < len(args); i++ {
+			if args[i] == "--format" && i+1 < len(args) {
+				format = agent.SessionExportFormat(args[i+1])
+				i++
+			}
+		}
+		exported, err := agent.ExportSession(id, format)
+		if err != nil {
+			return err
+		}
+		fmt.Fprint(stdout, exported)
+		return nil
+	case "delete":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: termixgo sessions delete <id>")
+		}
+		if err := agent.DeleteSession(args[1]); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Deleted session %s\n", args[1])
+		return nil
+	case "rename":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: termixgo sessions rename <id> <title>")
+		}
+		title := strings.Join(args[2:], " ")
+		summary, err := agent.RenameSession(args[1], title)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Renamed session %s to %q\n", summary.ID, summary.Title)
+		return nil
+	default:
+		return fmt.Errorf("unknown sessions action %q; use list, search, export, delete, or rename", action)
+	}
+}
+
 // runWorker lists the background coding workers and whether each is ready.
 //
 // Starting a worker is deliberately not a CLI action: a worker is a detached
@@ -1202,6 +1341,8 @@ Usage:
                                   Manage scheduled assistant jobs
   termixgo heartbeat [status|on|off|interval <duration>]
                                   Periodic self-check for the 24/7 assistant
+  termixgo sessions [list|search|export|delete|rename]
+                                  Manage saved agent sessions
   termixgo audit [count]          Show recent audited actions (metadata only)
   termixgo worker [list]          List the background coding workers
   termixgo serve                  Run the Telegram assistant 24/7

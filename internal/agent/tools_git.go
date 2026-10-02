@@ -428,6 +428,77 @@ func (t *gitRestoreTool) Run(ctx context.Context, env *Env, args map[string]any)
 	return Result{Output: summary}, nil
 }
 
+type gitBlameTool struct{}
+
+func (t *gitBlameTool) Name() string      { return "git_blame" }
+func (t *gitBlameTool) Aliases() []string { return []string{"blame"} }
+func (t *gitBlameTool) Mutating() bool    { return false }
+func (t *gitBlameTool) Risk() Risk        { return RiskEdit }
+func (t *gitBlameTool) Label(a map[string]any) string {
+	return "Reading git blame " + Shorten(argString(a, "path"), 50)
+}
+func (t *gitBlameTool) DoneLabel(a map[string]any) string {
+	return "Read git blame " + Shorten(argString(a, "path"), 50)
+}
+func (t *gitBlameTool) Description() string {
+	return "Show what revision and author last modified each line of a file. Supports line ranges (start_line, end_line) and revision."
+}
+func (t *gitBlameTool) Schema() map[string]any {
+	return object(map[string]any{
+		"path":       strProp("File path to blame."),
+		"start_line": intProp("First line of the range to blame (1-based)."),
+		"end_line":   intProp("Last line of the range to blame (1-based)."),
+		"revision":   strProp("Commit or revision to blame."),
+	}, "path")
+}
+
+func (t *gitBlameTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	path := argString(args, "path", "file")
+	if strings.TrimSpace(path) == "" {
+		return Result{Output: "Path is required.", IsError: true}, nil
+	}
+	resolved := resolvePath(env, path)
+	if err := checkWorkspacePath(env, resolved); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+
+	argv := []string{"blame"}
+	startLine := argInt(args, "start_line", 0, 1, 1000000)
+	endLine := argInt(args, "end_line", 0, 1, 1000000)
+	if startLine > 0 && endLine > 0 {
+		if startLine > endLine {
+			return Result{Output: "start_line must be less than or equal to end_line.", IsError: true}, nil
+		}
+		argv = append(argv, fmt.Sprintf("-L%d,%d", startLine, endLine))
+	} else if startLine > 0 {
+		argv = append(argv, fmt.Sprintf("-L%d,", startLine))
+	} else if endLine > 0 {
+		argv = append(argv, fmt.Sprintf("-L1,%d", endLine))
+	}
+
+	if rev := strings.TrimSpace(argString(args, "revision", "rev", "commit")); rev != "" {
+		// A revision is model-supplied and must not reach git as an option. A
+		// real revision never starts with a dash, so refusing one keeps it out
+		// of the option position while the path stays behind --.
+		if strings.HasPrefix(rev, "-") {
+			return Result{Output: fmt.Sprintf("invalid revision %q", rev), IsError: true}, nil
+		}
+		argv = append(argv, rev)
+	}
+
+	relPath := displayPath(env, resolved)
+	argv = append(argv, "--", relPath)
+
+	output, err := runGit(ctx, env, argv...)
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	if strings.TrimSpace(output) == "" {
+		return Result{Output: "No blame output."}, nil
+	}
+	return Result{Output: output}, nil
+}
+
 // firstLine is the subject line of a commit message, for compact labels.
 func firstLine(text string) string {
 	if index := strings.IndexByte(text, '\n'); index >= 0 {

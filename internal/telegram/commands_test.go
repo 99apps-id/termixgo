@@ -8,25 +8,47 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/provider"
 )
 
 // scriptedAgent is a fully controlled bridge target, which is what the command
 // routing needs: every branch has to be reachable on demand.
 type scriptedAgent struct {
-	mu            sync.Mutex
-	status        string
-	model         string
-	answer        string
-	runErr        error
-	setErr        error
-	prompts       []string
-	newCalls      int
-	stopCalls     int
-	lastMediaType string
-	lastImageData string
-	progressLines []string
-	diffOutput    string
-	diffErr       error
+	mu              sync.Mutex
+	status          string
+	model           string
+	answer          string
+	runErr          error
+	setErr          error
+	prompts         []string
+	newCalls        int
+	stopCalls       int
+	lastMediaType   string
+	lastImageData   string
+	progressLines   []string
+	diffOutput      string
+	diffErr         error
+	transcribeText  string
+	transcribeErr   error
+	workspace       string
+	activeProviders []provider.Provider
+}
+
+func (a *scriptedAgent) ActiveProviders() []provider.Provider {
+	return a.activeProviders
+}
+
+func (a *scriptedAgent) TranscribeAudio(ctx context.Context, data []byte, filename string) (string, error) {
+	return a.transcribeText, a.transcribeErr
+}
+
+func (a *scriptedAgent) RunVoicePrompt(ctx context.Context, prompt string, progress func(string)) (string, error) {
+	return a.RunPrompt(ctx, prompt, progress)
+}
+
+func (a *scriptedAgent) Workspace() string {
+	return a.workspace
 }
 
 func (a *scriptedAgent) GitDiff(ctx context.Context) (string, error) {

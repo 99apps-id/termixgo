@@ -18,14 +18,15 @@ var toolSearchAlwaysOn = map[string]bool{
 	"read_file": true, "list_directory": true, "write_file": true,
 	"edit": true, "multi_edit": true, "apply_patch": true,
 	"create_directory": true, "delete_file": true, "move_file": true,
-	"grep": true, "glob": true,
+	"grep": true, "glob": true, "code_outline": true,
 	"run_command": true, "run_checks": true,
 	"background": true, "logs": true, "wait": true, "list_processes": true, "kill": true,
 	"todo_write": true, "todo_read": true,
 	"think": true, "subagent": true,
 	"ask_user":   true,
 	"git_status": true, "git_diff": true, "git_log": true, "git_show": true,
-	"git_add": true, "git_commit": true, "git_branch": true, "git_restore": true,
+	"git_blame": true,
+	"git_add":   true, "git_commit": true, "git_branch": true, "git_restore": true,
 	findToolsName: true,
 }
 

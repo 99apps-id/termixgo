@@ -31,6 +31,20 @@ func providersWithModels() []provider.Provider {
 	return out
 }
 
+// activeProviders returns the providers that are currently usable: if the agent
+// implements ProviderLister, it filters down to providers with valid credentials
+// or local access. Otherwise it falls back to all providers with models.
+func (b *Bot) activeProviders() []provider.Provider {
+	if lister, ok := b.agent.(ProviderLister); ok {
+		active := lister.ActiveProviders()
+		if len(active) > 0 {
+			sort.Slice(active, func(i, j int) bool { return active[i].Label < active[j].Label })
+			return active
+		}
+	}
+	return providersWithModels()
+}
+
 // buttonsKeyboard pairs labels with callback values, two buttons per row.
 func buttonsKeyboard(prefix string, labels, values []string) *InlineKeyboard {
 	keyboard := &InlineKeyboard{InlineKeyboard: [][]InlineButton{}}
@@ -49,11 +63,11 @@ func buttonsKeyboard(prefix string, labels, values []string) *InlineKeyboard {
 }
 
 // sendModelMenu opens the picker: the current model, then one button per
-// provider that has a catalogue.
+// active provider that has a catalogue.
 func (b *Bot) sendModelMenu(ctx context.Context, chatID int64) {
-	providers := providersWithModels()
+	providers := b.activeProviders()
 	if len(providers) == 0 {
-		b.reply(ctx, chatID, "No model catalogue is available in this build.")
+		b.reply(ctx, chatID, "No active models or providers are available.")
 		return
 	}
 	labels := make([]string, 0, len(providers))
@@ -62,7 +76,7 @@ func (b *Bot) sendModelMenu(ctx context.Context, chatID int64) {
 		labels = append(labels, info.Label)
 		values = append(values, info.ID)
 	}
-	text := "Current model: " + b.agent.Model() + "\nChoose a provider to see its models."
+	text := "Current model: " + b.agent.Model() + "\nChoose an active provider to select a model:"
 	if _, err := b.client.SendMessage(ctx, chatID, text, buttonsKeyboard(modelProviderPrefix, labels, values)); err != nil {
 		b.logf("could not send the model menu: %v", err)
 	}
@@ -81,12 +95,16 @@ func (b *Bot) showProviderModels(ctx context.Context, query *CallbackQuery, prov
 	if len(models) > maxModelButtons {
 		models = models[:maxModelButtons]
 	}
+	currentModel := b.agent.Model()
 	labels := make([]string, 0, len(models))
 	values := make([]string, 0, len(models))
 	for _, model := range models {
 		label := model.Label
 		if label == "" {
 			label = model.ID
+		}
+		if model.ID == currentModel || providerID+":"+model.ID == currentModel {
+			label = "✓ " + label
 		}
 		labels = append(labels, label)
 		values = append(values, model.ID)

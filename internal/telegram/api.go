@@ -73,6 +73,31 @@ type PhotoSize struct {
 	FileSize int    `json:"file_size"`
 }
 
+// Document represents an incoming document file.
+type Document struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+	FileSize int    `json:"file_size"`
+}
+
+// Voice represents an incoming voice note.
+type Voice struct {
+	FileID   string `json:"file_id"`
+	Duration int    `json:"duration"`
+	MimeType string `json:"mime_type"`
+	FileSize int    `json:"file_size"`
+}
+
+// Audio represents an incoming audio track.
+type Audio struct {
+	FileID   string `json:"file_id"`
+	Duration int    `json:"duration"`
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+	FileSize int    `json:"file_size"`
+}
+
 // Message is an incoming or outgoing message.
 type Message struct {
 	MessageID int64       `json:"message_id"`
@@ -81,6 +106,9 @@ type Message struct {
 	Text      string      `json:"text"`
 	Caption   string      `json:"caption"`
 	Photo     []PhotoSize `json:"photo"`
+	Document  *Document   `json:"document"`
+	Voice     *Voice      `json:"voice"`
+	Audio     *Audio      `json:"audio"`
 }
 
 // File is a downloadable Telegram file.

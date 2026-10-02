@@ -94,20 +94,25 @@ const (
 	SessionExportJSONL    SessionExportFormat = "jsonl"
 )
 
+// Export renders this session in the requested format.
+func (s *Session) Export(format SessionExportFormat) (string, error) {
+	switch format {
+	case SessionExportJSONL:
+		return exportSessionJSONL(s)
+	case SessionExportMarkdown, "":
+		return exportSessionMarkdown(s)
+	default:
+		return "", fmt.Errorf("unsupported session export format %q", format)
+	}
+}
+
 // ExportSession renders one saved session in the requested format.
 func ExportSession(id string, format SessionExportFormat) (string, error) {
 	session, err := LoadSession(id)
 	if err != nil {
 		return "", err
 	}
-	switch format {
-	case SessionExportJSONL:
-		return exportSessionJSONL(session)
-	case SessionExportMarkdown, "":
-		return exportSessionMarkdown(session)
-	default:
-		return "", fmt.Errorf("unsupported session export format %q", format)
-	}
+	return session.Export(format)
 }
 
 func exportSessionMarkdown(session *Session) (string, error) {

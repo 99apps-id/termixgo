@@ -227,6 +227,33 @@ func TestGitBranchTreatsAnOptionLikeNameAsABranch(t *testing.T) {
 	}
 }
 
+// TestGitBlameRefusesAnOptionLikeRevision keeps a model-supplied revision out
+// of git's option position while a real revision still works.
+func TestGitBlameRefusesAnOptionLikeRevision(t *testing.T) {
+	env := gitEnv(t)
+	if err := os.WriteFile(filepath.Join(env.Workspace, "f.txt"), []byte("a\nb\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	git(t, env, "add", "f.txt")
+	git(t, env, "commit", "-m", "add f")
+
+	bad, err := (&gitBlameTool{}).Run(context.Background(), env, map[string]any{"path": "f.txt", "revision": "-f"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !bad.IsError {
+		t.Fatalf("an option-like revision should be refused, got %q", bad.Output)
+	}
+
+	good, err := (&gitBlameTool{}).Run(context.Background(), env, map[string]any{"path": "f.txt", "revision": "HEAD"})
+	if err != nil || good.IsError {
+		t.Fatalf("HEAD blame failed: %+v err=%v", good, err)
+	}
+	if strings.TrimSpace(good.Output) == "" {
+		t.Errorf("HEAD blame returned no output")
+	}
+}
+
 func TestGitAddStagesEverything(t *testing.T) {
 	env := gitEnv(t)
 	git(t, env, "commit", "--allow-empty", "-m", "init")
@@ -409,12 +436,54 @@ func TestGitBranchListsSwitchesAndCreates(t *testing.T) {
 	}
 }
 
+func TestGitBlameShowsAuthorAndLines(t *testing.T) {
+	env := gitEnv(t)
+	writeTestFile(t, env, "file.txt", "line 1\nline 2\nline 3\n")
+	git(t, env, "add", "file.txt")
+	git(t, env, "commit", "-m", "first commit")
+
+	result, err := (&gitBlameTool{}).Run(context.Background(), env, map[string]any{
+		"path": "file.txt",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("blame failed: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "Termixgo Test") {
+		t.Errorf("blame should contain author name: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "line 1") || !strings.Contains(result.Output, "line 3") {
+		t.Errorf("blame should contain file lines: %s", result.Output)
+	}
+
+	// Test line range
+	rangeResult, err := (&gitBlameTool{}).Run(context.Background(), env, map[string]any{
+		"path":       "file.txt",
+		"start_line": 2,
+		"end_line":   2,
+	})
+	if err != nil {
+		t.Fatalf("Run range: %v", err)
+	}
+	if rangeResult.IsError {
+		t.Fatalf("blame range failed: %s", rangeResult.Output)
+	}
+	if !strings.Contains(rangeResult.Output, "line 2") {
+		t.Errorf("blame range should contain line 2: %s", rangeResult.Output)
+	}
+	if strings.Contains(rangeResult.Output, "line 1") || strings.Contains(rangeResult.Output, "line 3") {
+		t.Errorf("blame range should not contain other lines: %s", rangeResult.Output)
+	}
+}
+
 func TestGitToolsAreRegisteredWithConsistentMetadata(t *testing.T) {
 	registry := DefaultRegistry()
 	mutating := map[string]bool{
 		"git_add": true, "git_commit": true, "git_branch": true, "git_restore": true,
 	}
-	readOnly := []string{"git_status", "git_diff", "git_log", "git_show"}
+	readOnly := []string{"git_status", "git_diff", "git_log", "git_show", "git_blame"}
 
 	for _, name := range readOnly {
 		tool, ok := registry.Lookup(name)

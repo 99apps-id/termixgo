@@ -164,3 +164,135 @@ func TestPhotoMessageRunsWithTheImage(t *testing.T) {
 		t.Errorf("image data was not the downloaded bytes")
 	}
 }
+
+func TestDocumentMessageRunsWithTextDocument(t *testing.T) {
+	docContent := []byte("func main() { println(\"hello world\") }")
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/getFile"):
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"ok":     true,
+				"result": map[string]any{"file_id": "doc123", "file_path": "documents/main.go"},
+			})
+		case strings.Contains(request.URL.Path, "/file/"):
+			_, _ = writer.Write(docContent)
+		default:
+			_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 1}})
+		}
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	agent := &scriptedAgent{answer: "file inspected", model: "test-model", workspace: tempDir}
+	bot := New("123:abc", agent)
+	bot.client = newClientAt("123:abc", server.URL)
+	bot.Pair(7, 9)
+
+	bot.handleMessage(context.Background(), &Message{
+		Chat:    Chat{ID: 7, Type: "private"},
+		From:    &User{ID: 9},
+		Caption: "Please refactor this",
+		Document: &Document{
+			FileID:   "doc123",
+			FileName: "main.go",
+			MimeType: "text/x-go",
+		},
+	})
+
+	prompt := agent.firstPrompt()
+	if !strings.Contains(prompt, "main.go") {
+		t.Errorf("prompt should mention filename: %s", prompt)
+	}
+	if !strings.Contains(prompt, "func main()") {
+		t.Errorf("prompt should contain file content: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Please refactor this") {
+		t.Errorf("prompt should contain caption: %s", prompt)
+	}
+}
+
+func TestDocumentMessageRunsWithImageDocument(t *testing.T) {
+	image := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/getFile"):
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"ok":     true,
+				"result": map[string]any{"file_id": "imgdoc", "file_path": "documents/photo.png"},
+			})
+		case strings.Contains(request.URL.Path, "/file/"):
+			_, _ = writer.Write(image)
+		default:
+			_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 1}})
+		}
+	}))
+	defer server.Close()
+
+	agent := &scriptedAgent{answer: "screenshot seen", model: "test-model"}
+	bot := New("123:abc", agent)
+	bot.client = newClientAt("123:abc", server.URL)
+	bot.Pair(7, 9)
+
+	bot.handleMessage(context.Background(), &Message{
+		Chat:    Chat{ID: 7, Type: "private"},
+		From:    &User{ID: 9},
+		Caption: "look at screenshot",
+		Document: &Document{
+			FileID:   "imgdoc",
+			FileName: "screenshot.png",
+			MimeType: "image/png",
+		},
+	})
+
+	if got := agent.firstPrompt(); got != "look at screenshot" {
+		t.Errorf("prompt = %q", got)
+	}
+	mediaType, data := agent.imageCall()
+	if mediaType != "image/png" {
+		t.Errorf("media type = %q, want image/png", mediaType)
+	}
+	if data != base64.StdEncoding.EncodeToString(image) {
+		t.Errorf("image data was not the downloaded bytes")
+	}
+}
+
+func TestVoiceMessageTranscribesAndRunsPrompt(t *testing.T) {
+	audioBytes := []byte{0x4f, 0x67, 0x67, 0x53} // OggS
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/getFile"):
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"ok":     true,
+				"result": map[string]any{"file_id": "voice1", "file_path": "voice/note.oga"},
+			})
+		case strings.Contains(request.URL.Path, "/file/"):
+			_, _ = writer.Write(audioBytes)
+		default:
+			_ = json.NewEncoder(writer).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 1}})
+		}
+	}))
+	defer server.Close()
+
+	agent := &scriptedAgent{
+		answer:         "tests fixed",
+		model:          "test-model",
+		transcribeText: "run all tests and fix failing ones",
+	}
+	bot := New("123:abc", agent)
+	bot.client = newClientAt("123:abc", server.URL)
+	bot.Pair(7, 9)
+
+	bot.handleMessage(context.Background(), &Message{
+		Chat: Chat{ID: 7, Type: "private"},
+		From: &User{ID: 9},
+		Voice: &Voice{
+			FileID:   "voice1",
+			Duration: 3,
+			MimeType: "audio/ogg",
+		},
+	})
+
+	if got := agent.firstPrompt(); got != "run all tests and fix failing ones" {
+		t.Errorf("prompt = %q, want transcribed text", got)
+	}
+}

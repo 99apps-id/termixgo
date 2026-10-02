@@ -43,6 +43,9 @@ var slashCommands = []SlashCommand{
 		{Value: "last", Detail: "copy the newest answer"},
 		{Value: "all", Detail: "copy the whole transcript"},
 	}},
+	{Trigger: "/export", Args: "[path] [--jsonl]", Summary: "Export the current session to a file and clipboard", Options: []SlashOption{
+		{Value: "--jsonl", Detail: "export as JSONL instead of Markdown"},
+	}},
 	{Trigger: "/new", Args: "", Summary: "Start a new session"},
 	{Trigger: "/sessions", Args: "[list|search|rename|delete|export]", Summary: "List, find, rename, delete or export sessions", Options: []SlashOption{
 		{Value: "list", Detail: "print every saved session with its id"},

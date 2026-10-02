@@ -3,6 +3,8 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -14,7 +16,6 @@ import (
 	"github.com/99apps-id/termixgo/internal/app"
 	customcmd "github.com/99apps-id/termixgo/internal/command"
 	"github.com/99apps-id/termixgo/internal/config"
-	"github.com/99apps-id/termixgo/internal/provider"
 )
 
 // mcpReloadTimeout bounds a /mcp reload, so a server that hangs on its
@@ -107,6 +108,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashModel(args)
 	case "copy":
 		return m.slashCopy(args)
+	case "export":
+		return m.slashExport(args)
 	case "setup":
 		m.startSetup()
 		return m, nil
@@ -254,6 +257,80 @@ func (m *Model) slashCopy(args string) (tea.Model, tea.Cmd) {
 	return m, writeClipboard(text)
 }
 
+// slashExport exports the live session to a file and clipboard.
+func (m *Model) slashExport(args string) (tea.Model, tea.Cmd) {
+	session := m.app.Session()
+	if session == nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "No active session to export."})
+		m.refresh()
+		return m, nil
+	}
+
+	fields := strings.Fields(args)
+	format := agent.SessionExportMarkdown
+	var targetPath string
+
+	for _, field := range fields {
+		switch strings.ToLower(field) {
+		case "--jsonl", "-j":
+			format = agent.SessionExportJSONL
+		case "--markdown", "-m":
+			format = agent.SessionExportMarkdown
+		default:
+			if !strings.HasPrefix(field, "-") && targetPath == "" {
+				targetPath = field
+			}
+		}
+	}
+
+	document, err := session.Export(format)
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Export failed: " + err.Error()})
+		m.refresh()
+		return m, nil
+	}
+
+	ext := "md"
+	if format == agent.SessionExportJSONL {
+		ext = "jsonl"
+	}
+
+	if targetPath == "" {
+		exportDir := filepath.Join(m.app.Workspace(), ".termixgo", "exports")
+		_ = os.MkdirAll(exportDir, 0o755)
+		targetPath = filepath.Join(exportDir, fmt.Sprintf("session-%s.%s", shortID(session.ID()), ext))
+	} else if !filepath.IsAbs(targetPath) {
+		targetPath = filepath.Join(m.app.Workspace(), targetPath)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: fmt.Sprintf("Create dir failed: %v", err)})
+		m.refresh()
+		return m, nil
+	}
+
+	// The transcript can carry tool output, so it is written owner-only, like
+	// the session file it came from.
+	if err := os.WriteFile(targetPath, []byte(document), 0o600); err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: fmt.Sprintf("Write export failed: %v", err)})
+		m.refresh()
+		return m, nil
+	}
+
+	relPath, err := filepath.Rel(m.app.Workspace(), targetPath)
+	display := targetPath
+	if err == nil && !strings.HasPrefix(relPath, "..") {
+		display = filepath.ToSlash(relPath)
+	}
+
+	m.blocks = append(m.blocks, block{
+		kind: blockNotice,
+		text: fmt.Sprintf("Exported session %s to %s (%d bytes) and copied to clipboard.", shortID(session.ID()), display, len(document)),
+	})
+	m.refresh()
+	return m, writeClipboard(document)
+}
+
 // lastAssistantText returns the newest non-empty assistant answer.
 func (m *Model) lastAssistantText() string {
 	for index := len(m.blocks) - 1; index >= 0; index-- {
@@ -311,17 +388,9 @@ func (m *Model) transcriptText() string {
 // the menu stays short instead of pouring the whole catalogue into one list.
 func (m *Model) activeProviderItems() []pickerItem {
 	current := m.app.CurrentModel().Provider
-	store := m.app.Secrets()
-	items := make([]pickerItem, 0, 16)
-	for _, info := range provider.Providers() {
-		if len(provider.ModelsFor(info.ID)) == 0 {
-			continue
-		}
-		// KeySource reads the stored credential without refreshing a token, so
-		// opening the picker never blocks on the network.
-		if info.ID != current && info.NeedsKey && provider.KeySource(store, info.ID) == "" {
-			continue
-		}
+	providers := m.app.ActiveProviders()
+	items := make([]pickerItem, 0, len(providers))
+	for _, info := range providers {
 		extra := "local"
 		switch {
 		case info.ID == current:
@@ -337,10 +406,58 @@ func (m *Model) activeProviderItems() []pickerItem {
 }
 
 func (m *Model) slashModel(args string) (tea.Model, tea.Cmd) {
-	if strings.TrimSpace(args) == "" {
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
 		m.openPicker("Choose a provider", "model-provider", m.activeProviderItems())
 		return m, nil
 	}
+	fields := strings.Fields(trimmed)
+	if len(fields) > 0 {
+		switch strings.ToLower(fields[0]) {
+		case "voice":
+			if len(fields) == 1 {
+				current := m.app.VoiceModel()
+				if current == "" {
+					current = "none (using default Whisper)"
+				}
+				m.blocks = append(m.blocks, block{kind: blockNotice, text: "Voice model is " + current})
+				m.refresh()
+				return m, nil
+			}
+			val := strings.Join(fields[1:], " ")
+			if strings.EqualFold(val, "off") || strings.EqualFold(val, "none") || strings.EqualFold(val, "clear") {
+				_ = m.app.SetVoiceModel("")
+				m.blocks = append(m.blocks, block{kind: blockNotice, text: "Cleared voice model (using default Whisper)."})
+			} else {
+				_ = m.app.SetVoiceModel(val)
+				m.blocks = append(m.blocks, block{kind: blockNotice, text: "Voice model is now " + val})
+			}
+			m.refresh()
+			return m, nil
+
+		case "image":
+			if len(fields) == 1 {
+				current := m.app.ImageModel()
+				if current == "" {
+					current = "none (using active model)"
+				}
+				m.blocks = append(m.blocks, block{kind: blockNotice, text: "Image model is " + current})
+				m.refresh()
+				return m, nil
+			}
+			val := strings.Join(fields[1:], " ")
+			if strings.EqualFold(val, "off") || strings.EqualFold(val, "none") || strings.EqualFold(val, "clear") {
+				_ = m.app.SetImageModel("")
+				m.blocks = append(m.blocks, block{kind: blockNotice, text: "Cleared image model (using active model for subagents)."})
+			} else {
+				_ = m.app.SetImageModel(val)
+				m.blocks = append(m.blocks, block{kind: blockNotice, text: "Image model is now " + val})
+			}
+			m.refresh()
+			return m, nil
+		}
+	}
+
 	model, err := m.app.SetModelByQuery(args)
 	if err != nil {
 		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})

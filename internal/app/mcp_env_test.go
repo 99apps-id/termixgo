@@ -35,6 +35,30 @@ func TestMCPEnvironmentMovesToTheSecretFile(t *testing.T) {
 	}
 }
 
+// TestAddMCPServerKeepsEnvInTheSecretFile keeps a newly added server's token
+// out of config.json.
+func TestAddMCPServerKeepsEnvInTheSecretFile(t *testing.T) {
+	application := newTestApp(t)
+	err := application.AddMCPServer(config.MCPServer{
+		Name:    "github",
+		Command: "mcp-server-github",
+		Env:     map[string]string{"GITHUB_PERSONAL_ACCESS_TOKEN": "token"},
+	})
+	if err != nil {
+		t.Fatalf("AddMCPServer: %v", err)
+	}
+	cfg := application.Config()
+	if len(cfg.MCPServers) != 1 {
+		t.Fatalf("servers = %+v", cfg.MCPServers)
+	}
+	if len(cfg.MCPServers[0].Env) != 0 {
+		t.Errorf("config carries MCP env: %+v", cfg.MCPServers[0].Env)
+	}
+	if got := application.mcpEnvFor("github")["GITHUB_PERSONAL_ACCESS_TOKEN"]; got != "token" {
+		t.Errorf("secret env = %q, want token", got)
+	}
+}
+
 // TestSaveMCPEnvRoundTrips proves a fresh environment can be stored and read
 // back, which is what the loader uses to launch the server.
 func TestSaveMCPEnvRoundTrips(t *testing.T) {

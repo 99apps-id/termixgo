@@ -299,7 +299,7 @@ func TestRunSubagentReviewRoleCannotMutate(t *testing.T) {
 // only the review roles are read-tier, every other role is a peer of the main
 // agent with the full allowlist.
 func TestRunSubagentWorkerRolesAreFullPeers(t *testing.T) {
-	for _, role := range []SubagentType{SubagentExplore, SubagentGeneral, SubagentBuilder} {
+	for _, role := range []SubagentType{SubagentExplore, SubagentGeneral, SubagentBuilder, SubagentImage} {
 		if SubagentIsReadOnly(string(role)) {
 			t.Errorf("%s is a worker, not a review role, so it must keep the full toolset", role)
 		}

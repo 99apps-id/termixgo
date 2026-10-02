@@ -129,3 +129,32 @@ func TestDisabledServersAreKept(t *testing.T) {
 		t.Errorf("MCPServers = %+v, want the disabled server kept", loaded.MCPServers)
 	}
 }
+
+func TestWithMCPServerAndMutations(t *testing.T) {
+	cfg := Default()
+
+	// Add server
+	cfg = cfg.WithMCPServer(MCPServer{Name: "git-mcp", Command: "mcp-git", Args: []string{"--read-only"}})
+	if len(cfg.MCPServers) != 1 || cfg.MCPServers[0].Name != "git-mcp" {
+		t.Fatalf("expected 1 server, got %+v", cfg.MCPServers)
+	}
+
+	// Disable server
+	var found bool
+	cfg, found = cfg.SetMCPServerDisabled("git-mcp", true)
+	if !found || !cfg.MCPServers[0].Disabled {
+		t.Errorf("expected server to be disabled, got %+v", cfg.MCPServers[0])
+	}
+
+	// Re-enable server
+	cfg, found = cfg.SetMCPServerDisabled("git-mcp", false)
+	if !found || cfg.MCPServers[0].Disabled {
+		t.Errorf("expected server to be enabled, got %+v", cfg.MCPServers[0])
+	}
+
+	// Remove server
+	cfg, found = cfg.WithoutMCPServer("git-mcp")
+	if !found || len(cfg.MCPServers) != 0 {
+		t.Errorf("expected server removed, got %+v", cfg.MCPServers)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/version"
 )
 
@@ -39,6 +40,26 @@ type Agent interface {
 // DiffProvider is an optional interface an Agent can implement to surface git diffs.
 type DiffProvider interface {
 	GitDiff(ctx context.Context) (string, error)
+}
+
+// AudioTranscriber can transcribe voice notes and audio to text.
+type AudioTranscriber interface {
+	TranscribeAudio(ctx context.Context, data []byte, filename string) (string, error)
+}
+
+// WorkspaceProvider gives access to the workspace directory path.
+type WorkspaceProvider interface {
+	Workspace() string
+}
+
+// VoicePromptRunner can run a turn initiated from a voice note, with fallback to a voice model.
+type VoicePromptRunner interface {
+	RunVoicePrompt(ctx context.Context, prompt string, progress func(string)) (string, error)
+}
+
+// ProviderLister can return the providers currently active or usable.
+type ProviderLister interface {
+	ActiveProviders() []provider.Provider
 }
 
 // PendingApproval tracks one in-flight approval request waiting for a callback query.
@@ -499,10 +520,27 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		return
 	}
 
-	// No text and no photo means there is nothing to ask. Running the agent
-	// anyway sent an empty turn, which the model answered from the previous
-	// context: the operator saw the agent reply to an older question (a
-	// sticker or a voice note triggered it).
+	// Voice notes and audio tracks are transcribed and run as prompts.
+	if message.Voice != nil {
+		b.runVoice(ctx, chatID, message.Voice.FileID, "voice.ogg", message.Caption)
+		return
+	}
+	if message.Audio != nil {
+		name := message.Audio.FileName
+		if name == "" {
+			name = "audio.mp3"
+		}
+		b.runVoice(ctx, chatID, message.Audio.FileID, name, message.Caption)
+		return
+	}
+
+	// Documents (files, patches, logs, images sent as documents) are saved or inspected.
+	if message.Document != nil {
+		b.runDocument(ctx, chatID, message)
+		return
+	}
+
+	// No text means there is nothing to ask.
 	if text == "" {
 		return
 	}
@@ -613,6 +651,138 @@ func (b *Bot) runPhoto(ctx context.Context, chatID int64, message *Message) {
 	b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
 		return b.agent.RunPromptWithImage(runCtx, prompt, mediaType, encoded, progress)
 	})
+}
+
+func isImageExtension(name string) bool {
+	ext := strings.ToLower(filepath.Ext(name))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp":
+		return true
+	}
+	return false
+}
+
+// runDocument downloads a document file. If it is an image, it is passed to
+// vision; otherwise text files are displayed inline and all files are saved
+// to the workspace uploads directory when available.
+func (b *Bot) runDocument(ctx context.Context, chatID int64, message *Message) {
+	doc := message.Document
+	if doc == nil {
+		return
+	}
+	prompt := strings.TrimSpace(message.Caption)
+
+	file, err := b.client.GetFile(ctx, doc.FileID)
+	if err != nil {
+		b.reply(ctx, chatID, "Could not fetch document: "+err.Error())
+		return
+	}
+	data, err := b.client.DownloadFile(ctx, file.FilePath)
+	if err != nil {
+		b.reply(ctx, chatID, "Could not download document: "+err.Error())
+		return
+	}
+
+	if strings.HasPrefix(strings.ToLower(doc.MimeType), "image/") || isImageExtension(doc.FileName) {
+		if prompt == "" {
+			prompt = "Describe this image and act on anything notable in it."
+		}
+		encoded := base64.StdEncoding.EncodeToString(data)
+		mediaType := doc.MimeType
+		if mediaType == "" {
+			mediaType = imageMediaType(doc.FileName)
+		}
+		b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
+			return b.agent.RunPromptWithImage(runCtx, prompt, mediaType, encoded, progress)
+		})
+		return
+	}
+
+	fileName := filepath.Base(doc.FileName)
+	if fileName == "." || fileName == "/" || fileName == "" {
+		fileName = "uploaded_document"
+	}
+
+	uploadRelPath := filepath.Join(".termixgo", "uploads", fileName)
+	savedToWorkspace := false
+	if wp, ok := b.agent.(WorkspaceProvider); ok && wp.Workspace() != "" {
+		uploadDir := filepath.Join(wp.Workspace(), ".termixgo", "uploads")
+		if err := os.MkdirAll(uploadDir, 0o755); err == nil {
+			fullPath := filepath.Join(uploadDir, fileName)
+			if err := os.WriteFile(fullPath, data, 0o644); err == nil {
+				savedToWorkspace = true
+			}
+		}
+	}
+
+	var builder strings.Builder
+	if savedToWorkspace {
+		fmt.Fprintf(&builder, "[Document uploaded: %s saved to %s]\n\n", fileName, filepath.ToSlash(uploadRelPath))
+	} else {
+		fmt.Fprintf(&builder, "[Document uploaded: %s (%d bytes)]\n\n", fileName, len(data))
+	}
+
+	if utf8.Valid(data) && len(data) <= 64*1024 {
+		builder.WriteString("File content:\n```\n")
+		builder.WriteString(string(data))
+		builder.WriteString("\n```\n\n")
+	}
+
+	if prompt != "" {
+		builder.WriteString(prompt)
+	} else {
+		builder.WriteString("Please inspect the uploaded document and proceed.")
+	}
+
+	b.runPrompt(ctx, chatID, builder.String())
+}
+
+// runVoice downloads an incoming voice note or audio file, transcribes it to
+// text, and runs the agent with the transcribed prompt.
+func (b *Bot) runVoice(ctx context.Context, chatID int64, fileID, filename, caption string) {
+	transcriber, ok := b.agent.(AudioTranscriber)
+	if !ok {
+		b.reply(ctx, chatID, "Voice transcription is not supported by this agent.")
+		return
+	}
+
+	file, err := b.client.GetFile(ctx, fileID)
+	if err != nil {
+		b.reply(ctx, chatID, "Could not fetch voice message: "+err.Error())
+		return
+	}
+	data, err := b.client.DownloadFile(ctx, file.FilePath)
+	if err != nil {
+		b.reply(ctx, chatID, "Could not download voice message: "+err.Error())
+		return
+	}
+
+	text, err := transcriber.TranscribeAudio(ctx, data, filename)
+	if err != nil {
+		b.reply(ctx, chatID, "Transcription failed: "+err.Error())
+		return
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		b.reply(ctx, chatID, "No speech detected in audio.")
+		return
+	}
+
+	b.reply(ctx, chatID, "Transcribed: <i>\""+escapeHTML(text)+"\"</i>")
+
+	prompt := text
+	if caption = strings.TrimSpace(caption); caption != "" {
+		prompt = caption + "\n\n" + text
+	}
+
+	if runner, ok := b.agent.(VoicePromptRunner); ok {
+		b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
+			return runner.RunVoicePrompt(runCtx, prompt, progress)
+		})
+		return
+	}
+
+	b.runPrompt(ctx, chatID, prompt)
 }
 
 // typingRefresh is how often the typing action is renewed while a turn runs.

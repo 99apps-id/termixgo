@@ -222,12 +222,41 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 		}
 		m.refreshWelcome()
 		m.setup.summary = append(m.setup.summary, "model: "+model.Label)
-		m.setup.step = setupTelegramAsk
-		m.setup.message = "Connect the Telegram companion bot now?"
-		m.setup.errText = ""
-		m.current = modeSetup
-		m.refresh()
-		return m, nil
+		return m.advanceToVoiceModel()
+	case "setup-voice-model":
+		if item.ID == "custom" {
+			m.setup.step = setupCustomVoiceModel
+			m.current = modeSetup
+			m.setup.message = "Type the model id for voice transcription and replies."
+			m.input.SetValue("")
+			m.input.Placeholder = "provider:model or model-id"
+			m.input.EchoMode = textinput.EchoNormal
+			m.input.Focus()
+			m.refresh()
+			return m, textareaBlink()
+		}
+		if item.ID != "skip" && item.ID != "default" {
+			_ = m.app.SetVoiceModel(item.ID)
+			m.setup.summary = append(m.setup.summary, "voice: "+item.Label)
+		}
+		return m.advanceToImageModel()
+	case "setup-image-model":
+		if item.ID == "custom" {
+			m.setup.step = setupCustomImageModel
+			m.current = modeSetup
+			m.setup.message = "Type the model id for image creation subagent."
+			m.input.SetValue("")
+			m.input.Placeholder = "provider:model or model-id"
+			m.input.EchoMode = textinput.EchoNormal
+			m.input.Focus()
+			m.refresh()
+			return m, textareaBlink()
+		}
+		if item.ID != "skip" {
+			_ = m.app.SetImageModel(item.ID)
+			m.setup.summary = append(m.setup.summary, "image: "+item.Label)
+		}
+		return m.advanceToTelegramAsk()
 	}
 	return m, m.enterChat()
 }

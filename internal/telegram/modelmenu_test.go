@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/99apps-id/termixgo/internal/provider"
 )
 
 // callbackData finds the first inline button whose callback data has a prefix.
@@ -82,5 +84,39 @@ func TestModelMenuIgnoresAStranger(t *testing.T) {
 	}
 	if api.called("editMessageText") {
 		t.Errorf("a stranger must not get an edit")
+	}
+}
+
+func TestModelMenuOnlyShowsActiveProviders(t *testing.T) {
+	agent := &scriptedAgent{
+		model: "claude-sonnet-4-5",
+		activeProviders: []provider.Provider{
+			{ID: "anthropic", Label: "Anthropic"},
+		},
+	}
+	bot, api := pairedBot(t, agent)
+
+	bot.handleMessage(context.Background(), message("/model"))
+	sent := api.calls("sendMessage")
+	if len(sent) == 0 {
+		t.Fatalf("no model menu was sent")
+	}
+	last := sent[len(sent)-1]
+	markup, _ := last["reply_markup"].(map[string]any)
+	rows, _ := markup["inline_keyboard"].([]any)
+
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row of buttons, got %d", len(rows))
+	}
+	buttons, _ := rows[0].([]any)
+	if len(buttons) != 1 {
+		t.Fatalf("expected 1 button, got %d", len(buttons))
+	}
+	btn, _ := buttons[0].(map[string]any)
+	if btn["text"] != "Anthropic" {
+		t.Errorf("expected Anthropic button, got %v", btn["text"])
+	}
+	if btn["callback_data"] != modelProviderPrefix+"anthropic" {
+		t.Errorf("callback data = %v", btn["callback_data"])
 	}
 }

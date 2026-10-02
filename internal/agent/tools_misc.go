@@ -652,13 +652,13 @@ func (t *subagentTool) DoneLabel(a map[string]any) string {
 	return "Delegated (" + LookupSubagent(argString(a, "type")).Label + "): " + Shorten(argString(a, "prompt", "description"), 50)
 }
 func (t *subagentTool) Description() string {
-	return "Spawn a subagent worker (explore, general, builder, code-review, security) with the full toolset and no sandbox. Use it for a self-contained task so the main context stays lean. Review types only read."
+	return "Spawn a subagent worker (explore, general, builder, code-review, security, image) with the full toolset and no sandbox. Use it for a self-contained task so the main context stays lean. Review types only read."
 }
 func (t *subagentTool) Schema() map[string]any {
 	return object(map[string]any{
 		"prompt":      strProp("The task to carry out, stated precisely."),
 		"description": strProp("Three to five words naming the task."),
-		"type":        strProp("Worker type: explore, general, builder, code-review or security. Defaults to general."),
+		"type":        strProp("Worker type: explore, general, builder, code-review, security, or image. Defaults to general."),
 	}, "prompt")
 }
 

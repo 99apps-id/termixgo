@@ -76,7 +76,7 @@ func TestHelpAndSetupViewsRender(t *testing.T) {
 	resize(model, 100, 30)
 
 	model.current = modeHelp
-	if view := stripANSI(model.View()); !strings.Contains(view, "/model") || !strings.Contains(view, "Keys") {
+	if view := stripANSI(model.View()); !strings.Contains(view, "Commands") || !strings.Contains(view, "Keys") {
 		t.Errorf("the help view is incomplete:\n%s", view)
 	}
 

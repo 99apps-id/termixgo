@@ -33,6 +33,10 @@ const (
 	// instead of an API key. It is last so the numeric order of the others is
 	// unchanged.
 	setupOAuth
+	setupVoiceModel
+	setupCustomVoiceModel
+	setupImageModel
+	setupCustomImageModel
 )
 
 // setupTitlePrefix brands every wizard title with one wordmark so the picker
@@ -91,6 +95,29 @@ func setupModelItems(providerID string) []pickerItem {
 	return items
 }
 
+// setupVoiceItems lists available voice models for the wizard.
+func setupVoiceItems() []pickerItem {
+	return []pickerItem{
+		{ID: "default", Label: "Default Whisper", Detail: "Auto-detect Groq or OpenAI Whisper"},
+		{ID: "groq:whisper-large-v3-turbo", Label: "Groq Whisper Large v3 Turbo", Detail: "Ultra-fast speech transcription"},
+		{ID: "openai:whisper-1", Label: "OpenAI Whisper-1", Detail: "Standard OpenAI speech-to-text"},
+		{ID: "custom", Label: "Custom Model", Detail: "Type a custom model id"},
+		{ID: "skip", Label: "Skip", Detail: "Do not set a voice model"},
+	}
+}
+
+// setupImageItems lists available image creation models for the wizard.
+func setupImageItems() []pickerItem {
+	return []pickerItem{
+		{ID: "dall-e-3", Label: "OpenAI DALL-E 3", Detail: "High-quality image generation"},
+		{ID: "openai:gpt-4o", Label: "OpenAI GPT-4o", Detail: "Multimodal visual and image reasoning"},
+		{ID: "gemini-2.5-flash", Label: "Google Gemini 2.5 Flash", Detail: "Fast multimodal visual model"},
+		{ID: "qwen/qwen3.8-27b", Label: "Qwen 3.8 27B Vision", Detail: "Open vision-language model"},
+		{ID: "custom", Label: "Custom Model", Detail: "Type a custom model id"},
+		{ID: "skip", Label: "Skip", Detail: "Use active model for subagents"},
+	}
+}
+
 // handleSetupKey drives the wizard's input steps.
 func (m *Model) handleSetupKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Escape is a way back, never a trap. At the provider list it leaves the
@@ -140,6 +167,38 @@ func (m *Model) handleSetupKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case setupCustomModel:
 		if key.String() == "enter" {
 			return m.saveCustomModel()
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(key)
+		return m, cmd
+
+	case setupCustomVoiceModel:
+		if key.String() == "enter" {
+			val := strings.TrimSpace(m.input.Value())
+			if val != "" {
+				_ = m.app.SetVoiceModel(val)
+				m.setup.summary = append(m.setup.summary, "voice: "+val)
+			}
+			return m.advanceToImageModel()
+		}
+		if key.String() == "esc" {
+			return m.advanceToImageModel()
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(key)
+		return m, cmd
+
+	case setupCustomImageModel:
+		if key.String() == "enter" {
+			val := strings.TrimSpace(m.input.Value())
+			if val != "" {
+				_ = m.app.SetImageModel(val)
+				m.setup.summary = append(m.setup.summary, "image: "+val)
+			}
+			return m.advanceToTelegramAsk()
+		}
+		if key.String() == "esc" {
+			return m.advanceToTelegramAsk()
 		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(key)
@@ -329,9 +388,32 @@ func (m *Model) saveCustomModel() (tea.Model, tea.Cmd) {
 	m.input.Blur()
 	m.refreshWelcome()
 	m.setup.summary = append(m.setup.summary, "model: "+model.Label)
+	return m.advanceToVoiceModel()
+}
+
+func (m *Model) advanceToVoiceModel() (tea.Model, tea.Cmd) {
+	m.setup.errText = ""
+	m.setup.step = setupVoiceModel
+	m.openPicker(setupPickerTitle("Voice Model"), "setup-voice-model", setupVoiceItems())
+	return m, nil
+}
+
+func (m *Model) advanceToImageModel() (tea.Model, tea.Cmd) {
+	m.setup.errText = ""
+	m.setup.step = setupImageModel
+	m.openPicker(setupPickerTitle("Image Model"), "setup-image-model", setupImageItems())
+	return m, nil
+}
+
+func (m *Model) advanceToTelegramAsk() (tea.Model, tea.Cmd) {
+	m.input.SetValue("")
+	m.input.Blur()
+	m.input.EchoMode = textinput.EchoNormal
 	m.setup.step = setupTelegramAsk
 	m.setup.message = "Connect the Telegram companion bot now?"
 	m.setup.errText = ""
+	m.current = modeSetup
+	m.refresh()
 	return m, nil
 }
 
@@ -405,7 +487,7 @@ func (m *Model) viewSetup() string {
 	}
 
 	switch m.setup.step {
-	case setupProvider, setupModel:
+	case setupProvider, setupModel, setupVoiceModel, setupImageModel:
 		body = append(body, m.styles.Dim.Render("Choose from the list."))
 	case setupEndpoint:
 		body = append(body, m.styles.Dim.Render("Type the server base URL. It is saved in the settings file and used for every request to this provider."))
@@ -417,7 +499,7 @@ func (m *Model) viewSetup() string {
 		body = append(body, m.styles.Dim.Render("This provider logs in with a device code, not an API key."))
 		body = append(body, m.styles.Dim.Render("In a shell run: termixgo login "+m.setup.providerID))
 		body = append(body, "", m.styles.Hint.Render("Press Enter once the login finishes."))
-	case setupCustomModel:
+	case setupCustomModel, setupCustomVoiceModel, setupCustomImageModel:
 		body = append(body, m.styles.Dim.Render("Type the model id your server expects."))
 		body = append(body, "", m.input.View())
 	case setupTelegramAsk:
@@ -458,6 +540,8 @@ func setupProgress(step setupStep) int {
 		return 1
 	case setupEndpoint, setupKey, setupModel, setupCustomModel, setupOAuth:
 		return 2
+	case setupVoiceModel, setupCustomVoiceModel, setupImageModel, setupCustomImageModel:
+		return 3
 	case setupTelegramAsk, setupTelegramToken, setupTelegramPair:
 		return 3
 	default:

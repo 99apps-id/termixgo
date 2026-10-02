@@ -65,6 +65,36 @@ func hasBlockKind(model *Model, kind blockKind) bool {
 	return false
 }
 
+// ------------------------------------------------- /export
+
+func TestSlashExportExportsCurrentSession(t *testing.T) {
+	model := chatModel(t)
+	session := model.app.Session()
+	session.SetTitle("My Export Test Session")
+	session.AddUser("Hello agent")
+	session.AddAssistant("Hello operator", "", nil)
+
+	// 1. Export without path (default exports to .termixgo/exports/session-<id>.md)
+	_, output := runSlash(t, model, "/export")
+	if !strings.Contains(output, "Exported session") {
+		t.Errorf("output should report export: %s", output)
+	}
+
+	// 2. Export with custom path
+	exportFile := filepath.Join(t.TempDir(), "exported.md")
+	_, output = runSlash(t, model, "/export "+exportFile)
+	if !strings.Contains(output, "Exported session") {
+		t.Errorf("output should report export: %s", output)
+	}
+	data, err := os.ReadFile(exportFile)
+	if err != nil {
+		t.Fatalf("read exportFile: %v", err)
+	}
+	if !strings.Contains(string(data), "# My Export Test Session") || !strings.Contains(string(data), "Hello agent") {
+		t.Errorf("exported file content invalid: %s", string(data))
+	}
+}
+
 // ------------------------------------------------- /model
 
 func TestSlashModelOpensAProviderPickerFirst(t *testing.T) {

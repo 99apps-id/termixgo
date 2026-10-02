@@ -89,7 +89,15 @@ func TestWizardWalksALocalProviderEndToEnd(t *testing.T) {
 		t.Errorf("provider = %q", atKey.setup.providerID)
 	}
 
-	atTelegram := choose(t, atKey, "qwen2.5-coder")
+	atVoice := choose(t, atKey, "qwen2.5-coder")
+	if atVoice.setup.step != setupVoiceModel {
+		t.Fatalf("after a model the wizard offers voice model: step %d", atVoice.setup.step)
+	}
+	atImage := choose(t, atVoice, "skip")
+	if atImage.setup.step != setupImageModel {
+		t.Fatalf("after voice the wizard offers image model: step %d", atImage.setup.step)
+	}
+	atTelegram := choose(t, atImage, "skip")
 	if atTelegram.setup.step != setupTelegramAsk {
 		t.Fatalf("after a model the wizard offers Telegram: step %d", atTelegram.setup.step)
 	}
@@ -115,6 +123,25 @@ func TestWizardWalksALocalProviderEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(view, "model:") {
 		t.Errorf("the summary should name the chosen model:\n%s", view)
+	}
+}
+
+func TestWizardConfiguresVoiceAndImageModels(t *testing.T) {
+	model := wizardModel(t)
+	atModel := choose(t, choose(t, model, "ollama"), "qwen2.5-coder")
+	atVoice := choose(t, atModel, "groq:whisper-large-v3-turbo")
+	atImage := choose(t, atVoice, "dall-e-3")
+	atTelegram := atImage
+	if atTelegram.setup.step != setupTelegramAsk {
+		t.Fatalf("after image model, want setupTelegramAsk, got %d", atTelegram.setup.step)
+	}
+	declined := press(t, atTelegram, "n")
+	closed := press(t, declined, "enter")
+	if closed.app.VoiceModel() != "groq:whisper-large-v3-turbo" {
+		t.Errorf("voice model = %q, want groq:whisper-large-v3-turbo", closed.app.VoiceModel())
+	}
+	if closed.app.ImageModel() != "dall-e-3" {
+		t.Errorf("image model = %q, want dall-e-3", closed.app.ImageModel())
 	}
 }
 
@@ -205,17 +232,22 @@ func TestWizardAsksForACustomModel(t *testing.T) {
 	if done.setup.errText != "" {
 		t.Fatalf("a typed model should be accepted, got %q", done.setup.errText)
 	}
-	if done.setup.step != setupTelegramAsk {
-		t.Fatalf("step = %d, want the Telegram question", done.setup.step)
+	if done.setup.step != setupVoiceModel {
+		t.Fatalf("step = %d, want the voice model step", done.setup.step)
+	}
+	atImage := choose(t, done, "skip")
+	atTelegram := choose(t, atImage, "skip")
+	if atTelegram.setup.step != setupTelegramAsk {
+		t.Fatalf("step = %d, want the Telegram question", atTelegram.setup.step)
 	}
 	// The bare id is stored against the chosen provider, which is what makes it
 	// resolve later instead of being read as a catalogue id.
-	stored := done.app.CurrentModel()
+	stored := atTelegram.app.CurrentModel()
 	if stored.ID != "a-model-id" || stored.Provider != providerID {
 		t.Errorf("model = %+v, want %s:a-model-id", stored, providerID)
 	}
-	if !strings.Contains(strings.Join(done.setup.summary, " "), "a-model-id") {
-		t.Errorf("summary = %v", done.setup.summary)
+	if !strings.Contains(strings.Join(atTelegram.setup.summary, " "), "a-model-id") {
+		t.Errorf("summary = %v", atTelegram.setup.summary)
 	}
 }
 
@@ -224,7 +256,9 @@ func TestWizardAsksForACustomModel(t *testing.T) {
 // API, which a unit test has no business doing.
 func TestWizardTelegramStepsDeclineAndEscape(t *testing.T) {
 	model := wizardModel(t)
-	atAsk := choose(t, choose(t, model, "ollama"), "qwen2.5-coder")
+	atModel := choose(t, choose(t, model, "ollama"), "qwen2.5-coder")
+	atVoice := choose(t, atModel, "skip")
+	atAsk := choose(t, atVoice, "skip")
 
 	// y moves to the token step and masks the field.
 	atToken := press(t, atAsk, "y")

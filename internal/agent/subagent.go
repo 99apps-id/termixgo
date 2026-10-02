@@ -20,6 +20,7 @@ const (
 	SubagentBuilder    SubagentType = "builder"
 	SubagentCodeReview SubagentType = "code-review"
 	SubagentSecurity   SubagentType = "security"
+	SubagentImage      SubagentType = "image"
 )
 
 // MaxSubagentDepth caps nesting. The main agent runs at depth 0 and may
@@ -73,6 +74,13 @@ var Subagents = map[SubagentType]SubagentDef{
 		Description:  "Audits code and configuration for security risks.",
 		SystemPrompt: "You are a security-review subagent. Scan the requested scope for injection, auth bypass, secret leakage, missing validation at trust boundaries, unsafe deserialization and weak crypto. Report concrete findings with file:line and severity. If nothing is wrong, say No security issues found.",
 		ReadOnly:     true,
+	},
+	SubagentImage: {
+		Type:         SubagentImage,
+		Label:        "Image creation",
+		Description:  "Generates and processes images, mockups, diagrams, and visual assets.",
+		SystemPrompt: "You are an image creation subagent. When the user or main agent asks to create, draw, or generate an image, diagram, or visual mockup, produce the requested visual asset or diagram. Save any generated files (e.g. SVG, HTML/CSS, image files) to the workspace and provide the path. Return a clear summary of what was generated.",
+		MaxSteps:     12,
 	},
 }
 

@@ -147,9 +147,17 @@ type Config struct {
 	WorkerCommands map[string][]string `json:"workerCommands,omitempty"`
 
 	// SubagentModels maps a subagent role (explore, general, builder,
-	// code-review, security) to the model that role should use, as a catalogue
+	// code-review, security, image) to the model that role should use, as a catalogue
 	// id or "provider:model". A role with no entry uses the active model.
 	SubagentModels map[string]string `json:"subagentModels,omitempty"`
+
+	// VoiceModel specifies the model or provider:model used for voice processing
+	// and fallback responses to voice messages.
+	VoiceModel string `json:"voiceModel,omitempty"`
+
+	// ImageModel specifies the model used for creating or processing images,
+	// also mapping to the image subagent role.
+	ImageModel string `json:"imageModel,omitempty"`
 
 	// SubagentFallbacks is an ordered model chain a subagent falls through when
 	// a provider has no credential or runs out of quota. When it is set it is
@@ -316,4 +324,53 @@ func (c Config) WithRecent(path string) Config {
 	}
 	c.RecentProjects = next
 	return c
+}
+
+// WithMCPServer adds or updates an MCP server configuration.
+func (c Config) WithMCPServer(server MCPServer) Config {
+	server.Name = strings.TrimSpace(server.Name)
+	server.Command = strings.TrimSpace(server.Command)
+	if server.Name == "" || server.Command == "" {
+		return c
+	}
+	replaced := false
+	for i, s := range c.MCPServers {
+		if strings.EqualFold(s.Name, server.Name) {
+			c.MCPServers[i] = server
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		c.MCPServers = append(c.MCPServers, server)
+	}
+	return c
+}
+
+// WithoutMCPServer removes an MCP server by name.
+func (c Config) WithoutMCPServer(name string) (Config, bool) {
+	needle := strings.TrimSpace(name)
+	filtered := make([]MCPServer, 0, len(c.MCPServers))
+	found := false
+	for _, s := range c.MCPServers {
+		if strings.EqualFold(s.Name, needle) {
+			found = true
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+	c.MCPServers = filtered
+	return c, found
+}
+
+// SetMCPServerDisabled toggles an MCP server's disabled state.
+func (c Config) SetMCPServerDisabled(name string, disabled bool) (Config, bool) {
+	needle := strings.TrimSpace(name)
+	for i, s := range c.MCPServers {
+		if strings.EqualFold(s.Name, needle) {
+			c.MCPServers[i].Disabled = disabled
+			return c, true
+		}
+	}
+	return c, false
 }

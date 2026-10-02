@@ -327,6 +327,55 @@ func (a *App) ReloadMCP(ctx context.Context) error {
 	return nil
 }
 
+// AddMCPServer saves an MCP server configuration. Its environment is a place
+// for a token, so it goes to the secret file and is cleared from the config
+// before the config is written.
+func (a *App) AddMCPServer(server config.MCPServer) error {
+	if len(server.Env) > 0 {
+		env := a.mcpEnvFor(server.Name)
+		for key, value := range server.Env {
+			env[key] = value
+		}
+		if err := a.saveMCPEnv(server.Name, env); err != nil {
+			return err
+		}
+		server.Env = nil
+	}
+	a.mu.Lock()
+	a.cfg = a.cfg.WithMCPServer(server)
+	cfg := a.cfg
+	a.mu.Unlock()
+	return config.Save(cfg)
+}
+
+// RemoveMCPServer deletes an MCP server by name.
+func (a *App) RemoveMCPServer(name string) error {
+	a.mu.Lock()
+	newCfg, found := a.cfg.WithoutMCPServer(name)
+	if !found {
+		a.mu.Unlock()
+		return fmt.Errorf("mcp server %q not found", name)
+	}
+	a.cfg = newCfg
+	cfg := a.cfg
+	a.mu.Unlock()
+	return config.Save(cfg)
+}
+
+// SetMCPServerEnabled enables or disables an MCP server by name.
+func (a *App) SetMCPServerEnabled(name string, enabled bool) error {
+	a.mu.Lock()
+	newCfg, found := a.cfg.SetMCPServerDisabled(name, !enabled)
+	if !found {
+		a.mu.Unlock()
+		return fmt.Errorf("mcp server %q not found", name)
+	}
+	a.cfg = newCfg
+	cfg := a.cfg
+	a.mu.Unlock()
+	return config.Save(cfg)
+}
+
 // restoreModel resolves the configured model and builds its client.
 func (a *App) restoreModel() error {
 	id := strings.TrimSpace(a.cfg.DefaultModel)
@@ -989,6 +1038,9 @@ func (a *App) runSubagent(ctx context.Context, subType, prompt string) (string, 
 	client := a.client
 	model := a.model
 	primary := strings.TrimSpace(a.cfg.SubagentModels[strings.ToLower(strings.TrimSpace(subType))])
+	if primary == "" && strings.ToLower(strings.TrimSpace(subType)) == "image" {
+		primary = strings.TrimSpace(a.cfg.ImageModel)
+	}
 	fallbacks := append([]string(nil), a.cfg.SubagentFallbacks...)
 	a.mu.Unlock()
 	if client == nil {
@@ -1327,6 +1379,108 @@ func (a *App) RunPromptWithImage(ctx context.Context, prompt, mediaType, data st
 		return answer, nil
 	}
 	return notice, nil
+}
+
+// RunVoicePrompt runs a turn initiated from a voice note. If the active model
+// errors and a voice fallback model is configured, it retries with the voice model.
+func (a *App) RunVoicePrompt(ctx context.Context, prompt string, progress func(string)) (string, error) {
+	answer, err := a.RunPrompt(ctx, prompt, progress)
+	if err == nil {
+		return answer, nil
+	}
+
+	a.mu.Lock()
+	voiceModelID := strings.TrimSpace(a.cfg.VoiceModel)
+	maxSteps := a.cfg.MaxSteps
+	a.mu.Unlock()
+
+	if voiceModelID == "" {
+		return "", err
+	}
+
+	if progress != nil {
+		progress(fmt.Sprintf("Falling back to voice model (%s)...", voiceModelID))
+	}
+
+	roleClient, roleModel, clientErr := a.subagentClient(voiceModelID)
+	if clientErr != nil {
+		return "", fmt.Errorf("active turn failed (%v), and voice fallback model error: %w", err, clientErr)
+	}
+
+	report, subErr := agent.RunSubagent(ctx, a.env(), roleClient, roleModel, string(agent.SubagentGeneral), prompt, maxSteps)
+	if subErr != nil {
+		return "", fmt.Errorf("active turn failed (%v), and voice fallback turn error: %w", err, subErr)
+	}
+
+	session := a.currentSession()
+	session.AddUser(prompt)
+	session.AddAssistant(report, "", nil)
+	_ = session.Save()
+
+	return report, nil
+}
+
+// VoiceModel returns the configured voice model.
+func (a *App) VoiceModel() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.VoiceModel
+}
+
+// SetVoiceModel sets and saves the voice model.
+func (a *App) SetVoiceModel(model string) error {
+	a.mu.Lock()
+	a.cfg.VoiceModel = strings.TrimSpace(model)
+	cfg := a.cfg
+	a.mu.Unlock()
+	return config.Save(cfg)
+}
+
+// ImageModel returns the configured image creation model.
+func (a *App) ImageModel() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.ImageModel
+}
+
+// SetImageModel sets and saves the image creation model and updates the image subagent role.
+func (a *App) SetImageModel(model string) error {
+	a.mu.Lock()
+	trimmed := strings.TrimSpace(model)
+	a.cfg.ImageModel = trimmed
+	if a.cfg.SubagentModels == nil {
+		a.cfg.SubagentModels = map[string]string{}
+	}
+	if trimmed != "" {
+		a.cfg.SubagentModels["image"] = trimmed
+	} else {
+		delete(a.cfg.SubagentModels, "image")
+	}
+	cfg := a.cfg
+	a.mu.Unlock()
+	return config.Save(cfg)
+}
+
+// ActiveProviders lists the providers the operator can use right now: the
+// current provider, local providers that need no key, and providers with a
+// stored key or login.
+func (a *App) ActiveProviders() []provider.Provider {
+	a.mu.Lock()
+	current := a.model.Provider
+	store := a.store
+	a.mu.Unlock()
+
+	var active []provider.Provider
+	for _, info := range provider.Providers() {
+		if len(provider.ModelsFor(info.ID)) == 0 {
+			continue
+		}
+		if info.ID != current && info.NeedsKey && provider.KeySource(store, info.ID) == "" {
+			continue
+		}
+		active = append(active, info)
+	}
+	return active
 }
 
 // telegramProgressLine renders one event as a short chat line.
