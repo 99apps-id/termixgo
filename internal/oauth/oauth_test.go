@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -173,6 +174,48 @@ func TestClientCredentialStore(t *testing.T) {
 	}
 	if id, secret := tokens.LoadClient("antigravity"); id != "the-id" || secret != "the-secret" {
 		t.Errorf("LoadClient = %q %q, want the-id the-secret", id, secret)
+	}
+}
+
+// TestPromptClientCredentialsAsksOnlyForTheMissingSecret covers the Antigravity
+// 400 "client_secret is missing": the id was known, so the login must ask for
+// the secret alone and not re-ask the id.
+func TestPromptClientCredentialsAsksOnlyForTheMissingSecret(t *testing.T) {
+	var out strings.Builder
+	id, secret, err := promptClientCredentials(strings.NewReader("the-secret\n"), &out, "antigravity", "known-id", "")
+	if err != nil {
+		t.Fatalf("promptClientCredentials: %v", err)
+	}
+	if id != "known-id" || secret != "the-secret" {
+		t.Errorf("got id=%q secret=%q, want known-id the-secret", id, secret)
+	}
+	if strings.Contains(out.String(), "Client id:") {
+		t.Errorf("a resolved id must not be asked again: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "Client secret:") {
+		t.Errorf("the missing secret must be asked for: %q", out.String())
+	}
+}
+
+// TestPKCEResolvesStoredClientCredentials proves a provider with a client
+// secret can exchange a code after only the secret was stored.
+func TestPKCEResolvesStoredClientCredentials(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	store, err := secrets.Load()
+	if err != nil {
+		t.Fatalf("secrets.Load: %v", err)
+	}
+	tokens := NewStore(store)
+	if err := tokens.SaveClient("antigravity", "cid", "csecret"); err != nil {
+		t.Fatalf("SaveClient: %v", err)
+	}
+	spec, ok := SpecFor("antigravity")
+	if !ok {
+		t.Fatal("no antigravity spec")
+	}
+	flow := pkceFlowFromSpec(spec, tokens)
+	if flow.ClientID != "cid" || flow.ClientSecret != "csecret" {
+		t.Errorf("flow = %+v, want cid/csecret from the store", flow)
 	}
 }
 

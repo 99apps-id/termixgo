@@ -14,23 +14,36 @@ import (
 // vendor's own CLI ships. The pair is stored in the secret file, not the
 // repository, so secret scanning never sees it. The secret is hidden when the
 // input is a terminal.
-func promptClientCredentials(in io.Reader, out io.Writer, provider string) (string, string, error) {
-	fmt.Fprintf(out, "%s needs the public OAuth client id and secret its own CLI ships.\n", provider)
-	fmt.Fprint(out, "Client id: ")
+// knownID and knownSecret skip a question when the value is already resolved,
+// so a login that only lost its secret asks for the secret alone.
+func promptClientCredentials(in io.Reader, out io.Writer, provider, knownID, knownSecret string) (string, string, error) {
+	id := strings.TrimSpace(knownID)
+	secret := strings.TrimSpace(knownSecret)
 	reader := bufio.NewReader(in)
-	id, err := readPromptLine(reader)
-	if err != nil {
-		return "", "", err
+	if id == "" {
+		fmt.Fprintf(out, "%s needs the public OAuth client id and secret its own CLI ships.\n", provider)
+		fmt.Fprint(out, "Client id: ")
+		line, err := readPromptLine(reader)
+		if err != nil {
+			return "", "", err
+		}
+		id = line
 	}
-	fmt.Fprint(out, "Client secret: ")
-	secret, err := readPromptSecret(in, reader)
-	if err != nil {
-		return "", "", err
+	if secret == "" {
+		fmt.Fprint(out, "Client secret: ")
+		line, err := readPromptSecret(in, reader)
+		if err != nil {
+			return "", "", err
+		}
+		secret = line
 	}
-	if strings.TrimSpace(id) == "" {
+	if id == "" {
 		return "", "", fmt.Errorf("the client id is required")
 	}
-	return strings.TrimSpace(id), strings.TrimSpace(secret), nil
+	if secret == "" {
+		return "", "", fmt.Errorf("the client secret is required")
+	}
+	return id, secret, nil
 }
 
 func readPromptLine(reader *bufio.Reader) (string, error) {

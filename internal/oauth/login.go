@@ -38,11 +38,17 @@ func Login(ctx context.Context, store *Store, provider string, in io.Reader, out
 		token, err = WaitCodexToken(ctx, flow, device, clock)
 	case "pkce":
 		flow := pkceFlowFromSpec(spec, store)
-		if strings.TrimSpace(flow.ClientID) == "" {
+		needsID := strings.TrimSpace(flow.ClientID) == ""
+		needsSecret := strings.TrimSpace(spec.ClientSecretEnv) != "" && strings.TrimSpace(flow.ClientSecret) == ""
+		if needsID || needsSecret {
 			if in == nil {
-				return fmt.Errorf("%s needs OAuth client credentials in %s", provider, spec.ClientIDEnv)
+				env := spec.ClientIDEnv
+				if needsSecret {
+					env = spec.ClientSecretEnv
+				}
+				return fmt.Errorf("%s needs OAuth client credentials in %s", provider, env)
 			}
-			id, secret, promptErr := promptClientCredentials(in, out, provider)
+			id, secret, promptErr := promptClientCredentials(in, out, provider, flow.ClientID, flow.ClientSecret)
 			if promptErr != nil {
 				return promptErr
 			}
