@@ -193,6 +193,12 @@ runLoop:
 				stopReason = "aborted"
 				break runLoop
 			}
+			// Record the provider failure next to the tool failures so the
+			// journal, and the operator, can see why a turn ended without an
+			// answer instead of only seeing the tool history.
+			if r.Journal != nil {
+				r.Journal.Record("provider", "", streamErr.Error())
+			}
 			emit(Event{Kind: EventError, Err: streamErr})
 			stopReason = "error"
 			break runLoop

@@ -113,6 +113,37 @@ func TestAntigravityModelsUseUpstreamIDs(t *testing.T) {
 	}
 }
 
+// TestAntigravitySurfacesAnEmptyFinishReason covers a stream that ends with no
+// content for a block reason: the client must name the reason instead of
+// returning an empty step the agent would retry into the same empty answer.
+func TestAntigravitySurfacesAnEmptyFinishReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !strings.Contains(request.URL.Path, "streamGenerateContent") {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(writer, `data: {"response":{"candidates":[{"content":{"parts":[]},"finishReason":"SAFETY"}]}}`+"\n\n")
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "antigravity", Label: "Antigravity", Kind: KindAntigravity}, server.URL, "oauth-token")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	client.(*antigravityClient).SetAccountID("proj-1")
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "gemini-3.8-flash",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	}, func(StreamEvent) error { return nil })
+	if err == nil {
+		t.Fatal("an empty SAFETY finish must surface an error")
+	}
+	if !strings.Contains(err.Error(), "safety") {
+		t.Errorf("error = %v, want the finish reason named", err)
+	}
+}
+
 func TestSanitizeFunctionName(t *testing.T) {
 	if got := sanitizeFunctionName("weird name!"); got != "weird_name_" {
 		t.Errorf("sanitizeFunctionName = %q", got)

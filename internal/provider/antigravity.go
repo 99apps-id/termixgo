@@ -87,6 +87,8 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 
 	reader := newSSEReader(response.Body)
 	usage := &cumulativeUsage{}
+	emitted := false
+	finish := ""
 	for {
 		payload, err := reader.next()
 		if err == io.EOF {
@@ -125,8 +127,12 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 		if len(chunk.Candidates) == 0 {
 			continue
 		}
+		if reason := strings.TrimSpace(chunk.Candidates[0].FinishReason); reason != "" {
+			finish = reason
+		}
 		for _, part := range chunk.Candidates[0].Content.Parts {
 			if part.FunctionCall != nil {
+				emitted = true
 				c.rememberSignature(part.FunctionCall.ID, part.ThoughtSignature)
 				arguments, _ := json.Marshal(part.FunctionCall.Args)
 				call := ToolCall{ID: part.FunctionCall.ID, Name: part.FunctionCall.Name, Arguments: string(arguments)}
@@ -138,6 +144,7 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 			if part.Text == "" {
 				continue
 			}
+			emitted = true
 			kind := EventTextDelta
 			if part.Thought {
 				kind = EventReasoningDelta
@@ -146,6 +153,14 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 				return err
 			}
 		}
+	}
+	// A candidate that ended without content for a reason other than a clean
+	// stop (a safety block, a token cap, a malformed function call) is not a
+	// step worth retrying blindly: the same request returns the same empty
+	// answer. Surface the reason so the turn explains itself instead of
+	// looping on a silent empty step.
+	if !emitted && finish != "" && !strings.EqualFold(finish, "STOP") {
+		return fmt.Errorf("the model ended the turn without an answer (finish reason %s)", strings.ToLower(finish))
 	}
 	return nil
 }
