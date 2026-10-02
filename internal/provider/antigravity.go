@@ -358,11 +358,24 @@ func cleanAntigravitySchema(schema map[string]any) map[string]any {
 	return cleaned
 }
 
-var antigravityUnsupportedKeys = map[string]bool{
-	"$schema": true, "additionalProperties": true, "default": true, "optional": true,
-	"uniqueItems": true, "examples": true, "$id": true, "$ref": true, "definitions": true,
-	"const": true, "oneOf": true, "anyOf": true, "allOf": true, "not": true,
+// geminiUnsupportedKeys are JSON Schema keywords the Gemini function-declaration
+// schema rejects with an "Unknown name" 400. MCP servers emit schemas with
+// keywords like propertyNames, so every path that sends tools to Gemini must
+// drop them. anyOf/oneOf/allOf/not are listed because Gemini cannot express
+// them in a function schema.
+var geminiUnsupportedKeys = map[string]bool{
+	"$schema": true, "$id": true, "$ref": true, "$defs": true, "$comment": true,
+	"definitions": true, "additionalProperties": true, "propertyNames": true,
+	"patternProperties": true, "unevaluatedProperties": true, "unevaluatedItems": true,
+	"dependentRequired": true, "dependentSchemas": true,
+	"default": true, "examples": true, "title": true, "optional": true,
+	"deprecated": true, "readOnly": true, "writeOnly": true,
+	"uniqueItems": true, "const": true, "oneOf": true, "anyOf": true, "allOf": true, "not": true,
+	"if": true, "then": true, "else": true,
+	"contentEncoding": true, "contentMediaType": true, "contentSchema": true,
 }
+
+var antigravityUnsupportedKeys = geminiUnsupportedKeys
 
 func stripSchemaKeys(value any) any {
 	switch typed := value.(type) {

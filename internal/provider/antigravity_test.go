@@ -113,3 +113,24 @@ func TestCleanAntigravitySchemaDropsUnsupportedKeys(t *testing.T) {
 		t.Errorf("default should be dropped")
 	}
 }
+
+// TestCleanAntigravitySchemaDropsPropertyNames covers the 400 an MCP tool
+// caused: its schema carried propertyNames, which the Gemini API rejects with
+// "Unknown name propertyNames".
+func TestCleanAntigravitySchemaDropsPropertyNames(t *testing.T) {
+	cleaned := cleanAntigravitySchema(map[string]any{
+		"type": "object",
+		"properties": map[string]any{"env": map[string]any{
+			"type":                 "object",
+			"propertyNames":        map[string]any{"pattern": "^[A-Z_]+$"},
+			"additionalProperties": map[string]any{"type": "string"},
+		}},
+	})
+	env := cleaned["properties"].(map[string]any)["env"].(map[string]any)
+	if _, ok := env["propertyNames"]; ok {
+		t.Errorf("propertyNames should be dropped")
+	}
+	if _, ok := env["additionalProperties"]; ok {
+		t.Errorf("additionalProperties should be dropped")
+	}
+}

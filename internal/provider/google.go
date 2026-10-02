@@ -146,8 +146,7 @@ func encodeGoogleTools(tools []ToolDef) []map[string]any {
 func sanitizeGoogleSchema(schema map[string]any) map[string]any {
 	out := make(map[string]any, len(schema))
 	for key, value := range schema {
-		switch key {
-		case "additionalProperties", "$schema", "title", "default", "examples", "$id":
+		if geminiUnsupportedKeys[key] || strings.HasPrefix(key, "x-") {
 			continue
 		}
 		out[key] = sanitizeGoogleValue(value)

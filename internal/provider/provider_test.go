@@ -217,6 +217,7 @@ func TestSanitizeGoogleSchemaDropsUnsupportedKeywords(t *testing.T) {
 	schema := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
+		"propertyNames":        map[string]any{"pattern": "^[a-z]+$"},
 		"$schema":              "http://json-schema.org/draft-07/schema#",
 		"properties": map[string]any{
 			"path": map[string]any{"type": "string", "additionalProperties": false},
@@ -225,6 +226,9 @@ func TestSanitizeGoogleSchemaDropsUnsupportedKeywords(t *testing.T) {
 	clean := sanitizeGoogleSchema(schema)
 	if _, present := clean["additionalProperties"]; present {
 		t.Errorf("additionalProperties must be removed")
+	}
+	if _, present := clean["propertyNames"]; present {
+		t.Errorf("propertyNames must be removed")
 	}
 	if _, present := clean["$schema"]; present {
 		t.Errorf("$schema must be removed")
