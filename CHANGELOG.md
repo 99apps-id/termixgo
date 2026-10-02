@@ -152,6 +152,9 @@ All notable changes to Termixgo are recorded here. The format follows
 - The setup wizard routes an OAuth provider to a login step and says a login is
   required rather than asking for an API key, and `termixgo secret` refuses an
   OAuth provider.
+- A browser OAuth login on a headless server: open the printed URL on another
+  machine and paste the redirected `127.0.0.1` URL, with its code and state, back
+  into the terminal to finish. An SSH tunnel still works where the port is fixed.
 
 ### Fixed
 

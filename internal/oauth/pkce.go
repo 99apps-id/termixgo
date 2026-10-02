@@ -1,6 +1,7 @@
 package oauth
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -167,18 +169,84 @@ func (s *pkceSession) authorizeURL() (string, error) {
 	return endpoint.String(), nil
 }
 
-// Wait blocks for the callback and exchanges the code for a token.
-func (s *pkceSession) Wait(ctx context.Context, clock Clock) (Token, error) {
+// Wait blocks for the callback and exchanges the code for a token. When in is
+// not nil the operator can instead open the URL on another machine and paste the
+// redirect URL (or the code) back, which is how a headless server logs in.
+func (s *pkceSession) Wait(ctx context.Context, clock Clock, in io.Reader) (Token, error) {
 	defer s.Close()
+	pasted := make(chan string, 1)
+	if in != nil {
+		go func() {
+			scanner := bufio.NewScanner(in)
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if !looksLikePastedCode(line) {
+					continue
+				}
+				select {
+				case pasted <- line:
+				default:
+				}
+				return
+			}
+		}()
+	}
 	var code string
 	select {
 	case code = <-s.codeCh:
+	case input := <-pasted:
+		parsedCode, state, ok := extractPastedCode(input)
+		if !ok {
+			return Token{}, errors.New("the pasted value did not contain a code")
+		}
+		if state != "" && state != s.state {
+			return Token{}, errors.New("the pasted login state does not match")
+		}
+		code = parsedCode
 	case err := <-s.errCh:
 		return Token{}, err
 	case <-ctx.Done():
 		return Token{}, ctx.Err()
 	}
 	return s.exchange(ctx, code, clock)
+}
+
+// looksLikePastedCode keeps a stray keypress from being mistaken for a code:
+// only a redirect URL, a query string, a code#state pair, or a long tokenless
+// string is accepted.
+func looksLikePastedCode(line string) bool {
+	if line == "" {
+		return false
+	}
+	if strings.Contains(line, "code=") || strings.Contains(line, "://") || strings.Contains(line, "#") {
+		return true
+	}
+	return !strings.ContainsAny(line, " \t") && len(line) >= 16
+}
+
+// extractPastedCode accepts the redirect URL, its query string, a code#state
+// pair, or a bare code, and returns the code and the state when one is present.
+func extractPastedCode(input string) (string, string, bool) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "", "", false
+	}
+	if parsed, err := url.Parse(trimmed); err == nil {
+		if code := parsed.Query().Get("code"); code != "" {
+			return code, parsed.Query().Get("state"), true
+		}
+	}
+	if strings.Contains(trimmed, "code=") {
+		if values, err := url.ParseQuery(trimmed); err == nil {
+			if code := values.Get("code"); code != "" {
+				return code, values.Get("state"), true
+			}
+		}
+	}
+	if idx := strings.Index(trimmed, "#"); idx >= 0 {
+		return trimmed[:idx], trimmed[idx+1:], trimmed[:idx] != ""
+	}
+	return trimmed, "", true
 }
 
 func (s *pkceSession) exchange(ctx context.Context, code string, clock Clock) (Token, error) {

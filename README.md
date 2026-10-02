@@ -346,6 +346,14 @@ refreshed automatically. There are two shapes:
   it cannot. Approve there; the browser returns to a local port and the login
   completes. No code to type.
 
+A server with no browser runs the same login. Open the printed URL on another
+machine and approve; the browser cannot reach the server's `127.0.0.1`, so copy
+the redirect URL from the address bar (it carries `code=` and `state=`) and
+paste it back into the terminal on the server. An SSH tunnel is the alternative:
+`ssh -L <port>:127.0.0.1:<port> user@server` before opening the URL lets the
+browser finish the callback, which is easiest for Codex because its port is
+fixed at 1455.
+
 ```sh
 termixgo login xai-oauth      # xAI/Grok, device code
 termixgo login openai-codex   # ChatGPT/Codex, browser + loopback callback (port 1455)
@@ -370,13 +378,17 @@ termixgo model github-copilot/copilot-gpt-5.4
 
 ### Antigravity
 
-A full login, then pick a model and start:
+A full login on a machine with a browser, then pick a model and start:
 
 ```sh
 termixgo login antigravity                    # opens the Google consent page
 termixgo model antigravity/antigravity-gemini-3.8-flash
 termixgo
 ```
+
+On a headless server the same command prints the consent URL. Open it on your
+own machine, approve, then paste the failed `127.0.0.1` callback URL from the
+address bar back into the server terminal to finish the login.
 
 Antigravity signs in with Google's public installed-app client, the same pair
 the Antigravity IDE ships. A release build stamps that pair into the binary at

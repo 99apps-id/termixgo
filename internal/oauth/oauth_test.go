@@ -305,12 +305,44 @@ func TestPKCEFlow(t *testing.T) {
 	}
 	response.Body.Close()
 
-	token, err := session.Wait(context.Background(), noWaitClock())
+	token, err := session.Wait(context.Background(), noWaitClock(), nil)
 	if err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
 	if token.Access != "pkce-access" || token.Refresh != "pkce-refresh" {
 		t.Fatalf("token = %+v", token)
+	}
+}
+
+// TestExtractPastedCode covers the headless login: the operator opens the URL
+// on another machine and pastes the redirect URL, its query, or the code back.
+func TestExtractPastedCode(t *testing.T) {
+	redirect := "http://127.0.0.1:36685/auth/callback?state=abc123&iss=https://accounts.google.com&code=4%2F0AXexample&scope=email&prompt=consent"
+	code, state, ok := extractPastedCode(redirect)
+	if !ok || code != "4/0AXexample" || state != "abc123" {
+		t.Errorf("redirect URL: code=%q state=%q ok=%v", code, state, ok)
+	}
+	code, state, ok = extractPastedCode("code=the-code&state=the-state")
+	if !ok || code != "the-code" || state != "the-state" {
+		t.Errorf("query: code=%q state=%q ok=%v", code, state, ok)
+	}
+	code, state, ok = extractPastedCode("the-code#the-state")
+	if !ok || code != "the-code" || state != "the-state" {
+		t.Errorf("code#state: code=%q state=%q ok=%v", code, state, ok)
+	}
+}
+
+// TestLooksLikePastedCode keeps a stray keypress from being exchanged.
+func TestLooksLikePastedCode(t *testing.T) {
+	for _, line := range []string{"", "hi", "y", "   "} {
+		if looksLikePastedCode(line) {
+			t.Errorf("%q must not look like a code", line)
+		}
+	}
+	for _, line := range []string{"http://127.0.0.1:1/cb?code=x", "code=abc&state=s", "abcdef#state", "averylongopaquecodestring123"} {
+		if !looksLikePastedCode(line) {
+			t.Errorf("%q should look like a code", line)
+		}
 	}
 }
 

@@ -63,7 +63,8 @@ func Login(ctx context.Context, store *Store, provider string, in io.Reader, out
 		if err == nil {
 			fmt.Fprintf(out, "Open this URL to log in:\n%s\n", authURL)
 			openBrowser(authURL)
-			token, err = session.Wait(ctx, clock)
+			fmt.Fprintf(out, "If this machine has no browser, open the URL on another machine, then paste the full redirect URL back here.\n")
+			token, err = session.Wait(ctx, clock, in)
 		}
 	case "copilot":
 		flow := DeviceFlow{ClientID: spec.ClientID, Scope: spec.Scope, DeviceURL: spec.DeviceURL, TokenURL: spec.TokenURL, VerifyHint: spec.VerifyHint}
