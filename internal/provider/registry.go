@@ -110,15 +110,20 @@ var contextWindows = map[string]int{
 
 	// GitHub Copilot models
 	"copilot-gpt-5.4":           1050000,
+	"copilot-gpt-5.4-mini":      400000,
 	"copilot-gpt-5.3-codex":     400000,
-	"copilot-gpt-5.2":           1050000,
-	"copilot-claude-sonnet-4.6": 1000000,
-	"copilot-claude-opus-4.7":   1000000,
-	"copilot-claude-opus-4.6":   1000000,
-	"copilot-claude-haiku-4.5":  200000,
-	"copilot-gemini-3.1-pro":    1048576,
-	"copilot-gemini-2.5-pro":    1048576,
-	"copilot-grok-code-fast-1":  256000,
+	"copilot-gpt-5.6-terra":     1050000,
+	"copilot-gpt-5.6-luna":      1050000,
+	"copilot-gpt-6-luna":        1050000,
+	"copilot-claude-sonnet-5-5": 1000000,
+	"copilot-claude-sonnet-5":   1000000,
+	"copilot-claude-haiku-4-5":  200000,
+	"copilot-gemini-3.8-flash":  1048576,
+	"copilot-gemini-3.6-flash":  1048576,
+	"copilot-gemini-3.5-flash":  1048576,
+	"copilot-grok-4.7":          256000,
+	"copilot-kimi-k3":           256000,
+	"copilot-mai-code-1-flash":  128000,
 	"codex-gpt-5.1-codex-max":   400000,
 	"codex-gpt-5.1-codex":       400000,
 	"codex-gpt-5-codex":         400000,
@@ -418,16 +423,25 @@ func Models() []Model {
 		{ID: "claude-oauth-haiku-4-5", Provider: "claude-oauth", Label: "Claude 4.5 Haiku (OAuth)", APIID: "claude-haiku-4-5-20251001", Description: "Fast Claude through a Claude login.", Tags: []string{"fast", "tools"}},
 
 		// GitHub Copilot models served through a GitHub login (OAuth).
-		{ID: "copilot-gpt-5.4", Provider: "github-copilot", Label: "GPT-5.4 (Copilot)", APIID: "gpt-5.4", Description: "Long-context frontier model through GitHub Copilot.", Tags: []string{"tools", "coding"}},
+		// GitHub Copilot models served through a GitHub login. The wire ids are
+		// the account's live catalogue at api.githubcopilot.com/models; a Copilot
+		// account only serves the entries its policy enables, so models that a
+		// given account has disabled are not offered here.
+		{ID: "copilot-gpt-5.4", Provider: "github-copilot", Label: "GPT-5.4 (Copilot)", APIID: "gpt-5.4", Description: "Long-context frontier model through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-gpt-5.4-mini", Provider: "github-copilot", Label: "GPT-5.4 Mini (Copilot)", APIID: "gpt-5.4-mini", Description: "Faster GPT-5.4 through GitHub Copilot.", Tags: []string{"fast", "tools"}},
 		{ID: "copilot-gpt-5.3-codex", Provider: "github-copilot", Label: "GPT-5.3 Codex (Copilot)", APIID: "gpt-5.3-codex", Description: "Agentic coding model through GitHub Copilot.", Tags: []string{"coding", "tools"}},
-		{ID: "copilot-gpt-5.2", Provider: "github-copilot", Label: "GPT-5.2 (Copilot)", APIID: "gpt-5.2", Description: "Balanced model through GitHub Copilot.", Tags: []string{"reasoning", "tools"}},
-		{ID: "copilot-claude-sonnet-4.6", Provider: "github-copilot", Label: "Claude Sonnet 4.6 (Copilot)", APIID: "claude-sonnet-4.6", Description: "Claude Sonnet through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
-		{ID: "copilot-claude-opus-4.7", Provider: "github-copilot", Label: "Claude Opus 4.7 (Copilot)", APIID: "claude-opus-4.7", Description: "Flagship Claude Opus through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
-		{ID: "copilot-claude-opus-4.6", Provider: "github-copilot", Label: "Claude Opus 4.6 (Copilot)", APIID: "claude-opus-4.6", Description: "Claude Opus through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
-		{ID: "copilot-claude-haiku-4.5", Provider: "github-copilot", Label: "Claude Haiku 4.5 (Copilot)", APIID: "claude-haiku-4.5", Description: "Fast Claude through GitHub Copilot.", Tags: []string{"fast", "tools"}},
-		{ID: "copilot-gemini-3.1-pro", Provider: "github-copilot", Label: "Gemini 3.1 Pro (Copilot)", APIID: "gemini-3.1-pro-preview", Description: "Frontier Gemini through GitHub Copilot.", Tags: []string{"reasoning", "tools"}},
-		{ID: "copilot-gemini-2.5-pro", Provider: "github-copilot", Label: "Gemini 2.5 Pro (Copilot)", APIID: "gemini-2.5-pro", Description: "Balanced Gemini through GitHub Copilot.", Tags: []string{"reasoning", "tools"}},
-		{ID: "copilot-grok-code-fast-1", Provider: "github-copilot", Label: "Grok Code Fast 1 (Copilot)", APIID: "grok-code-fast-1", Description: "Fast coding model through GitHub Copilot.", Tags: []string{"coding", "fast"}},
+		{ID: "copilot-gpt-5.6-terra", Provider: "github-copilot", Label: "GPT-5.6 Terra (Copilot)", APIID: "gpt-5.6-terra", Description: "Balanced GPT-5.6 through GitHub Copilot.", Tags: []string{"reasoning", "tools"}},
+		{ID: "copilot-gpt-5.6-luna", Provider: "github-copilot", Label: "GPT-5.6 Luna (Copilot)", APIID: "gpt-5.6-luna", Description: "Efficient GPT-5.6 through GitHub Copilot.", Tags: []string{"fast", "tools"}},
+		{ID: "copilot-gpt-6-luna", Provider: "github-copilot", Label: "GPT-6 Luna (Copilot)", APIID: "gpt-6-luna", Description: "Newest efficient GPT through GitHub Copilot.", Tags: []string{"fast", "tools"}},
+		{ID: "copilot-claude-sonnet-5-5", Provider: "github-copilot", Label: "Claude Sonnet 5.5 (Copilot)", APIID: "claude-sonnet-5.5", Description: "Frontier Claude through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-claude-sonnet-5", Provider: "github-copilot", Label: "Claude Sonnet 5 (Copilot)", APIID: "claude-sonnet-5", Description: "Balanced Claude through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-claude-haiku-4-5", Provider: "github-copilot", Label: "Claude Haiku 4.5 (Copilot)", APIID: "claude-haiku-4.5", Description: "Fast Claude through GitHub Copilot.", Tags: []string{"fast", "tools"}},
+		{ID: "copilot-gemini-3.8-flash", Provider: "github-copilot", Label: "Gemini 3.8 Flash (Copilot)", APIID: "gemini-3.8-flash", Description: "Fast Gemini through GitHub Copilot.", Tags: []string{"fast", "tools"}},
+		{ID: "copilot-gemini-3.6-flash", Provider: "github-copilot", Label: "Gemini 3.6 Flash (Copilot)", APIID: "gemini-3.6-flash", Description: "Balanced Gemini through GitHub Copilot.", Tags: []string{"fast", "tools"}},
+		{ID: "copilot-gemini-3.5-flash", Provider: "github-copilot", Label: "Gemini 3.5 Flash (Copilot)", APIID: "gemini-3.5-flash", Description: "Efficient Gemini through GitHub Copilot.", Tags: []string{"fast", "tools"}},
+		{ID: "copilot-grok-4.7", Provider: "github-copilot", Label: "Grok 4.7 (Copilot)", APIID: "grok-4.7", Description: "xAI Grok through GitHub Copilot.", Tags: []string{"reasoning", "tools"}},
+		{ID: "copilot-kimi-k3", Provider: "github-copilot", Label: "Kimi K3 (Copilot)", APIID: "kimi-k3", Description: "Moonshot Kimi through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-mai-code-1-flash", Provider: "github-copilot", Label: "MAI-Code-1.1-Flash (Copilot)", APIID: "mai-code-1.1-flash", Description: "Fast coding model through GitHub Copilot.", Tags: []string{"coding", "fast"}},
 		// Google Antigravity serves Gemini and Claude models through its Cloud
 		// Code backend under an Antigravity login.
 		// The Cloud Code backend keys models by an upstream id that differs
@@ -641,7 +655,10 @@ func ProvidersRequiringKey() []Provider {
 }
 
 // FindModel resolves free text the operator typed to a model: exact id,
-// exact wire id, case-insensitive label, then a unique id/label substring.
+// exact wire id, case-insensitive label, then a substring. When several ids
+// share a substring (gpt-5.4-mini and copilot-gpt-5.4-mini), the shortest id
+// wins, so the bare catalogue id stays the default shorthand and a
+// provider-scoped duplicate does not make the shorthand ambiguous.
 func FindModel(query string) (Model, bool) {
 	needle := strings.ToLower(strings.TrimSpace(query))
 	if needle == "" {
@@ -666,6 +683,23 @@ func FindModel(query string) (Model, bool) {
 	}
 	if len(matches) == 1 {
 		return matches[0], true
+	}
+	// A provider-scoped duplicate such as copilot-gpt-5.4-mini ends with the
+	// bare id gpt-5.4-mini. Prefer that bare id so a shared shorthand still
+	// resolves; a genuine collision (deepseek, many distinct ids) stays
+	// ambiguous.
+	base, bases := Model{}, 0
+	for _, candidate := range matches {
+		for _, other := range matches {
+			if other.ID != candidate.ID && strings.HasSuffix(other.ID, "-"+candidate.ID) {
+				base = candidate
+				bases++
+				break
+			}
+		}
+	}
+	if bases == 1 {
+		return base, true
 	}
 	return Model{}, false
 }

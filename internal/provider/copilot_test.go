@@ -71,7 +71,7 @@ func TestCopilotStreamChatCompletionsAndMessages(t *testing.T) {
 	// 2. Test Claude model routes to /v1/messages
 	text.Reset()
 	err = client.Stream(context.Background(), ChatRequest{
-		Model:    "claude-sonnet-4.6",
+		Model:    "claude-sonnet-5.5",
 		Messages: []Message{{Role: RoleUser, Content: "hi"}},
 	}, func(event StreamEvent) error {
 		if event.Type == EventTextDelta {

@@ -95,7 +95,10 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 			body["requestId"] = agRequestID(newSession, req.Model, len(req.Messages))
 			response, err = c.post(ctx, endpoint, headers, body)
 		}
-		if err != nil && isEndpointError(err) && !strings.Contains(c.baseURL, "cloudcode-pa.googleapis.com") {
+		// The daily host is the chat host; when it fails at the endpoint level,
+		// retry once on the prod host. The check must name the daily host,
+		// because "cloudcode-pa.googleapis.com" is a substring of it too.
+		if err != nil && isEndpointError(err) && strings.Contains(c.baseURL, "daily-cloudcode-pa") {
 			fallbackURL := "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
 			response, err = c.post(ctx, fallbackURL, headers, body)
 		}
@@ -239,7 +242,7 @@ func (c *antigravityClient) ensureProject(ctx context.Context) (string, error) {
 		}
 	}
 	if project == "" {
-		return "termixgo-" + randomHex(8), nil
+		project = "termixgo-" + randomHex(8)
 	}
 	c.project = project
 	return project, nil

@@ -259,6 +259,39 @@ func TestCatalogueDropsDeadCodexModelsAndFixesHaiku(t *testing.T) {
 	}
 }
 
+// TestCatalogueCopilotUsesLiveModelIDs pins the Copilot catalogue to the ids
+// its live endpoint serves. The removed entries were absent from, or disabled
+// in, the live catalogue, so selecting them failed at request time.
+func TestCatalogueCopilotUsesLiveModelIDs(t *testing.T) {
+	for _, id := range []string{
+		"copilot-gpt-5.2", "copilot-claude-sonnet-4.6", "copilot-claude-opus-4.7",
+		"copilot-claude-opus-4.6", "copilot-gemini-3.1-pro", "copilot-gemini-2.5-pro",
+		"copilot-grok-code-fast-1",
+	} {
+		if _, ok := ModelByID(id); ok {
+			t.Errorf("%s is not in the live Copilot catalogue and must not be offered", id)
+		}
+	}
+	cases := map[string]string{
+		"copilot-gpt-5.4":           "gpt-5.4",
+		"copilot-gpt-5.4-mini":      "gpt-5.4-mini",
+		"copilot-claude-sonnet-5-5": "claude-sonnet-5.5",
+		"copilot-claude-haiku-4-5":  "claude-haiku-4.5",
+		"copilot-gemini-3.8-flash":  "gemini-3.8-flash",
+		"copilot-grok-4.7":          "grok-4.7",
+	}
+	for id, want := range cases {
+		model, ok := ModelByID(id)
+		if !ok {
+			t.Errorf("%s is missing", id)
+			continue
+		}
+		if got := model.WireID(); got != want {
+			t.Errorf("%s wire id = %q, want %q", id, got, want)
+		}
+	}
+}
+
 func TestEncodeOpenAIToolsShape(t *testing.T) {
 	tools := []ToolDef{{Name: "read_file", Description: "Read a file.", Schema: map[string]any{"type": "object"}}}
 	encoded := encodeOpenAITools(tools)

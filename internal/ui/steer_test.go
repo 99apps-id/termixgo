@@ -87,6 +87,11 @@ func TestQueuedInputSteersALiveTurn(t *testing.T) {
 
 	// The turn ended before it could take the steer, so the UI has to run it
 	// rather than let it disappear.
+	steer := model.app.TakeSteer()
+	if len(steer) != 1 || steer[0] != "also check the tests" {
+		t.Fatalf("late steer = %q, want the queued follow-up", steer)
+	}
+	model.app.Steer(steer[0])
 	next, _ := send(t, queued, runDoneMsg{})
 	if len(next.queue) != 0 {
 		t.Errorf("the late steer should have started, got %d held", len(next.queue))
