@@ -46,24 +46,62 @@ func checkWorkspacePath(env *Env, path string) error {
 	if strings.TrimSpace(env.Workspace) == "" {
 		return nil
 	}
-	resolved := path
-	// A symlink inside the workspace can point outside it. filepath.Rel on the
-	// symlink path returns a relative path that looks safe, but the resolved
-	// path escapes the workspace. Resolve symlinks on the existing components
-	// so the check reflects where the path actually lands.
-	if abs, err := filepath.EvalSymlinks(path); err == nil {
-		resolved = abs
-	} else if abs, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
-		resolved = filepath.Join(abs, filepath.Base(path))
+	workspace, err := filepath.Abs(env.Workspace)
+	if err != nil {
+		return fmt.Errorf("cannot resolve workspace: %w", err)
 	}
-	rel, err := filepath.Rel(env.Workspace, resolved)
+	workspace, err = filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return fmt.Errorf("cannot resolve workspace: %w", err)
+	}
+	resolved, err := resolveExistingPath(path)
+	if err != nil {
+		return fmt.Errorf("cannot safely resolve path: %w", err)
+	}
+	rel, err := filepath.Rel(workspace, resolved)
 	if err != nil {
 		return fmt.Errorf("cannot resolve path against workspace: %v", err)
 	}
-	if strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return fmt.Errorf("path escapes the workspace: %s", displayPath(env, path))
 	}
 	return nil
+}
+
+// resolveExistingPath resolves the nearest existing ancestor before appending
+// missing components. This catches symlinks even when a later component does
+// not exist yet, as in write_file's create-parent path.
+func resolveExistingPath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	candidate := filepath.Clean(absolute)
+	var missing []string
+	for {
+		if _, statErr := os.Lstat(candidate); statErr == nil {
+			resolved, resolveErr := filepath.EvalSymlinks(candidate)
+			if resolveErr != nil {
+				return "", fmt.Errorf("unresolvable symlink at %s", candidate)
+			}
+			resolved, err = filepath.Abs(resolved)
+			if err != nil {
+				return "", err
+			}
+			for index := len(missing) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, missing[index])
+			}
+			return filepath.Clean(resolved), nil
+		} else if !os.IsNotExist(statErr) {
+			return "", statErr
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			return "", fmt.Errorf("no existing ancestor for %s", path)
+		}
+		missing = append(missing, filepath.Base(candidate))
+		candidate = parent
+	}
 }
 
 // openError explains a filesystem failure in terms the model can act on.

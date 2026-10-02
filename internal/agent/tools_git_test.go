@@ -191,6 +191,26 @@ func TestGitShowDefaultsToHead(t *testing.T) {
 	}
 }
 
+// TestGitShowTreatsAnOptionLikeRefAsARevision keeps a read-only tool from
+// writing outside the workspace. A ref that starts with a dash used to reach
+// git as an option, and `--output=` wrote the patch to an arbitrary file.
+func TestGitShowTreatsAnOptionLikeRefAsARevision(t *testing.T) {
+	env := gitEnv(t)
+	git(t, env, "commit", "--allow-empty", "-m", "base")
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+
+	result, err := (&gitShowTool{}).Run(context.Background(), env, map[string]any{"ref": "--output=" + outside})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("an option-like ref should be refused as an unknown revision, got %q", result.Output)
+	}
+	if _, err := os.Stat(outside); err == nil {
+		t.Fatalf("git_show wrote outside the workspace: %s was created", outside)
+	}
+}
+
 func TestGitAddStagesEverything(t *testing.T) {
 	env := gitEnv(t)
 	git(t, env, "commit", "--allow-empty", "-m", "init")

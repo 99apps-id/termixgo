@@ -25,9 +25,12 @@ func TestHarnessBudgetNeverCollapsesToZero(t *testing.T) {
 	if got := ApplyHarnessToBudget(0, profile); got < 1 {
 		t.Errorf("budget = %d, want at least 1", got)
 	}
+	// A profile must not silently raise the operator's configured ceiling.
+	// The operator's maxSteps is the whole per-turn cap; only a cap profile
+	// (a negative delta) may lower it.
 	autonomous := GetHarnessProfile("autonomous")
-	if got := ApplyHarnessToBudget(25, autonomous); got <= 25 {
-		t.Errorf("autonomous budget = %d, want above the base", got)
+	if got := ApplyHarnessToBudget(25, autonomous); got != 25 {
+		t.Errorf("autonomous budget = %d, want the operator's 25 unchanged", got)
 	}
 }
 

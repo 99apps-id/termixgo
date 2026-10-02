@@ -777,6 +777,19 @@ func (a *App) env() *agent.Env {
 	}
 }
 
+// isolatedEnv returns a per-run environment for a scheduled job. It shares the
+// model, tools, secrets and search, but keeps a throwaway todo store and an
+// emitter that does not fold usage into the operator's live session, so a
+// background turn cannot rewrite the operator's plan or its spend.
+func (a *App) isolatedEnv() *agent.Env {
+	base := a.env()
+	base.Todos = agent.NewTodoStore()
+	base.Emit = func(event agent.Event) {
+		a.emitInto(event, false)
+	}
+	return base
+}
+
 // Processes exposes the background process manager.
 func (a *App) Processes() *agent.ProcessManager { return a.processes }
 
@@ -803,6 +816,13 @@ func (a *App) Shutdown() {
 }
 
 func (a *App) emit(event agent.Event) {
+	a.emitInto(event, true)
+}
+
+// emitInto is the shared emit path. A scheduled run calls it with foldUsage
+// false so its usage and spend never land on the operator's live session or
+// app total; the throwaway session still accounts for itself.
+func (a *App) emitInto(event agent.Event, foldUsage bool) {
 	a.recordAudit(event)
 	if event.Kind == agent.EventProcessEnd {
 		// A worker announced completion; forward it to chat so a 24/7
@@ -812,20 +832,22 @@ func (a *App) emit(event agent.Event) {
 			_ = a.Notify(context.Background(), text)
 		}(event.Text)
 	}
-	if event.Kind == agent.EventUsage {
+	if foldUsage && event.Kind == agent.EventUsage {
 		a.AddUsage(event.Usage)
 	}
 	if event.Kind == agent.EventToolEnd {
 		a.recordToolResult(event.ToolName, event.ToolOK)
 	}
-	switch event.Kind {
-	case agent.EventUsage, agent.EventTurnEnd:
-		// Every usage event carries the run's running total, so assigning is
-		// correct and also repairs the value after a resumed session.
-		a.mu.Lock()
-		a.costUSD = event.CostUSD
-		a.costKnown = event.CostKnown
-		a.mu.Unlock()
+	if foldUsage {
+		switch event.Kind {
+		case agent.EventUsage, agent.EventTurnEnd:
+			// Every usage event carries the run's running total, so assigning is
+			// correct and also repairs the value after a resumed session.
+			a.mu.Lock()
+			a.costUSD = event.CostUSD
+			a.costKnown = event.CostKnown
+			a.mu.Unlock()
+		}
 	}
 	a.mu.Lock()
 	observer := a.observer
@@ -1121,11 +1143,15 @@ func (a *App) runOn(ctx context.Context, input string, images []provider.Image, 
 	agent.AutoCheckpoint(runCtx, a.workspace)
 
 	cfg := a.Config()
+	runEnv := a.env()
+	if isolated != nil {
+		runEnv = a.isolatedEnv()
+	}
 	runner := &agent.Runner{
 		Client: client,
 		Model:  model,
 		Config: cfg,
-		Env:    a.env(),
+		Env:    runEnv,
 		Tools:  a.tools,
 		Policy: a.Policy(),
 		// cfg.MaxSteps is the whole per-turn ceiling, so an interactive turn

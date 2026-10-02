@@ -88,6 +88,31 @@ func TestMoveFileRefusesTheWorkspaceRoot(t *testing.T) {
 	}
 }
 
+// TestWriteFileRefusesABrokenSymlinkEscape closes the write path that let a
+// symlink whose target did not exist yet pass the workspace check: the check
+// fell back to resolving only the parent directory, so the write then followed
+// the symlink and created a file outside the workspace.
+func TestWriteFileRefusesABrokenSymlinkEscape(t *testing.T) {
+	env := testEnv(t)
+	outside := t.TempDir()
+	target := filepath.Join(outside, "newfile")
+	link := filepath.Join(env.Workspace, "escape")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+
+	result, err := (&writeFileTool{}).Run(context.Background(), env, map[string]any{"path": "escape", "content": "pwned"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("writing through a broken symlink that escapes the workspace should be refused, got %q", result.Output)
+	}
+	if _, err := os.Stat(target); err == nil {
+		t.Fatalf("the write escaped the workspace and created %s", target)
+	}
+}
+
 // TestMemoryCapKeepsValidUTF8 covers the trim branch of the learned-memory file.
 // The cap was applied with a byte slice, so a multi-byte fact could be cut in
 // half and the file written with invalid UTF-8 that the prompt then carries.

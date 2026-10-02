@@ -70,14 +70,12 @@ var BuiltinHarnessProfiles = map[string]HarnessProfile{
 	"autonomous": {
 		ID:          "autonomous",
 		Label:       "Fully autonomous",
-		Description: "Self-directed execution with a higher step budget and proactive failure pivoting.",
+		Description: "Self-directed execution with proactive failure pivoting; the configured step limit still applies.",
 		PromptPrelude: "You are operating in FULLY AUTONOMOUS mode. Complete the request end to end and verify your work.\n" +
 			"- Break an ambiguous goal into concrete milestones.\n" +
 			"- Never assume a path, symbol or dependency exists without reading it first.\n" +
 			"- On error or timeout, diagnose, pivot to an alternative, and continue. Do not stop early.\n" +
 			"- Verify with inspection, test or lint before concluding.",
-		StepBudgetDelta: 200,
-		StepBudgetCap:   1000,
 	},
 	"critical": {
 		ID:          "critical",
@@ -220,7 +218,9 @@ func ApplyHarnessToBudget(base int, profile HarnessProfile) int {
 	if budget <= 0 {
 		budget = DefaultStepBudget
 	}
-	budget += profile.StepBudgetDelta
+	if profile.StepBudgetDelta < 0 {
+		budget += profile.StepBudgetDelta
+	}
 	if budget < 1 {
 		budget = 1
 	}

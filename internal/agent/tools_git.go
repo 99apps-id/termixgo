@@ -229,10 +229,11 @@ func (t *gitShowTool) Run(ctx context.Context, env *Env, args map[string]any) (R
 	if ref == "" {
 		ref = "HEAD"
 	}
-	argv := []string{"show", ref}
+	argv := []string{"show"}
 	if argBool(args, "stat", false) {
 		argv = append(argv, "--stat")
 	}
+	argv = append(argv, "--end-of-options", ref)
 	output, err := runGit(ctx, env, argv...)
 	if err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
