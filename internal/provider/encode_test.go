@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -564,5 +565,63 @@ func TestRetryableTransportSeparatesTransientFromPermanent(t *testing.T) {
 	}
 	if retryableTransport(errors.New("tls: failed to verify certificate: x509: certificate signed by unknown authority")) {
 		t.Errorf("a certificate error will not fix itself; do not retry it")
+	}
+}
+
+// TestClaudeOAuthCloaksToolsAndDecloaksTheStream covers the OAuth tool
+// cloaking: client tools are suffixed and decoy CLI tools added on the way out,
+// and the suffixed name is restored when the tool call streams back.
+func TestClaudeOAuthCloaksToolsAndDecloaksTheStream(t *testing.T) {
+	var gotTools []any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		raw, _ := io.ReadAll(request.Body)
+		var body map[string]any
+		_ = json.Unmarshal(raw, &body)
+		gotTools, _ = body["tools"].([]any)
+		writer.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(writer, "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"read_file_ide\"}}\n\n")
+		fmt.Fprint(writer, "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\n")
+		fmt.Fprint(writer, "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "claude-oauth", Label: "Claude (OAuth)", Kind: KindAnthropic, OAuth: true}, server.URL, "sk-ant-oat-token")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+
+	var name string
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "claude-sonnet-5",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		Tools:    []ToolDef{{Name: "read_file", Schema: map[string]any{"type": "object", "properties": map[string]any{}}}},
+	}, func(event StreamEvent) error {
+		if event.Type == EventToolCall && event.ToolCall != nil {
+			name = event.ToolCall.Name
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if name != "read_file" {
+		t.Errorf("decloaked tool name = %q, want read_file", name)
+	}
+
+	foundClient, foundDecoy := false, false
+	for _, entry := range gotTools {
+		object, _ := entry.(map[string]any)
+		switch object["name"] {
+		case "read_file_ide":
+			foundClient = true
+		case "Bash":
+			foundDecoy = true
+		}
+	}
+	if !foundClient {
+		t.Errorf("the client tool should be sent suffixed: %#v", gotTools)
+	}
+	if !foundDecoy {
+		t.Errorf("the decoy tools should be present: %#v", gotTools)
 	}
 }

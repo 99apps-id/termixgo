@@ -19,18 +19,27 @@ const codexCLIVersion = "0.159.0"
 type codexClient struct{ *httpClient }
 
 func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(StreamEvent) error) error {
+	input := encodeResponsesInput(req)
+	instructions := strings.TrimSpace(req.System)
+	var tools []map[string]any
+	if len(req.Tools) > 0 {
+		tools = encodeResponsesTools(req.Tools)
+	}
 	payload := map[string]any{
 		"model":  req.Model,
 		"stream": true,
 		"store":  false,
-		"input":  encodeResponsesInput(req),
+		"input":  input,
 	}
-	if strings.TrimSpace(req.System) != "" {
-		payload["instructions"] = req.System
+	if instructions != "" {
+		payload["instructions"] = instructions
 	}
-	if len(req.Tools) > 0 {
-		payload["tools"] = encodeResponsesTools(req.Tools)
+	if len(tools) > 0 {
+		payload["tools"] = tools
 		payload["tool_choice"] = "auto"
+	}
+	if isCodexResponsesLiteModel(req.Model) {
+		applyResponsesLite(payload, input, tools, instructions)
 	}
 
 	key := c.currentKey()
@@ -40,9 +49,6 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 		"User-Agent":    "codex_cli_rs/" + codexCLIVersion,
 		"version":       codexCLIVersion,
 		"session_id":    c.SessionID(),
-	}
-	if isCodexResponsesLiteModel(req.Model) {
-		headers["x-openai-internal-codex-responses-lite"] = "true"
 	}
 	if strings.TrimSpace(c.accountID) != "" {
 		headers["ChatGPT-Account-ID"] = c.accountID
@@ -184,6 +190,30 @@ func encodeResponsesTools(tools []ToolDef) []map[string]any {
 		})
 	}
 	return out
+}
+
+// applyResponsesLite rewrites a request for the responses-lite models. They
+// carry tools and instructions as input prefix items and reject the top-level
+// tools and instructions fields; the reference executor does the same.
+func applyResponsesLite(payload map[string]any, input []map[string]any, tools []map[string]any, instructions string) {
+	if tools == nil {
+		tools = []map[string]any{}
+	}
+	prefix := []map[string]any{{"type": "additional_tools", "role": "developer", "tools": tools}}
+	if instructions != "" {
+		prefix = append(prefix, map[string]any{
+			"type":    "message",
+			"role":    "developer",
+			"content": []map[string]any{{"type": "input_text", "text": instructions}},
+		})
+	}
+	payload["input"] = append(prefix, input...)
+	delete(payload, "instructions")
+	delete(payload, "tools")
+	payload["tool_choice"] = "auto"
+	payload["parallel_tool_calls"] = false
+	payload["reasoning"] = map[string]any{"effort": "medium", "context": "all_turns"}
+	payload["include"] = []string{"reasoning.encrypted_content"}
 }
 
 // responsesEvent is the subset of the event feed the client needs.

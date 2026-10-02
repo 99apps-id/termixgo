@@ -27,11 +27,12 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 	if maxTokens <= 0 {
 		maxTokens = 8192
 	}
+	messages := encodeAnthropicMessages(req.Messages)
 	payload := map[string]any{
 		"model":      req.Model,
 		"max_tokens": maxTokens,
 		"stream":     true,
-		"messages":   encodeAnthropicMessages(req.Messages),
+		"messages":   messages,
 	}
 	if strings.TrimSpace(req.System) != "" {
 		payload["system"] = req.System
@@ -39,13 +40,11 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 	if req.Temperature != nil {
 		payload["temperature"] = *req.Temperature
 	}
-	if len(req.Tools) > 0 {
-		payload["tools"] = encodeAnthropicTools(req.Tools)
-	}
 
 	headers := map[string]string{"anthropic-version": "2023-06-01"}
 	url := c.baseURL + "/v1/messages"
 	key := c.currentKey()
+	var aliases map[string]string
 	if c.info.OAuth {
 		// A Claude Code OAuth login sends a bearer token under the claude-cli
 		// identity and needs the beta query plus the claude-code beta header;
@@ -64,17 +63,29 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 		headers["X-Stainless-Arch"] = "arm64"
 		headers["X-Stainless-Os"] = "MacOS"
 		headers["X-Stainless-Timeout"] = "600"
+		// The endpoint expects the Claude Code tool names, so client tools are
+		// suffixed and the CLI's own tools are offered as unavailable decoys.
+		if len(req.Tools) > 0 {
+			cloaked, names := cloakClaudeTools(encodeAnthropicTools(req.Tools))
+			payload["tools"] = cloaked
+			aliases = names
+			cloakClaudeMessages(messages)
+		}
+		payload["system"] = withClaudeBillingHeader(payload["system"], payload)
 		payload["metadata"] = map[string]any{
 			"user_id": claudeUserID(key, c.SessionID()),
 		}
 		url += "?beta=true"
 	} else {
 		headers["x-api-key"] = key
+		if len(req.Tools) > 0 {
+			payload["tools"] = encodeAnthropicTools(req.Tools)
+		}
 	}
-	return c.streamWithURL(ctx, url, headers, payload, emit)
+	return c.streamWithURL(ctx, url, headers, payload, emit, aliases)
 }
 
-func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers map[string]string, payload map[string]any, emit func(StreamEvent) error) error {
+func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers map[string]string, payload map[string]any, emit func(StreamEvent) error, aliases map[string]string) error {
 	response, err := c.post(ctx, url, headers, payload)
 	if err != nil {
 		return err
@@ -108,7 +119,13 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 			}
 		case "content_block_start":
 			if event.ContentBlock != nil && event.ContentBlock.Type == "tool_use" {
-				blocks[event.Index] = &anthropicBlock{id: event.ContentBlock.ID, name: event.ContentBlock.Name}
+				name := event.ContentBlock.Name
+				if aliases != nil {
+					if original, ok := aliases[name]; ok {
+						name = original
+					}
+				}
+				blocks[event.Index] = &anthropicBlock{id: event.ContentBlock.ID, name: name}
 			}
 		case "content_block_delta":
 			delta := event.Delta
@@ -313,4 +330,101 @@ func deriveUUIDFromSeed(seed string) string {
 	hexStr := hex.EncodeToString(h[:])
 	b16 := (h[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%s-%s-4%s-%02x%s-%s", hexStr[0:8], hexStr[8:12], hexStr[13:16], b16, hexStr[17:20], hexStr[20:32])
+}
+
+// claudeToolSuffix is the suffix every client tool gets before an OAuth
+// request. The endpoint expects the Claude Code tool names, so a client tool
+// named read_file is sent as read_file_ide and renamed back on the stream.
+const claudeToolSuffix = "_ide"
+
+// cloakClaudeTools suffixes the client tools and appends the Claude Code decoy
+// tools, which are advertised as unavailable. It returns the aliases mapping a
+// suffixed name back to the original.
+func cloakClaudeTools(tools []map[string]any) ([]map[string]any, map[string]string) {
+	aliases := make(map[string]string, len(tools))
+	cloaked := make([]map[string]any, 0, len(tools)+len(claudeDecoyTools))
+	for _, tool := range tools {
+		name, _ := tool["name"].(string)
+		suffixed := name + claudeToolSuffix
+		aliases[suffixed] = name
+		copied := make(map[string]any, len(tool))
+		for key, value := range tool {
+			copied[key] = value
+		}
+		copied["name"] = suffixed
+		cloaked = append(cloaked, copied)
+	}
+	return append(cloaked, claudeDecoyTools...), aliases
+}
+
+// cloakClaudeMessages renames the tool_use blocks in the history to the
+// suffixed names the tools list now carries.
+func cloakClaudeMessages(messages []map[string]any) {
+	for _, message := range messages {
+		blocks, ok := message["content"].([]map[string]any)
+		if !ok {
+			continue
+		}
+		for _, block := range blocks {
+			if block["type"] != "tool_use" {
+				continue
+			}
+			name, _ := block["name"].(string)
+			if name != "" && !strings.HasSuffix(name, claudeToolSuffix) {
+				block["name"] = name + claudeToolSuffix
+			}
+		}
+	}
+}
+
+// withClaudeBillingHeader prepends the billing line the current Claude Code
+// client sends. The hash is taken over the body before the header is added.
+func withClaudeBillingHeader(system any, payload map[string]any) any {
+	encoded, _ := json.Marshal(payload)
+	sum := sha256.Sum256(encoded)
+	text := fmt.Sprintf("x-anthropic-billing-header: cc_version=%s.%s; cc_entrypoint=sdk-cli; cch=%s;",
+		claudeCLIVersion, randomHex(2)[:3], hex.EncodeToString(sum[:])[:5])
+	billing := map[string]any{"type": "text", "text": text}
+	switch value := system.(type) {
+	case []map[string]any:
+		if len(value) > 0 {
+			if existing, ok := value[0]["text"].(string); ok && strings.HasPrefix(existing, "x-anthropic-billing-header:") {
+				return value
+			}
+		}
+		return append([]map[string]any{billing}, value...)
+	case string:
+		if strings.TrimSpace(value) == "" {
+			return []map[string]any{billing}
+		}
+		return []map[string]any{billing, {"type": "text", "text": value}}
+	default:
+		return []map[string]any{billing}
+	}
+}
+
+// claudeDecoyTools are the Claude Code native tools, offered so the request
+// looks like the CLI. A decoy that gets called resolves to no client tool and
+// surfaces as unavailable, which is the intent.
+var claudeDecoyTools = []map[string]any{
+	{"name": "Task", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "TaskOutput", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "TaskStop", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "TaskCreate", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "TaskGet", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "TaskUpdate", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "TaskList", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "Bash", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "Glob", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "Grep", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "Read", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "Edit", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "Write", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "NotebookEdit", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "WebFetch", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "WebSearch", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "AskUserQuestion", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "Skill", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "EnterPlanMode", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+	{"name": "ExitPlanMode", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
 }

@@ -54,7 +54,7 @@ func (c *copilotClient) Stream(ctx context.Context, req ChatRequest, emit func(S
 		if len(req.Tools) > 0 {
 			payload["tools"] = encodeAnthropicTools(req.Tools)
 		}
-		return anthropicCli.streamWithURL(ctx, url, headers, payload, emit)
+		return anthropicCli.streamWithURL(ctx, url, headers, payload, emit, nil)
 	}
 
 	openAICli := &openAIClient{httpClient: c.httpClient}

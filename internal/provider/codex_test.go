@@ -14,7 +14,7 @@ import (
 // TestCodexStreamUsesTheResponsesAPI proves the Codex client posts to
 // /responses with the account header and decodes the typed event feed.
 func TestCodexStreamUsesTheResponsesAPI(t *testing.T) {
-	var gotPath, gotAuth, gotAccount, gotOriginator, gotVersion, gotAgent, gotSessionID, gotLite string
+	var gotPath, gotAuth, gotAccount, gotOriginator, gotVersion, gotAgent, gotSessionID string
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		gotPath = request.URL.Path
@@ -24,7 +24,6 @@ func TestCodexStreamUsesTheResponsesAPI(t *testing.T) {
 		gotVersion = request.Header.Get("version")
 		gotAgent = request.Header.Get("User-Agent")
 		gotSessionID = request.Header.Get("session_id")
-		gotLite = request.Header.Get("x-openai-internal-codex-responses-lite")
 		raw, _ := io.ReadAll(request.Body)
 		_ = json.Unmarshal(raw, &gotBody)
 
@@ -50,7 +49,7 @@ func TestCodexStreamUsesTheResponsesAPI(t *testing.T) {
 	var calls []ToolCall
 	var usage Usage
 	err = codex.Stream(context.Background(), ChatRequest{
-		Model:  "gpt-6.1-sol",
+		Model:  "gpt-5.3-codex",
 		System: "be brief",
 		Messages: []Message{
 			{Role: RoleUser, Content: "read a"},
@@ -88,9 +87,6 @@ func TestCodexStreamUsesTheResponsesAPI(t *testing.T) {
 	if gotSessionID == "" {
 		t.Errorf("session_id header missing")
 	}
-	if gotLite != "true" {
-		t.Errorf("x-openai-internal-codex-responses-lite = %q, want true", gotLite)
-	}
 	if gotBody["instructions"] != "be brief" || gotBody["store"] != false {
 		t.Errorf("body = %v", gotBody)
 	}
@@ -121,5 +117,59 @@ func TestCodexInputUsesResponseItems(t *testing.T) {
 	}
 	if items[2]["call_id"] != "c1" {
 		t.Errorf("tool result should carry call_id, got %v", items[2])
+	}
+}
+
+// TestCodexResponsesLiteMovesToolsAndInstructions covers the lite models: they
+// take tools and instructions as input prefix items and reject the top-level
+// tools and instructions fields the standard models use.
+func TestCodexResponsesLiteMovesToolsAndInstructions(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		raw, _ := io.ReadAll(request.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		writer.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "openai-codex", Label: "Codex", Kind: KindOpenAI}, server.URL, "token")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "gpt-6-sol",
+		System:   "be brief",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		Tools: []ToolDef{{
+			Name:   "read_file",
+			Schema: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}},
+		}},
+	}, func(StreamEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	if _, present := gotBody["tools"]; present {
+		t.Errorf("a lite request must not carry top-level tools")
+	}
+	if _, present := gotBody["instructions"]; present {
+		t.Errorf("a lite request must not carry top-level instructions")
+	}
+	input, ok := gotBody["input"].([]any)
+	if !ok || len(input) < 2 {
+		t.Fatalf("input = %#v", gotBody["input"])
+	}
+	prefix := input[0].(map[string]any)
+	if prefix["type"] != "additional_tools" || prefix["role"] != "developer" {
+		t.Errorf("input[0] = %#v, want the additional_tools prefix", prefix)
+	}
+	instruction := input[1].(map[string]any)
+	if instruction["type"] != "message" || instruction["role"] != "developer" {
+		t.Errorf("input[1] = %#v, want the developer instructions", instruction)
+	}
+	reasoning, _ := gotBody["reasoning"].(map[string]any)
+	if reasoning["context"] != "all_turns" {
+		t.Errorf("reasoning = %#v, want context all_turns", reasoning)
 	}
 }
