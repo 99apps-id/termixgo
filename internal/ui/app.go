@@ -470,6 +470,8 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key.String() {
+	case "ctrl+y":
+		return m.slashCopy("")
 	case "ctrl+o":
 		m.showDetails = !m.showDetails
 		if m.showDetails {
@@ -1866,7 +1868,7 @@ func (m *Model) viewHelp() string {
 	keys := []string{
 		"", m.styles.BoxTitle.Render("Keys"), "",
 		m.styles.MenuDesc.Render("  Enter send | Ctrl+J newline | Tab complete | PgUp/PgDn scroll"),
-		m.styles.MenuDesc.Render("  Esc stop or clear | Ctrl+O toggle details | Ctrl+C quit"),
+		m.styles.MenuDesc.Render("  Esc stop or clear | Ctrl+O toggle details | Ctrl+Y copy answer | Ctrl+C quit"),
 	}
 	trailer := []string{m.styles.Hint.Render(fmt.Sprintf("Press any key to close. %d commands in total.", len(entries)))}
 

@@ -59,8 +59,13 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 		return err
 	}
 	defer response.Body.Close()
+	return decodeResponsesStream(c.info.Label, response.Body, emit)
+}
 
-	reader := newSSEReader(response.Body)
+// decodeResponsesStream turns the OpenAI Responses event feed into StreamEvents.
+// The Codex client and the Copilot /responses route share it.
+func decodeResponsesStream(label string, body io.Reader, emit func(StreamEvent) error) error {
+	reader := newSSEReader(body)
 	usage := &cumulativeUsage{}
 	for {
 		payload, err := reader.next()
@@ -68,7 +73,7 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 			break
 		}
 		if err != nil {
-			return wrapStreamError(c.info.Label, err)
+			return wrapStreamError(label, err)
 		}
 		if strings.TrimSpace(payload) == "" {
 			continue
@@ -111,7 +116,7 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 				}
 			}
 		case "response.failed", "error":
-			return wrapStreamError(c.info.Label, fmt.Errorf("the Codex backend reported a failure: %s", event.message()))
+			return wrapStreamError(label, fmt.Errorf("the Responses backend reported a failure: %s", event.message()))
 		}
 	}
 	return nil

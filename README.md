@@ -169,6 +169,7 @@ Keys:
 | `Ctrl+J` / `Alt+Enter` | insert a newline |
 | `Tab` | complete a slash command or an `@file` mention |
 | `Ctrl+O` | show or hide tool and reasoning details |
+| `Ctrl+Y` | copy the newest answer to the clipboard |
 | `Esc` | stop the running turn, then clear the input |
 | `PgUp` / `PgDn`, wheel | scroll the transcript |
 | `Ctrl+C` | quit |
@@ -184,6 +185,7 @@ command typed mid-turn is queued and runs when the turn ends.
 | `/model [id]` | show or switch the model (no argument opens a picker) |
 | `/setup` | onboarding: provider key, model, skills, Telegram |
 | `/help` | every command and key binding |
+| `/copy [last\|all]` | copy the newest answer, or the whole transcript, over OSC 52 |
 | `/new` | start a new session |
 | `/sessions [list\|search\|rename\|delete\|export]` | manage saved sessions |
 | `/sessions export <id> [--format markdown|jsonl]` | export a session |

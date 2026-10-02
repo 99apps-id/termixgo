@@ -92,3 +92,63 @@ func TestCopilotStreamChatCompletionsAndMessages(t *testing.T) {
 		t.Errorf("text = %q", text.String())
 	}
 }
+
+// TestCopilotEscalatesToResponsesWhenChatCompletionsRejectsTheModel covers the
+// models Copilot does not serve on /chat/completions: the client retries on
+// /responses, and remembers the model so the next call skips the failed path.
+func TestCopilotEscalatesToResponsesWhenChatCompletionsRejectsTheModel(t *testing.T) {
+	var chatHits, responsesHits int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/chat/completions"):
+			chatHits++
+			writer.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(writer, `{"error":{"message":"The requested model is not accessible via the /chat/completions endpoint.","type":"invalid_request_error"}}`)
+		case strings.HasSuffix(request.URL.Path, "/responses"):
+			responsesHits++
+			writer.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello from responses\"}\n\n")
+			fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "github-copilot", Label: "GitHub Copilot", Kind: KindCopilot, OAuth: true}, server.URL, "copilot-token")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+
+	var text strings.Builder
+	stream := func() error {
+		text.Reset()
+		return client.Stream(context.Background(), ChatRequest{
+			Model:    "mai-code-1.1-flash",
+			Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		}, func(event StreamEvent) error {
+			if event.Type == EventTextDelta {
+				text.WriteString(event.Text)
+			}
+			return nil
+		})
+	}
+
+	if err := stream(); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if text.String() != "hello from responses" {
+		t.Errorf("text = %q, want the responses answer", text.String())
+	}
+	if chatHits != 1 || responsesHits != 1 {
+		t.Errorf("first call: chatHits=%d responsesHits=%d, want 1 and 1", chatHits, responsesHits)
+	}
+
+	// The model is remembered, so the second call skips /chat/completions.
+	if err := stream(); err != nil {
+		t.Fatalf("second Stream: %v", err)
+	}
+	if chatHits != 1 || responsesHits != 2 {
+		t.Errorf("second call: chatHits=%d responsesHits=%d, want 1 and 2", chatHits, responsesHits)
+	}
+}

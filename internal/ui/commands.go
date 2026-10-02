@@ -105,6 +105,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 	switch name {
 	case "model":
 		return m.slashModel(args)
+	case "copy":
+		return m.slashCopy(args)
 	case "setup":
 		m.startSetup()
 		return m, nil
@@ -229,6 +231,78 @@ func (m *Model) runCustom(name, args string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m.startRun(item.Expand(args))
+}
+
+// slashCopy copies conversation text to the terminal clipboard with OSC 52, so
+// it works over SSH and needs no platform clipboard tool. The default scope is
+// the newest answer; "all" copies the whole transcript.
+func (m *Model) slashCopy(args string) (tea.Model, tea.Cmd) {
+	var text string
+	switch strings.ToLower(strings.TrimSpace(args)) {
+	case "all", "transcript":
+		text = m.transcriptText()
+	default:
+		text = m.lastAssistantText()
+	}
+	if strings.TrimSpace(text) == "" {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "There is nothing to copy yet."})
+		m.refresh()
+		return m, nil
+	}
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: "Copied to the clipboard."})
+	m.refresh()
+	return m, writeClipboard(text)
+}
+
+// lastAssistantText returns the newest non-empty assistant answer.
+func (m *Model) lastAssistantText() string {
+	for index := len(m.blocks) - 1; index >= 0; index-- {
+		if m.blocks[index].kind != blockAssistant {
+			continue
+		}
+		if text := strings.TrimSpace(m.blocks[index].text); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+// transcriptText renders the visible conversation as plain text: the operator
+// turns, the answers, and what each tool did.
+func (m *Model) transcriptText() string {
+	var builder strings.Builder
+	write := func(label, text string) {
+		if strings.TrimSpace(text) == "" {
+			return
+		}
+		if builder.Len() > 0 {
+			builder.WriteString("\n\n")
+		}
+		if label != "" {
+			builder.WriteString(label)
+			builder.WriteString("\n")
+		}
+		builder.WriteString(text)
+	}
+	for _, entry := range m.blocks {
+		switch entry.kind {
+		case blockUser:
+			write("You:", entry.text)
+		case blockAssistant:
+			write("Assistant:", entry.text)
+		case blockTool:
+			detail := entry.toolResult
+			if strings.TrimSpace(detail) == "" {
+				detail = entry.toolLabel
+			}
+			write("Tool "+entry.toolName+":", detail)
+		case blockNotice:
+			write("", entry.text)
+		case blockError:
+			write("Error:", entry.text)
+		}
+	}
+	return builder.String()
 }
 
 // activeProviderItems lists the providers the operator can use right now: the

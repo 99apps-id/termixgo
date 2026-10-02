@@ -155,6 +155,12 @@ All notable changes to Termixgo are recorded here. The format follows
 - A browser OAuth login on a headless server: open the printed URL on another
   machine and paste the redirected `127.0.0.1` URL, with its code and state, back
   into the terminal to finish. An SSH tunnel still works where the port is fixed.
+- `Ctrl+Y` and `/copy [last|all]` copy the newest answer or the whole transcript
+  to the terminal clipboard with an OSC 52 escape, which needs no platform tool
+  and works over SSH.
+- Copilot models that answer "not accessible via the /chat/completions endpoint"
+  are retried on the OpenAI Responses endpoint (`/responses`) and remembered, so
+  models such as the MAI, Grok and some GPT entries work.
 
 ### Fixed
 

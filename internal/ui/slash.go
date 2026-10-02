@@ -39,6 +39,10 @@ var slashCommands = []SlashCommand{
 	{Trigger: "/model", Args: "[id]", Summary: "Show or switch the model"},
 	{Trigger: "/setup", Args: "", Summary: "Onboarding: provider key, skills, Telegram"},
 	{Trigger: "/help", Args: "", Summary: "List every command and key binding"},
+	{Trigger: "/copy", Args: "[last|all]", Summary: "Copy the newest answer, or the whole transcript", Options: []SlashOption{
+		{Value: "last", Detail: "copy the newest answer"},
+		{Value: "all", Detail: "copy the whole transcript"},
+	}},
 	{Trigger: "/new", Args: "", Summary: "Start a new session"},
 	{Trigger: "/sessions", Args: "[list|search|rename|delete|export]", Summary: "List, find, rename, delete or export sessions", Options: []SlashOption{
 		{Value: "list", Detail: "print every saved session with its id"},
