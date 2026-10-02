@@ -62,8 +62,21 @@ Copy-Item (Join-Path $root "NOTICE") $stage -Force
 
 $bundle = Join-Path $dist "Termixgo-$Version-windows-amd64-installer.zip"
 if (Test-Path $bundle) { Remove-Item $bundle -Force }
-& 7z a -tzip -bso0 -bsp0 $bundle (Join-Path $stage "*") | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "packing the installer bundle failed" }
+$sevenZip = Get-Command 7z -ErrorAction SilentlyContinue
+if ($sevenZip) {
+    & 7z a -tzip -bso0 -bsp0 $bundle (Join-Path $stage "*") | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "packing the installer bundle failed" }
+} elseif (Get-Command tar -ErrorAction SilentlyContinue) {
+    Push-Location $stage
+    try {
+        & tar -a -cf $bundle *
+        if ($LASTEXITCODE -ne 0) { throw "packing the installer bundle failed" }
+    } finally {
+        Pop-Location
+    }
+} else {
+    Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $bundle -Force
+}
 
 Remove-Item $stage -Recurse -Force
 
