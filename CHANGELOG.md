@@ -144,6 +144,27 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Fixed
 
+- An OAuth login that the vendor has revoked no longer sends a dead bearer on
+  every request. A refresh that answers `invalid_grant`, `refresh_token_reused`,
+  `refresh_token_expired` or `refresh_token_invalidated` is now a `GrantError`,
+  and `AccessToken` drops the stored credential when the access token is spent
+  too, so `HasKey`, `/status` and the setup wizard all agree that a re-login is
+  needed instead of failing the turn with an auth error. A temporary 5xx or a
+  network failure still hands back the stored token.
+- Concurrent refreshes make one token request per provider instead of racing.
+  These vendors rotate the refresh token on use, so a second replay of the old
+  one can invalidate the whole session; OpenAI logs the account out. `RefreshCodex`
+  and its siblings now run behind a per-provider lock and re-check the store
+  first, so a caller that queued behind the lock adopts the token the winner
+  saved. Twelve concurrent callers now produce one refresh, measured in a test.
+- Codex and Claude logins rotate before the vendor ages the grant out, not just
+  when the hour-long access token expires. A spec can set `RefreshLead` (10
+  minutes for Codex, 4 hours for Claude, matching 9router's `refreshLeadMs`) and
+  `MaxRefreshAge` (8 days for Codex, its `maxRefreshAgeMs`), and a token records
+  `LastRefresh` so a credential left unused for too long is renewed early.
+- `/status` reports a provider's credential as an `oauth login` rather than
+  showing "no key" for a provider that is logged in, and an API key stored under
+  a login provider's id no longer impersonates a login there.
 - `/cron run` no longer starts an empty turn for a job that does not exist. The
   not-found and read-failure branches used `break` inside the inner switch,
   which only left that switch: the command then printed `Running job .` and

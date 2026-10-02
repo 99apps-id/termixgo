@@ -49,8 +49,15 @@ func UsesOAuth(id string) bool {
 	return ok && info.OAuth
 }
 
-// KeySource names where a key came from, for the status view.
+// KeySource names where a key came from, for the status view. A login
+// provider answers with the stored OAuth token, not an API key.
 func KeySource(store *secrets.Store, id string) string {
+	if UsesOAuth(id) {
+		if token, ok := OAuthStore(store).Load(id); ok && strings.TrimSpace(token.Access) != "" {
+			return "oauth login"
+		}
+		return ""
+	}
 	if store != nil && store.Has(secrets.ProviderKey(id)) {
 		return "stored"
 	}

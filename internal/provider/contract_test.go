@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/oauth"
 	"github.com/99apps-id/termixgo/internal/secrets"
 )
 
@@ -81,6 +82,41 @@ func TestKeySourceNamesWhereTheKeyCameFrom(t *testing.T) {
 	}
 	if got := KeySource(store, "openai"); got != "stored" {
 		t.Errorf("source = %q, want stored", got)
+	}
+}
+
+func TestKeySourceReportsAnOAuthLogin(t *testing.T) {
+	store := storeAt(t)
+	if got := KeySource(store, "xai-oauth"); got != "" {
+		t.Errorf("source = %q, want empty before any login", got)
+	}
+	// A pasted API key must not impersonate a login: the status view has to
+	// say where the credential really came from.
+	if err := store.Set(secrets.ProviderKey("xai-oauth"), "stored-key"); err != nil {
+		t.Fatalf("store key: %v", err)
+	}
+	if got := KeySource(store, "xai-oauth"); got != "" {
+		t.Errorf("source = %q, want empty; an API key is not an OAuth login", got)
+	}
+	_ = store.Delete(secrets.ProviderKey("xai-oauth"))
+	tokens := OAuthStore(store)
+	if err := tokens.Save("xai-oauth", oauth.Token{Access: "a", Expires: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatalf("save token: %v", err)
+	}
+	if got := KeySource(store, "xai-oauth"); got != "oauth login" {
+		t.Errorf("source = %q, want the login to be visible in the status view", got)
+	}
+	if !HasKey(store, "xai-oauth") {
+		t.Error("a stored login must satisfy the key requirement")
+	}
+	if err := tokens.Delete("xai-oauth"); err != nil {
+		t.Fatalf("delete token: %v", err)
+	}
+	if got := KeySource(store, "xai-oauth"); got != "" {
+		t.Errorf("source = %q, want empty after logout", got)
+	}
+	if HasKey(store, "xai-oauth") {
+		t.Error("a logged-out provider must not report a key from the environment")
 	}
 }
 

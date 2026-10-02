@@ -1,6 +1,9 @@
 package oauth
 
-import "sort"
+import (
+	"sort"
+	"time"
+)
 
 // Spec describes how one provider logs in. Kind is "device" for RFC 8628,
 // "codex" for the OpenAI Codex device flow, or "pkce" for an authorization
@@ -29,6 +32,14 @@ type Spec struct {
 	ExtraAuth       map[string]string
 	ExchangeJSON    bool
 	RefreshJSON     bool
+
+	// RefreshLead overrides how early the access token is renewed; zero is
+	// the five-minute default. MaxRefreshAge renews a credential that has
+	// gone unrenewed for that long even while its access token still looks
+	// valid, for vendors that age the grant itself out (9router calls this
+	// maxRefreshAgeMs). Values follow the 9router registry presets.
+	RefreshLead   time.Duration
+	MaxRefreshAge time.Duration
 }
 
 // specs are the providers Termixgo can log in to. The client ids are the
@@ -44,10 +55,15 @@ var specs = map[string]Spec{
 		TokenURL:  "https://auth.x.ai/oauth2/token",
 	},
 	"openai-codex": {
-		Provider: "openai-codex",
-		Kind:     "codex",
-		ClientID: "app_EMoamEEZ73f0CkXaXp7hrann",
-		Issuer:   "https://auth.openai.com",
+		Provider:    "openai-codex",
+		Kind:        "codex",
+		ClientID:    "app_EMoamEEZ73f0CkXaXp7hrann",
+		Issuer:      "https://auth.openai.com",
+		RefreshLead: 10 * time.Minute,
+		// OpenAI ages a Codex refresh grant out in about eight days even
+		// while the hour-long access token keeps rotating, so the credential
+		// is renewed by age as well as by expiry (9router maxRefreshAgeMs).
+		MaxRefreshAge: 8 * 24 * time.Hour,
 	},
 	"claude-oauth": {
 		Provider:     "claude-oauth",
@@ -60,6 +76,7 @@ var specs = map[string]Spec{
 		RedirectPath: "/callback",
 		ExchangeJSON: true,
 		RefreshJSON:  true,
+		RefreshLead:  4 * time.Hour, // 9router refreshLeadMs
 	},
 	// Antigravity shares Google's OAuth. The client id and the public
 	// installed-app secret are read from the environment rather than committed,

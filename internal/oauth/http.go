@@ -12,7 +12,6 @@ import (
 	"time"
 )
 
-
 // client is the shared HTTP client for the login flows.
 var client = &http.Client{Timeout: 30 * time.Second}
 

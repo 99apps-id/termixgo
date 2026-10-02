@@ -24,8 +24,7 @@ func noWaitClock() Clock {
 
 func TestDeviceFlow(t *testing.T) {
 	polls := 0
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
 		case "/device":
