@@ -242,6 +242,23 @@ func TestSanitizeGoogleSchemaDropsUnsupportedKeywords(t *testing.T) {
 	}
 }
 
+// TestCatalogueDropsDeadCodexModelsAndFixesHaiku pins two model-id fixes: the
+// Codex models the backend no longer serves, and the dated Claude Haiku id.
+func TestCatalogueDropsDeadCodexModelsAndFixesHaiku(t *testing.T) {
+	for _, id := range []string{"codex-gpt-5.4", "codex-gpt-5.4-codex", "codex-gpt-5.3-codex-spark"} {
+		if _, ok := ModelByID(id); ok {
+			t.Errorf("%s returns 400 model is not supported and must not be offered", id)
+		}
+	}
+	haiku, ok := ModelByID("claude-oauth-haiku-4-5")
+	if !ok {
+		t.Fatal("claude-oauth-haiku-4-5 is missing")
+	}
+	if haiku.WireID() != "claude-haiku-4-5-20251001" {
+		t.Errorf("haiku wire id = %q, want claude-haiku-4-5-20251001", haiku.WireID())
+	}
+}
+
 func TestEncodeOpenAIToolsShape(t *testing.T) {
 	tools := []ToolDef{{Name: "read_file", Description: "Read a file.", Schema: map[string]any{"type": "object"}}}
 	encoded := encodeOpenAITools(tools)

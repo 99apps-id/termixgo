@@ -8,6 +8,15 @@ import (
 	"strings"
 )
 
+// The Claude Code CLI identity an OAuth token is entitled to. The beta list
+// matches what the current CLI sends; the first entry is what unlocks an
+// OAuth bearer at all.
+const (
+	claudeCLIVersion   = "2.1.280"
+	claudeCLIUserAgent = "claude-cli/" + claudeCLIVersion + " (external, sdk-cli)"
+	claudeOAuthBeta    = "claude-code-20250219,oauth-2025-04-20"
+)
+
 // anthropicClient speaks the Messages streaming protocol.
 type anthropicClient struct{ *httpClient }
 
@@ -33,16 +42,20 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 	}
 
 	headers := map[string]string{"anthropic-version": "2023-06-01"}
+	url := c.baseURL + "/v1/messages"
 	if c.info.OAuth {
-		// An OAuth login sends a bearer token and needs the beta that unlocks
-		// it, instead of the API key header.
+		// A Claude Code OAuth login sends a bearer token under the claude-cli
+		// identity and needs the beta query plus the claude-code beta header;
+		// the API key header is not used.
 		headers["Authorization"] = "Bearer " + c.apiKey
-		headers["anthropic-beta"] = "oauth-2025-04-20"
+		headers["anthropic-beta"] = claudeOAuthBeta
 		headers["x-app"] = "cli"
+		headers["User-Agent"] = claudeCLIUserAgent
+		url += "?beta=true"
 	} else {
 		headers["x-api-key"] = c.apiKey
 	}
-	response, err := c.post(ctx, c.baseURL+"/v1/messages", headers, payload)
+	response, err := c.post(ctx, url, headers, payload)
 	if err != nil {
 		return err
 	}

@@ -8,6 +8,11 @@ import (
 	"strings"
 )
 
+// codexCLIVersion is the Codex CLI release whose identity the ChatGPT backend
+// expects. It gates access to the newer models, so it is sent in both the
+// User-Agent and the version header.
+const codexCLIVersion = "0.159.0"
+
 // codexClient speaks the Responses API served by the ChatGPT backend for a
 // Codex login. It is not chat-completions: the request carries input items and
 // the stream is a typed event feed, so it needs its own encoder and decoder.
@@ -31,7 +36,8 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 	headers := map[string]string{
 		"Authorization": "Bearer " + c.apiKey,
 		"originator":    "codex_cli_rs",
-		"User-Agent":    "codex_cli_rs/0.0.0 (Termixgo)",
+		"User-Agent":    "codex_cli_rs/" + codexCLIVersion,
+		"version":       codexCLIVersion,
 	}
 	if strings.TrimSpace(c.accountID) != "" {
 		headers["ChatGPT-Account-ID"] = c.accountID

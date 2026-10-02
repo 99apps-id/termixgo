@@ -147,6 +147,42 @@ func TestAnthropicRequestCarriesSystemToolsAndLimits(t *testing.T) {
 	}
 }
 
+// TestAnthropicOAuthUsesTheClaudeCodeIdentity covers the Claude OAuth headers:
+// the bearer is only accepted under the claude-cli User-Agent, the claude-code
+// beta, the beta query, and without the API key header.
+func TestAnthropicOAuthUsesTheClaudeCodeIdentity(t *testing.T) {
+	recorder, server := newPayloadRecorder(t)
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "claude-oauth", Label: "Claude (OAuth)", Kind: KindAnthropic, OAuth: true}, server.URL, "oauth-token")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	collect(t, client, ChatRequest{
+		Model:    "claude-sonnet-5",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	})
+
+	if recorder.query != "beta=true" {
+		t.Errorf("query = %q, want beta=true", recorder.query)
+	}
+	if got := recorder.headers.Get("User-Agent"); got != claudeCLIUserAgent {
+		t.Errorf("User-Agent = %q, want %q", got, claudeCLIUserAgent)
+	}
+	if got := recorder.headers.Get("anthropic-beta"); !strings.Contains(got, "oauth-2025-04-20") || !strings.Contains(got, "claude-code-20250219") {
+		t.Errorf("anthropic-beta = %q", got)
+	}
+	if recorder.headers.Get("x-app") != "cli" {
+		t.Errorf("x-app = %q, want cli", recorder.headers.Get("x-app"))
+	}
+	if got := recorder.headers.Get("Authorization"); got != "Bearer oauth-token" {
+		t.Errorf("Authorization = %q", got)
+	}
+	if recorder.headers.Get("x-api-key") != "" {
+		t.Errorf("an OAuth request must not send x-api-key")
+	}
+}
+
 // TestAnthropicDefaultsMaxTokens guards the value that keeps a thinking model
 // from truncating its own answer when the caller did not set a limit.
 func TestAnthropicDefaultsMaxTokens(t *testing.T) {

@@ -368,10 +368,10 @@ func Models() []Model {
 		{ID: "codex-gpt-5.6-sol", Provider: "openai-codex", Label: "GPT-5.6 Sol (ChatGPT)", APIID: "gpt-5.6-sol", Description: "Previous balanced generation through a ChatGPT login.", Tags: []string{"reasoning", "tools"}},
 		{ID: "codex-gpt-5.6-luna", Provider: "openai-codex", Label: "GPT-5.6 Luna (ChatGPT)", APIID: "gpt-5.6-luna", Description: "Previous efficient generation through a ChatGPT login.", Tags: []string{"fast", "tools"}},
 		{ID: "codex-gpt-5.5", Provider: "openai-codex", Label: "GPT-5.5 (ChatGPT)", APIID: "gpt-5.5", Description: "Latest frontier generation through a ChatGPT login.", Tags: []string{"reasoning", "tools", "coding"}},
-		{ID: "codex-gpt-5.4", Provider: "openai-codex", Label: "GPT-5.4 (ChatGPT)", APIID: "gpt-5.4", Description: "Long-context workhorse through a ChatGPT login.", Tags: []string{"reasoning", "tools"}},
-		{ID: "codex-gpt-5.4-codex", Provider: "openai-codex", Label: "GPT-5.4 Codex", APIID: "gpt-5.4-codex", Description: "Newest Codex-tuned model.", Tags: []string{"coding", "tools"}},
+		// gpt-5.4, gpt-5.4-mini and gpt-5.3-codex-spark are gone from
+		// backend-api/codex/models for ChatGPT accounts and return HTTP 400
+		// "model is not supported", so they are not offered (9router #4202).
 		{ID: "codex-gpt-5.3-codex", Provider: "openai-codex", Label: "GPT-5.3 Codex", APIID: "gpt-5.3-codex", Description: "Agentic software engineering.", Tags: []string{"coding", "tools"}},
-		{ID: "codex-gpt-5.3-codex-spark", Provider: "openai-codex", Label: "GPT-5.3 Codex Spark", APIID: "gpt-5.3-codex-spark", Description: "Fast Codex variant, on the ChatGPT Pro entitlement.", Tags: []string{"coding", "fast"}},
 		{ID: "codex-gpt-5.2-codex", Provider: "openai-codex", Label: "GPT-5.2 Codex", APIID: "gpt-5.2-codex", Description: "Previous Codex generation.", Tags: []string{"coding", "tools"}},
 		{ID: "codex-gpt-5.1-codex-max", Provider: "openai-codex", Label: "GPT-5.1 Codex Max", APIID: "gpt-5.1-codex-max", Description: "Long-horizon Codex model.", Tags: []string{"coding", "tools"}},
 		{ID: "codex-gpt-5.1-codex", Provider: "openai-codex", Label: "GPT-5.1 Codex", APIID: "gpt-5.1-codex", Description: "Earlier Codex model.", Tags: []string{"coding", "tools"}},
@@ -385,7 +385,7 @@ func Models() []Model {
 		// The Claude models served through a Claude login (OAuth).
 		{ID: "claude-oauth-opus-5", Provider: "claude-oauth", Label: "Claude Opus 5 (OAuth)", APIID: "claude-opus-5", Description: "Previous flagship through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-oauth-sonnet-5", Provider: "claude-oauth", Label: "Claude Sonnet 5 (OAuth)", APIID: "claude-sonnet-5", Description: "Balanced Claude through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
-		{ID: "claude-oauth-haiku-4-5", Provider: "claude-oauth", Label: "Claude 4.5 Haiku (OAuth)", APIID: "claude-haiku-4-5", Description: "Fast Claude through a Claude login.", Tags: []string{"fast", "tools"}},
+		{ID: "claude-oauth-haiku-4-5", Provider: "claude-oauth", Label: "Claude 4.5 Haiku (OAuth)", APIID: "claude-haiku-4-5-20251001", Description: "Fast Claude through a Claude login.", Tags: []string{"fast", "tools"}},
 		// Google Antigravity serves Gemini and Claude models through its Cloud
 		// Code backend under an Antigravity login.
 		// The Cloud Code backend keys models by an upstream id that can differ

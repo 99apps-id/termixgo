@@ -14,13 +14,15 @@ import (
 // TestCodexStreamUsesTheResponsesAPI proves the Codex client posts to
 // /responses with the account header and decodes the typed event feed.
 func TestCodexStreamUsesTheResponsesAPI(t *testing.T) {
-	var gotPath, gotAuth, gotAccount, gotOriginator string
+	var gotPath, gotAuth, gotAccount, gotOriginator, gotVersion, gotAgent string
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		gotPath = request.URL.Path
 		gotAuth = request.Header.Get("Authorization")
 		gotAccount = request.Header.Get("ChatGPT-Account-ID")
 		gotOriginator = request.Header.Get("originator")
+		gotVersion = request.Header.Get("version")
+		gotAgent = request.Header.Get("User-Agent")
 		raw, _ := io.ReadAll(request.Body)
 		_ = json.Unmarshal(raw, &gotBody)
 
@@ -75,6 +77,11 @@ func TestCodexStreamUsesTheResponsesAPI(t *testing.T) {
 	}
 	if gotAuth != "Bearer oauth-token" || gotAccount != "acct_9" || gotOriginator != "codex_cli_rs" {
 		t.Errorf("headers: auth=%q account=%q originator=%q", gotAuth, gotAccount, gotOriginator)
+	}
+	// The backend gates newer models on the Codex CLI identity, so the version
+	// header and User-Agent must carry a real release, not a placeholder.
+	if gotVersion != codexCLIVersion || gotAgent != "codex_cli_rs/"+codexCLIVersion {
+		t.Errorf("identity headers: version=%q user-agent=%q", gotVersion, gotAgent)
 	}
 	if gotBody["instructions"] != "be brief" || gotBody["store"] != false {
 		t.Errorf("body = %v", gotBody)
