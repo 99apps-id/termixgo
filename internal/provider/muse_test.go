@@ -15,13 +15,15 @@ import (
 // with the Meta identity headers and decodes the typed event feed, the same
 // shape the Codex client uses.
 func TestMuseStreamUsesTheResponsesAPI(t *testing.T) {
-	var gotPath, gotAuth, gotAgent, gotClientID string
+	var gotPath, gotAuth, gotAgent, gotClientID, gotAPIVersion, gotSessionID string
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		gotPath = request.URL.Path
 		gotAuth = request.Header.Get("Authorization")
 		gotAgent = request.Header.Get("User-Agent")
 		gotClientID = request.Header.Get("X-Client-Id")
+		gotAPIVersion = request.Header.Get("x-api-version")
+		gotSessionID = request.Header.Get("session_id")
 		raw, _ := io.ReadAll(request.Body)
 		_ = json.Unmarshal(raw, &gotBody)
 
@@ -81,6 +83,12 @@ func TestMuseStreamUsesTheResponsesAPI(t *testing.T) {
 	if gotClientID != "tbh:tui" {
 		t.Errorf("X-Client-Id = %q, want tbh:tui", gotClientID)
 	}
+	if gotAPIVersion != "1.0.0" {
+		t.Errorf("x-api-version = %q, want 1.0.0", gotAPIVersion)
+	}
+	if gotSessionID == "" {
+		t.Errorf("session_id should not be empty")
+	}
 	if gotBody["model"] != "muse-spark-1.3" || gotBody["instructions"] != "be brief" {
 		t.Errorf("body = %v", gotBody)
 	}
@@ -95,6 +103,171 @@ func TestMuseStreamUsesTheResponsesAPI(t *testing.T) {
 	}
 	if usage.TotalTokens != 10 || usage.PromptTokens != 7 {
 		t.Errorf("usage = %+v", usage)
+	}
+}
+
+// TestMuseStampsFunctionCallItems pins the item shape Meta requires: a replayed
+// function_call without id and status makes the backend answer 404
+// model_not_found, so both fields must be present on the wire.
+func TestMuseStampsFunctionCallItems(t *testing.T) {
+	payload := (&museClient{}).payload(ChatRequest{
+		Model: "muse-spark-1.3",
+		Messages: []Message{
+			{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call_9", Name: "read_file", Arguments: "{}"}}},
+			{Role: RoleTool, ToolID: "call_9", Content: "ok"},
+		},
+	})
+	input, ok := payload["input"].([]map[string]any)
+	if !ok {
+		t.Fatalf("input = %T, want a list of items", payload["input"])
+	}
+	var call, output map[string]any
+	for _, item := range input {
+		switch item["type"] {
+		case "function_call":
+			call = item
+		case "function_call_output":
+			output = item
+		}
+	}
+	if call == nil {
+		t.Fatalf("no function_call item in %v", input)
+	}
+	if call["id"] != "fc_call_9" {
+		t.Errorf("function_call id = %v, want fc_call_9", call["id"])
+	}
+	if call["status"] != "completed" {
+		t.Errorf("function_call status = %v, want completed", call["status"])
+	}
+	if output == nil || output["call_id"] != "call_9" {
+		t.Errorf("function_call_output = %v", output)
+	}
+}
+
+// TestMuseRemintsOnceWhenTheKeyIsStale pins the renewal path: Meta answers an
+// aged-out key with 404 model_not_found, so the client must mint a fresh key
+// and replay the request rather than surfacing the 404.
+func TestMuseRemintsOnceWhenTheKeyIsStale(t *testing.T) {
+	var hits int
+	var auths []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		auths = append(auths, request.Header.Get("Authorization"))
+		if hits == 1 {
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = writer.Write([]byte(`{"error":{"code":"model_not_found","message":"The requested model was not found."}}`))
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n")
+		fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "muse", Label: "Meta Muse Code", Kind: KindMuse}, server.URL, "LLM|stale")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	client.(interface{ SetForceKeyResolver(KeyResolver) }).SetForceKeyResolver(func(string) string { return "LLM|fresh" })
+
+	var text strings.Builder
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "muse-spark-1.3",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	}, func(event StreamEvent) error {
+		if event.Type == EventTextDelta {
+			text.WriteString(event.Text)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if hits != 2 {
+		t.Fatalf("hits = %d, want 2 (stale then fresh)", hits)
+	}
+	if len(auths) != 2 || auths[0] != "Bearer LLM|stale" || auths[1] != "Bearer LLM|fresh" {
+		t.Errorf("authorization headers = %v", auths)
+	}
+	if text.String() != "ok" {
+		t.Errorf("text = %q, want the replayed answer", text.String())
+	}
+}
+
+// TestMuseResetsSessionAndRetriesOnSessionError proves that like Antigravity,
+// a session or unauthenticated error resets the session and retries seamlessly.
+func TestMuseResetsSessionAndRetriesOnSessionError(t *testing.T) {
+	var hits int
+	var sessions []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		sessions = append(sessions, request.Header.Get("session_id"))
+		if hits == 1 {
+			writer.WriteHeader(http.StatusUnauthorized)
+			_, _ = writer.Write([]byte(`{"error":{"message":"session expired or invalid"}}`))
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"resumed\"}\n\n")
+		fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "muse", Label: "Meta Muse Code", Kind: KindMuse}, server.URL, "LLM|session-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+
+	var text strings.Builder
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "muse-spark-1.3",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	}, func(event StreamEvent) error {
+		if event.Type == EventTextDelta {
+			text.WriteString(event.Text)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if hits != 2 {
+		t.Fatalf("hits = %d, want 2 (retry on session error)", hits)
+	}
+	if len(sessions) != 2 || sessions[0] == sessions[1] {
+		t.Errorf("session_id should have changed across retry, got: %v", sessions)
+	}
+	if text.String() != "resumed" {
+		t.Errorf("text = %q, want resumed", text.String())
+	}
+}
+
+// TestMuseDoesNotRetryOnAnOrdinaryError keeps the renewal scoped to a stale
+// credential: a real 400 must surface once, not be retried as if a mint helps.
+func TestMuseDoesNotRetryOnAnOrdinaryError(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"message":"bad request"}}`))
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "muse", Label: "Meta Muse Code", Kind: KindMuse}, server.URL, "LLM|key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	client.(interface{ SetForceKeyResolver(KeyResolver) }).SetForceKeyResolver(func(string) string { return "LLM|other" })
+
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "muse-spark-1.3",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	}, func(StreamEvent) error { return nil })
+	if err == nil {
+		t.Fatal("a 400 must be reported")
+	}
+	if hits != 1 {
+		t.Errorf("hits = %d, want 1 (no retry for a non-stale error)", hits)
 	}
 }
 

@@ -120,6 +120,29 @@ func newHTTPClient(info Provider, baseURL, apiKey string) (Client, error) {
 
 func (c *httpClient) ID() string { return c.info.ID }
 
+// providerStatusError is a non-2xx response. The status is carried so a client
+// can react to it: a login whose credential went stale answers 401, and Meta
+// Muse answers 404 model_not_found for the same condition. Matching on a typed
+// status beats parsing the message.
+type providerStatusError struct {
+	label   string
+	status  int
+	message string
+}
+
+func (e *providerStatusError) Error() string {
+	hint := ""
+	switch e.status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		hint = " (check the API key with /setup)"
+	case http.StatusTooManyRequests:
+		hint = " (rate limited; retry shortly)"
+	case http.StatusNotFound:
+		hint = " (check the model id and base URL)"
+	}
+	return fmt.Sprintf("%s returned %d: %s%s", e.label, e.status, e.message, hint)
+}
+
 // statusError turns a provider error body into an actionable message.
 func (c *httpClient) statusError(response *http.Response) error {
 	raw, _ := io.ReadAll(io.LimitReader(response.Body, 8192))
@@ -145,16 +168,7 @@ func (c *httpClient) statusError(response *http.Response) error {
 	if message == "" {
 		message = http.StatusText(response.StatusCode)
 	}
-	hint := ""
-	switch response.StatusCode {
-	case http.StatusUnauthorized, http.StatusForbidden:
-		hint = " (check the API key with /setup)"
-	case http.StatusTooManyRequests:
-		hint = " (rate limited; retry shortly)"
-	case http.StatusNotFound:
-		hint = " (check the model id and base URL)"
-	}
-	return fmt.Errorf("%s returned %d: %s%s", c.info.Label, response.StatusCode, message, hint)
+	return &providerStatusError{label: c.info.Label, status: response.StatusCode, message: message}
 }
 
 // sseReader reads Server-Sent Events and yields each event's joined data.

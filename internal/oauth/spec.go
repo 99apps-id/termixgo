@@ -140,7 +140,7 @@ var specs = map[string]Spec{
 		CopilotTokenURL: "https://api.github.com/copilot_internal/v2/token",
 		RefreshLead:     5 * time.Minute,
 	},
-	// Meta Muse Code. The device grant yields a short-lived "dca:" token that
+	// Meta Muse Code. The device grant yields a durable "dca:" token that
 	// the model endpoint does not accept directly; it is minted into an LLM
 	// API key at MintURL, which becomes the stored access token. The client id
 	// is the public one Meta's Muse CLI ships, so it is not a secret.
@@ -152,6 +152,9 @@ var specs = map[string]Spec{
 		TokenURL:   "https://auth.meta.com/oidc/device/token/",
 		VerifyHint: "https://auth.meta.com/oauth/device/",
 		MintURL:    "https://api.meta.ai/muse-code/key",
+		// The minted key is stable for the account with no advertised expiry.
+		// Renew on demand from the stored dca (401 remint), not on a timer,
+		// so an active session never expires locally.
 	},
 }
 

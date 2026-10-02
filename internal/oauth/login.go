@@ -101,9 +101,17 @@ func Login(ctx context.Context, store *Store, provider string, in io.Reader, out
 			var device Token
 			device, err = WaitDevice(ctx, flow, code, clock)
 			if err == nil {
-				// The device grant only yields a "dca:" token; the model
-				// endpoint needs the minted API key.
-				token, err = MintMetaKey(ctx, spec.MintURL, device.Access)
+				// The device grant yields a durable "dca:" token; the model
+				// endpoint needs the minted API key. Keep the dca token as
+				// the refresh so the key can be re-minted without another
+				// login, and let the session persist indefinitely.
+				// Minting is best effort: a transient mint failure keeps a
+				// dca-only login that mints lazily on first use.
+				var notice string
+				token, notice, err = museTokenFromDevice(ctx, spec.MintURL, device, clock.now())
+				if err == nil && strings.TrimSpace(notice) != "" {
+					fmt.Fprintf(out, "%s\n", notice)
+				}
 			}
 		}
 	default:
@@ -200,6 +208,18 @@ func AccessToken(ctx context.Context, store *Store, provider string) string {
 	if !ok || strings.TrimSpace(token.Refresh) == "" {
 		return token.Access
 	}
+	// For Muse, the minted Model API key is long-lived and does not expire on a 1-hour
+	// timer. Clear or ignore any legacy expiry timestamp so existing stored sessions
+	// persist like Antigravity instead of getting dropped.
+	if provider == "muse" {
+		if !token.Expires.IsZero() {
+			token.Expires = time.Time{}
+			_ = store.Save(provider, token)
+		}
+		if strings.TrimSpace(token.Access) != "" {
+			return token.Access
+		}
+	}
 	lead := spec.RefreshLead
 	if lead <= 0 {
 		lead = defaultRefreshLead
@@ -217,7 +237,7 @@ func AccessToken(ctx context.Context, store *Store, provider string) string {
 		// rotation). Keep sending its bearer only if the access token still
 		// works; otherwise drop the login so HasKey, /status and the setup
 		// wizard all agree the operator must log in again.
-		if token.Valid(time.Now(), 0) {
+		if token.Valid(time.Now(), 0) || (provider == "muse" && strings.TrimSpace(token.Access) != "") {
 			return token.Access
 		}
 		_ = store.Delete(provider)
@@ -245,6 +265,9 @@ func ForceRefreshToken(ctx context.Context, store *Store, provider string) strin
 	}
 	var grant *GrantError
 	if errors.As(err, &grant) {
+		if provider == "muse" && strings.TrimSpace(token.Access) != "" {
+			return token.Access
+		}
 		_ = store.Delete(provider)
 		return ""
 	}
@@ -289,6 +312,12 @@ func refreshTokenOnce(ctx context.Context, store *Store, spec Spec, token Token)
 		refreshed, err = FetchCopilotToken(ctx, spec.CopilotTokenURL, token.Refresh, clock)
 	case "muse":
 		refreshed, err = MintMetaKey(ctx, spec.MintURL, token.Refresh)
+		if err == nil {
+			refreshed.Expires = time.Time{}
+			if strings.TrimSpace(refreshed.Refresh) == "" {
+				refreshed.Refresh = token.Refresh
+			}
+		}
 	case "codex":
 		refreshed, err = RefreshCodex(ctx, CodexFlow{ClientID: spec.ClientID, Issuer: spec.Issuer}, token.Refresh, clock)
 	case "pkce":
