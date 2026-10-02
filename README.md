@@ -46,12 +46,15 @@ keeps the context usage, the session id and the session spend in view.
 - [Slash commands](#slash-commands)
 - [Configuration](#configuration)
 - [Providers](#providers)
+- [OAuth logins](#oauth-logins)
 - [Tools](#tools)
 - [Orchestration pipelines](#orchestration-pipelines)
 - [Trust and approval](#trust-and-approval)
 - [Memory and skills](#memory-and-skills)
 - [MCP servers](#mcp-servers)
 - [Telegram companion](#telegram-companion)
+- [Run as a 24/7 assistant](#run-as-a-247-assistant)
+- [Scheduled jobs and heartbeat](#scheduled-jobs-and-heartbeat)
 - [Cost, budgets and plans](#cost-budgets-and-plans)
 - [Security](#security)
 - [Where state lives](#where-state-lives)
@@ -333,6 +336,24 @@ termixgo models --provider qwen-token-plan   # list one provider's catalogue
 termixgo endpoint                            # show the custom endpoints
 termixgo endpoint openai-compatible https://my-server/v1
 ```
+
+### Choosing a model
+
+- First run, and `/setup`, walks provider then model: the wizard lists the
+  providers, and after you pick one it lists that provider's models. An OAuth
+  provider shows "login required" and points at the login command instead of
+  asking for an API key.
+- `/model` opens a provider list first, limited to the providers you can use now
+  (the current one, local servers, and providers with a stored key or login),
+  then that provider's models. Type to filter, Enter to pick, and Esc to go back
+  to the provider list.
+- `/model <id>`, `termixgo model <id>` and `termixgo models [--provider id]` do
+  the same from the keyboard or the shell. An id the catalogue does not list is
+  still usable with `provider:id` (for example `openai:gpt-9-experimental`).
+
+OAuth providers (see below) appear once you have logged in, and their models
+work like any other. The catalogue keeps a readable local id separate from the
+wire id a provider expects, so a vendor rename does not change what you type.
 
 ## OAuth logins
 
@@ -628,18 +649,57 @@ blocks whose info string ends with `linenos` are emitted with numbered lines.
 `/model` opens a provider-and-model picker. Send a photo, optionally with a
 caption as the instruction, and the agent sees it with a vision model.
 
-To run the assistant headless, 24/7:
-
-```sh
-termixgo telegram on
-termixgo serve
-termixgo service install   # register auto-start with systemd, launchd or schtasks
-```
-
 `termixgo serve` verifies that a usable model is configured before it starts and
 names the exact reason (a missing key, an unknown provider) if it is not. The CLI
 keeps its own settings, so a custom endpoint set in another application is not
 shared with it; use `termixgo endpoint` and `termixgo secret` to configure it.
+
+To run the bot as an always-on assistant, see
+[Run as a 24/7 assistant](#run-as-a-247-assistant).
+
+## Run as a 24/7 assistant
+
+`termixgo serve` is the headless assistant: it connects the Telegram bot, starts
+the scheduler and the heartbeat, and stays up until it is stopped. Register it
+with the operating system so it starts on boot and survives a closed session:
+
+```sh
+termixgo telegram on       # enable the bridge (or pair with /telegram setup)
+termixgo serve             # run it in the foreground to watch the startup
+termixgo service install   # systemd on Linux, launchd on macOS, schtasks on Windows
+termixgo service status
+termixgo service uninstall
+```
+
+What `service install` creates:
+
+- Linux: a systemd user unit at `~/.config/systemd/user/termixgo.service` with
+  `Restart=on-failure` and `RestartSec=5`, enabled with
+  `systemctl --user enable --now`, plus `loginctl enable-linger` so it keeps
+  running after you close the SSH session and starts at boot without a login.
+- macOS: a launchd agent under `~/Library/LaunchAgents`.
+- Windows: a scheduled task named `TermixgoAssistant` that starts at logon and is
+  run once immediately.
+
+Inspect and control it:
+
+```sh
+# Linux
+systemctl --user status termixgo
+systemctl --user restart termixgo
+journalctl --user -u termixgo -f
+loginctl show-user "$USER" -p Linger   # Linger=yes means boot start without login
+
+# Windows (PowerShell)
+schtasks /Query /TN TermixgoAssistant /V /FO LIST
+Start-ScheduledTask -TaskName TermixgoAssistant
+```
+
+A headless server has no browser, so an OAuth login is finished by pasting the
+redirect URL back (see [OAuth logins](#oauth-logins)); once the token is stored
+the service refreshes it on its own. Give it work to do with
+`termixgo cron` and a periodic self-check with `termixgo heartbeat`
+(see [Scheduled jobs and heartbeat](#scheduled-jobs-and-heartbeat)).
 
 ## Scheduled jobs and heartbeat
 
@@ -763,6 +823,8 @@ termixgo approval [mode]        # ask, edits, all or plan
 termixgo harness [id]           # show or set the agent harness profile
 termixgo mcp                    # list MCP servers and their tools
 termixgo secret <provider> [key] # store a provider API key
+termixgo login <provider>       # OAuth login: xai-oauth, openai-codex, claude-oauth, antigravity, github-copilot
+termixgo logout <provider>      # drop a stored OAuth login
 termixgo telegram [status|on|off]
 termixgo cron [list|add|remove|on|off|run]
 termixgo heartbeat [status|on|off|interval <duration>]
