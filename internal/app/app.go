@@ -1004,29 +1004,51 @@ func (a *App) runOn(ctx context.Context, input string, images []provider.Image, 
 // RunPrompt runs one turn for the Telegram bridge, forwarding short progress
 // lines and returning the final answer text.
 func (a *App) RunPrompt(ctx context.Context, prompt string, progress func(string)) (string, error) {
+	notice := ""
 	if progress != nil {
 		// The opening line is part of the contract: the caller shows it at once,
 		// before the first event arrives.
 		progress("Working...")
 		a.SetObserver(func(event agent.Event) {
+			switch {
+			case event.Kind == agent.EventNotice && strings.TrimSpace(event.Text) != "":
+				notice = event.Text
+			case event.Kind == agent.EventError && event.Err != nil:
+				notice = event.Err.Error()
+			}
 			if line := telegramProgressLine(event); line != "" {
 				progress(line)
 			}
 		})
 		defer a.SetObserver(nil)
 	}
+	session := a.currentSession()
+	mark := session.MessageCount()
 	if err := a.runTurn(ctx, prompt); err != nil {
 		return "", err
 	}
-	return a.currentSession().LastAssistantText(), nil
+	// Report only what this turn produced. Falling back to the session's last
+	// answer would send an earlier turn's reply again when the model said
+	// nothing, which reads as the agent repeating itself.
+	if answer := strings.TrimSpace(session.LastAssistantTextSince(mark)); answer != "" {
+		return answer, nil
+	}
+	return notice, nil
 }
 
 // RunPromptWithImage runs one turn with an image attached to the prompt, for a
 // photo the operator sent. mediaType is a MIME type and data is base64.
 func (a *App) RunPromptWithImage(ctx context.Context, prompt, mediaType, data string, progress func(string)) (string, error) {
+	notice := ""
 	if progress != nil {
 		progress("Working...")
 		a.SetObserver(func(event agent.Event) {
+			switch {
+			case event.Kind == agent.EventNotice && strings.TrimSpace(event.Text) != "":
+				notice = event.Text
+			case event.Kind == agent.EventError && event.Err != nil:
+				notice = event.Err.Error()
+			}
 			if line := telegramProgressLine(event); line != "" {
 				progress(line)
 			}
@@ -1034,10 +1056,15 @@ func (a *App) RunPromptWithImage(ctx context.Context, prompt, mediaType, data st
 		defer a.SetObserver(nil)
 	}
 	images := []provider.Image{{MediaType: mediaType, Data: data}}
+	session := a.currentSession()
+	mark := session.MessageCount()
 	if err := a.runTurnWithImages(ctx, prompt, images); err != nil {
 		return "", err
 	}
-	return a.currentSession().LastAssistantText(), nil
+	if answer := strings.TrimSpace(session.LastAssistantTextSince(mark)); answer != "" {
+		return answer, nil
+	}
+	return notice, nil
 }
 
 // telegramProgressLine renders one event as a short chat line.

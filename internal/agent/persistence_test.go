@@ -304,6 +304,32 @@ func TestSessionLastAssistantText(t *testing.T) {
 	}
 }
 
+// TestSessionLastAssistantTextSince keeps a caller from reporting an earlier
+// turn's answer when the current turn says nothing.
+func TestSessionLastAssistantTextSince(t *testing.T) {
+	session := NewSession("/w", "m")
+	session.AddUser("first")
+	session.AddAssistant("first answer", "", nil)
+
+	mark := session.MessageCount()
+	session.AddUser("second")
+	session.AddAssistant("second answer", "", nil)
+	if got := session.LastAssistantTextSince(mark); got != "second answer" {
+		t.Errorf("LastAssistantTextSince = %q, want the new answer", got)
+	}
+
+	// A turn that produced no assistant text must not fall back to the old one.
+	quiet := session.MessageCount()
+	session.AddUser("third")
+	if got := session.LastAssistantTextSince(quiet); got != "" {
+		t.Errorf("LastAssistantTextSince = %q, want empty for a silent turn", got)
+	}
+	// The old behaviour still sees the last answer in the session.
+	if got := session.LastAssistantText(); got != "second answer" {
+		t.Errorf("LastAssistantText = %q, want the previous answer", got)
+	}
+}
+
 // TestMessagesReturnsACopy keeps a caller from mutating the conversation by
 // accident, which the unexported fields alone would not prevent.
 func TestMessagesReturnsACopy(t *testing.T) {

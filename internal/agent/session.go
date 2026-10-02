@@ -322,6 +322,25 @@ func (s *Session) LastAssistantText() string {
 	return ""
 }
 
+// LastAssistantTextSince returns the newest non-empty assistant message at or
+// after mark. With a mark taken before a turn, it reports the answer this turn
+// produced: an empty result means the turn said nothing, which is not the same
+// as the previous turn's answer.
+func (s *Session) LastAssistantTextSince(mark int) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if mark < 0 {
+		mark = 0
+	}
+	for index := len(s.messages) - 1; index >= mark; index-- {
+		message := s.messages[index]
+		if message.Role == provider.RoleAssistant && strings.TrimSpace(message.Content) != "" {
+			return message.Content
+		}
+	}
+	return ""
+}
+
 // snapshot copies the state for persistence, taken under the lock.
 func (s *Session) snapshot() sessionJSON {
 	s.mu.Lock()
