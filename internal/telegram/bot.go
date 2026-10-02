@@ -74,11 +74,17 @@ type Bot struct {
 
 	offset int64
 	// cursorPath, when set, is where the last confirmed update id is kept so a
-	// restart resumes instead of replaying the prompts Telegram still holds. A
-	// crash between fetching a batch and confirming it otherwise re-ran an older
-	// prompt on the next start, which the operator read as the agent answering a
-	// question from before.
+	// restart resumes instead of replaying the prompts Telegram still holds.
 	cursorPath string
+
+	// offsetMu guards offset, persisted and inflight. offset is the poll
+	// cursor, advanced when an update is dispatched. persisted is the
+	// contiguous watermark written to disk, advanced only once every earlier
+	// update has finished, so a crash replays an in-flight prompt instead of
+	// dropping it. inflight is the set of dispatched updates not yet done.
+	offsetMu  sync.Mutex
+	persisted int64
+	inflight  map[int64]bool
 
 	// handlers tracks in-flight update handlers so shutdown waits for them
 	// instead of leaving a goroutine writing to a dead client.
@@ -212,9 +218,15 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	// Resume from the last confirmed update so a restart does not replay the
 	// prompts Telegram still holds.
+	b.offsetMu.Lock()
 	if b.offset == 0 {
 		b.offset = b.loadOffset()
 	}
+	b.persisted = b.offset
+	if b.inflight == nil {
+		b.inflight = map[int64]bool{}
+	}
+	b.offsetMu.Unlock()
 
 	commands := []BotCommand{
 		{Command: "run", Description: "Run a prompt with live progress"},
@@ -235,7 +247,10 @@ func (b *Bot) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		updates, err := b.client.GetUpdates(ctx, b.offset, 30)
+		b.offsetMu.Lock()
+		offset := b.offset
+		b.offsetMu.Unlock()
+		updates, err := b.client.GetUpdates(ctx, offset, 30)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -250,11 +265,16 @@ func (b *Bot) Run(ctx context.Context) error {
 			// than dispatched: running it again would repeat the command.
 			// The offset is "the first update to return", not "the last one
 			// seen", which is why the comparison is below rather than at.
+			b.offsetMu.Lock()
 			if update.UpdateID < b.offset {
+				b.offsetMu.Unlock()
 				continue
 			}
+			// Mark it in flight before the cursor moves past it, so the
+			// persisted watermark can never step over an unfinished update.
+			b.inflight[update.UpdateID] = true
 			b.offset = update.UpdateID + 1
-			b.saveOffset(b.offset)
+			b.offsetMu.Unlock()
 			b.dispatch(ctx, update)
 		}
 	}
@@ -269,8 +289,27 @@ func (b *Bot) dispatch(ctx context.Context, update Update) {
 	b.handlers.Add(1)
 	go func() {
 		defer b.handlers.Done()
+		defer b.finishUpdate(update.UpdateID)
 		b.handleUpdate(ctx, update)
 	}()
+}
+
+// finishUpdate marks an update done and persists the contiguous watermark: the
+// highest offset below which every update has finished. Persisting only here,
+// and not when the update is dispatched, means a crash during handling replays
+// the prompt on the next start instead of losing it.
+func (b *Bot) finishUpdate(updateID int64) {
+	b.offsetMu.Lock()
+	delete(b.inflight, updateID)
+	for b.persisted < b.offset {
+		if b.inflight[b.persisted] {
+			break
+		}
+		b.persisted++
+	}
+	persisted := b.persisted
+	b.offsetMu.Unlock()
+	b.saveOffset(persisted)
 }
 
 // handlePollError backs off after a failed poll, honouring Telegram's own

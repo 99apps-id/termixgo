@@ -139,11 +139,15 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 		switch event.Type {
 		case "message_start":
 			if event.Message != nil && event.Message.Usage != nil {
+				// Anthropic reports input_tokens, cache_read and cache_creation
+				// as separate counts that do not overlap, so the prompt total is
+				// their sum. Pricing subtracts the cached parts before applying
+				// the regular input rate, so nothing is charged twice.
 				promptTokens := event.Message.Usage.InputTokens
 				cacheRead := event.Message.Usage.CacheReadInputTokens
 				cacheWrite := event.Message.Usage.CacheCreationInputTokens
 				usage := Usage{
-					PromptTokens:     promptTokens + cacheRead,
+					PromptTokens:     promptTokens + cacheRead + cacheWrite,
 					CacheReadTokens:  cacheRead,
 					CacheWriteTokens: cacheWrite,
 				}

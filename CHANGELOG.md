@@ -167,6 +167,20 @@ All notable changes to Termixgo are recorded here. The format follows
   out of quota; when set it is the complete set, so a subagent never lands on a
   provider the operator did not list.
 
+- An MCP server's `env` (which can carry a token) is stored in the 0600 secret
+  file instead of `config.json`, and a pair already in the config is migrated on
+  the next start. This closes the Windows gap where `config.json` has no explicit
+  owner-only ACL.
+- The Telegram poll offset is persisted only after an update's handler finishes,
+  with a contiguous watermark, so a crash replays an in-flight prompt instead of
+  dropping it.
+- Anthropic cache usage is counted once: the prompt total is
+  `input + cache_read + cache_creation`, and pricing subtracts both cache parts
+  before the regular input rate (cache read at 0.10x, cache write at 1.25x)
+  instead of dropping the write or charging a cached token twice.
+- `git_branch` passes a switch target after `--end-of-options`, so a name such
+  as `-f` cannot force-switch and discard local changes from a read-only call.
+
 ### Fixed
 
 - An OAuth login that the vendor has revoked no longer sends a dead bearer on

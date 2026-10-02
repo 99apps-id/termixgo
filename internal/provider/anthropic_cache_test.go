@@ -118,10 +118,11 @@ func TestAnthropicUsageTracksCachedTokens(t *testing.T) {
 		t.Fatalf("expected at least 2 usage events, got %d", len(gotUsage))
 	}
 
-	// First usage from message_start
+	// First usage from message_start. Anthropic's input_tokens, cache_read and
+	// cache_creation do not overlap, so the prompt total is their sum.
 	u0 := gotUsage[0]
-	if u0.PromptTokens != 900 { // 500 miss + 400 hit = 900 total prompt tokens
-		t.Errorf("PromptTokens = %d, want 900", u0.PromptTokens)
+	if u0.PromptTokens != 1000 { // 500 miss + 400 read + 100 write
+		t.Errorf("PromptTokens = %d, want 1000", u0.PromptTokens)
 	}
 	if u0.CacheReadTokens != 400 {
 		t.Errorf("CacheReadTokens = %d, want 400", u0.CacheReadTokens)
@@ -169,5 +170,16 @@ func TestPricingCostCachedTokensDiscount(t *testing.T) {
 	})
 	if math.Abs(costMixed-5.5) > 1e-9 {
 		t.Errorf("costMixed = %v, want 5.5", costMixed)
+	}
+
+	// A cache write is billed at 1.25x and is not charged again as regular
+	// input: 600k regular ($6) + 400k written ($5) = $11.
+	costWrite := pricing.Cost(Usage{
+		PromptTokens:     1_000_000,
+		CompletionTokens: 0,
+		CacheWriteTokens: 400_000,
+	})
+	if math.Abs(costWrite-11.0) > 1e-9 {
+		t.Errorf("costWrite = %v, want 11.0", costWrite)
 	}
 }

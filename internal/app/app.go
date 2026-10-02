@@ -6,6 +6,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -230,6 +231,11 @@ func New(workspace string) (*App, error) {
 // It always builds a fresh registry from the built-ins, so a reload does not
 // accumulate the tools of the previous attempt.
 func (a *App) connectMCP(ctx context.Context) {
+	// A server's environment can carry a token (GITHUB_PERSONAL_ACCESS_TOKEN).
+	// It lives in the 0600 secret file, not config.json, which has no explicit
+	// owner-only ACL on Windows; any pair already in the config is moved here
+	// once.
+	a.migrateMCPEnv()
 	cfg := a.Config()
 	enabled := make([]mcp.Options, 0, len(cfg.MCPServers))
 	disabled := make([]mcp.Options, 0, len(cfg.MCPServers))
@@ -238,7 +244,7 @@ func (a *App) connectMCP(ctx context.Context) {
 			Name:    server.Name,
 			Command: server.Command,
 			Args:    server.Args,
-			Env:     server.Env,
+			Env:     a.mcpEnvFor(server.Name),
 			Dir:     a.workspace,
 		}
 		if server.Disabled {
@@ -775,6 +781,68 @@ func (a *App) env() *agent.Env {
 		Ask:         a.ask,
 		RunSubagent: a.runSubagent,
 	}
+}
+
+// mcpEnvPrefix namespaces a server's environment inside the secret store.
+const mcpEnvPrefix = "mcp-env:"
+
+// mcpEnvFor returns a server's environment from the secret store.
+func (a *App) mcpEnvFor(name string) map[string]string {
+	env := map[string]string{}
+	key := mcpEnvPrefix + strings.ToLower(strings.TrimSpace(name))
+	if a.store == nil {
+		return env
+	}
+	raw := strings.TrimSpace(a.store.Get(key))
+	if raw == "" {
+		return env
+	}
+	if err := json.Unmarshal([]byte(raw), &env); err != nil || env == nil {
+		return map[string]string{}
+	}
+	return env
+}
+
+// saveMCPEnv stores a server's environment in the 0600 secret file.
+func (a *App) saveMCPEnv(name string, env map[string]string) error {
+	if a.store == nil {
+		return errors.New("no secret store is available")
+	}
+	data, err := json.Marshal(env)
+	if err != nil {
+		return err
+	}
+	return a.store.Set(mcpEnvPrefix+strings.ToLower(strings.TrimSpace(name)), string(data))
+}
+
+// migrateMCPEnv moves any environment a config.json still carries into the
+// secret store and removes it from the config, so a token that was written to
+// the world-readable file by an older version ends up owner-only.
+func (a *App) migrateMCPEnv() {
+	migrated := map[string]bool{}
+	for _, server := range a.Config().MCPServers {
+		if len(server.Env) == 0 {
+			continue
+		}
+		env := a.mcpEnvFor(server.Name)
+		for key, value := range server.Env {
+			env[key] = value
+		}
+		if err := a.saveMCPEnv(server.Name, env); err != nil {
+			continue
+		}
+		migrated[strings.ToLower(strings.TrimSpace(server.Name))] = true
+	}
+	if len(migrated) == 0 {
+		return
+	}
+	_ = a.UpdateConfig(func(c *config.Config) {
+		for index := range c.MCPServers {
+			if migrated[strings.ToLower(strings.TrimSpace(c.MCPServers[index].Name))] {
+				c.MCPServers[index].Env = nil
+			}
+		}
+	})
 }
 
 // isolatedEnv returns a per-run environment for a scheduled job. It shares the

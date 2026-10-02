@@ -262,19 +262,41 @@ func (m Model) PricingWith(overrides map[string]Pricing) Pricing {
 
 // Cost estimates the dollars a usage report costs at this price. An unknown
 // price yields zero, and callers use Known() to say unknown, not zero.
-// Cached prompt tokens are priced at a 90% discount (0.10x of the standard input rate).
+//
+// A cache read is billed at a tenth of the input rate and a cache write at
+// 1.25x, both Anthropic's published multipliers. Cache read and write are
+// subtracted from the prompt total before the regular rate is applied, so a
+// token that is reported in both PromptTokens and the cache counters is charged
+// once, not twice.
 func (p Pricing) Cost(usage Usage) float64 {
 	inputTokens := usage.PromptTokens
-	cachedTokens := usage.CacheReadTokens
-	if cachedTokens > inputTokens {
-		cachedTokens = inputTokens
+	cacheRead := usage.CacheReadTokens
+	cacheWrite := usage.CacheWriteTokens
+	if cacheRead < 0 {
+		cacheRead = 0
 	}
-	regularInput := inputTokens - cachedTokens
+	if cacheWrite < 0 {
+		cacheWrite = 0
+	}
+	if cacheRead+cacheWrite > inputTokens {
+		// Defensive: never let the cached parts exceed the total, which would
+		// make the regular part negative.
+		cacheRead = inputTokens
+		cacheWrite = 0
+	}
+	regularInput := inputTokens - cacheRead - cacheWrite
 
 	return (float64(regularInput)*p.InputPerMillion +
-		float64(cachedTokens)*p.InputPerMillion*0.10 +
+		float64(cacheRead)*p.InputPerMillion*cacheReadMultiplier +
+		float64(cacheWrite)*p.InputPerMillion*cacheWriteMultiplier +
 		float64(usage.CompletionTokens)*p.OutputPerMillion) / 1_000_000
 }
+
+// Cache price multipliers relative to the standard input rate.
+const (
+	cacheReadMultiplier  = 0.10
+	cacheWriteMultiplier = 1.25
+)
 
 // Cost estimates the dollars a usage report costs on this model. An unknown
 // price yields zero, and callers use Pricing().Known() to say "unknown"

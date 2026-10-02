@@ -211,6 +211,22 @@ func TestGitShowTreatsAnOptionLikeRefAsARevision(t *testing.T) {
 	}
 }
 
+// TestGitBranchTreatsAnOptionLikeNameAsABranch keeps a switch target from
+// reaching git as an option: a name such as -f would force-switch and discard
+// local changes.
+func TestGitBranchTreatsAnOptionLikeNameAsABranch(t *testing.T) {
+	env := gitEnv(t)
+	git(t, env, "commit", "--allow-empty", "-m", "base")
+
+	result, err := (&gitBranchTool{}).Run(context.Background(), env, map[string]any{"name": "-f"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("an option-like branch name should be refused, got %q", result.Output)
+	}
+}
+
 func TestGitAddStagesEverything(t *testing.T) {
 	env := gitEnv(t)
 	git(t, env, "commit", "--allow-empty", "-m", "init")

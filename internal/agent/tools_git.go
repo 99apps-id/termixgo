@@ -369,9 +369,14 @@ func (t *gitBranchTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	}
 	argv := []string{"checkout"}
 	if argBool(args, "create", false) {
-		argv = append(argv, "-b")
+		// `-b <name>` consumes the name as its argument, which git validates,
+		// so a name that looks like an option is rejected rather than obeyed.
+		argv = append(argv, "-b", name)
+	} else {
+		// A switch target the model supplied must not reach git as an option:
+		// a name such as -f would force-switch and discard local changes.
+		argv = append(argv, "--end-of-options", name)
 	}
-	argv = append(argv, name)
 	output, err := runGit(ctx, env, argv...)
 	if err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil

@@ -619,6 +619,12 @@ Add that to `~/.termixgo/config.json` and run `/mcp reload`. The server starts
 with the session and its tools appear as `mcp_<server>__<tool>`, so
 `mcp_files__read_file` always says where the call went.
 
+A server's `env` is a place for a token such as
+`GITHUB_PERSONAL_ACCESS_TOKEN`. Those values are kept in the 0600 secret file
+rather than `config.json`, which has no explicit owner-only ACL on Windows; a
+server's `env` written into `config.json` by an older version is moved to the
+secret file on the next start.
+
 - `/mcp` lists every server, whether it started, and how many tools it added.
 - `termixgo mcp` does the same from a shell and exits non-zero when a server
   fails to start, which makes it usable in a check.
