@@ -52,9 +52,9 @@ func StartCodexDevice(ctx context.Context, flow CodexFlow) (CodexDevice, error) 
 		return CodexDevice{}, statusError(flow.deviceURL(), status, body)
 	}
 	var parsed struct {
-		UserCode     string `json:"user_code"`
-		DeviceAuthID string `json:"device_auth_id"`
-		Interval     int    `json:"interval"`
+		UserCode     string  `json:"user_code"`
+		DeviceAuthID string  `json:"device_auth_id"`
+		Interval     flexInt `json:"interval"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return CodexDevice{}, err
@@ -167,10 +167,10 @@ func RefreshCodex(ctx context.Context, flow CodexFlow, refreshToken string, cloc
 }
 
 type codexToken struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	IDToken      string `json:"id_token"`
-	ExpiresIn    int    `json:"expires_in"`
+	AccessToken  string  `json:"access_token"`
+	RefreshToken string  `json:"refresh_token"`
+	IDToken      string  `json:"id_token"`
+	ExpiresIn    flexInt `json:"expires_in"`
 }
 
 func (t codexToken) toToken(now time.Time) Token {

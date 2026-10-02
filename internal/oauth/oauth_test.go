@@ -28,7 +28,7 @@ func TestDeviceFlow(t *testing.T) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
 		case "/device":
-			fmt.Fprint(writer, `{"device_code":"dc","user_code":"WXYZ","verification_uri":"https://verify","interval":1,"expires_in":60}`)
+			fmt.Fprint(writer, `{"device_code":"dc","user_code":"WXYZ","verification_uri":"https://verify","interval":"1","expires_in":"60"}`)
 		case "/token":
 			polls++
 			if polls == 1 {
@@ -87,7 +87,7 @@ func TestCodexDeviceFlow(t *testing.T) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
 		case "/api/accounts/deviceauth/usercode":
-			fmt.Fprint(writer, `{"user_code":"CODE","device_auth_id":"DA","interval":1}`)
+			fmt.Fprint(writer, `{"user_code":"CODE","device_auth_id":"DA","interval":"1"}`)
 		case "/api/accounts/deviceauth/token":
 			polls++
 			if polls == 1 {

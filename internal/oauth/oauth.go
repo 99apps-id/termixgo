@@ -9,12 +9,41 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/secrets"
 )
+
+// flexInt accepts a JSON number or a numeric string. Some OAuth servers send
+// values such as interval and expires_in as strings, which a plain int field
+// rejects during Unmarshal.
+type flexInt int
+
+func (f *flexInt) UnmarshalJSON(data []byte) error {
+	text := strings.TrimSpace(string(data))
+	if text == "" || text == "null" {
+		return nil
+	}
+	if strings.HasPrefix(text, `"`) {
+		var inner string
+		if err := json.Unmarshal(data, &inner); err != nil {
+			return err
+		}
+		text = strings.TrimSpace(inner)
+		if text == "" {
+			return nil
+		}
+	}
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return fmt.Errorf("expected a number, got %s", text)
+	}
+	*f = flexInt(int(value))
+	return nil
+}
 
 // KeyPrefix namespaces token entries in the secret store.
 const KeyPrefix = "oauth:"
@@ -193,12 +222,12 @@ type DeviceCode struct {
 }
 
 type deviceResponse struct {
-	DeviceCode              string `json:"device_code"`
-	UserCode                string `json:"user_code"`
-	VerificationURI         string `json:"verification_uri"`
-	VerificationURIComplete string `json:"verification_uri_complete"`
-	Interval                int    `json:"interval"`
-	ExpiresIn               int    `json:"expires_in"`
+	DeviceCode              string  `json:"device_code"`
+	UserCode                string  `json:"user_code"`
+	VerificationURI         string  `json:"verification_uri"`
+	VerificationURIComplete string  `json:"verification_uri_complete"`
+	Interval                flexInt `json:"interval"`
+	ExpiresIn               flexInt `json:"expires_in"`
 }
 
 // StartDevice requests a device code.
@@ -247,10 +276,10 @@ func StartDevice(ctx context.Context, flow DeviceFlow) (DeviceCode, error) {
 }
 
 type tokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"`
-	Error        string `json:"error"`
+	AccessToken  string  `json:"access_token"`
+	RefreshToken string  `json:"refresh_token"`
+	ExpiresIn    flexInt `json:"expires_in"`
+	Error        string  `json:"error"`
 }
 
 // WaitDevice polls until the operator approves, the code expires, or ctx ends.
