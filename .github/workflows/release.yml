@@ -42,3 +42,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Public installed-app credentials, stamped into the binary so a
+          # download needs no prompt. Add them as repository secrets; a release
+          # without them still builds and falls back to the login prompt.
+          TERMIXGO_ANTIGRAVITY_CLIENT_ID: ${{ secrets.TERMIXGO_ANTIGRAVITY_CLIENT_ID }}
+          TERMIXGO_ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.TERMIXGO_ANTIGRAVITY_CLIENT_SECRET }}

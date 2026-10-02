@@ -48,6 +48,29 @@ try {
     $module = "github.com/99apps-id/termixgo/internal/version"
     $ldflags = "-s -w -X $module.Version=$Version -X $module.Commit=$commit -X $module.BuildDate=$date"
 
+    # Provider client credentials stay out of the repository. A local .env.local
+    # (git-ignored) or the environment supplies the public Antigravity
+    # installed-app pair, so a shipped binary needs no prompt at login.
+    $envFile = Join-Path $root ".env.local"
+    if (Test-Path $envFile) {
+        foreach ($line in Get-Content $envFile) {
+            $trimmed = $line.Trim()
+            if (-not $trimmed -or $trimmed.StartsWith("#")) { continue }
+            $eq = $trimmed.IndexOf("=")
+            if ($eq -lt 1) { continue }
+            $key = $trimmed.Substring(0, $eq).Trim()
+            $value = $trimmed.Substring($eq + 1).Trim().Trim('"')
+            Set-Item -Path "env:$key" -Value $value
+        }
+    }
+    $oauthModule = "github.com/99apps-id/termixgo/internal/oauth"
+    if ($env:TERMIXGO_ANTIGRAVITY_CLIENT_ID) {
+        $ldflags += " -X $oauthModule.AntigravityClientID=$($env:TERMIXGO_ANTIGRAVITY_CLIENT_ID)"
+    }
+    if ($env:TERMIXGO_ANTIGRAVITY_CLIENT_SECRET) {
+        $ldflags += " -X $oauthModule.AntigravityClientSecret=$($env:TERMIXGO_ANTIGRAVITY_CLIENT_SECRET)"
+    }
+
     $dist = Join-Path $root "dist"
     if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
     New-Item -ItemType Directory -Path $dist | Out-Null

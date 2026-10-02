@@ -219,6 +219,23 @@ func TestPKCEResolvesStoredClientCredentials(t *testing.T) {
 	}
 }
 
+// TestSpecForCarriesStampedAntigravityCredentials proves a release binary that
+// had the public client pair injected at link time needs no environment and no
+// prompt: the spec already holds both values.
+func TestSpecForCarriesStampedAntigravityCredentials(t *testing.T) {
+	oldID, oldSecret := AntigravityClientID, AntigravityClientSecret
+	t.Cleanup(func() { AntigravityClientID, AntigravityClientSecret = oldID, oldSecret })
+	AntigravityClientID, AntigravityClientSecret = "stamped-id", "stamped-secret"
+
+	spec, ok := SpecFor("antigravity")
+	if !ok {
+		t.Fatal("no antigravity spec")
+	}
+	if spec.ClientID != "stamped-id" || spec.ClientSecret != "stamped-secret" {
+		t.Errorf("spec = %+v, want the stamped pair", spec)
+	}
+}
+
 // TestPKCEFlow drives the loopback authorization-code flow end to end against
 // a fake token endpoint: start, visit the redirect with a code, exchange.
 func TestPKCEFlow(t *testing.T) {

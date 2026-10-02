@@ -24,6 +24,12 @@ builds:
       - -X github.com/99apps-id/termixgo/internal/version.Version={{ .Version }}
       - -X github.com/99apps-id/termixgo/internal/version.Commit={{ .ShortCommit }}
       - -X github.com/99apps-id/termixgo/internal/version.BuildDate={{ .Date }}
+      # The public Antigravity client pair comes from repository secrets set in
+      # the release workflow, never from the tree. When the secrets are absent
+      # the flag is omitted and the binary falls back to the environment or a
+      # one-time prompt.
+      - '{{ with .Env.TERMIXGO_ANTIGRAVITY_CLIENT_ID }}-X github.com/99apps-id/termixgo/internal/oauth.AntigravityClientID={{ . }}{{ end }}'
+      - '{{ with .Env.TERMIXGO_ANTIGRAVITY_CLIENT_SECRET }}-X github.com/99apps-id/termixgo/internal/oauth.AntigravityClientSecret={{ . }}{{ end }}'
     goos:
       - linux
       - darwin

@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -101,10 +102,37 @@ var specs = map[string]Spec{
 	},
 }
 
-// SpecFor returns the login spec for a provider.
+// AntigravityClientID and AntigravityClientSecret are Google's public
+// installed-app credential. They are never committed: a release build stamps
+// them here with -ldflags, sourced from an environment variable or the local
+// .env.local file, so the operator never types them:
+//
+//	-X github.com/99apps-id/termixgo/internal/oauth.AntigravityClientID=...
+//	-X github.com/99apps-id/termixgo/internal/oauth.AntigravityClientSecret=...
+//
+// A build with no stamp falls back to TERMIXGO_ANTIGRAVITY_CLIENT_ID and
+// TERMIXGO_ANTIGRAVITY_CLIENT_SECRET, then to a one-time prompt.
+var (
+	AntigravityClientID     string
+	AntigravityClientSecret string
+)
+
+// SpecFor returns the login spec for a provider, filling the Antigravity client
+// pair from the build stamp when the binary carried one.
 func SpecFor(provider string) (Spec, bool) {
 	spec, ok := specs[provider]
-	return spec, ok
+	if !ok {
+		return Spec{}, false
+	}
+	if provider == "antigravity" {
+		if strings.TrimSpace(spec.ClientID) == "" {
+			spec.ClientID = strings.TrimSpace(AntigravityClientID)
+		}
+		if strings.TrimSpace(spec.ClientSecret) == "" {
+			spec.ClientSecret = strings.TrimSpace(AntigravityClientSecret)
+		}
+	}
+	return spec, true
 }
 
 // Supported lists the providers with a login, sorted.

@@ -9,10 +9,22 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.1.
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)
 MODULE := github.com/99apps-id/termixgo/internal/version
+
+# Provider client credentials stay out of the repository. A git-ignored
+# .env.local supplies the public Antigravity installed-app pair, which is
+# stamped into the binary so a shipped build needs no prompt at login. A build
+# without the file falls back to the environment, then to a one-time prompt.
+-include .env.local
+OAUTH_MODULE := github.com/99apps-id/termixgo/internal/oauth
+AG_ID_LDFLAG := $(if $(TERMIXGO_ANTIGRAVITY_CLIENT_ID),-X $(OAUTH_MODULE).AntigravityClientID=$(TERMIXGO_ANTIGRAVITY_CLIENT_ID))
+AG_SECRET_LDFLAG := $(if $(TERMIXGO_ANTIGRAVITY_CLIENT_SECRET),-X $(OAUTH_MODULE).AntigravityClientSecret=$(TERMIXGO_ANTIGRAVITY_CLIENT_SECRET))
+
 LDFLAGS := -s -w \
 	-X $(MODULE).Version=$(VERSION) \
 	-X $(MODULE).Commit=$(COMMIT) \
-	-X $(MODULE).BuildDate=$(DATE)
+	-X $(MODULE).BuildDate=$(DATE) \
+	$(AG_ID_LDFLAG) \
+	$(AG_SECRET_LDFLAG)
 
 .PHONY: help build run test lint fmt vet check race clean cross
 
