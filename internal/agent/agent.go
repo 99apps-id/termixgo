@@ -432,6 +432,17 @@ func (r *Runner) systemParts(session *Session) []string {
 func (r *Runner) observeToolResult(ledger *VerifyLedger, guard *loopGuard, name, rawArgs string, result Result) {
 	lowered := strings.ToLower(strings.TrimSpace(name))
 	switch lowered {
+	case "apply_patch", "patch":
+		if result.IsError {
+			return
+		}
+		args, err := decodeToolArguments(rawArgs)
+		if err != nil {
+			return
+		}
+		for _, path := range patchChangedPaths(argString(args, "patch")) {
+			*ledger = ledger.RecordEdit(path)
+		}
 	case "edit", "replace", "multi_edit", "multi_replace", "write_file", "write", "create_file":
 		if result.IsError {
 			return
@@ -461,6 +472,27 @@ func (r *Runner) observeToolResult(ledger *VerifyLedger, guard *loopGuard, name,
 			*ledger = ledger.RecordVerification()
 		}
 	}
+}
+
+// patchChangedPaths extracts the file paths touched by an apply_patch
+// document, so verify-on-stop can track multi-file edits the same way it
+// tracks exact-string tools.
+func patchChangedPaths(document string) []string {
+	ops, err := parsePatch(document)
+	if err != nil {
+		return nil
+	}
+	paths := make([]string, 0, len(ops))
+	seen := make(map[string]bool, len(ops))
+	for _, op := range ops {
+		path := strings.TrimSpace(op.path)
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 // needsApprovalFor reports whether a call must wait. Trust is the outer
