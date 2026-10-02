@@ -387,6 +387,7 @@ termixgo login openai-codex   # ChatGPT/Codex, browser + loopback callback (port
 termixgo login claude-oauth   # Claude, browser + loopback callback
 termixgo login antigravity    # Google Antigravity, browser + loopback callback
 termixgo login github-copilot # GitHub Copilot, device code
+termixgo login muse           # Meta Muse Code, device code then API-key mint
 termixgo logout <provider>
 ```
 
@@ -401,6 +402,7 @@ termixgo model openai-codex/codex-gpt-5.5
 termixgo model claude-oauth/claude-oauth-sonnet-5
 termixgo model antigravity/antigravity-gemini-3.8-flash
 termixgo model github-copilot/copilot-gpt-5.4
+termixgo model muse/muse-spark-1.3
 ```
 
 ### Antigravity
@@ -833,7 +835,7 @@ termixgo approval [mode]        # ask, edits, all or plan
 termixgo harness [id]           # show or set the agent harness profile
 termixgo mcp                    # list MCP servers and their tools
 termixgo secret <provider> [key] # store a provider API key
-termixgo login <provider>       # OAuth login: xai-oauth, openai-codex, claude-oauth, antigravity, github-copilot
+termixgo login <provider>       # OAuth login: xai-oauth, openai-codex, claude-oauth, antigravity, github-copilot, muse
 termixgo logout <provider>      # drop a stored OAuth login
 termixgo telegram [status|on|off]
 termixgo cron [list|add|remove|on|off|run]

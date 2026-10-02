@@ -87,6 +87,25 @@ func Login(ctx context.Context, store *Store, provider string, in io.Reader, out
 				token, err = FetchCopilotToken(ctx, spec.CopilotTokenURL, ghToken.Access, clock)
 			}
 		}
+	case "muse":
+		flow := DeviceFlow{ClientID: spec.ClientID, Scope: spec.Scope, DeviceURL: spec.DeviceURL, TokenURL: spec.TokenURL, VerifyHint: spec.VerifyHint}
+		var code DeviceCode
+		code, err = StartDevice(ctx, flow)
+		if err == nil {
+			target := code.VerificationURIComplete
+			if strings.TrimSpace(target) == "" {
+				target = code.VerificationURI
+			}
+			fmt.Fprintf(out, "Open %s and enter code %s\n", target, code.UserCode)
+			openBrowser(target)
+			var device Token
+			device, err = WaitDevice(ctx, flow, code, clock)
+			if err == nil {
+				// The device grant only yields a "dca:" token; the model
+				// endpoint needs the minted API key.
+				token, err = MintMetaKey(ctx, spec.MintURL, device.Access)
+			}
+		}
 	default:
 		flow := DeviceFlow{ClientID: spec.ClientID, Scope: spec.Scope, DeviceURL: spec.DeviceURL, TokenURL: spec.TokenURL, VerifyHint: spec.VerifyHint}
 		var code DeviceCode
@@ -268,6 +287,8 @@ func refreshTokenOnce(ctx context.Context, store *Store, spec Spec, token Token)
 	switch spec.Kind {
 	case "copilot":
 		refreshed, err = FetchCopilotToken(ctx, spec.CopilotTokenURL, token.Refresh, clock)
+	case "muse":
+		refreshed, err = MintMetaKey(ctx, spec.MintURL, token.Refresh)
 	case "codex":
 		refreshed, err = RefreshCodex(ctx, CodexFlow{ClientID: spec.ClientID, Issuer: spec.Issuer}, token.Refresh, clock)
 	case "pkce":

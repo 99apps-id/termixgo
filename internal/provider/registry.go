@@ -14,6 +14,7 @@ const (
 	KindGoogle      Kind = "google"
 	KindAntigravity Kind = "antigravity"
 	KindCopilot     Kind = "copilot"
+	KindMuse        Kind = "muse"
 )
 
 // Provider describes one BYOK provider.
@@ -131,6 +132,11 @@ var contextWindows = map[string]int{
 	"grok-4.5-oauth":            500000,
 	"grok-build-0.1-oauth":      256000,
 
+	// Meta Muse.
+	"muse-spark-1.3":             1048576,
+	"muse-spark-1.3-contributor": 1048576,
+	"muse-spark-1.2":             1048576,
+
 	// xAI.
 	"grok-4.7":       500000,
 	"grok-4.6":       500000,
@@ -230,6 +236,7 @@ var providerContextWindows = map[string]int{
 	"qwen-token-plan": 131072,
 	"stepfun":         262144,
 	"stepfun-plan":    262144,
+	"muse":            1048576,
 	"zhipu":           131072,
 	// A local server usually runs a quantised model with a small window.
 	"ollama":            32768,
@@ -282,6 +289,7 @@ func Providers() []Provider {
 		{ID: "xai-oauth", Label: "xAI Grok (OAuth)", Kind: KindOpenAI, DefaultBaseURL: "https://api.x.ai/v1", ConsoleURL: "https://x.ai/", NeedsKey: true, OAuth: true},
 		{ID: "openai-codex", Label: "OpenAI Codex (ChatGPT)", Kind: KindOpenAI, DefaultBaseURL: "https://chatgpt.com/backend-api/codex", ConsoleURL: "https://chatgpt.com/", NeedsKey: true, OAuth: true},
 		{ID: "github-copilot", Label: "GitHub Copilot", Kind: KindCopilot, DefaultBaseURL: "https://api.githubcopilot.com", ConsoleURL: "https://github.com/features/copilot", NeedsKey: true, OAuth: true},
+		{ID: "muse", Label: "Meta Muse Code", Kind: KindMuse, DefaultBaseURL: "https://api.meta.ai/v1", ConsoleURL: "https://dev.meta.ai/products/muse-code", NeedsKey: true, OAuth: true},
 
 		// Vendors that matter most for agentic coding, cheapest strong models
 		// first so the wizard's default order is also a sensible one.
@@ -442,6 +450,13 @@ func Models() []Model {
 		{ID: "copilot-grok-4.7", Provider: "github-copilot", Label: "Grok 4.7 (Copilot)", APIID: "grok-4.7", Description: "xAI Grok through GitHub Copilot.", Tags: []string{"reasoning", "tools"}},
 		{ID: "copilot-kimi-k3", Provider: "github-copilot", Label: "Kimi K3 (Copilot)", APIID: "kimi-k3", Description: "Moonshot Kimi through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "copilot-mai-code-1-flash", Provider: "github-copilot", Label: "MAI-Code-1.1-Flash (Copilot)", APIID: "mai-code-1.1-flash", Description: "Fast coding model through GitHub Copilot.", Tags: []string{"coding", "fast"}},
+		// Meta Muse Code models served through a Meta login (OAuth). The wire
+		// ids are the ones api.meta.ai serves; a Muse login only reaches the
+		// models its account is entitled to.
+		{ID: "muse-spark-1.3", Provider: "muse", Label: "Muse Spark 1.3", Description: "Meta's flagship reasoning and agentic coding model through a Muse login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "muse-spark-1.3-contributor", Provider: "muse", Label: "Muse Spark 1.3 Contributor", Description: "Muse contributor model through a Meta login.", Tags: []string{"coding", "tools"}},
+		{ID: "muse-spark-1.2", Provider: "muse", Label: "Muse Spark 1.2", Description: "Previous Muse generation through a Meta login.", Tags: []string{"reasoning", "coding"}},
+
 		// Google Antigravity serves Gemini and Claude models through its Cloud
 		// Code backend under an Antigravity login.
 		// The Cloud Code backend keys models by an upstream id that differs

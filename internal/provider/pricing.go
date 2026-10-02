@@ -185,6 +185,7 @@ var planProviders = map[string]PlanInfo{
 	"claude-oauth":   {Name: "Claude", CreditUnit: "subscription"},
 	"antigravity":    {Name: "Google Antigravity", CreditUnit: "subscription"},
 	"github-copilot": {Name: "GitHub Copilot", CreditUnit: "subscription"},
+	"muse":           {Name: "Meta Muse Code", CreditUnit: "subscription"},
 }
 
 // Plan returns the subscription a model is served under, when its provider

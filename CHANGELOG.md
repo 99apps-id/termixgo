@@ -6,6 +6,23 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- Meta Muse Code as a login provider and model backend. `termixgo login muse`
+  runs Meta's RFC 8628 device flow, mints the returned device token into an LLM
+  API key, and stores it. `muse` speaks the Responses API at `api.meta.ai`
+  (the same shape as Codex) with the Muse identity headers, and the catalogue
+  offers `muse-spark-1.3`, `muse-spark-1.3-contributor` and `muse-spark-1.2`.
+  A login is a subscription, so its models report no per-token dollar price.
+
+### Fixed
+
+- Release archives carry the install scripts again: `INSTALL.bat`,
+  `install.ps1` and `uninstall.ps1` in the Windows zip, `install.sh` in the
+  tar.gz for Linux and macOS. The goreleaser configuration only listed the
+  docs, so a download from the releases page had the binary but nothing to
+  install it with, unlike the bundle `scripts/make-installer.ps1` builds.
+
 ## 0.1.0 - 2026-10-02
 
 ### Added
