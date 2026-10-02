@@ -177,6 +177,41 @@ func TestClientCredentialStore(t *testing.T) {
 	}
 }
 
+// TestOpenAICodexUsesTheLoopbackPKCEFlow pins the flow the Codex CLI uses. The
+// old device session answered client_id_not_found_in_session, so login must be
+// an authorization code on the fixed loopback port with the CLI's extra params.
+func TestOpenAICodexUsesTheLoopbackPKCEFlow(t *testing.T) {
+	spec, ok := SpecFor("openai-codex")
+	if !ok {
+		t.Fatal("no openai-codex spec")
+	}
+	if spec.Kind != "pkce" {
+		t.Fatalf("kind = %q, want pkce", spec.Kind)
+	}
+	if spec.RedirectPort != 1455 || spec.RedirectPath != "/auth/callback" {
+		t.Errorf("redirect = %d %q, want 1455 /auth/callback", spec.RedirectPort, spec.RedirectPath)
+	}
+	if spec.AuthorizeURL != "https://auth.openai.com/oauth/authorize" {
+		t.Errorf("authorize = %q", spec.AuthorizeURL)
+	}
+	if spec.ExtraAuth["codex_cli_simplified_flow"] != "true" || spec.ExtraAuth["originator"] != "codex_cli_rs" {
+		t.Errorf("extra auth = %#v", spec.ExtraAuth)
+	}
+	if strings.TrimSpace(spec.RefreshScope) == "" {
+		t.Errorf("the OpenAI refresh grant needs the original scope")
+	}
+}
+
+// TestTokenFromReadsTheChatGPTAccountID proves the PKCE exchange captures the
+// account id the Codex client sends as ChatGPT-Account-ID.
+func TestTokenFromReadsTheChatGPTAccountID(t *testing.T) {
+	access := testJWT(`{"https://api.openai.com/auth":{"chatgpt_account_id":"acct_42"}}`)
+	token := tokenFrom(tokenResponse{AccessToken: access, RefreshToken: "r", ExpiresIn: 3600}, time.Now())
+	if token.AccountID != "acct_42" {
+		t.Errorf("AccountID = %q, want acct_42", token.AccountID)
+	}
+}
+
 // TestPromptClientCredentialsAsksOnlyForTheMissingSecret covers the Antigravity
 // 400 "client_secret is missing": the id was known, so the login must ask for
 // the secret alone and not re-ask the id.

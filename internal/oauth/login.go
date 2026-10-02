@@ -125,6 +125,7 @@ func pkceFlowFromSpec(spec Spec, store *Store) PKCEFlow {
 		ExtraAuth:    spec.ExtraAuth,
 		ExchangeJSON: spec.ExchangeJSON,
 		RefreshJSON:  spec.RefreshJSON,
+		RefreshScope: spec.RefreshScope,
 	}
 }
 

@@ -199,6 +199,32 @@ func TestAccessTokenRefreshesAStaleGrantEarly(t *testing.T) {
 	}
 }
 
+// TestPKCERefreshSendsTheConfiguredScope covers the OpenAI refresh grant, which
+// expects the original scope back; providers that do not set one send none.
+func TestPKCERefreshSendsTheConfiguredScope(t *testing.T) {
+	store := testStore(t)
+	var gotScope string
+	server := fakeTokenServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		_ = request.ParseForm()
+		gotScope = request.PostForm.Get("scope")
+		writer.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(writer, `{"access_token":"fresh","expires_in":3600}`)
+	})
+	useTestSpec(t, Spec{
+		Provider: "codex-scope", Kind: "pkce", ClientID: "cid",
+		TokenURL: server.URL, RefreshScope: "openid profile email offline_access",
+	})
+	if err := store.Save("codex-scope", Token{Access: "old", Refresh: "rt", Expires: time.Now().Add(-time.Hour)}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if got := AccessToken(context.Background(), store, "codex-scope"); got != "fresh" {
+		t.Fatalf("AccessToken = %q, want fresh", got)
+	}
+	if gotScope != "openid profile email offline_access" {
+		t.Errorf("refresh scope = %q", gotScope)
+	}
+}
+
 func TestValidSkipsTheLeadWindow(t *testing.T) {
 	// Claude's preset rotates four hours early (9router refreshLeadMs).
 	token := Token{Access: "a", Expires: time.Now().Add(3 * time.Hour)}

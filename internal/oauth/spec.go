@@ -33,6 +33,10 @@ type Spec struct {
 	ExtraAuth       map[string]string
 	ExchangeJSON    bool
 	RefreshJSON     bool
+	// RefreshScope is sent on a PKCE refresh when a vendor requires it (the
+	// OpenAI token endpoint expects the original scope on the refresh grant).
+	// Empty means the refresh carries no scope, as Claude and Google expect.
+	RefreshScope string
 
 	// RefreshLead overrides how early the access token is renewed; zero is
 	// the five-minute default. MaxRefreshAge renews a credential that has
@@ -57,10 +61,24 @@ var specs = map[string]Spec{
 	},
 	"openai-codex": {
 		Provider:    "openai-codex",
-		Kind:        "codex",
+		Kind:        "pkce",
 		ClientID:    "app_EMoamEEZ73f0CkXaXp7hrann",
-		Issuer:      "https://auth.openai.com",
 		RefreshLead: 10 * time.Minute,
+		// The Codex CLI logs in with an authorization code on a fixed loopback
+		// port, not the old device flow: the device session is what answered
+		// client_id_not_found_in_session. The extra params are the ones the
+		// CLI sends, and the codex_cli_simplified_flow flag is required.
+		AuthorizeURL: "https://auth.openai.com/oauth/authorize",
+		TokenURL:     "https://auth.openai.com/oauth/token",
+		Scopes:       []string{"openid", "profile", "email", "offline_access"},
+		RedirectPort: 1455,
+		RedirectPath: "/auth/callback",
+		ExtraAuth: map[string]string{
+			"id_token_add_organizations": "true",
+			"codex_cli_simplified_flow":  "true",
+			"originator":                 "codex_cli_rs",
+		},
+		RefreshScope: "openid profile email offline_access",
 		// OpenAI ages a Codex refresh grant out in about eight days even
 		// while the hour-long access token keeps rotating, so the credential
 		// is renewed by age as well as by expiry (9router maxRefreshAgeMs).

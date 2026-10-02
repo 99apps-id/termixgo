@@ -31,6 +31,8 @@ type PKCEFlow struct {
 	// form, which the Anthropic endpoint expects.
 	ExchangeJSON bool
 	RefreshJSON  bool
+	// RefreshScope is included on the refresh grant when a vendor requires it.
+	RefreshScope string
 }
 
 type pkceSession struct {
@@ -211,6 +213,9 @@ func RefreshPKCE(ctx context.Context, flow PKCEFlow, refreshToken string, clock 
 	}
 	if flow.ClientSecret != "" {
 		payload["client_secret"] = flow.ClientSecret
+	}
+	if strings.TrimSpace(flow.RefreshScope) != "" {
+		payload["scope"] = flow.RefreshScope
 	}
 	token, err := tokenRequest(ctx, flow.TokenURL, payload, flow.RefreshJSON, clock)
 	if err != nil {

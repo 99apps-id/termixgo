@@ -278,6 +278,7 @@ func StartDevice(ctx context.Context, flow DeviceFlow) (DeviceCode, error) {
 type tokenResponse struct {
 	AccessToken  string  `json:"access_token"`
 	RefreshToken string  `json:"refresh_token"`
+	IDToken      string  `json:"id_token"`
 	ExpiresIn    flexInt `json:"expires_in"`
 	Error        string  `json:"error"`
 }
@@ -357,6 +358,12 @@ func tokenFrom(parsed tokenResponse, now time.Time) Token {
 	token := Token{Access: parsed.AccessToken, Refresh: parsed.RefreshToken}
 	if parsed.ExpiresIn > 0 {
 		token.Expires = now.Add(time.Duration(parsed.ExpiresIn) * time.Second)
+	}
+	// The ChatGPT account id rides in the token claims; the Codex client needs
+	// it for the ChatGPT-Account-ID header later.
+	token.AccountID = AccountIDFromJWT(parsed.AccessToken)
+	if token.AccountID == "" {
+		token.AccountID = AccountIDFromJWT(parsed.IDToken)
 	}
 	return token
 }
