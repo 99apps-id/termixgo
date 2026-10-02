@@ -17,8 +17,9 @@ const defaultRefreshLead = 5 * time.Minute
 
 // Login drives the flow a provider declares (device, codex, or pkce) and
 // stores the token. It writes the code the operator must enter and the URL to
-// open.
-func Login(ctx context.Context, store *Store, provider string, out io.Writer) error {
+// open. in is used to prompt for client credentials a provider needs and the
+// environment or the secret store does not already hold.
+func Login(ctx context.Context, store *Store, provider string, in io.Reader, out io.Writer) error {
 	spec, ok := SpecFor(provider)
 	if !ok {
 		return fmt.Errorf("%s does not use an OAuth login", provider)
@@ -36,9 +37,19 @@ func Login(ctx context.Context, store *Store, provider string, out io.Writer) er
 		fmt.Fprintf(out, "Open %s and enter code %s\n", flow.VerifyURL(), device.UserCode)
 		token, err = WaitCodexToken(ctx, flow, device, clock)
 	case "pkce":
-		flow := pkceFlowFromSpec(spec)
+		flow := pkceFlowFromSpec(spec, store)
 		if strings.TrimSpace(flow.ClientID) == "" {
-			return fmt.Errorf("%s needs OAuth client credentials in %s", provider, spec.ClientIDEnv)
+			if in == nil {
+				return fmt.Errorf("%s needs OAuth client credentials in %s", provider, spec.ClientIDEnv)
+			}
+			id, secret, promptErr := promptClientCredentials(in, out, provider)
+			if promptErr != nil {
+				return promptErr
+			}
+			if saveErr := store.SaveClient(provider, id, secret); saveErr != nil {
+				return saveErr
+			}
+			flow = pkceFlowFromSpec(spec, store)
 		}
 		var session *pkceSession
 		var authURL string
@@ -73,8 +84,8 @@ func Login(ctx context.Context, store *Store, provider string, out io.Writer) er
 }
 
 // pkceFlowFromSpec maps a spec to the PKCE flow, resolving a client credential
-// from the environment when the spec names one.
-func pkceFlowFromSpec(spec Spec) PKCEFlow {
+// from the environment, then the secret store, when the spec names one.
+func pkceFlowFromSpec(spec Spec, store *Store) PKCEFlow {
 	clientID := spec.ClientID
 	if spec.ClientIDEnv != "" {
 		if value := strings.TrimSpace(os.Getenv(spec.ClientIDEnv)); value != "" {
@@ -85,6 +96,16 @@ func pkceFlowFromSpec(spec Spec) PKCEFlow {
 	if spec.ClientSecretEnv != "" {
 		if value := strings.TrimSpace(os.Getenv(spec.ClientSecretEnv)); value != "" {
 			clientSecret = value
+		}
+	}
+	if store != nil && (strings.TrimSpace(clientID) == "" || strings.TrimSpace(clientSecret) == "") {
+		if id, secret := store.LoadClient(spec.Provider); strings.TrimSpace(id) != "" {
+			if strings.TrimSpace(clientID) == "" {
+				clientID = id
+			}
+			if strings.TrimSpace(clientSecret) == "" {
+				clientSecret = secret
+			}
 		}
 	}
 	return PKCEFlow{
@@ -179,7 +200,13 @@ func refreshTokenOnce(ctx context.Context, store *Store, spec Spec, token Token)
 	case "codex":
 		refreshed, err = RefreshCodex(ctx, CodexFlow{ClientID: spec.ClientID, Issuer: spec.Issuer}, token.Refresh, clock)
 	case "pkce":
-		refreshed, err = RefreshPKCE(ctx, pkceFlowFromSpec(spec), token.Refresh, clock)
+		flow := pkceFlowFromSpec(spec, store)
+		if strings.TrimSpace(flow.ClientID) == "" {
+			// No client credentials to refresh with; keep the current access
+			// token until the operator logs in again.
+			return token, nil
+		}
+		refreshed, err = RefreshPKCE(ctx, flow, token.Refresh, clock)
 	default:
 		refreshed, err = RefreshDevice(ctx, DeviceFlow{ClientID: spec.ClientID, DeviceURL: spec.DeviceURL, TokenURL: spec.TokenURL}, token.Refresh, clock)
 	}

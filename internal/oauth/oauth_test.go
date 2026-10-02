@@ -156,6 +156,26 @@ func TestTokenStore(t *testing.T) {
 	}
 }
 
+// TestClientCredentialStore keeps the vendor client pair in the secret file,
+// out of the repository, so a provider can refresh without environment keys.
+func TestClientCredentialStore(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	store, err := secrets.Load()
+	if err != nil {
+		t.Fatalf("secrets.Load: %v", err)
+	}
+	tokens := NewStore(store)
+	if id, secret := tokens.LoadClient("antigravity"); id != "" || secret != "" {
+		t.Fatalf("a fresh store should have no client credentials, got %q %q", id, secret)
+	}
+	if err := tokens.SaveClient("antigravity", "the-id", "the-secret"); err != nil {
+		t.Fatalf("SaveClient: %v", err)
+	}
+	if id, secret := tokens.LoadClient("antigravity"); id != "the-id" || secret != "the-secret" {
+		t.Errorf("LoadClient = %q %q, want the-id the-secret", id, secret)
+	}
+}
+
 // TestPKCEFlow drives the loopback authorization-code flow end to end against
 // a fake token endpoint: start, visit the redirect with a code, exchange.
 func TestPKCEFlow(t *testing.T) {

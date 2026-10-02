@@ -509,7 +509,7 @@ func runLogin(args []string, stdout io.Writer) error {
 	}
 	ctx, stop := signalContext()
 	defer stop()
-	return oauth.Login(ctx, oauth.NewStore(store), providerID, stdout)
+	return oauth.Login(ctx, oauth.NewStore(store), providerID, os.Stdin, stdout)
 }
 
 // runLogout removes a stored OAuth token.

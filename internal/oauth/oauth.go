@@ -108,6 +108,43 @@ func (s *Store) Delete(provider string) error {
 	return s.secrets.Delete(KeyPrefix + provider)
 }
 
+// LoadClient returns stored OAuth client credentials for a provider. They are
+// the public installed-app pair a vendor's CLI ships, kept out of the source so
+// GitHub secret scanning does not flag the repository.
+func (s *Store) LoadClient(provider string) (id, secret string) {
+	if s == nil || s.secrets == nil {
+		return "", ""
+	}
+	s.mu.Lock()
+	raw := s.secrets.Get(KeyPrefix + provider + ":client")
+	s.mu.Unlock()
+	if strings.TrimSpace(raw) == "" {
+		return "", ""
+	}
+	var parsed struct {
+		ClientID     string `json:"clientId"`
+		ClientSecret string `json:"clientSecret"`
+	}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return "", ""
+	}
+	return parsed.ClientID, parsed.ClientSecret
+}
+
+// SaveClient stores OAuth client credentials for a provider.
+func (s *Store) SaveClient(provider, id, secret string) error {
+	if s == nil || s.secrets == nil {
+		return errors.New("no secret store is available")
+	}
+	data, err := json.Marshal(map[string]string{"clientId": id, "clientSecret": secret})
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.secrets.Set(KeyPrefix+provider+":client", string(data))
+}
+
 // Clock makes the poll loop testable.
 type Clock struct {
 	Now   func() time.Time
