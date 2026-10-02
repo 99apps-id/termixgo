@@ -101,6 +101,46 @@ func TestSchedulerDeliversADueJob(t *testing.T) {
 	}
 }
 
+// TestSchedulerRequeuesAJobWhenTheAssistantIsBusy covers two jobs due at the
+// same tick: the one that loses the single-run gate is put back, not skipped.
+func TestSchedulerRequeuesAJobWhenTheAssistantIsBusy(t *testing.T) {
+	now := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	store := newStore(t)
+	if _, err := store.Add("daily", "write the report", Schedule{Kind: Every, Every: time.Hour}, now); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	runner := &fakeRunner{err: ErrBusy}
+	clock := now.Add(2 * time.Hour)
+	scheduler := &Scheduler{
+		Store:  store,
+		Runner: runner,
+		Now:    func() time.Time { return clock },
+	}
+
+	scheduler.tick(context.Background())
+	scheduler.Wait()
+
+	jobs := store.List()
+	if jobs[0].LastError != "" {
+		t.Errorf("a busy deferral is not a failure, LastError = %q", jobs[0].LastError)
+	}
+	if jobs[0].NextRun.After(clock) {
+		t.Errorf("a busy job must be requeued to now, NextRun = %v", jobs[0].NextRun)
+	}
+
+	// The next tick retries it and it succeeds.
+	runner.mu.Lock()
+	runner.err = nil
+	runner.answer = "ok"
+	runner.mu.Unlock()
+	scheduler.tick(context.Background())
+	scheduler.Wait()
+	if runner.calls() != 2 {
+		t.Errorf("calls = %d, want the job retried once", runner.calls())
+	}
+}
+
 func TestSchedulerSuppressesSilentJobs(t *testing.T) {
 	now := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	store := newStore(t)

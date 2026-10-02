@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -137,6 +138,11 @@ func (a *App) RunScheduled(ctx context.Context, prompt string, progress func(str
 	}
 	session := agent.NewSession(a.workspace, a.CurrentModel().ID)
 	if err := a.runOn(ctx, prompt, nil, session); err != nil {
+		if errors.Is(err, ErrBusy) {
+			// Surface it as the scheduler's busy sentinel so the job is requeued
+			// rather than marked failed.
+			return "", cron.ErrBusy
+		}
 		return "", err
 	}
 	return session.LastAssistantText(), nil

@@ -218,8 +218,11 @@ func (a *App) SetTelegramChat(chatID, ownerUserID int64) error {
 	if err := a.UpdateConfig(func(cfg *config.Config) {
 		cfg.Telegram.ChatID = chatID
 		cfg.Telegram.OwnerUserID = ownerUserID
+		// Pairing consumes the code and unpairing drops it, so a code that was
+		// live never stays valid: a leaked code cannot re-pair the bot. A fresh
+		// code is generated on the next /setup.
+		cfg.Telegram.PairingCode = ""
 		if chatID != 0 {
-			cfg.Telegram.PairingCode = ""
 			cfg.Telegram.Enabled = true
 		}
 	}); err != nil {
@@ -232,7 +235,10 @@ func (a *App) SetTelegramChat(chatID, ownerUserID int64) error {
 			a.botStatus = "paired"
 		}
 		a.mu.Unlock()
+		return nil
 	}
+	// Clear the running bot's copy too, so it stops accepting the old code.
+	a.applyPairingCode("")
 	return nil
 }
 

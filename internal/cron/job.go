@@ -254,6 +254,24 @@ func (s *Store) MarkStarted(id string, now time.Time) (Job, bool, error) {
 }
 
 // MarkError records a failure without touching the schedule.
+// Requeue makes a job due again now, so the next tick retries it. It is how a
+// job that lost the single-run gate keeps its occurrence instead of skipping it.
+func (s *Store) Requeue(id string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.jobs {
+		if s.jobs[index].ID != id {
+			continue
+		}
+		if !s.jobs[index].Enabled {
+			return nil
+		}
+		s.jobs[index].NextRun = now
+		return s.saveLocked()
+	}
+	return nil
+}
+
 func (s *Store) MarkError(id string, failure error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

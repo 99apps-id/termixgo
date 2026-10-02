@@ -2,11 +2,17 @@ package cron
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 )
+
+// ErrBusy is returned by a Runner when the assistant is already running a
+// turn. The job is not failed: the scheduler puts it back so the occurrence is
+// retried on the next tick instead of being lost.
+var ErrBusy = errors.New("the assistant is busy")
 
 // Tokens a scheduled turn can answer with to stay silent.
 const (
@@ -136,6 +142,16 @@ func (s *Scheduler) run(ctx context.Context, id, prompt string) {
 	defer s.wg.Done()
 	defer s.release(id)
 	output, err := s.Runner.RunScheduled(ctx, prompt, nil)
+	if errors.Is(err, ErrBusy) {
+		// The operator or another job holds the single-run slot. Requeue so the
+		// occurrence is not lost; the next tick tries again.
+		if requeueErr := s.Store.Requeue(id, s.now()); requeueErr != nil {
+			s.logf("job %s could not be requeued: %v", id, requeueErr)
+		} else {
+			s.logf("job %s deferred: the assistant is busy", id)
+		}
+		return
+	}
 	if err != nil {
 		_ = s.Store.MarkError(id, err)
 		s.logf("job %s failed: %v", id, err)
