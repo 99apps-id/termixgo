@@ -142,34 +142,15 @@ func encodeGoogleTools(tools []ToolDef) []map[string]any {
 	return out
 }
 
-// sanitizeGoogleSchema drops JSON Schema keywords the Gemini API rejects.
+// sanitizeGoogleSchema drops JSON Schema keywords the Gemini API rejects. It
+// shares stripSchemaKeys with Antigravity, which keeps property names intact
+// and prunes a required name that has no property.
 func sanitizeGoogleSchema(schema map[string]any) map[string]any {
-	out := make(map[string]any, len(schema))
-	for key, value := range schema {
-		if geminiUnsupportedKeys[key] || strings.HasPrefix(key, "x-") {
-			continue
-		}
-		out[key] = sanitizeGoogleValue(value)
-	}
+	out := stripSchemaKeys(schema).(map[string]any)
 	if _, ok := out["type"]; !ok {
 		out["type"] = "object"
 	}
-	return out
-}
-
-func sanitizeGoogleValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return sanitizeGoogleSchema(typed)
-	case []any:
-		out := make([]any, 0, len(typed))
-		for _, item := range typed {
-			out = append(out, sanitizeGoogleValue(item))
-		}
-		return out
-	default:
-		return value
-	}
+	return pruneUndefinedRequired(out).(map[string]any)
 }
 
 // encodeGoogleContents builds the contents array, matching tool results by

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -139,6 +140,31 @@ func TestCleanAntigravitySchemaDropsUnsupportedKeys(t *testing.T) {
 // TestCleanAntigravitySchemaDropsPropertyNames covers the 400 an MCP tool
 // caused: its schema carried propertyNames, which the Gemini API rejects with
 // "Unknown name propertyNames".
+// TestCleanAntigravitySchemaPrunesUndefinedRequired covers the live 400
+// "property is not defined": a required name with no matching property, at the
+// top level and inside an array item, must be dropped.
+func TestCleanAntigravitySchemaPrunesUndefinedRequired(t *testing.T) {
+	cleaned := cleanAntigravitySchema(map[string]any{
+		"type": "object",
+		"properties": map[string]any{"todos": map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"title": map[string]any{"type": "string"}},
+				"required":   []string{"title", "status"},
+			},
+		}},
+		"required": []string{"todos", "ghost"},
+	})
+	if got := cleaned["required"]; !reflect.DeepEqual(got, []string{"todos"}) {
+		t.Errorf("required = %#v, want [todos]", got)
+	}
+	items := cleaned["properties"].(map[string]any)["todos"].(map[string]any)["items"].(map[string]any)
+	if got := items["required"]; !reflect.DeepEqual(got, []string{"title"}) {
+		t.Errorf("items required = %#v, want [title]", got)
+	}
+}
+
 func TestCleanAntigravitySchemaDropsPropertyNames(t *testing.T) {
 	cleaned := cleanAntigravitySchema(map[string]any{
 		"type": "object",

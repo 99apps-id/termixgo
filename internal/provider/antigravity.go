@@ -355,7 +355,9 @@ func cleanAntigravitySchema(schema map[string]any) map[string]any {
 		cleaned["properties"] = map[string]any{"reason": map[string]any{"type": "string"}}
 		cleaned["required"] = []string{"reason"}
 	}
-	return cleaned
+	// A required name without a matching property is rejected with
+	// "property is not defined", which MCP servers emit.
+	return pruneUndefinedRequired(cleaned).(map[string]any)
 }
 
 // geminiUnsupportedKeys are JSON Schema keywords the Gemini function-declaration
@@ -385,6 +387,20 @@ func stripSchemaKeys(value any) any {
 			if antigravityUnsupportedKeys[key] || strings.HasPrefix(key, "x-") {
 				continue
 			}
+			// Inside "properties" the keys are property names, not schema
+			// keywords. A tool is free to name a property "title" or "required";
+			// filtering those names deleted the property and then left a
+			// dangling required entry, which Gemini rejects.
+			if key == "properties" {
+				if properties, ok := entry.(map[string]any); ok {
+					cleaned := make(map[string]any, len(properties))
+					for name, property := range properties {
+						cleaned[name] = stripSchemaKeys(property)
+					}
+					out[key] = cleaned
+					continue
+				}
+			}
 			out[key] = stripSchemaKeys(entry)
 		}
 		return out
@@ -396,6 +412,70 @@ func stripSchemaKeys(value any) any {
 		return out
 	default:
 		return value
+	}
+}
+
+// pruneUndefinedRequired removes every name from a "required" list that has no
+// sibling property. The Gemini function schema validates required against
+// properties and answers "property is not defined" otherwise, which both
+// hand-written and MCP-supplied schemas trip over.
+func pruneUndefinedRequired(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, entry := range typed {
+			out[key] = pruneUndefinedRequired(entry)
+		}
+		if required, ok := out["required"]; ok {
+			properties, _ := out["properties"].(map[string]any)
+			if filtered, keep := definedRequired(required, properties); keep {
+				out["required"] = filtered
+			} else {
+				delete(out, "required")
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for index, entry := range typed {
+			out[index] = pruneUndefinedRequired(entry)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+// definedRequired keeps the required names that name a real property, reporting
+// whether any survived.
+func definedRequired(required any, properties map[string]any) (any, bool) {
+	switch names := required.(type) {
+	case []string:
+		kept := make([]string, 0, len(names))
+		for _, name := range names {
+			if _, present := properties[name]; present {
+				kept = append(kept, name)
+			}
+		}
+		if len(kept) == 0 {
+			return nil, false
+		}
+		return kept, true
+	case []any:
+		kept := make([]any, 0, len(names))
+		for _, entry := range names {
+			if text, ok := entry.(string); ok {
+				if _, present := properties[text]; present {
+					kept = append(kept, text)
+				}
+			}
+		}
+		if len(kept) == 0 {
+			return nil, false
+		}
+		return kept, true
+	default:
+		return nil, false
 	}
 }
 
