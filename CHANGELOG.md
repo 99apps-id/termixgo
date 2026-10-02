@@ -6,6 +6,8 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+## 0.1.1 - 2026-10-02
+
 ### Added
 
 - Meta Muse Code as a login provider and model backend. `termixgo login muse`
