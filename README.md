@@ -336,15 +336,27 @@ termixgo endpoint openai-compatible https://my-server/v1
 
 Some providers log in with a device code or a browser instead of an API key.
 Run the login once; the token is stored in `~/.termixgo/secrets.json` (0600) and
-refreshed automatically:
+refreshed automatically. There are two shapes:
+
+- Device code (xAI/Grok, GitHub Copilot): the command prints a URL and a short
+  code. Open the URL, enter the code and approve. The command waits and finishes
+  by itself.
+- Browser with a loopback callback (ChatGPT/Codex, Claude, Antigravity): the
+  command opens the browser at the vendor's consent page, or prints the URL when
+  it cannot. Approve there; the browser returns to a local port and the login
+  completes. No code to type.
 
 ```sh
 termixgo login xai-oauth      # xAI/Grok, device code
-termixgo login openai-codex   # ChatGPT/Codex, device code
+termixgo login openai-codex   # ChatGPT/Codex, browser + loopback callback (port 1455)
 termixgo login claude-oauth   # Claude, browser + loopback callback
 termixgo login antigravity    # Google Antigravity, browser + loopback callback
+termixgo login github-copilot # GitHub Copilot, device code
 termixgo logout <provider>
 ```
+
+The setup wizard runs the same check: choosing an OAuth provider shows "login
+required" and points at the login command instead of asking for an API key.
 
 Then pick a model:
 
@@ -353,15 +365,32 @@ termixgo model xai-oauth/grok-4.7-oauth
 termixgo model openai-codex/codex-gpt-5.5
 termixgo model claude-oauth/claude-oauth-sonnet-5
 termixgo model antigravity/antigravity-gemini-3.8-flash
+termixgo model github-copilot/copilot-gpt-5.4
 ```
 
-Antigravity reads its public client credentials from the environment, because
-GitHub secret scanning flags the Google pair:
+### Antigravity
+
+A full login, then pick a model and start:
 
 ```sh
-export TERMIXGO_ANTIGRAVITY_CLIENT_ID=...
-export TERMIXGO_ANTIGRAVITY_CLIENT_SECRET=...
+termixgo login antigravity                    # opens the Google consent page
+termixgo model antigravity/antigravity-gemini-3.8-flash
+termixgo
 ```
+
+Antigravity signs in with Google's public installed-app client, the same pair
+the Antigravity IDE ships. A release build stamps that pair into the binary at
+build time, from a git-ignored `.env.local` or from
+`TERMIXGO_ANTIGRAVITY_CLIENT_ID` and `TERMIXGO_ANTIGRAVITY_CLIENT_SECRET`, so a
+shipped build opens the browser with no prompt. The pair is never committed,
+because GitHub secret scanning flags it. You can also set those two variables
+at run time, and a build without the stamp asks for the pair once and stores it
+in the secret file.
+
+Antigravity keys models by an upstream id that carries the thinking tier, for
+example `gemini-3.8-flash-medium`. The catalogue maps a readable local id onto
+it, so choose the model from `/model` or `termixgo models` rather than typing a
+wire id by hand.
 
 These endpoints are requested by the vendors' own CLIs and are not officially
 supported; a failure names the model id and the endpoint.

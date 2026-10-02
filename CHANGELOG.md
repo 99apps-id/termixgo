@@ -141,6 +141,17 @@ All notable changes to Termixgo are recorded here. The format follows
   open; `Wait` never returned and `/stop` reported success while the turn stayed
   in progress. The command is now grouped with its children and the whole group
   is killed on cancel and on timeout.
+- OAuth logins for xAI/Grok, ChatGPT/Codex, Claude, Google Antigravity and
+  GitHub Copilot. A device code or a browser loopback callback stores a token in
+  the secret file, refreshes it before the vendor ages it out and shows the
+  provider as a subscription instead of a dollar rate.
+- Antigravity signs in with Google's public installed-app client pair stamped
+  into the binary at build time, from a git-ignored `.env.local` or the
+  environment, so a release build needs no prompt and the pair never enters the
+  repository. A build without the stamp asks for the pair once and stores it.
+- The setup wizard routes an OAuth provider to a login step and says a login is
+  required rather than asking for an API key, and `termixgo secret` refuses an
+  OAuth provider.
 
 ### Fixed
 

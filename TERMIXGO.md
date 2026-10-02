@@ -26,6 +26,10 @@ truth for Termixgo.
 - Security: provider keys and the Telegram token live in
   `~/.termixgo/secrets.json` with mode 0600 and nowhere else. Never log a
   secret, never write one into `config.json`, a session file or the transcript.
+  OAuth access and refresh tokens live there too, under `oauth:<provider>`. A
+  vendor's public installed-app client pair is never committed: a release build
+  stamps the Antigravity pair into the binary with ldflags, from a git-ignored
+  `.env.local` or the environment, and an unstamped build prompts and stores it.
 - Terminal UX: every state has to read well in 80 columns, in a light and a dark
   theme, and with colour disabled.
 
