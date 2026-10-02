@@ -388,8 +388,11 @@ func Models() []Model {
 		{ID: "claude-oauth-haiku-4-5", Provider: "claude-oauth", Label: "Claude 4.5 Haiku (OAuth)", APIID: "claude-haiku-4-5", Description: "Fast Claude through a Claude login.", Tags: []string{"fast", "tools"}},
 		// Google Antigravity serves Gemini and Claude models through its Cloud
 		// Code backend under an Antigravity login.
-		{ID: "antigravity-gemini-3.8-flash", Provider: "antigravity", Label: "Gemini 3.8 Flash (Antigravity)", APIID: "gemini-3.8-flash", Description: "Fast Gemini through an Antigravity login.", Tags: []string{"fast", "tools", "coding"}},
-		{ID: "antigravity-gemini-3.5-flash", Provider: "antigravity", Label: "Gemini 3.5 Flash (Antigravity)", APIID: "gemini-3.5-flash", Description: "Balanced Gemini through an Antigravity login.", Tags: []string{"fast", "tools"}},
+		// The Cloud Code backend keys models by an upstream id that can differ
+		// from the catalogue id, and it encodes the thinking level in that id.
+		// Sending the short id returns 404 "check the model id and base URL".
+		{ID: "antigravity-gemini-3.8-flash", Provider: "antigravity", Label: "Gemini 3.8 Flash (Antigravity)", APIID: "gemini-3.8-flash-medium(medium)", Description: "Fast Gemini through an Antigravity login.", Tags: []string{"fast", "tools", "coding"}},
+		{ID: "antigravity-gemini-3.5-flash", Provider: "antigravity", Label: "Gemini 3.5 Flash (Antigravity)", APIID: "gemini-3.5-flash-high", Description: "Balanced Gemini through an Antigravity login.", Tags: []string{"fast", "tools"}},
 		{ID: "antigravity-gemini-pro", Provider: "antigravity", Label: "Gemini Pro (Antigravity)", APIID: "gemini-pro-agent", Description: "Flagship Gemini through an Antigravity login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "antigravity-claude-sonnet-4-6", Provider: "antigravity", Label: "Claude Sonnet 4.6 (Antigravity)", APIID: "claude-sonnet-4-6", Description: "Claude through an Antigravity login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-opus-5", Provider: "anthropic", Label: "Claude Opus 5", Description: "Previous flagship, still available.", Tags: []string{"reasoning", "tools"}},

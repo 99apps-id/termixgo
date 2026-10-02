@@ -90,6 +90,28 @@ func TestAntigravityStreamOnboardsAndDecodes(t *testing.T) {
 	}
 }
 
+// TestAntigravityModelsUseUpstreamIDs pins the wire ids the Cloud Code backend
+// expects. The catalogue id is short and readable; the API id carries the
+// thinking tier, and a mismatch is a 404 "check the model id and base URL".
+func TestAntigravityModelsUseUpstreamIDs(t *testing.T) {
+	cases := map[string]string{
+		"antigravity-gemini-3.8-flash":  "gemini-3.8-flash-medium(medium)",
+		"antigravity-gemini-3.5-flash":  "gemini-3.5-flash-high",
+		"antigravity-gemini-pro":        "gemini-pro-agent",
+		"antigravity-claude-sonnet-4-6": "claude-sonnet-4-6",
+	}
+	for id, want := range cases {
+		model, ok := ModelByID(id)
+		if !ok {
+			t.Errorf("model %q is missing", id)
+			continue
+		}
+		if got := model.WireID(); got != want {
+			t.Errorf("%s wire id = %q, want %q", id, got, want)
+		}
+	}
+}
+
 func TestSanitizeFunctionName(t *testing.T) {
 	if got := sanitizeFunctionName("weird name!"); got != "weird_name_" {
 		t.Errorf("sanitizeFunctionName = %q", got)
