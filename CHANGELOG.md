@@ -6,6 +6,16 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+## 0.1.3 - 2026-10-03
+
+### Fixed
+
+- Meta Muse Code survives its intermittent overload. A request that answers
+  `404 model_not_found` is retried up to three times with the same key, with
+  backoff and jitter, before the key is treated as stale and minted again. Meta
+  uses that status both for an overloaded backend and for an aged-out key, so
+  the transient case no longer triggers a needless re-mint or a failed turn.
+
 ## 0.1.2 - 2026-10-03
 
 ### Fixed

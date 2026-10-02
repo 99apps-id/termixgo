@@ -3,14 +3,33 @@ package provider
 import (
 	"context"
 	"errors"
+	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 // museUserAgent is the identity Meta's Muse backend expects. It gates access,
 // so the official CLI's build string is reused rather than the Termixgo agent.
 const museUserAgent = "muse-build/1.3.0 (interactive; macos-aarch64; build ac7280f2aca67769d1455a8847bb502b617d50f6)"
+
+// museRetryAttempts bounds how many times a transient Muse failure is retried
+// with the same key before the key is treated as stale and re-minted. Meta is
+// intermittently overloaded and answers a healthy request with 404
+// model_not_found, so a retry costs far less than a needless re-mint.
+const museRetryAttempts = 3
+
+// museRetryWait is the pause before a retry. It is a variable so a test can
+// remove the delay, and it carries jitter so parallel sessions do not retry in
+// lockstep.
+var museRetryWait = func(attempt int) time.Duration {
+	delay := 500 * time.Millisecond << uint(attempt-1)
+	if delay > 4*time.Second {
+		delay = 4 * time.Second
+	}
+	return delay + time.Duration(rand.Int63n(int64(delay/2+1)))
+}
 
 // museClient speaks the Responses API served at api.meta.ai for a Muse login.
 // It is not chat-completions: the request carries input items and the stream is
@@ -43,15 +62,15 @@ func (c *museClient) Stream(ctx context.Context, req ChatRequest, emit func(Stre
 	payload := c.payload(req)
 
 	key := c.currentKey()
-	response, err := c.send(ctx, key, payload)
+	response, err := c.sendWithRetry(ctx, key, payload)
 	if err == nil {
 		defer response.Body.Close()
 		return decodeResponsesStream(c.info.Label, response.Body, emit)
 	}
 
-	// Token expired or session invalidated on Meta's backend (such as intermittent 404
-	// model_not_found, 401 unauthenticated, or session invalidation): refresh token,
-	// reset session, and retry once (matching Antigravity's durability).
+	// Still failing after the transient retries means the credential or session,
+	// not the network: refresh the token, reset the session, and try again once
+	// (matching Antigravity's durability).
 	if !isMuseAuthOrSessionError(err) {
 		return err
 	}
@@ -60,7 +79,7 @@ func (c *museClient) Stream(ctx context.Context, req ChatRequest, emit func(Stre
 	if strings.TrimSpace(fresh) != "" {
 		key = fresh
 	}
-	response, err = c.send(ctx, key, payload)
+	response, err = c.sendWithRetry(ctx, key, payload)
 	if err != nil {
 		return err
 	}
@@ -78,6 +97,64 @@ func (c *museClient) send(ctx context.Context, key string, payload map[string]an
 		"session_id":    c.session(),
 	}
 	return c.post(ctx, c.baseURL+"/responses", headers, payload)
+}
+
+// sendWithRetry posts, retrying a transient Muse failure with the same key a
+// few times before giving up. Meta answers a request it cannot serve during an
+// overload with 404 model_not_found, the same status it uses for a stale key,
+// so the request is replayed rather than immediately re-minted.
+func (c *museClient) sendWithRetry(ctx context.Context, key string, payload map[string]any) (*http.Response, error) {
+	var err error
+	for attempt := 1; attempt <= museRetryAttempts; attempt++ {
+		var response *http.Response
+		response, err = c.send(ctx, key, payload)
+		if err == nil {
+			return response, nil
+		}
+		if attempt == museRetryAttempts || !museTransient(err) {
+			return nil, err
+		}
+		if waitErr := museWait(ctx, museRetryWait(attempt)); waitErr != nil {
+			return nil, waitErr
+		}
+	}
+	return nil, err
+}
+
+// museTransient reports whether an error is worth retrying with the same key.
+// The 404 matters most: Meta uses it both for a stale key and for its own
+// overload, so it is retried first and only treated as stale after that.
+func museTransient(err error) bool {
+	var status *providerStatusError
+	if errors.As(err, &status) {
+		switch status.status {
+		case http.StatusNotFound,
+			http.StatusRequestTimeout,
+			http.StatusTooManyRequests,
+			http.StatusInternalServerError,
+			http.StatusBadGateway,
+			http.StatusServiceUnavailable,
+			http.StatusGatewayTimeout:
+			return true
+		}
+		return false
+	}
+	return retryableTransport(err)
+}
+
+// museWait pauses before a retry, honoring ctx.
+func museWait(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // payload builds the Responses body shared by every Muse model.
