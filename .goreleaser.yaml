@@ -57,8 +57,8 @@ archives:
       # target OS; the other branch is a glob that matches no file, which
       # goreleaser tolerates (the same idiom the docs use to package no extra
       # files). Each lands at the archive root, beside the binary it installs.
-      - src: 'packaging/{{ if eq .Os "windows" }}windows/INSTALL.bat{{ else }}__platform__/*{{ end }}'
-        dst: INSTALL.bat
+      - src: 'packaging/{{ if eq .Os "windows" }}windows/install.bat{{ else }}__platform__/*{{ end }}'
+        dst: install.bat
       - src: 'packaging/{{ if eq .Os "windows" }}windows/install.ps1{{ else }}__platform__/*{{ end }}'
         dst: install.ps1
       - src: 'packaging/{{ if eq .Os "windows" }}windows/uninstall.ps1{{ else }}__platform__/*{{ end }}'

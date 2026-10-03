@@ -88,7 +88,7 @@ keeps the context usage, the session id and the session spend in view.
 
 Download `Termixgo-<version>-windows-amd64-installer.zip` from the
 [latest release](https://github.com/99apps-id/termixgo/releases/latest), extract
-it anywhere, and double-click `INSTALL.bat`. It installs to
+it anywhere, and double-click `install.bat`. It installs to
 `%LOCALAPPDATA%\Programs\Termixgo`, adds that directory to the user PATH and
 registers an uninstaller. Open a new terminal afterwards so it picks up the PATH
 change.

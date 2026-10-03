@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     The bundle is a zip holding the binary, the install and uninstall scripts
-    and a double-clickable INSTALL.bat. The user extracts it anywhere and runs
-    INSTALL.bat, which copies the binary into a per-user programs directory,
+    and a double-clickable install.bat. The user extracts it anywhere and runs
+    install.bat, which copies the binary into a per-user programs directory,
     puts that directory on the user PATH and registers the install.
 
     This used to be a 7-Zip self-extracting exe, but the SFX modules bundled
@@ -49,13 +49,12 @@ if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Path $stage | Out-Null
 
 Copy-Item $Binary (Join-Path $stage "termixgo.exe") -Force
-Copy-Item (Join-Path $root "packaging\windows\INSTALL.bat") $stage -Force
+Copy-Item (Join-Path $root "packaging\windows\install.bat") $stage -Force
 Copy-Item (Join-Path $root "packaging\windows\install.ps1") $stage -Force
 Copy-Item (Join-Path $root "packaging\windows\uninstall.ps1") $stage -Force
-# The same zip also carries install.sh and a lowercase install.bat, so cmd,
-# PowerShell and a Linux shell each find an entry point beside the binary.
+# install.sh travels too, so the same zip carries an entry point for cmd,
+# PowerShell and a Linux shell beside the binary.
 Copy-Item (Join-Path $root "packaging\linux\install.sh") $stage -Force
-Copy-Item (Join-Path $root "packaging\windows\INSTALL.bat") (Join-Path $stage "install.bat") -Force
 # The licence and the notice travel with the install, which is what the Apache
 # licence asks for when distributing the binary.
 Copy-Item (Join-Path $root "LICENSE") $stage -Force
