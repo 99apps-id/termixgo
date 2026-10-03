@@ -49,9 +49,9 @@ if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Path $stage | Out-Null
 
 Copy-Item $Binary (Join-Path $stage "termixgo.exe") -Force
-Copy-Item (Join-Path $root "packaging\windows\install.bat") $stage -Force
-Copy-Item (Join-Path $root "packaging\windows\install.ps1") $stage -Force
-Copy-Item (Join-Path $root "packaging\windows\uninstall.ps1") $stage -Force
+Copy-Item (Join-Path $root "installer\install.bat") $stage -Force
+Copy-Item (Join-Path $root "installer\install.ps1") $stage -Force
+Copy-Item (Join-Path $root "installer\uninstall.ps1") $stage -Force
 # install.sh travels too, so the same zip carries an entry point for cmd,
 # PowerShell and a Linux shell beside the binary.
 Copy-Item (Join-Path $root "packaging\linux\install.sh") $stage -Force

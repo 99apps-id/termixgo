@@ -8,6 +8,12 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Changed
 
+- The Windows installer scripts live in `installer/` now (they moved from
+  `packaging/windows/`): the double-click `install.bat`, the per-user
+  `install.ps1`, `uninstall.ps1` and a folder README, with
+  `scripts/make-installer.ps1` staging the release bundle from there. The
+  folder also doubles as a run-from-source install point: build
+  `installer/termixgo.exe` and run `install.bat` beside it.
 - The wordmark is bold now: the welcome banner spells TERMIXGO in full-block
   glyphs, one hue per letter on a teal-to-amber ramp, instead of thin
   underscore strokes. The rows stay rectangular so the welcome block clips
