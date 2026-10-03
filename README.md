@@ -10,13 +10,9 @@ Termixgo is a coding agent that runs entirely in your terminal. No web view, no
 browser, no separate runtime. One compiled binary, your own API keys, and
 everything the agent does printed as terminal output.
 
-```
- _____  _____  ____   __  __  ___ __  __  ____   ___
-|_   _|| ____||  _ \ |  \/  ||_ _|\ \/ / / ___| / _ \
-  | |  |  _|  | |_) || |\/| | | |  \  / | |  _ | | | |
-  | |  | |___ |  _ < | |  | | | |  /  \ | |_| || |_| |
-  |_|  |_____||_| \_\|_|  |_||___|/_/\_\ \____| \___/
-```
+<div align="center">
+  <img src="termixgo-banner.svg" width="840" alt="TERMIXGO" />
+</div>
 
 - Runs on Windows, Linux and macOS from a single static binary, cross-compiled
   and released for amd64 and arm64.
@@ -92,6 +88,19 @@ it anywhere, and double-click `install.bat`. It installs to
 `%LOCALAPPDATA%\Programs\Termixgo`, adds that directory to the user PATH and
 registers an uninstaller. Open a new terminal afterwards so it picks up the PATH
 change.
+
+The same scripts live in this repository's [`installer/`](installer/README.md)
+folder, so you can also install straight from a checkout: build the binary next
+to the scripts and run the same entry point.
+
+```powershell
+go build -o installer/termixgo.exe ./cmd/termixgo
+installer\install.bat
+```
+
+`installer/README.md` documents every option (`-Source`, `-Destination`,
+`-NoPath`, `-NoPause`) and the matching `uninstall.ps1`, which keeps your
+configuration and keys unless `-Purge` is given.
 
 ### Linux and macOS
 

@@ -8,6 +8,11 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Changed
 
+- The README now spells TERMIXGO like the TUI does: a coloured SVG banner
+  (`termixgo-banner.svg`) built from the same block glyphs and the same
+  teal-to-amber per-letter hues as `internal/ui/banner.go`, replacing the
+  thin figlet art. The Install section points at the `installer/` folder as
+  the run-from-source entry point.
 - The Windows installer scripts live in `installer/` now (they moved from
   `packaging/windows/`): the double-click `install.bat`, the per-user
   `install.ps1`, `uninstall.ps1` and a folder README, with
