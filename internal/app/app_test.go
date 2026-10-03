@@ -190,6 +190,15 @@ func TestSetApprovalModePersists(t *testing.T) {
 	}
 	if err := application.SetApprovalMode("bogus"); err == nil {
 		t.Errorf("an invalid mode must be rejected")
+	} else {
+		// The rejection is the only list of choices an operator sees, so it has
+		// to be derived from the modes this build accepts rather than written
+		// out by hand: plan was valid here while the message still named three.
+		for _, mode := range config.ApprovalModes {
+			if !strings.Contains(err.Error(), string(mode)) {
+				t.Errorf("the rejection should name %q, got %q", mode, err)
+			}
+		}
 	}
 }
 

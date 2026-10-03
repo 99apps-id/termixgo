@@ -52,6 +52,10 @@ All notable changes to Termixgo are recorded here. The format follows
   had every bare LF written back as CRLF and a one-line change arrived as a
   whole-file diff. Matching is done against the file's own bytes, and the
   replacement inherits the terminator of the region it replaced.
+- A rejected approval mode names every mode this build accepts. `plan` was a
+  valid mode while the error still listed ask, edits and all, so an operator who
+  mistyped it was told the mode did not exist. The test now reads the message
+  against the list this build accepts, so a mode cannot be left out again.
 
 ## 0.1.3 - 2026-10-03
 

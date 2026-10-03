@@ -750,7 +750,7 @@ func (a *App) SetBaseURL(providerID, rawURL string) error {
 // SetApprovalMode changes the approval policy.
 func (a *App) SetApprovalMode(mode config.ApprovalMode) error {
 	if !config.ValidApprovalMode(mode) {
-		return fmt.Errorf("approval mode must be one of ask, edits, all")
+		return fmt.Errorf("approval mode must be one of ask, edits, all, plan")
 	}
 	a.mu.Lock()
 	a.cfg.ApprovalMode = mode
