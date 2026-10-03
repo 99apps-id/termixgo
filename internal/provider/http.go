@@ -2,7 +2,9 @@ package provider
 
 import (
 	"bufio"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -74,9 +77,21 @@ func (c *httpClient) SessionID() string {
 }
 
 func deriveSessionID(seed string) string {
-	sum := sha256.Sum256([]byte(seed + fmt.Sprintf("%d", time.Now().UnixNano())))
+	// Two calls can land on the same clock tick (coarse timer resolution on
+	// Windows), so mix wall time with crypto entropy and a process-wide
+	// counter: a reset must never reproduce the previous id, or a
+	// session-error retry reuses the dead session.
+	var randBytes [8]byte
+	if _, err := rand.Read(randBytes[:]); err != nil {
+		binary.BigEndian.PutUint64(randBytes[:], uint64(time.Now().UnixNano())^uint64(sessionSeq.Add(1)))
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d|%x", seed, time.Now().UnixNano(), sessionSeq.Add(1), randBytes)))
 	return hex.EncodeToString(sum[:16]) + fmt.Sprintf("%d", time.Now().UnixMilli())
 }
+
+// sessionSeq guarantees deriveSessionID never repeats within a process even
+// when the clock does not advance between calls.
+var sessionSeq atomic.Uint64
 
 func newHTTPClient(info Provider, baseURL, apiKey string) (Client, error) {
 	shared := &http.Client{
