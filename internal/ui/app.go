@@ -1069,6 +1069,7 @@ func (m *Model) applyEvent(event agent.Event) {
 			toolName:  event.ToolName,
 			toolLabel: event.ToolLabel,
 			toolArgs:  event.ToolArgs,
+			preview:   event.Preview,
 		})
 	case agent.EventToolEnd:
 		if target := m.lastRunningTool(event.ToolName); target != nil {

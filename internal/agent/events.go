@@ -53,6 +53,10 @@ type Event struct {
 	ToolName  string
 	ToolLabel string
 	ToolArgs  string
+	// Preview is a unified diff of what a file-changing tool is about to
+	// write, computed before the tool ran while the old bytes are still on
+	// disk. The approval dialog and the transcript both render it.
+	Preview string
 	// ToolResult is a short display form; ToolOK reports success.
 	ToolResult string
 	ToolOK     bool

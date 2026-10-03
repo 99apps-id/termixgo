@@ -8,6 +8,12 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Added
 
+- The transcript now shows what an edit changed: the diff preview the approval
+  dialog already computed before the run rides on the tool-start event, and a
+  finished, successful edit renders its changed lines colored (a six-line peek
+  in compact view, the whole capped preview under the details toggle). A
+  running or failed tool shows nothing - a preview of a change that did not
+  happen would lie.
 - `review_changes` runs the read-only reviewer over the working change set
   before a commit, and a reviewer that opens no file no longer gets to say
   "Looks good.": `RunSubagent` counts the nested run's tool calls, retries an

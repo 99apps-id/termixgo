@@ -528,7 +528,16 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 
 	startLabel := tool.Label(args)
 	emit := r.emit
-	emit(Event{Kind: EventToolStart, ToolName: tool.Name(), ToolLabel: startLabel, ToolArgs: Shorten(call.Arguments, 240)})
+	// The diff preview is computed before the run, not after: it locates
+	// old_string in the file as it is now, and a successful edit makes that
+	// text history. Tools outside the edit family answer with an empty
+	// preview, so this costs nothing they did not already pay - the approval
+	// dialog was building the same diff anyway.
+	preview := ""
+	if r.Env != nil {
+		preview = PreviewToolDiff(r.Env, tool.Name(), args)
+	}
+	emit(Event{Kind: EventToolStart, ToolName: tool.Name(), ToolLabel: startLabel, ToolArgs: Shorten(call.Arguments, 240), Preview: preview})
 
 	// Plan mode blocks mutating tools outright instead of asking. Prompting
 	// on every write would defeat the mode: the operator chose it to explore
@@ -548,7 +557,7 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 				Tool:   tool.Name(),
 				Detail: startLabel,
 				Risk:   string(tool.Risk()),
-				Diff:   PreviewToolDiff(r.Env, tool.Name(), args),
+				Diff:   preview,
 			})
 		}
 		if !decision.Allowed() {

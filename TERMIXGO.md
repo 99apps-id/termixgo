@@ -105,6 +105,11 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
 - The approval decision is taken before a mutating tool runs, through
   `Env.Approve`. The desktop build has no gates; Termixgo adds real ones, so
   trust and `ApprovalMode` must be honoured.
+- The edit diff preview is computed at that same pre-run moment and travels
+  on `EventToolStart`: once the tool has succeeded the old text is gone and
+  a late preview would describe a change that cannot be found anymore. The
+  transcript colors it only for a finished, successful tool - running or
+  failed edits show no preview.
 - Tool schemas are JSON Schema objects. `edit` matches exact strings: never
   change it to line-based editing without a matching change to the prompt.
 - `read_file` returns line-count metadata, not inline line numbers, so an exact

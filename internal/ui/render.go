@@ -42,6 +42,9 @@ type block struct {
 	toolLabel  string
 	toolArgs   string
 	toolResult string
+	// preview is a unified diff of the change an edit tool made; the
+	// transcript colors it once the tool reports success.
+	preview    string
 	toolOK     bool
 	toolMillis int64
 
@@ -212,10 +215,15 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 		style = styles.ToolError
 	}
 	if !showDetails {
-		// Compact: just the marker and tool label on one line.
+		// Compact: marker and label on one line - plus a few lines of the
+		// diff when this tool changed a file for real, so the operator sees
+		// what changed without opening the details view.
 		line := truncate(fmt.Sprintf("  %s %s", marker, item.toolLabel), width)
 		if item.running {
 			return shimmerTool(line, styles)
+		}
+		if peek := previewLines(item, styles, width, previewPeekLines); peek != "" {
+			return style.Render(line) + "\n" + peek
 		}
 		return style.Render(line)
 	}
@@ -235,6 +243,9 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 		return shimmerTool(line, styles)
 	}
 	rendered := style.Render(line + styles.Dim.Render(timing))
+	if peek := previewLines(item, styles, width, previewFullLines); peek != "" {
+		rendered += "\n" + peek
+	}
 	result := strings.TrimSpace(item.toolResult)
 	if result == "" {
 		return rendered
@@ -244,6 +255,32 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 		display += "\n... [tool output clipped]"
 	}
 	return rendered + "\n" + renderPrefixed(display, "    ", styles.Dim, width)
+}
+
+// previewPeekLines is how much of an edit's diff the compact transcript
+// shows; the details view renders the whole stored preview, which the agent
+// already caps at its own limit.
+const (
+	previewPeekLines = 6
+	previewFullLines = 40
+)
+
+// previewLines colors a finished edit tool's diff for the transcript. A tool
+// that did not succeed changed nothing on disk, and a preview of a change
+// that never happened would lie, so it stays hidden until the result says OK.
+func previewLines(item block, styles Styles, width, maxLines int) string {
+	if item.preview == "" || item.running || !item.toolOK {
+		return ""
+	}
+	body := renderApprovalDiff(item.preview, styles, width-4, maxLines)
+	if body == "" {
+		return ""
+	}
+	lines := strings.Split(body, "\n")
+	for index := range lines {
+		lines[index] = "    " + lines[index]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderPlanBlock(item block, styles Styles, width int) string {
