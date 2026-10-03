@@ -124,3 +124,64 @@ func FolderExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
 }
+
+// AllowInFolder records the operator's "always" answer at a folder's trust
+// gate: a statement about this folder and this tool, kept apart from the
+// tool-level AlwaysAllowedTools because only a folder statement may silence
+// the folder gate.
+func (c *Config) AllowInFolder(folder, tool string) {
+	key := TrustKey(folder)
+	if key == "" || strings.TrimSpace(tool) == "" {
+		return
+	}
+	if c.FolderAllowedTools == nil {
+		c.FolderAllowedTools = map[string][]string{}
+	}
+	stored := CleanFolder(folder)
+	for known := range c.FolderAllowedTools {
+		if TrustKey(known) == key {
+			stored = known
+			break
+		}
+	}
+	tools := c.FolderAllowedTools[stored]
+	for _, name := range tools {
+		if name == tool {
+			return
+		}
+	}
+	c.FolderAllowedTools[stored] = append(append([]string{}, tools...), tool)
+}
+
+// AllowedInFolder reports whether folder (or a parent folder, the same
+// inheritance trust uses) carries a folder-always grant for the tool.
+func (c Config) AllowedInFolder(folder, tool string) bool {
+	for _, name := range c.ToolsAllowedInFolder(folder) {
+		if name == tool {
+			return true
+		}
+	}
+	return false
+}
+
+// ToolsAllowedInFolder lists the folder-always grants for a folder, parents
+// included: an "always" answer at the root covers nested packages the same
+// way folder trust does.
+func (c Config) ToolsAllowedInFolder(folder string) []string {
+	target := TrustKey(folder)
+	if target == "" {
+		return nil
+	}
+	var tools []string
+	for stored, granted := range c.FolderAllowedTools {
+		key := TrustKey(stored)
+		if key == "" {
+			continue
+		}
+		if key != target && !strings.HasPrefix(target, key+string(filepath.Separator)) {
+			continue
+		}
+		tools = append(tools, granted...)
+	}
+	return tools
+}

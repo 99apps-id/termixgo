@@ -499,13 +499,19 @@ func patchChangedPaths(document string) []string {
 }
 
 // needsApprovalFor reports whether a call must wait. Trust is the outer
-// gate: a mutating tool in an untrusted folder always asks, even when the
-// approval mode would allow it. In a trusted folder the allowlist runs.
+// gate: a mutating tool in an untrusted folder asks even when the approval
+// mode would allow it - unless the operator has answered this folder's gate
+// for this tool already. The app records those answers on
+// Env.SessionAllowed and re-seeds them into every turn's Env, because a
+// "session" or "always" answer that never silences the gate is a dead
+// promise and the same tool re-asks every turn. Tool-level policy allowances
+// are not that silencer: they are statements about a tool, not about this
+// folder. In a trusted folder the allowlist runs.
 func (r *Runner) needsApprovalFor(tool Tool) bool {
 	if r.Policy != nil && r.Policy.NeedsApproval(tool) {
 		return true
 	}
-	if tool.Mutating() && r.Env != nil && !r.Env.Trusted {
+	if tool.Mutating() && r.Env != nil && !r.Env.Trusted && !r.Env.SessionAllowed[tool.Name()] {
 		return true
 	}
 	return false

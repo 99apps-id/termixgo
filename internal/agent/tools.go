@@ -56,7 +56,12 @@ type Env struct {
 	Memory    *Memory
 	Todos     *TodoStore
 	Trusted   bool
-	Depth     int
+	// SessionAllowed carries this folder's answered trust gates: tools the
+	// operator cleared with "session" or "always" at this folder's prompt.
+	// The app re-seeds a fresh snapshot every turn, and needsApprovalFor
+	// reads it - an answer that silences nothing is a dead promise.
+	SessionAllowed map[string]bool
+	Depth          int
 
 	// Processes owns the background processes. It is shared across turns
 	// because a background process must outlive the turn that started it.

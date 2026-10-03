@@ -173,6 +173,11 @@ type Config struct {
 
 	// AlwaysAllowedTools are tools the operator answered "allow always" for.
 	AlwaysAllowedTools []string `json:"alwaysAllowedTools,omitempty"`
+	// FolderAllowedTools are the "always" answers made at a folder's trust
+	// gate: folder -> tools. Separate from AlwaysAllowedTools because it is
+	// a statement about this folder, and only a folder statement may
+	// silence the folder gate.
+	FolderAllowedTools map[string][]string `json:"folderAllowedTools,omitempty"`
 
 	// MCPServers are the Model Context Protocol servers to start with a
 	// session. Each one contributes its tools to the agent, gated by the

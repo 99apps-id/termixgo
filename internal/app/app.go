@@ -148,6 +148,13 @@ type App struct {
 	// because money comes from the price table while the shape of a turn
 	// comes from here.
 	toolCalls map[string]*ToolStat
+
+	// folderGranted holds this folder's trust-gate answers given during the
+	// run: the operator's session grants, plus folder-always ones that also
+	// persist to config. A snapshot rides on every turn's Env because the
+	// folder gate in needsApprovalFor reads it - without that read "allow
+	// session" and "always" evaporated and the same tool re-asked forever.
+	folderGranted map[string]bool
 }
 
 // New loads the state for a workspace and prepares a session.
@@ -867,11 +874,12 @@ func (a *App) env() *agent.Env {
 		Journal: a.journal,
 		// The full-text index behind search_memory. Nil degrades that tool to
 		// its substring fallback rather than failing the turn.
-		Search:      a.search,
-		Emit:        a.emit,
-		Approve:     a.approve,
-		Ask:         a.ask,
-		RunSubagent: a.runSubagent,
+		Search:         a.search,
+		Emit:           a.emit,
+		Approve:        a.approve,
+		SessionAllowed: a.folderGrants(),
+		Ask:            a.ask,
+		RunSubagent:    a.runSubagent,
 	}
 }
 
@@ -1062,11 +1070,59 @@ func (a *App) AuditTail(limit int) ([]audit.Entry, error) {
 	return ledger.Tail(limit)
 }
 
+// noteFolderDecision turns the operator's answer about a mutating tool into
+// a folder-scoped grant, so the trust gate stops asking for a tool the
+// operator has already cleared at this folder's prompt. Session answers live
+// for the run; "always" additionally persists under this folder's config
+// entry, which is a statement about the folder - the global tool list keeps
+// its separate, weaker meaning.
+func (a *App) noteFolderDecision(tool string, decision agent.Decision) {
+	switch decision {
+	case agent.DecisionAllowSession:
+		a.recordFolderGrant(tool)
+	case agent.DecisionAllowAlways:
+		a.recordFolderGrant(tool)
+		_ = a.UpdateConfig(func(cfg *config.Config) {
+			cfg.AllowInFolder(a.workspace, tool)
+		})
+	}
+}
+
+func (a *App) recordFolderGrant(tool string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.folderGranted == nil {
+		a.folderGranted = map[string]bool{}
+	}
+	a.folderGranted[tool] = true
+}
+
+// folderGrants merges the persisted folder-always answers with the grants
+// made during this run. A fresh copy per turn keeps config edits and answers
+// given mid-run visible to the next turn without sharing mutable state.
+func (a *App) folderGrants() map[string]bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	persisted := a.cfg.ToolsAllowedInFolder(a.workspace)
+	out := make(map[string]bool, len(persisted)+4)
+	for _, name := range persisted {
+		out[name] = true
+	}
+	for name, ok := range a.folderGranted {
+		if ok {
+			out[name] = true
+		}
+	}
+	return out
+}
+
 func (a *App) approve(request agent.ApprovalRequest) agent.Decision {
 	if a.interactor == nil {
 		return agent.DecisionDeny
 	}
-	return a.interactor.Approve(request)
+	decision := a.interactor.Approve(request)
+	a.noteFolderDecision(request.Tool, decision)
+	return decision
 }
 
 func (a *App) ask(question string, options []string) (string, error) {
