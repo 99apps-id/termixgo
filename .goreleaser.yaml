@@ -53,15 +53,15 @@ archives:
       - LICENSE
       - NOTICE
       # The install scripts travel inside the archive, so an extracted download
-      # installs without cloning the repo. The src template picks the set for the
-      # target OS; the other branch is a glob that matches no file, which
-      # goreleaser tolerates (the same idiom the docs use to package no extra
-      # files). Each lands at the archive root, beside the binary it installs.
-      - src: 'packaging/{{ if eq .Os "windows" }}windows/install.bat{{ else }}__platform__/*{{ end }}'
+      # installs without cloning the repo. The Windows scripts live in
+      # installer/ and ride only the Windows archive; the other branch is a glob
+      # that matches no file, which goreleaser tolerates. Each lands at the
+      # archive root, beside the binary it installs.
+      - src: 'installer/{{ if eq .Os "windows" }}install.bat{{ else }}__platform__/*{{ end }}'
         dst: install.bat
-      - src: 'packaging/{{ if eq .Os "windows" }}windows/install.ps1{{ else }}__platform__/*{{ end }}'
+      - src: 'installer/{{ if eq .Os "windows" }}install.ps1{{ else }}__platform__/*{{ end }}'
         dst: install.ps1
-      - src: 'packaging/{{ if eq .Os "windows" }}windows/uninstall.ps1{{ else }}__platform__/*{{ end }}'
+      - src: 'installer/{{ if eq .Os "windows" }}uninstall.ps1{{ else }}__platform__/*{{ end }}'
         dst: uninstall.ps1
       # install.sh rides in every archive, including the Windows one, so a
       # single zip carries the entry point for cmd, PowerShell and a Linux
