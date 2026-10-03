@@ -168,20 +168,11 @@ func encodeResponsesInput(req ChatRequest) []map[string]any {
 				"content": responsesUserContent(message),
 			})
 		case RoleAssistant:
-			// Meta validates the replayed conversation shape: assistant text
-			// that precedes a function_call in the same turn is intermediate
-			// commentary, and replaying it as a plain final answer before the
-			// call returns HTTP 400 (invalid_request_error, param "input").
-			// The phase marker is only needed when the turn also called tools.
-			if text := strings.TrimSpace(message.Content); text != "" {
-				block := map[string]any{"type": "output_text", "text": message.Content}
-				if len(message.ToolCalls) > 0 {
-					block["phase"] = "commentary"
-				}
+			if strings.TrimSpace(message.Content) != "" {
 				items = append(items, map[string]any{
 					"type":    "message",
 					"role":    "assistant",
-					"content": []map[string]any{block},
+					"content": []map[string]any{{"type": "output_text", "text": message.Content}},
 				})
 			}
 			for _, call := range message.ToolCalls {
@@ -284,7 +275,7 @@ type responsesEvent struct {
 	// output item.
 	ItemID    string `json:"item_id"`
 	Arguments string `json:"arguments"`
-	Error *struct {
+	Error     *struct {
 		Message string `json:"message"`
 	} `json:"error"`
 	Item *struct {

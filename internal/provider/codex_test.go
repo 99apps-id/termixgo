@@ -173,3 +173,81 @@ func TestCodexResponsesLiteMovesToolsAndInstructions(t *testing.T) {
 		t.Errorf("reasoning = %#v, want context all_turns", reasoning)
 	}
 }
+
+// TestDecodeResponsesStreamUsesFunctionCallArgumentsDone proves the decoder
+// recovers a tool call's arguments from the dedicated finalize event. Meta
+// streams the arguments in response.function_call_arguments.delta/.done and can
+// leave the output_item.done copy empty; storing that blank string replays as
+// invalid JSON and Meta rejects every later turn with HTTP 400.
+func TestDecodeResponsesStreamUsesFunctionCallArgumentsDone(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"path\":"}`,
+		``,
+		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"\"a.go\"}"}`,
+		``,
+		`data: {"type":"response.function_call_arguments.done","item_id":"fc_1","arguments":"{\"path\":\"a.go\"}"}`,
+		``,
+		`data: {"type":"response.output_item.done","item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"read_file","arguments":""}}`,
+		``,
+	}, "\n")
+
+	var calls []ToolCall
+	if err := decodeResponsesStream("test", strings.NewReader(sse), func(event StreamEvent) error {
+		if event.Type == EventToolCall {
+			calls = append(calls, *event.ToolCall)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("decodeResponsesStream: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("calls = %+v, want one", calls)
+	}
+	if calls[0].Arguments != `{"path":"a.go"}` {
+		t.Errorf("arguments = %q, want the finalized JSON from the .done event", calls[0].Arguments)
+	}
+	if calls[0].ID != "call_1" || calls[0].Name != "read_file" {
+		t.Errorf("call = %+v, want call_1/read_file", calls[0])
+	}
+}
+
+// TestDecodeResponsesStreamFallsBackToArgumentDeltas covers a finalize event
+// that carries no arguments: the decoder assembles the streamed deltas instead
+// of emitting an empty string.
+func TestDecodeResponsesStreamFallsBackToArgumentDeltas(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_9","delta":"{\"q\":"}`,
+		``,
+		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_9","delta":"1}"}`,
+		``,
+		`data: {"type":"response.function_call_arguments.done","item_id":"fc_9","arguments":""}`,
+		``,
+		`data: {"type":"response.output_item.done","item":{"id":"fc_9","type":"function_call","call_id":"call_9","name":"grep","arguments":""}}`,
+		``,
+	}, "\n")
+
+	var calls []ToolCall
+	_ = decodeResponsesStream("test", strings.NewReader(sse), func(event StreamEvent) error {
+		if event.Type == EventToolCall {
+			calls = append(calls, *event.ToolCall)
+		}
+		return nil
+	})
+	if len(calls) != 1 || calls[0].Arguments != `{"q":1}` {
+		t.Fatalf("calls = %+v, want the assembled deltas", calls)
+	}
+}
+
+// TestCodexInputCarriesNoMetaPhase pins that the shared encoder leaves the
+// Meta-specific phase field out, so the ChatGPT backend Codex targets is never
+// sent a field it does not accept. The Muse client adds it in its own pass.
+func TestCodexInputCarriesNoMetaPhase(t *testing.T) {
+	items := encodeResponsesInput(ChatRequest{Messages: []Message{
+		{Role: RoleAssistant, Content: "thinking", ToolCalls: []ToolCall{{ID: "c1", Name: "t", Arguments: "{}"}}},
+	}})
+	for _, item := range items {
+		if _, present := item["phase"]; present {
+			t.Errorf("the shared encoder must not set the Meta-specific phase field: %v", item)
+		}
+	}
+}

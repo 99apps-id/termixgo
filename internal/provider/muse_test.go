@@ -440,6 +440,37 @@ func TestMuseCoercesInvalidArgumentsToAnObject(t *testing.T) {
 	}
 }
 
+// TestMuseTagsCommentaryPhase pins the replay shape Meta validates: assistant
+// text that precedes a function_call must carry phase "commentary", because
+// replaying it as an ordinary final answer returns HTTP 400 (param "input").
+// A turn with no tool call keeps phase "final_answer".
+func TestMuseTagsCommentaryPhase(t *testing.T) {
+	payload := (&museClient{}).payload(ChatRequest{
+		Model: "muse-spark-1.3",
+		Messages: []Message{
+			{Role: RoleUser, Content: "read a"},
+			{Role: RoleAssistant, Content: "Let me look.", ToolCalls: []ToolCall{{ID: "c1", Name: "read_file", Arguments: "{}"}}},
+			{Role: RoleTool, ToolID: "c1", Content: "file contents"},
+			{Role: RoleAssistant, Content: "All done."},
+		},
+	})
+	input, ok := payload["input"].([]map[string]any)
+	if !ok {
+		t.Fatalf("input = %T, want a list of items", payload["input"])
+	}
+	if len(input) != 5 {
+		t.Fatalf("input has %d items, want 5: %v", len(input), input)
+	}
+	// items[1] is the assistant commentary before the function_call at items[2].
+	if phase := input[1]["phase"]; phase != "commentary" {
+		t.Errorf("commentary phase = %v, want commentary", phase)
+	}
+	// items[3] is the tool result; items[4] is the final answer.
+	if phase := input[4]["phase"]; phase != "final_answer" {
+		t.Errorf("final phase = %v, want final_answer", phase)
+	}
+}
+
 // TestMuseModelHintNamesModelOnlyOnNotFound pins the wrapper without any
 // network: a persistent 404 names the model and the tier check while keeping
 // the typed status visible to errors.As, and any other status passes through

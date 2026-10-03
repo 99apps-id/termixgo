@@ -182,6 +182,12 @@ func (c *museClient) payload(req ChatRequest) map[string]any {
 	// answering with a misleading 404 model_not_found. The OpenAI Responses
 	// feed these items came from always carries both, so restate them here.
 	stampFunctionCallItems(input)
+	// Meta also validates the replayed conversation shape: assistant text that
+	// precedes a function_call is intermediate commentary, and replaying it as
+	// an ordinary final answer returns HTTP 400 (param "input"). Tag it here,
+	// not in the shared encoder, because the phase field is Meta-specific and
+	// the ChatGPT backend Codex uses does not accept it.
+	tagCommentaryItems(input)
 	instructions := strings.TrimSpace(req.System)
 	var tools []map[string]any
 	if len(req.Tools) > 0 {
@@ -241,6 +247,24 @@ func stampFunctionCallItems(items []map[string]any) {
 		if _, ok := item["status"]; !ok {
 			item["status"] = "completed"
 		}
+	}
+}
+
+// tagCommentaryItems labels replayed assistant messages with the phase Meta's
+// Responses API expects. An assistant message whose turn also called tools is
+// intermediate commentary: replaying it without the marker returns HTTP 400
+// (param "input"), because a plain final answer may not precede a function_call.
+// An assistant message with no tool call in its turn is the final answer.
+func tagCommentaryItems(items []map[string]any) {
+	for index, item := range items {
+		if item["type"] != "message" || item["role"] != "assistant" {
+			continue
+		}
+		phase := "final_answer"
+		if index+1 < len(items) && items[index+1]["type"] == "function_call" {
+			phase = "commentary"
+		}
+		item["phase"] = phase
 	}
 }
 
