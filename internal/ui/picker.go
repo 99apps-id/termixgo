@@ -9,7 +9,15 @@ import (
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/provider"
+	"github.com/99apps-id/termixgo/internal/version"
 )
+
+// brandedTitle prefixes overlay titles with the plain wordmark and the
+// version of the running build, the same identity the wizard carries, so
+// every menu says where it came from.
+func brandedTitle(tail string) string {
+	return version.Name + " " + version.Version + ": " + tail
+}
 
 // pickerItem is one selectable row.
 type pickerItem struct {
@@ -145,7 +153,7 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 		for _, model := range models {
 			items = append(items, pickerItem{ID: model.ID, Label: model.Label, Detail: model.Description})
 		}
-		m.openPicker("Choose a model", "model", items)
+		m.openPicker(brandedTitle("Choose a model"), "model", items)
 		m.picker.parent = "model-provider"
 		return m, nil
 	case "model":

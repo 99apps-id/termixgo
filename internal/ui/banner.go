@@ -9,27 +9,32 @@ import (
 // bannerWord is what the art spells, letter by letter.
 const bannerWord = "TERMIXGO"
 
-// bannerGlyphs is one five-row glyph per letter of bannerWord. Kept as data so
-// a test can prove every glyph has five rows and that the assembled art stays
-// rectangular.
+// bannerGlyphs is one five-row glyph per letter of bannerWord, drawn with
+// full-block strokes so the wordmark reads bold on any font that can render
+// U+2588. Kept as data so a test can prove every glyph has five rows and
+// that the assembled art stays rectangular.
 var bannerGlyphs = [][5]string{
-	{" _____ ", "|_   _|", "  | |  ", "  | |  ", "  |_|  "},        // T
-	{" _____ ", "| ____|", "|  _|  ", "| |___ ", "|_____|"},        // E
-	{" ____  ", "|  _ \\ ", "| |_) |", "|  _ < ", "|_| \\_\\"},     // R
-	{" __  __ ", "|  \\/  |", "| |\\/| |", "| |  | |", "|_|  |_|"}, // M
-	{" ___ ", "|_ _|", " | | ", " | | ", "|___|"},                  // I
-	{"__  __", "\\ \\/ /", " \\  / ", " /  \\ ", "/_/\\_\\"},       // X
-	{"  ____ ", " / ___|", "| |  _ ", "| |_| |", " \\____|"},       // G
-	{"  ___  ", " / _ \\ ", "| | | |", "| |_| |", " \\___/ "},      // O
+	{"█████", "  █  ", "  █  ", "  █  ", "  █  "},        // T
+	{"█████", "█    ", "████ ", "█    ", "█████"},        // E
+	{"████ ", "█   █", "████ ", "█  █ ", "█   █"},        // R
+	{"█   █", "██ ██", "█ █ █", "█   █", "█   █"},        // M
+	{"███", " █ ", " █ ", " █ ", "███"},                  // I
+	{"█   █", " █ █ ", "  █  ", " █ █ ", "█   █"},        // X
+	{" █████ ", "█     ", "█ ████", "█   █ ", " █████ "}, // G
+	{" ███ ", "█   █", "█   █", "█   █", " ███ "},        // O
 }
 
-// bannerRows assembles the art with every row padded to the same width, then
-// trims the trailing columns that carry no shape.
+// glyphWidth is the uniform row width inside one glyph.
+func glyphWidth(glyph [5]string) int {
+	return lipgloss.Width(glyph[0])
+}
+
+// bannerRows assembles the plain art with every row padded to the same width.
 func bannerRows() []string {
 	rows := make([]string, len(bannerGlyphs[0]))
 	for _, glyph := range bannerGlyphs {
 		for index, line := range glyph {
-			rows[index] += line
+			rows[index] += line + " "
 		}
 	}
 	width := 0
@@ -44,23 +49,33 @@ func bannerRows() []string {
 	return rows
 }
 
-// bannerGradient is the per-row colour ramp of the wordmark.
-var bannerGradient = []lipgloss.Color{
-	lipgloss.Color("#5eead4"),
-	lipgloss.Color("#67e8f9"),
-	lipgloss.Color("#7dd3fc"),
-	lipgloss.Color("#93c5fd"),
-	lipgloss.Color("#a78bfa"),
+// bannerHues is one colour per letter of the wordmark: a cool-to-warm ramp
+// that makes the mark read as a gradient across the word rather than down
+// the rows, which is what gives a bold block font its depth.
+var bannerHues = []lipgloss.Color{
+	lipgloss.Color("#2dd4bf"), // T teal
+	lipgloss.Color("#22d3ee"), // E cyan
+	lipgloss.Color("#38bdf8"), // R sky
+	lipgloss.Color("#818cf8"), // M indigo
+	lipgloss.Color("#a78bfa"), // I violet
+	lipgloss.Color("#e879f9"), // X fuchsia
+	lipgloss.Color("#fb7185"), // G rose
+	lipgloss.Color("#fbbf24"), // O amber
 }
 
-// RenderBanner returns the coloured TERMIXGO wordmark.
+// RenderBanner returns the bold coloured TERMIXGO wordmark. Each letter
+// carries its own hue; the rows stay rectangular so the welcome block can
+// clip them safely on narrow terminals.
 func RenderBanner(styles Styles) string {
-	rows := bannerRows()
 	var builder strings.Builder
-	for index, row := range rows {
-		color := bannerGradient[index%len(bannerGradient)]
-		builder.WriteString(lipgloss.NewStyle().Foreground(color).Bold(true).Render(row))
-		if index < len(rows)-1 {
+	for row := range bannerGlyphs[0] {
+		var line strings.Builder
+		for index, glyph := range bannerGlyphs {
+			hue := bannerHues[index%len(bannerHues)]
+			line.WriteString(lipgloss.NewStyle().Foreground(hue).Bold(true).Render(glyph[row] + " "))
+		}
+		builder.WriteString(line.String())
+		if row < len(bannerGlyphs[0])-1 {
 			builder.WriteString("\n")
 		}
 	}

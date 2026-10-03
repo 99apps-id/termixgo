@@ -11,6 +11,7 @@ import (
 
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/secrets"
+	"github.com/99apps-id/termixgo/internal/version"
 )
 
 // setupStep is where the onboarding wizard is.
@@ -39,9 +40,10 @@ const (
 	setupCustomImageModel
 )
 
-// setupTitlePrefix brands every wizard title with one wordmark so the picker
-// and the wizard steps never show two different headers.
-const setupTitlePrefix = "TERMIXGO Setup"
+// setupTitlePrefix brands every wizard title with the plain wordmark and the
+// version of the running build, so the picker and the wizard steps never show
+// two different headers and a screenshot of the setup names its own version.
+var setupTitlePrefix = version.Name + " " + version.Version + " Setup"
 
 // setupState carries the wizard between key presses.
 type setupState struct {

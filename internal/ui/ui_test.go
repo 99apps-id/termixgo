@@ -40,8 +40,12 @@ func TestBannerHasOneGlyphPerLetter(t *testing.T) {
 
 func TestRenderBannerContainsArt(t *testing.T) {
 	rendered := RenderBanner(NewStyles(DefaultPalette()))
-	if !strings.Contains(stripANSI(rendered), "|_   _|") {
-		t.Errorf("the rendered banner is missing the T glyph:\n%s", rendered)
+	if !strings.Contains(stripANSI(rendered), "██ ██") {
+		t.Errorf("the rendered banner is missing the M glyph:\n%s", rendered)
+	}
+	if len(bannerHues) != len(bannerGlyphs) {
+		t.Errorf("the wordmark has %d letters but %d hues; the gradient must not wrap",
+			len(bannerGlyphs), len(bannerHues))
 	}
 }
 

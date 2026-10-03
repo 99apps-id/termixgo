@@ -6,6 +6,16 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- The wordmark is bold now: the welcome banner spells TERMIXGO in full-block
+  glyphs, one hue per letter on a teal-to-amber ramp, instead of thin
+  underscore strokes. The rows stay rectangular so the welcome block clips
+  them safely on narrow terminals.
+- `/setup` and `/model` carry the plain wordmark and the running version
+  (`Termixgo 0.1.4 Setup: Provider`, `Termixgo 0.1.4: Choose a provider`),
+  so any screenshot of a menu names the build it came from.
+
 ### Fixed
 
 - In an untrusted folder, `allow session` and `always` at the trust prompt

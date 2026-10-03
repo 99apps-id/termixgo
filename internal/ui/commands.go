@@ -422,7 +422,7 @@ func (m *Model) activeProviderItems() []pickerItem {
 func (m *Model) slashModel(args string) (tea.Model, tea.Cmd) {
 	trimmed := strings.TrimSpace(args)
 	if trimmed == "" {
-		m.openPicker("Choose a provider", "model-provider", m.activeProviderItems())
+		m.openPicker(brandedTitle("Choose a provider"), "model-provider", m.activeProviderItems())
 		return m, nil
 	}
 	fields := strings.Fields(trimmed)

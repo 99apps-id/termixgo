@@ -66,16 +66,18 @@ func TestPickerEscRefocusesComposer(t *testing.T) {
 }
 
 // TestSetupTitlesShareOneWordmark pins the header refactor: the picker and
-// the wizard steps use one branded prefix, so TERMIXGO appears once and the
-// step name stays consistent.
+// the wizard steps use one branded prefix - the plain wordmark plus the
+// build version - and that prefix appears once per screen. The count anchors
+// on the full prefix, not the bare name, because the status header also
+// carries the name and must not read as a second wordmark.
 func TestSetupTitlesShareOneWordmark(t *testing.T) {
 	model := wizardModel(t)
 	pickerView := stripANSI(display(model))
 	if !strings.Contains(pickerView, setupTitlePrefix+": Provider") {
 		t.Errorf("provider picker should carry the branded title:\n%s", pickerView)
 	}
-	if count := strings.Count(pickerView, "TERMIXGO"); count != 1 {
-		t.Errorf("TERMIXGO appears %d times in the picker, want once:\n%s", count, pickerView)
+	if count := strings.Count(pickerView, setupTitlePrefix); count != 1 {
+		t.Errorf("the setup wordmark appears %d times in the picker, want once:\n%s", count, pickerView)
 	}
 
 	model.current = modeSetup
@@ -85,7 +87,7 @@ func TestSetupTitlesShareOneWordmark(t *testing.T) {
 	if !strings.Contains(wizardView, setupTitlePrefix+" (") {
 		t.Errorf("wizard should carry the branded header:\n%s", wizardView)
 	}
-	if count := strings.Count(wizardView, "TERMIXGO"); count != 1 {
-		t.Errorf("TERMIXGO appears %d times in the wizard, want once:\n%s", count, wizardView)
+	if count := strings.Count(wizardView, setupTitlePrefix); count != 1 {
+		t.Errorf("the setup wordmark appears %d times in the wizard, want once:\n%s", count, wizardView)
 	}
 }
