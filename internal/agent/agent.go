@@ -333,8 +333,11 @@ runLoop:
 	if stopReason == "aborted" {
 		emit(Event{Kind: EventNotice, Text: "Stopped."})
 	}
+	// Usage rides along on every stop path, not just the clean one. The audit
+	// ledger reads it off this event, so omitting it here recorded a turn that
+	// ran thirty steps as a thirty-step turn that spent nothing.
 	session.SetCost(sessionCost)
-	emit(Event{Kind: EventTurnEnd, StopReason: stopReason, CostUSD: sessionCost, CostKnown: costKnown})
+	emit(Event{Kind: EventTurnEnd, StopReason: stopReason, Usage: turnUsage, CostUSD: sessionCost, CostKnown: costKnown})
 	return nil
 }
 

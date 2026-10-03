@@ -6,6 +6,45 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Fixed
+
+- An interrupted turn no longer reports that it spent nothing. The clean stop
+  carried the turn's summed usage on `EventTurnEnd` and the step-cap, loop
+  guard, aborted and error paths did not, so the audit ledger, which reads
+  usage off exactly that event, recorded a thirty-step turn as a free one.
+  Every stop path now reports the same total.
+- A session file can no longer decide where the next save writes. `LoadSession`
+  confined the id it was asked for and then adopted the id stored inside the
+  file, and `Save` joined that into the sessions directory unchecked, so a
+  session whose text carried `../../pwned` wrote its transcript one level above
+  the directory that holds it on the first turn after it loaded. `Save` applies
+  the guard a read applies, and a loaded session keeps the validated id.
+- An OpenAI-compatible gateway error inside a 200 response now fails the turn.
+  Hosts that report a failure as a stream frame were decoded into a chunk with
+  no choices and ignored, so the agent got a half-finished answer with a nil
+  error and a rejected request read as the model choosing to stop early. The
+  object and the bare-string form are both recognised, and a frame that carries
+  no error is still tolerated, so a server sending fields this client does not
+  model keeps working.
+- Anthropic usage is counted once per request. Its counters are cumulative for
+  the request and one response can carry more than one message, because
+  interleaved thinking is in the OAuth beta header list, while the agent sums
+  every usage event it is handed, so each extra message charged the same prompt
+  tokens again. The OpenAI reader already deduplicated this way; the Anthropic
+  reader now uses the same guard.
+- The Telegram and scheduler event stream belongs to the turn that claimed it.
+  The observer was one global slot that any caller could overwrite and any
+  caller could clear, so a second inbound message that lost the single-run race
+  also cleared the observer of the turn still streaming: the chat sat on
+  "Working...", progress stopped arriving, and the prompt returned an empty
+  answer because the error notice had nowhere to go. A claim is refused while
+  the slot is held, and only its holder can release it.
+- `edit` no longer rewrites the line endings of lines it never touched. CRLF was
+  treated as a property of the whole file, so a file mixing both terminators
+  had every bare LF written back as CRLF and a one-line change arrived as a
+  whole-file diff. Matching is done against the file's own bytes, and the
+  replacement inherits the terminator of the region it replaced.
+
 ## 0.1.3 - 2026-10-03
 
 ### Fixed

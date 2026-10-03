@@ -181,6 +181,17 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   process group elsewhere. `cmd.WaitDelay` bounds the wait for the output pipe,
   which a surviving grandchild would otherwise hold open forever. Shutdown
   waits for the processes to go, because the caller exits immediately after.
+- The agent-event observer is one slot with one owner. `App.SetObserver` returns a
+  claim and refuses to install over a live one, so a second surface cannot detach
+  the sink of the turn that is streaming; the holder releases it with
+  `App.ClearObserver(claim)`, and a claim of 0 releases nothing. That is what stops
+  a caller which lost the run race from clearing the slot on its way out. A refused
+  install is not an error: the caller runs and streams nothing, which is acceptable
+  because that turn is refused as busy by `runMu` anyway, the slot guarding the same
+  single run that lock guards. Passing nil force-clears and exists so a test can
+  switch the slot off without holding one, never as a run path. Every install site
+  defers its release, since a claim that is never released leaves the slot occupied
+  for the life of the app.
 - Git runs through `exec.Command` with explicit argv, never a shell: arguments
   come from the model, and a file name or commit message must stay literal
   text. `git_restore` without paths is refused, since it would discard a whole

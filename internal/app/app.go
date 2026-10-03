@@ -104,7 +104,10 @@ type App struct {
 	ephemeral bool
 
 	interactor Interactor
-	observer   func(agent.Event)
+	// observer is the stream sink for the turn that holds the slot, and
+	// observerClaim is the token that releasing it is restricted to.
+	observer      func(agent.Event)
+	observerClaim int64
 
 	events  chan agent.Event
 	runMu   sync.Mutex
@@ -562,13 +565,53 @@ func (a *App) Ephemeral() bool {
 	return a.ephemeral
 }
 
-// SetObserver installs a single agent-event observer. It is how the Telegram
-// bridge follows a run without competing with the terminal UI for the event
-// channel.
-func (a *App) SetObserver(observer func(agent.Event)) {
+// SetObserver installs a single agent-event observer for one turn and returns
+// the claim that releases it. It is how the Telegram bridge follows a run
+// without competing with the terminal UI for the event channel.
+//
+// The slot belongs to whoever claimed it, and a claim is refused rather than
+// honoured out of turn. A caller that finds it occupied keeps running and
+// simply streams nothing, which is the right outcome: the only such caller is a
+// second surface whose turn is about to be refused as busy, because this slot
+// guards the same single run that runMu does. Releasing is restricted to the
+// holder for the same reason. Before that, a second inbound message installed
+// its own observer, lost the run race, and cleared the slot on the way out, so
+// the turn that was still streaming lost its sink: the chat sat on
+// "Working..." and the prompt returned an empty answer.
+//
+// A claim of 0 means nothing was installed, and ClearObserver ignores it.
+// Passing nil is a forced clear rather than a claim: it exists so a test can
+// switch the slot off without holding one, and no run path should use it, since
+// that is exactly the unowned release described above.
+func (a *App) SetObserver(observer func(agent.Event)) int64 {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	if observer == nil {
+		a.observer = nil
+		a.observerClaim = 0
+		return 0
+	}
+	if a.observer != nil {
+		return 0
+	}
+	a.observerClaim++
 	a.observer = observer
-	a.mu.Unlock()
+	return a.observerClaim
+}
+
+// ClearObserver releases a claim on the observer slot. Only the holder of that
+// claim can release it, and a claim of 0 releases nothing.
+func (a *App) ClearObserver(claim int64) {
+	if claim == 0 {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.observerClaim != claim {
+		return
+	}
+	a.observer = nil
+	a.observerClaim = 0
 }
 
 // AddUsage accumulates token usage into the app and the session.
@@ -1323,7 +1366,7 @@ func (a *App) RunPrompt(ctx context.Context, prompt string, progress func(string
 		// The opening line is part of the contract: the caller shows it at once,
 		// before the first event arrives.
 		progress("Working...")
-		a.SetObserver(func(event agent.Event) {
+		claim := a.SetObserver(func(event agent.Event) {
 			switch {
 			case event.Kind == agent.EventNotice && strings.TrimSpace(event.Text) != "":
 				notice = event.Text
@@ -1334,7 +1377,7 @@ func (a *App) RunPrompt(ctx context.Context, prompt string, progress func(string
 				progress(line)
 			}
 		})
-		defer a.SetObserver(nil)
+		defer a.ClearObserver(claim)
 	}
 	session := a.currentSession()
 	mark := session.MessageCount()
@@ -1356,7 +1399,7 @@ func (a *App) RunPromptWithImage(ctx context.Context, prompt, mediaType, data st
 	notice := ""
 	if progress != nil {
 		progress("Working...")
-		a.SetObserver(func(event agent.Event) {
+		claim := a.SetObserver(func(event agent.Event) {
 			switch {
 			case event.Kind == agent.EventNotice && strings.TrimSpace(event.Text) != "":
 				notice = event.Text
@@ -1367,7 +1410,7 @@ func (a *App) RunPromptWithImage(ctx context.Context, prompt, mediaType, data st
 				progress(line)
 			}
 		})
-		defer a.SetObserver(nil)
+		defer a.ClearObserver(claim)
 	}
 	images := []provider.Image{{MediaType: mediaType, Data: data}}
 	session := a.currentSession()

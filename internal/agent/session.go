@@ -82,6 +82,17 @@ func (s *Session) ID() string {
 	return s.id
 }
 
+// adoptID replaces the id with one the caller has already validated.
+//
+// A loaded session takes its id from the file, so without this the stored text
+// decides where the next save writes. LoadSession confines the id it was asked
+// for; this carries that decision into the live object.
+func (s *Session) adoptID(id string) {
+	s.mu.Lock()
+	s.id = id
+	s.mu.Unlock()
+}
+
 // Workspace is the folder the session was started in.
 func (s *Session) Workspace() string {
 	s.mu.Lock()
@@ -368,6 +379,12 @@ func (s *Session) Save() error {
 	// The snapshot is taken under the lock and marshalled outside it: holding
 	// the lock through a disk write would block the run for no reason.
 	state := s.snapshot()
+	// The id names the file, so it is checked the same way a read is. Without
+	// this a session whose stored id was "../../pwned" wrote its transcript one
+	// level above the sessions directory, on the first turn after it loaded.
+	if err := checkSessionID(state.ID); err != nil {
+		return fmt.Errorf("cannot save session: %w", err)
+	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode session: %w", err)
@@ -415,6 +432,7 @@ func LoadSession(id string) (*Session, error) {
 		return nil, fmt.Errorf("parse session %s: %w", id, err)
 	}
 	session := fromJSON(state)
+	session.adoptID(id)
 	repairImpossibleUsage(session)
 	return session, nil
 }

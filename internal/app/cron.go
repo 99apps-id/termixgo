@@ -129,12 +129,12 @@ func (a *App) StopScheduler() {
 func (a *App) RunScheduled(ctx context.Context, prompt string, progress func(string)) (string, error) {
 	if progress != nil {
 		progress("Working...")
-		a.SetObserver(func(event agent.Event) {
+		claim := a.SetObserver(func(event agent.Event) {
 			if line := telegramProgressLine(event); line != "" {
 				progress(line)
 			}
 		})
-		defer a.SetObserver(nil)
+		defer a.ClearObserver(claim)
 	}
 	session := agent.NewSession(a.workspace, a.CurrentModel().ID)
 	if err := a.runOn(ctx, prompt, nil, session); err != nil {

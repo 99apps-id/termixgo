@@ -93,13 +93,17 @@ func TestSteerReachesTheRunningTurn(t *testing.T) {
 
 	var noticeMu sync.Mutex
 	var steering string
-	application.SetObserver(func(event agent.Event) {
+	claim := application.SetObserver(func(event agent.Event) {
 		if event.Kind == agent.EventNotice && strings.HasPrefix(event.Text, "Steering:") {
 			noticeMu.Lock()
 			steering = event.Text
 			noticeMu.Unlock()
 		}
 	})
+	if claim == 0 {
+		t.Fatalf("the observer slot should be free in this test")
+	}
+	defer application.ClearObserver(claim)
 
 	done := make(chan error, 1)
 	go func() { done <- application.RunTurn(context.Background(), "look at the parser") }()

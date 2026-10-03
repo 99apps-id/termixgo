@@ -121,6 +121,13 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 
 	reader := newSSEReader(response.Body)
 	blocks := map[int]*anthropicBlock{}
+	// The counters Anthropic streams are cumulative for the request, and one
+	// response can carry more than one message: interleaved thinking is in the
+	// OAuth beta list, and each thinking round reports the running total again.
+	// The agent sums every usage event it is handed, so forwarding each report
+	// raw charged the same prompt tokens twice. The OpenAI reader already dedups
+	// this way; this is the same guard.
+	reportedUsage := &cumulativeUsage{}
 	for {
 		payload, err := reader.next()
 		if err == io.EOF {
@@ -146,13 +153,14 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 				promptTokens := event.Message.Usage.InputTokens
 				cacheRead := event.Message.Usage.CacheReadInputTokens
 				cacheWrite := event.Message.Usage.CacheCreationInputTokens
-				usage := Usage{
+				if step, ok := reportedUsage.step(Usage{
 					PromptTokens:     promptTokens + cacheRead + cacheWrite,
 					CacheReadTokens:  cacheRead,
 					CacheWriteTokens: cacheWrite,
-				}
-				if err := emit(StreamEvent{Type: EventUsage, Usage: &usage}); err != nil {
-					return err
+				}); ok {
+					if err := emit(StreamEvent{Type: EventUsage, Usage: &step}); err != nil {
+						return err
+					}
 				}
 			}
 		case "content_block_start":
@@ -201,9 +209,10 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 			}
 		case "message_delta":
 			if event.Usage != nil {
-				usage := Usage{CompletionTokens: event.Usage.OutputTokens}
-				if err := emit(StreamEvent{Type: EventUsage, Usage: &usage}); err != nil {
-					return err
+				if step, ok := reportedUsage.step(Usage{CompletionTokens: event.Usage.OutputTokens}); ok {
+					if err := emit(StreamEvent{Type: EventUsage, Usage: &step}); err != nil {
+						return err
+					}
 				}
 			}
 		case "error":

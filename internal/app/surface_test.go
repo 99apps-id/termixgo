@@ -121,7 +121,11 @@ func TestAddUsageAccumulatesOnTheAppAndTheSession(t *testing.T) {
 func TestEmitFeedsTheObserverAndTheCost(t *testing.T) {
 	application := newTestApp(t)
 	var seen []agent.Event
-	application.SetObserver(func(event agent.Event) { seen = append(seen, event) })
+	claim := application.SetObserver(func(event agent.Event) { seen = append(seen, event) })
+	if claim == 0 {
+		t.Fatalf("the observer slot should be free in this test")
+	}
+	defer application.ClearObserver(claim)
 
 	application.emit(agent.Event{
 		Kind:      agent.EventUsage,
@@ -150,9 +154,12 @@ func TestEmitFeedsTheObserverAndTheCost(t *testing.T) {
 func TestObserverIsClearedByANilSetter(t *testing.T) {
 	application := newTestApp(t)
 	calls := 0
-	application.SetObserver(func(agent.Event) { calls++ })
+	claim := application.SetObserver(func(agent.Event) { calls++ })
 	application.emit(agent.Event{Kind: agent.EventNotice, Text: "one"})
 	application.SetObserver(nil)
+	if claim == 0 {
+		t.Fatalf("the first caller should be granted the slot")
+	}
 	application.emit(agent.Event{Kind: agent.EventNotice, Text: "two"})
 	if calls != 1 {
 		t.Errorf("the observer ran %d times, want 1", calls)

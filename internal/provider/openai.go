@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 )
@@ -74,6 +75,13 @@ func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers ma
 		var chunk openAIChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
+		}
+		if message, reported := inBandError(chunk.Error); reported {
+			// A frame the server meant as a failure has to end the stream as a
+			// failure. It carries no choices, so ignoring it handed the agent a
+			// half-finished answer and a nil error, and the operator read a
+			// rejected request as the model choosing to stop early.
+			return fmt.Errorf("%s stream reported an error: %s", c.info.Label, message)
 		}
 		if chunk.Usage != nil {
 			cached := 0
@@ -245,6 +253,13 @@ type openAIChunk struct {
 		Delta        openAIDelta `json:"delta"`
 		FinishReason string      `json:"finish_reason"`
 	} `json:"choices"`
+	// Error is kept raw on purpose. A gateway reports a failure inside a 200
+	// response as a stream frame, and it does not agree on the shape: OpenRouter
+	// and most inference hosts send an object, some send a bare string, and a
+	// server that adds no error member sends nothing at all. Decoding it into a
+	// struct would make the string form a parse failure, which is then skipped
+	// exactly like the frame this is meant to catch.
+	Error json.RawMessage `json:"error"`
 	Usage *struct {
 		PromptTokens        int `json:"prompt_tokens"`
 		CompletionTokens    int `json:"completion_tokens"`
@@ -253,4 +268,37 @@ type openAIChunk struct {
 			CachedTokens int `json:"cached_tokens"`
 		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
+}
+
+// inBandError reads the error member of a stream frame, if the frame carried
+// one.
+func inBandError(raw json.RawMessage) (string, bool) {
+	text := strings.TrimSpace(string(raw))
+	if text == "" || text == "null" {
+		return "", false
+	}
+	var message struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		// Code is raw because a host may send it as a string or as a number, and
+		// failing the whole decode over that would drop the message with it.
+		Code json.RawMessage `json:"code"`
+	}
+	if json.Unmarshal([]byte(text), &message) == nil {
+		joined := strings.TrimSpace(message.Message)
+		if joined == "" {
+			joined = text
+		}
+		for _, detail := range []string{message.Type, strings.Trim(string(message.Code), `"`)} {
+			if trimmed := strings.TrimSpace(detail); trimmed != "" && trimmed != "null" {
+				joined += " (" + trimmed + ")"
+			}
+		}
+		return clipRunes(joined, 500), true
+	}
+	var plain string
+	if json.Unmarshal([]byte(text), &plain) == nil && strings.TrimSpace(plain) != "" {
+		return clipRunes(strings.TrimSpace(plain), 500), true
+	}
+	return clipRunes(text, 500), true
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -135,19 +137,25 @@ func parseEdits(value any) ([]editInstruction, error) {
 	return instructions, nil
 }
 
-// applyEdits runs the replacements against the file on disk, normalising line
-// endings for matching and restoring the file's original endings on write.
+// applyEdits runs the replacements against the file on disk.
+//
+// Matching is done against the file's own bytes rather than a normalised copy,
+// so a line the edit never mentions keeps the terminator it had. Deciding CRLF
+// from "this file contains a \r\n somewhere" and then writing every \n back as
+// CRLF rewrote every line of a mixed-ending file, so a one-line fix showed up as
+// a whole-file diff and buried the change in it.
 func applyEdits(env *Env, path string, instructions []editInstruction) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("%s", openError(err, displayPath(env, path)))
 	}
-	raw := string(data)
-	usesCRLF := strings.Contains(raw, "\r\n")
-	text := strings.ReplaceAll(raw, "\r\n", "\n")
+	text := string(data)
+	dominant := dominantEnding(text)
 
 	totalApplied := 0
 	for index, instruction := range instructions {
+		// What the caller sent is still normalised: a model copying from
+		// read_file always sees LF, whatever the file holds.
 		old := strings.ReplaceAll(instruction.Old, "\r\n", "\n")
 		replacement := strings.ReplaceAll(instruction.New, "\r\n", "\n")
 		if old == "" {
@@ -156,30 +164,114 @@ func applyEdits(env *Env, path string, instructions []editInstruction) (string, 
 		if old == replacement {
 			return "", fmt.Errorf("edit %d: old_string and new_string are identical", index+1)
 		}
-		count := strings.Count(text, old)
-		if count == 0 {
-			return "", fmt.Errorf("edit %d: old_string was not found in %s. %s", index+1, displayPath(env, path), diagnose(text, old))
+		found := presentSpellings(text, old)
+		if len(found) == 0 {
+			// Diagnosed against a normalised view, because the caller's needle is
+			// one: comparing it to raw CRLF bytes would blame the caller's
+			// spacing for what is a line-ending difference.
+			return "", fmt.Errorf("edit %d: old_string was not found in %s. %s", index+1, displayPath(env, path), diagnose(strings.ReplaceAll(text, "\r\n", "\n"), old))
+		}
+		count := 0
+		for _, spelling := range found {
+			count += strings.Count(text, spelling)
 		}
 		if count > 1 && !instruction.ReplaceAll {
-			lines := matchLines(text, old)
-			return "", fmt.Errorf("edit %d: old_string appears %d times (lines %s); add more context or set replace_all", index+1, count, strings.Join(lines, ", "))
+			return "", fmt.Errorf("edit %d: old_string appears %d times (lines %s); add more context or set replace_all", index+1, count, strings.Join(ambiguousLines(text, found), ", "))
 		}
-		if instruction.ReplaceAll {
-			text = strings.ReplaceAll(text, old, replacement)
-			totalApplied += count
-			continue
+		for _, spelling := range found {
+			body := replacement
+			if inheritedEnding(spelling, dominant) == "\r\n" {
+				body = strings.ReplaceAll(body, "\n", "\r\n")
+			}
+			occurrences := strings.Count(text, spelling)
+			if instruction.ReplaceAll {
+				text = strings.ReplaceAll(text, spelling, body)
+			} else {
+				text = strings.Replace(text, spelling, body, 1)
+			}
+			totalApplied += occurrences
 		}
-		text = strings.Replace(text, old, replacement, 1)
-		totalApplied++
 	}
 
-	if usesCRLF {
-		text = strings.ReplaceAll(text, "\n", "\r\n")
-	}
 	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
 		return "", fmt.Errorf("write %s: %v", displayPath(env, path), err)
 	}
 	return fmt.Sprintf("Applied %d replacement(s) in %s", totalApplied, displayPath(env, path)), nil
+}
+
+// spellings are the byte forms an old_string can take in a file. A needle that
+// spans lines and is written with \n matches an LF region and not a CRLF one,
+// so both have to be looked for; a single-line needle is identical either way.
+func spellings(old string) []string {
+	if !strings.Contains(old, "\n") {
+		return []string{old}
+	}
+	crlf := strings.ReplaceAll(old, "\n", "\r\n")
+	if crlf == old {
+		return []string{old}
+	}
+	// CRLF first: a block copied out of a mixed file most likely carries its
+	// own terminators, and the search for the two forms cannot overlap, since
+	// the LF spelling demands a bare \n exactly where the CRLF one has \r.
+	return []string{crlf, old}
+}
+
+// presentSpellings keeps only the forms the text actually holds.
+func presentSpellings(text, old string) []string {
+	var found []string
+	for _, spelling := range spellings(old) {
+		if strings.Count(text, spelling) > 0 {
+			found = append(found, spelling)
+		}
+	}
+	return found
+}
+
+// dominantEnding is what a single-line match inherits. The matched text holds no
+// line break to copy, so the convention the file already favours wins, which is
+// what the whole-file rewrite used to do for the uniform case it was written for.
+func dominantEnding(text string) string {
+	crlf := strings.Count(text, "\r\n")
+	if crlf > strings.Count(text, "\n")-crlf {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+// inheritedEnding is the terminator the replacement is written with: a match
+// that spans lines carries its own answer, one that does not takes the file's.
+func inheritedEnding(matched, dominant string) string {
+	if strings.Contains(matched, "\r\n") {
+		return "\r\n"
+	}
+	if strings.Contains(matched, "\n") {
+		return "\n"
+	}
+	return dominant
+}
+
+// ambiguousLines names every line a repeated match starts on, across both
+// spellings, so the caller can tell an ambiguity from an ending difference.
+func ambiguousLines(text string, found []string) []string {
+	seen := map[string]bool{}
+	lines := make([]string, 0, len(found)*5)
+	numbers := make([]int, 0, len(found)*5)
+	for _, spelling := range found {
+		for _, line := range matchLines(text, spelling) {
+			if seen[line] {
+				continue
+			}
+			seen[line] = true
+			if parsed, err := strconv.Atoi(line); err == nil {
+				numbers = append(numbers, parsed)
+			}
+		}
+	}
+	sort.Ints(numbers)
+	for _, number := range numbers {
+		lines = append(lines, strconv.Itoa(number))
+	}
+	return lines
 }
 
 // matchLines returns the 1-based line numbers where a needle starts.
