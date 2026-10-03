@@ -7,25 +7,26 @@ import (
 
 const samplePreview = "--- note.txt\n+++ note.txt\n before the line\n-hello from disk\n+hello changed\n after the line"
 
-func TestToolBlockShowsColoredPreviewAfterSuccess(t *testing.T) {
+func TestToolBlockShowsBoxedPreviewAfterSuccess(t *testing.T) {
 	styles := NewStyles(DefaultPalette())
 	done := block{kind: blockTool, toolName: "edit", toolLabel: "Edited note.txt", toolOK: true, preview: samplePreview}
 
 	compact := stripANSI(renderToolBlock(done, styles, 80, false))
-	if !strings.Contains(compact, "-hello from disk") || !strings.Contains(compact, "+hello changed") {
-		t.Errorf("compact transcript must show the changed lines: %q", compact)
+	for _, want := range []string{"- hello from disk", "+ hello changed", "note.txt", "╭", "╰"} {
+		if !strings.Contains(compact, want) {
+			t.Errorf("compact transcript preview missing %q:\n%s", want, compact)
+		}
 	}
 	if !strings.Contains(compact, "Edited note.txt") {
 		t.Error("the label must stay on its own line above the preview")
 	}
-	// (colorization itself belongs to renderApprovalDiff's own tests; under
-	// go test lipgloss detects a non-terminal and styles render plain)
+	// The colour itself lives in the styles; under go test lipgloss detects a
+	// non-terminal and renders plain, so the box and the markers are the
+	// observable contract here.
 
 	details := stripANSI(renderToolBlock(done, styles, 80, true))
-	// At 80 columns the details view may be side-by-side (no +/- markers,
-	// the columns carry the meaning); either way the changed text is there.
-	if !strings.Contains(details, "hello changed") {
-		t.Error("the details view must show the preview too")
+	if !strings.Contains(details, "hello changed") || !strings.Contains(details, "╭") {
+		t.Errorf("the details view must show the boxed preview too:\n%s", details)
 	}
 }
 
@@ -59,25 +60,22 @@ func TestToolBlockCompactPeeksAndStaysBounded(t *testing.T) {
 	}
 }
 
-func TestToolBlockDetailsGoesSideBySideWhenWide(t *testing.T) {
+func TestToolBlockPreviewStaysBoxedAtEveryWidth(t *testing.T) {
 	styles := NewStyles(DefaultPalette())
 	item := block{kind: blockTool, toolName: "edit", toolLabel: "Edited note.txt", toolOK: true, preview: samplePreview}
 
-	wide := stripANSI(renderToolBlock(item, styles, 96, true))
-	if !strings.Contains(wide, "|") {
-		t.Errorf("the details view on a wide terminal must draw two columns, got %q", wide)
-	}
-	if !strings.Contains(wide, "hello from disk") || !strings.Contains(wide, "hello changed") {
-		t.Error("both sides of the change must be visible side by side")
-	}
-
-	narrow := stripANSI(renderToolBlock(item, styles, 50, true))
-	if !strings.Contains(narrow, "-hello from disk") || !strings.Contains(narrow, "+hello changed") {
-		t.Error("a narrow terminal keeps the unified preview: half a code column is worse")
+	for _, width := range []int{96, 50} {
+		out := stripANSI(renderToolBlock(item, styles, width, true))
+		if !strings.Contains(out, "╭") || !strings.Contains(out, "╰") {
+			t.Errorf("width %d: the details preview must be in a box, got:\n%s", width, out)
+		}
+		if !strings.Contains(out, "- hello from disk") || !strings.Contains(out, "+ hello changed") {
+			t.Errorf("width %d: both the old and the new line must show, got:\n%s", width, out)
+		}
 	}
 
 	compact := stripANSI(renderToolBlock(item, styles, 96, false))
-	if !strings.Contains(compact, "-hello from disk") {
-		t.Error("the compact peek stays unified even on a wide terminal")
+	if !strings.Contains(compact, "- hello from disk") {
+		t.Error("the compact peek keeps the same boxed preview")
 	}
 }

@@ -114,9 +114,11 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   on `EventToolStart`: once the tool has succeeded the old text is gone and
   a late preview would describe a change that cannot be found anymore. The
   transcript colors it only for a finished, successful tool - running or
-  failed edits show no preview. Compact view peeks a few unified lines; the
-  details view goes two-column (the /diff renderer) on wide terminals and
-  stays unified when the width cannot hold two readable columns.
+  failed edits show no preview. It is drawn in a bordered box as code review:
+  a removed line red, an added line blue and an unchanged line green. Compact
+  view peeks a few rows; the details view shows more, and a long diff ends in
+  a "... (N more lines)" marker. The current edit preview replaces the old
+  bare, unboxed lines that ran together with the tool output.
 - The wordmark has one source of truth: the block glyphs and per-letter hues
   in `internal/ui/banner.go`. The README banner (`termixgo-banner.svg`) and the
   welcome screenshot (`termigo-welcome.png`) mirror that paint. Change the TUI

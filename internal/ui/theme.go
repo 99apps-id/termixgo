@@ -20,6 +20,12 @@ type Palette struct {
 	Tool      lipgloss.Color
 	Border    lipgloss.Color
 	Selection lipgloss.Color
+
+	// Diff colours for the edit preview: the old line red, the new line blue
+	// and the unchanged line green, the way a code review reads.
+	DiffAdd     lipgloss.Color
+	DiffDel     lipgloss.Color
+	DiffContext lipgloss.Color
 }
 
 // DefaultPalette is the Termixgo dark theme: a cyan-to-violet accent on a
@@ -39,6 +45,10 @@ func DefaultPalette() Palette {
 		Tool:      lipgloss.Color("#facc15"),
 		Border:    lipgloss.Color("#374151"),
 		Selection: lipgloss.Color("#1f2937"),
+
+		DiffAdd:     lipgloss.Color("#60a5fa"),
+		DiffDel:     lipgloss.Color("#f87171"),
+		DiffContext: lipgloss.Color("#4ade80"),
 	}
 }
 
@@ -84,6 +94,11 @@ type Styles struct {
 	Hint         lipgloss.Style
 	Trust        lipgloss.Style
 	NoTrust      lipgloss.Style
+
+	DiffAdd     lipgloss.Style
+	DiffDel     lipgloss.Style
+	DiffContext lipgloss.Style
+	DiffBox     lipgloss.Style
 }
 
 // NewStyles builds the style set for a palette.
@@ -128,5 +143,10 @@ func NewStyles(palette Palette) Styles {
 		Hint:         lipgloss.NewStyle().Foreground(palette.Faint),
 		Trust:        lipgloss.NewStyle().Foreground(palette.Success).Bold(true),
 		NoTrust:      lipgloss.NewStyle().Foreground(palette.Warning).Bold(true),
+
+		DiffAdd:     lipgloss.NewStyle().Foreground(palette.DiffAdd),
+		DiffDel:     lipgloss.NewStyle().Foreground(palette.DiffDel),
+		DiffContext: lipgloss.NewStyle().Foreground(palette.DiffContext),
+		DiffBox:     lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(palette.Border).Padding(0, 1),
 	}
 }

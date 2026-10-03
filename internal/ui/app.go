@@ -1805,11 +1805,13 @@ func renderApprovalDiff(diff string, styles Styles, width, maxLines int) string 
 		line = truncate(line, max(1, width))
 		switch {
 		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
-			out = append(out, styles.ToolDone.Render(line))
+			out = append(out, styles.DiffAdd.Render(line))
 		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
-			out = append(out, styles.ToolError.Render(line))
-		default:
+			out = append(out, styles.DiffDel.Render(line))
+		case strings.HasPrefix(line, "@@") || strings.HasPrefix(line, "diff ") || strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
 			out = append(out, styles.Dim.Render(line))
+		default:
+			out = append(out, styles.DiffContext.Render(line))
 		}
 	}
 	if truncated {

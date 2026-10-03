@@ -243,9 +243,7 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 		return shimmerTool(line, styles)
 	}
 	rendered := style.Render(line + styles.Dim.Render(timing))
-	if side := previewColumns(item, styles, width); side != "" {
-		rendered += "\n" + side
-	} else if peek := previewLines(item, styles, width, previewFullLines); peek != "" {
+	if peek := previewLines(item, styles, width, previewFullLines); peek != "" {
 		rendered += "\n" + peek
 	}
 	result := strings.TrimSpace(item.toolResult)
@@ -267,49 +265,98 @@ const (
 	previewFullLines = 40
 )
 
-// previewLines colors a finished edit tool's diff for the transcript. A tool
+// previewLines draws a finished edit tool's diff for the transcript. A tool
 // that did not succeed changed nothing on disk, and a preview of a change
 // that never happened would lie, so it stays hidden until the result says OK.
 func previewLines(item block, styles Styles, width, maxLines int) string {
 	if item.preview == "" || item.running || !item.toolOK {
 		return ""
 	}
-	body := renderApprovalDiff(item.preview, styles, width-4, maxLines)
-	if body == "" {
-		return ""
-	}
-	lines := strings.Split(body, "\n")
-	for index := range lines {
-		lines[index] = "    " + lines[index]
-	}
-	return strings.Join(lines, "\n")
+	return renderEditBox(item.preview, styles, width, maxLines)
 }
 
-// previewSideMinWidth is where two columns stop being a joke about code: half
-// of the terminal minus gutters still has to hold a readable statement.
-const previewSideMinWidth = 76
+// editPreviewMinWidth is the narrowest box worth drawing: below it the border
+// and the gutter leave no room for the code.
+const editPreviewMinWidth = 24
 
-// previewColumns draws a finished edit's preview in the two-column layout of
-// the /diff view, so the details screen shows old and new side by side. Under
-// the minimum width it returns "" and the caller keeps the unified preview -
-// half a code column is worse than a full-width diff.
-func previewColumns(item block, styles Styles, width int) string {
-	if item.preview == "" || item.running || !item.toolOK || width < previewSideMinWidth {
+// renderEditBox draws a finished edit's diff as a code review inside a bordered
+// box: a removed line red, an added line blue and an unchanged line green. It
+// is deliberately not the two-column /diff renderer. One coloured column reads
+// as the change itself, and the box keeps the change from bleeding into the
+// surrounding transcript, which is what the previous bare lines did.
+func renderEditBox(preview string, styles Styles, width, maxLines int) string {
+	if strings.TrimSpace(preview) == "" || width < editPreviewMinWidth {
 		return ""
 	}
-	files := sanitizeDiffFiles(parseUnifiedDiff(item.preview))
+	files := sanitizeDiffFiles(parseUnifiedDiff(preview))
 	if len(files) == 0 {
 		return ""
 	}
-	body := renderDiffSideBySide(files, styles, width-4, previewFullLines)
-	if body == "" {
+	// The transcript indents the box two columns, and the box spends two on
+	// its border and two more on its padding.
+	inner := width - 6
+	if inner < 8 {
 		return ""
 	}
-	lines := strings.Split(body, "\n")
-	for index := range lines {
-		lines[index] = "    " + lines[index]
+	if maxLines < 1 {
+		maxLines = 1
 	}
-	return strings.Join(lines, "\n")
+
+	var rows []string
+	for _, file := range files {
+		title := file.label
+		if file.adds > 0 || file.dels > 0 {
+			title = fmt.Sprintf("%s  (+%d -%d)", file.label, file.adds, file.dels)
+		}
+		rows = append(rows, styles.Heading.Render(title))
+		for _, line := range file.lines {
+			switch line.kind {
+			case "add":
+				rows = append(rows, styles.DiffAdd.Render("+ "+line.text))
+			case "del":
+				rows = append(rows, styles.DiffDel.Render("- "+line.text))
+			case "hunk":
+				rows = append(rows, styles.Dim.Render(strings.TrimSpace(line.text)))
+			case "hdr":
+				// The diff/---/+++ lines are already named by the file title.
+			default:
+				rows = append(rows, styles.DiffContext.Render("  "+line.text))
+			}
+		}
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	if len(rows) > maxLines {
+		if maxLines >= 2 {
+			hidden := len(rows) - (maxLines - 1)
+			rows = append(rows[:maxLines-1], styles.Dim.Render(fmt.Sprintf("... (%d more lines)", hidden)))
+		} else {
+			rows = rows[:1]
+		}
+	}
+	// A fixed width per row keeps the border a rectangle whatever the code
+	// holds; the padding style would otherwise size the box to the longest row.
+	for index, row := range rows {
+		rows[index] = padOrClip(row, inner)
+	}
+	box := strings.Split(styles.DiffBox.Render(strings.Join(rows, "\n")), "\n")
+	for index := range box {
+		box[index] = truncateANSI("  "+box[index], width)
+	}
+	return strings.Join(box, "\n")
+}
+
+// padOrClip grows a styled row to an exact display width and drops anything
+// past it.
+func padOrClip(line string, width int) string {
+	if ansi.StringWidth(line) > width {
+		return ansi.Truncate(line, width, "")
+	}
+	if pad := width - ansi.StringWidth(line); pad > 0 {
+		return line + strings.Repeat(" ", pad)
+	}
+	return line
 }
 
 func renderPlanBlock(item block, styles Styles, width int) string {
