@@ -8,6 +8,14 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Fixed
 
+- Compaction now always hands back a request that fits the model's window. The
+  newest four messages were beyond its reach, so a single large recent tool
+  result (a `read_file` at its 64 KB cap costs about 25k tokens against the
+  9.6k history budget of a 32k model) could not be trimmed at all: every later
+  step was rejected by the provider, the failure looked unrelated to anything
+  the operator asked, and only starting a new session cleared it. Older turns
+  are still elided first and the tail given up last, and a pass that shortens
+  what remains bounds the result by construction rather than by hope.
 - An interrupted turn no longer reports that it spent nothing. The clean stop
   carried the turn's summed usage on `EventTurnEnd` and the step-cap, loop
   guard, aborted and error paths did not, so the audit ledger, which reads

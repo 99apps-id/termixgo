@@ -32,9 +32,42 @@ func TestCompactKeepsTailAndNeverStartsWithToolResult(t *testing.T) {
 	if len(trimmed) > 0 && trimmed[0].Role == provider.RoleTool {
 		t.Fatalf("a compacted conversation must not start with a tool result")
 	}
-	// The newest message is preserved verbatim.
-	if trimmed[len(trimmed)-1].Content != messages[len(messages)-1].Content {
-		t.Errorf("the newest message must be kept intact")
+	// The newest message is the last thing compaction gives up, and this budget
+	// cannot hold one message of its size: 2000 tokens against a 4000 byte tool
+	// result. It is shortened, and its role is kept so the request stays legal.
+	last := trimmed[len(trimmed)-1]
+	if last.Role != provider.RoleTool {
+		t.Errorf("the newest message should still be the tool result, got a %s", last.Role)
+	}
+	if len(last.Content) >= len(messages[len(messages)-1].Content) {
+		t.Errorf("the newest message was not trimmed, so no arrangement can fit")
+	}
+	if used := EstimateMessages(trimmed); used > budget {
+		t.Errorf("compaction left the request over budget: %d > %d", used, budget)
+	}
+}
+
+// TestCompactKeepsTheNewestMessageWhenThereIsRoom is the part of the tail rule
+// that still holds: with room behind it the newest tool result is not touched,
+// because it is the very thing the model needs to answer with.
+func TestCompactKeepsTheNewestMessageWhenThereIsRoom(t *testing.T) {
+	messages := []provider.Message{
+		{Role: provider.RoleUser, Content: strings.Repeat("u", 4000)},
+		{Role: provider.RoleAssistant, Content: strings.Repeat("a", 4000)},
+		{Role: provider.RoleUser, Content: "second question"},
+		{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "1", Name: "read_file", Arguments: "{}"}}},
+		{Role: provider.RoleTool, ToolID: "1", Name: "read_file", Content: strings.Repeat("t", 4000)},
+	}
+	budget := 3000
+	if EstimateMessages(messages) <= budget {
+		t.Fatal("the fixture must exceed the budget")
+	}
+	trimmed := Compact(messages, budget)
+	if got := trimmed[len(trimmed)-1].Content; got != messages[len(messages)-1].Content {
+		t.Errorf("the newest message should be verbatim when there is room, got %d characters", len(got))
+	}
+	if used := EstimateMessages(trimmed); used > budget {
+		t.Errorf("compaction left the request over budget: %d > %d", used, budget)
 	}
 }
 

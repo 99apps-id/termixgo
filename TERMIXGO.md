@@ -103,8 +103,12 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   change it to line-based editing without a matching change to the prompt.
 - `read_file` returns line-count metadata, not inline line numbers, so an exact
   match stays copyable.
-- Compaction targets 50 to 60 percent of the budget and must never leave a tool
-  result at the head of the message list. The budget comes from
+- Compaction targets 50 to 60 percent of the budget, must never leave a tool
+  result at the head of the message list, and must always hand back a history
+  that fits. That last one outranks keeping the newest messages whole: older
+  turns are elided first and the tail given up last, but a trimmed tool result
+  only costs detail while a request over the window is refused, and a refused
+  request stops the session for every step after it. The budget comes from
   `provider.Model.Window()` through `agent.HistoryBudget`, never from a global
   constant.
 - A transient HTTP failure is retried only before the response body is read.
