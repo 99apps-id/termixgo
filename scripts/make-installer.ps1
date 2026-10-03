@@ -52,6 +52,10 @@ Copy-Item $Binary (Join-Path $stage "termixgo.exe") -Force
 Copy-Item (Join-Path $root "packaging\windows\INSTALL.bat") $stage -Force
 Copy-Item (Join-Path $root "packaging\windows\install.ps1") $stage -Force
 Copy-Item (Join-Path $root "packaging\windows\uninstall.ps1") $stage -Force
+# The same zip also carries install.sh and a lowercase install.bat, so cmd,
+# PowerShell and a Linux shell each find an entry point beside the binary.
+Copy-Item (Join-Path $root "packaging\linux\install.sh") $stage -Force
+Copy-Item (Join-Path $root "packaging\windows\INSTALL.bat") (Join-Path $stage "install.bat") -Force
 # The licence and the notice travel with the install, which is what the Apache
 # licence asks for when distributing the binary.
 Copy-Item (Join-Path $root "LICENSE") $stage -Force
