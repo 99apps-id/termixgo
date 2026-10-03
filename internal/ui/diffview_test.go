@@ -91,3 +91,47 @@ func TestParseUnifiedDiffNeverLosesUnknownLines(t *testing.T) {
 		t.Fatalf("unknown input should survive as one row, got %+v", files)
 	}
 }
+
+// TestRenderBlockReflowsTheDiffOnResize is the frame invariant applied to a
+// diff. The view was cached at the width it was opened with, so narrowing the
+// terminal clipped the new column off the right instead of falling back to one
+// column, and widening it left the old narrow columns in place.
+func TestRenderBlockReflowsTheDiffOnResize(t *testing.T) {
+	block := block{
+		kind:       blockDiff,
+		diffFiles:  sanitizeDiffFiles(parseUnifiedDiff(sampleDiff)),
+		diffLayout: "side",
+		diffBudget: 50,
+	}
+	styles := NewStyles(DefaultPalette())
+
+	wide := stripANSI(renderBlock(block, styles, 120, true))
+	if !strings.Contains(wide, "|") {
+		t.Fatalf("a wide diff should keep both columns:\n%s", wide)
+	}
+
+	narrow := stripANSI(renderBlock(block, styles, 60, true))
+	if strings.Contains(narrow, "|") {
+		t.Errorf("a narrow diff should fall back to one column and not keep the separator:\n%s", narrow)
+	}
+	if !strings.Contains(narrow, "func A() {}") || !strings.Contains(narrow, "func A() int {}") {
+		t.Errorf("the fallback must still show both sides:\n%s", narrow)
+	}
+}
+
+// TestDiffTextLosesTerminalEscapes keeps a changed line from driving the
+// terminal. The diff body carries file content, so an escape sequence there is
+// untrusted input, the same as model or tool text.
+func TestDiffTextLosesTerminalEscapes(t *testing.T) {
+	raw := "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-\x1b]0;pwned\x07old\n+new\n"
+	block := block{
+		kind:       blockDiff,
+		diffFiles:  sanitizeDiffFiles(parseUnifiedDiff(raw)),
+		diffLayout: "unified",
+		diffBudget: 50,
+	}
+	got := renderBlock(block, NewStyles(DefaultPalette()), 100, true)
+	if strings.ContainsRune(got, 0x1b) {
+		t.Errorf("a diff must not carry an escape sequence to the terminal: %q", got)
+	}
+}

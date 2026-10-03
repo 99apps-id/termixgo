@@ -153,3 +153,40 @@ func TestBatchStatusNamesRunningAndDone(t *testing.T) {
 		t.Errorf("status should name the idle worktree, got:\n%s", text)
 	}
 }
+
+// TestBatchStatusSeparatesAWorktreeFromItsPrefix is the substring trap. Two
+// checkouts named alpha and alpha-2 both contain "alpha", so a contains test
+// gave the idle one the running one's state.
+func TestBatchStatusSeparatesAWorktreeFromItsPrefix(t *testing.T) {
+	workspace := worktreeRepo(t)
+	manager := NewProcessManager()
+	now := time.Now()
+	parent := filepath.Dir(workspace)
+	for _, name := range []string{"alpha", "alpha-2"} {
+		if err := recordWorktree(workspace, worktreeEntry{Name: name, Path: filepath.Join(parent, name), Branch: "termixgo/" + name, CreatedAt: now, LastUsedAt: now}); err != nil {
+			t.Fatalf("record %s: %v", name, err)
+		}
+	}
+	running := &Process{ID: "proc-1", Dir: filepath.Join(parent, "alpha-2"), Label: "claude worker alpha-2", Started: now}
+	manager.mu.Lock()
+	manager.processes[running.ID] = running
+	manager.order = append(manager.order, running.ID)
+	manager.mu.Unlock()
+
+	text := batchStatus(workspace, manager, now)
+	alphaLine, prefixLine := "", ""
+	for _, line := range strings.Split(text, "\n") {
+		switch {
+		case strings.HasPrefix(line, "  alpha-2 "):
+			prefixLine = line
+		case strings.HasPrefix(line, "  alpha "):
+			alphaLine = line
+		}
+	}
+	if !strings.Contains(prefixLine, "running") {
+		t.Errorf("the worker's own checkout should read running, got:\n%s", prefixLine)
+	}
+	if !strings.Contains(alphaLine, "idle") {
+		t.Errorf("a checkout whose name is a prefix of a running one must stay idle, got:\n%s", alphaLine)
+	}
+}

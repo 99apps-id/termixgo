@@ -207,12 +207,15 @@ command typed mid-turn is queued and runs when the turn ends.
 | `/heartbeat [on\|off\|<interval>]` | periodic self-check for a 24/7 assistant |
 | `/audit [count]` | show recent audited actions |
 | `/worker [list\|start]` | run a background coding worker |
+| `/batch <task> :: <task>` | start one worker per task, each in its own worktree |
 | `/init` | generate a `TERMIXGO.md` for the project |
 | `/cost` | token usage and estimated spend for this session |
 | `/ps [kill <handle>]` | list background processes, or stop one |
 | `/checkpoint [list\|<message>]` | save a working-tree snapshot |
 | `/rewind [ref]` | restore the newest checkpoint, undoing later edits |
 | `/worktree [list\|add\|remove]` | git worktrees, for a second task in parallel |
+| `/workers` | show each tracked worktree and its worker state |
+| `/diff [side\|unified] [path...]` | show the working tree diff side by side |
 | `/exit` | quit |
 
 Type `/` on its own and press `Enter` to open the command menu. The menu never

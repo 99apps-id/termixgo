@@ -35,6 +35,22 @@ func diffIsClean(raw string) bool {
 	return trimmed == "" || trimmed == "No changes."
 }
 
+// sanitizeDiffFiles drops terminal control characters from parsed diff text
+// before it can reach the renderer. A diff carries file content, which is not
+// trusted: an escape sequence inside a changed line would otherwise be obeyed
+// by the terminal instead of shown.
+func sanitizeDiffFiles(files []diffFile) []diffFile {
+	for index := range files {
+		files[index].label = sanitizeText(files[index].label)
+		for line := range files[index].lines {
+			files[index].lines[line].text = sanitizeText(files[index].lines[line].text)
+			files[index].lines[line].raw = sanitizeText(files[index].lines[line].raw)
+			files[index].lines[line].hunkHdr = sanitizeText(files[index].lines[line].hunkHdr)
+		}
+	}
+	return files
+}
+
 // parseUnifiedDiff turns git diff output into files with numbered rows.
 // It never fails: an unrecognised line becomes context so nothing is lost.
 func parseUnifiedDiff(raw string) []diffFile {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -167,6 +168,20 @@ func (t *parallelBatchTool) Run(ctx context.Context, env *Env, args map[string]a
 	return Result{Output: strings.Join(lines, "\n")}, nil
 }
 
+// sameWorktree matches a process to its checkout by path, not by substring. Two
+// names where one is a prefix of the other, "alpha" and "alpha-2", would
+// otherwise share whichever worker was listed first, so one checkout read as
+// running while the other sat idle.
+func sameWorktree(process *Process, entry worktreeEntry) bool {
+	if process == nil {
+		return false
+	}
+	if strings.TrimSpace(entry.Path) != "" && filepath.Clean(process.Dir) == filepath.Clean(entry.Path) {
+		return true
+	}
+	return strings.TrimSpace(entry.Name) != "" && strings.HasSuffix(process.Label, " worker "+entry.Name)
+}
+
 // batchKinds names the distinct workers in a batch, so the approval prompt
 // shows which agents are being started instead of only how many. One approval
 // fans out to that many detached workers, each with its own checkout.
@@ -250,18 +265,19 @@ func batchStatus(workspace string, manager *ProcessManager, now time.Time) strin
 		state := "idle " + shortAge(now.Sub(entry.LastUsedAt))
 		if manager != nil {
 			for _, process := range manager.List() {
-				if strings.Contains(process.Dir, entry.Path) || strings.Contains(process.Label, entry.Name) {
-					if process.Exited() {
-						if process.ExitCode() == 0 {
-							state = "done"
-						} else {
-							state = fmt.Sprintf("failed (exit %d)", process.ExitCode())
-						}
-					} else {
-						state = "running " + process.ID
-					}
-					break
+				if !sameWorktree(process, entry) {
+					continue
 				}
+				if process.Exited() {
+					if process.ExitCode() == 0 {
+						state = "done"
+					} else {
+						state = fmt.Sprintf("failed (exit %d)", process.ExitCode())
+					}
+				} else {
+					state = "running " + process.ID
+				}
+				break
 			}
 		}
 		lines = append(lines, fmt.Sprintf("  %-20s %-16s %s", entry.Name, state, entry.Path))

@@ -46,8 +46,8 @@ type block struct {
 	toolMillis int64
 
 	diffFiles  []diffFile
-	diffText   string
 	diffLayout string
+	diffBudget int
 
 	plan []agent.Todo
 }
@@ -100,13 +100,20 @@ func renderBlock(item block, styles Styles, width int, showDetails bool) string 
 	case blockError:
 		return renderPrefixed(item.text, "  ", styles.Error, width)
 	case blockDiff:
-		if strings.TrimSpace(item.diffText) == "" {
+		if len(item.diffFiles) == 0 {
 			return ""
 		}
-		if width < 24 {
-			width = 24
+		// The diff is drawn from the parsed files on every frame, not cached at
+		// the width it was opened with. A cached body kept its old columns after
+		// a resize, so narrowing the terminal clipped the new side away instead
+		// of falling back to one column.
+		if item.diffLayout == "side" && width < 100 {
+			return renderDiffUnified(item.diffFiles, styles, width, item.diffBudget)
 		}
-		return item.diffText
+		if item.diffLayout == "side" {
+			return renderDiffSideBySide(item.diffFiles, styles, width, item.diffBudget)
+		}
+		return renderDiffUnified(item.diffFiles, styles, width, item.diffBudget)
 	default:
 		return item.text
 	}

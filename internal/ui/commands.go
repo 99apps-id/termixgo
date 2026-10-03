@@ -1047,19 +1047,9 @@ func (m *Model) slashDiff(args string) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 	}
-	files := parseUnifiedDiff(raw)
-	width := max(40, m.width-4)
-	if layout == "side" && width < 100 {
-		layout = "unified"
-	}
+	files := sanitizeDiffFiles(parseUnifiedDiff(raw))
 	budget := max(10, m.modalRowBudget()*3)
-	var body string
-	if layout == "side" {
-		body = renderDiffSideBySide(files, m.styles, width, budget)
-	} else {
-		body = renderDiffUnified(files, m.styles, width, budget)
-	}
-	m.blocks = append(m.blocks, block{kind: blockDiff, diffFiles: files, diffText: body, diffLayout: layout})
+	m.blocks = append(m.blocks, block{kind: blockDiff, diffFiles: files, diffLayout: layout, diffBudget: budget})
 	m.refresh()
 	return m, nil
 }
