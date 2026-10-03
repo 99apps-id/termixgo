@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -81,10 +82,27 @@ func (c *museClient) Stream(ctx context.Context, req ChatRequest, emit func(Stre
 	}
 	response, err = c.sendWithRetry(ctx, key, payload)
 	if err != nil {
-		return err
+		return museModelHint(req.Model, err)
 	}
 	defer response.Body.Close()
 	return decodeResponsesStream(c.info.Label, response.Body, emit)
+}
+
+// museModelHint names the model a persistent failure belongs to. Meta answers
+// a stale key, its own overload AND a model the account is not entitled to
+// with the same 404 model_not_found, so when retries and a fresh key still
+// fail the operator needs the model id and the tier to check, not the generic
+// base-URL hint.
+func museModelHint(model string, err error) error {
+	var status *providerStatusError
+	if !errors.As(err, &status) || status.status != http.StatusNotFound {
+		return err
+	}
+	name := "the selected model"
+	if trimmed := strings.TrimSpace(model); trimmed != "" {
+		name = fmt.Sprintf("model %q", trimmed)
+	}
+	return fmt.Errorf("%w: this Muse login cannot reach %s — check that the Muse Code subscription is active and covers its tier (standard vs contributor), and that no custom base URL overrides the Muse endpoint", err, name)
 }
 
 // send posts a Responses request with the Muse identity headers.

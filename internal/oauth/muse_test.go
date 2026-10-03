@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -61,11 +62,11 @@ func TestMuseSpecUsesTheDeviceFlow(t *testing.T) {
 }
 
 // TestMintMetaKeyExchangesTheDeviceToken proves the mint sends the dca token as
-// a bearer, sets x-api-version, sends an empty JSON body, and returns the API
-// key as the access token.
+// a bearer, sets x-api-version, enrolls the account with onboard:true, and
+// returns the API key as the access token.
 func TestMintMetaKeyExchangesTheDeviceToken(t *testing.T) {
 	var gotAuth, gotAgent, gotAPIVersion string
-	var gotBody map[string]string
+	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		gotAuth = request.Header.Get("Authorization")
 		gotAgent = request.Header.Get("User-Agent")
@@ -95,8 +96,8 @@ func TestMintMetaKeyExchangesTheDeviceToken(t *testing.T) {
 	if gotAPIVersion != "1.0.0" {
 		t.Errorf("x-api-version = %q, want 1.0.0", gotAPIVersion)
 	}
-	if len(gotBody) != 0 {
-		t.Errorf("body = %v, want empty JSON {}", gotBody)
+	if len(gotBody) != 1 || gotBody["onboard"] != true {
+		t.Errorf("body = %v, want {\"onboard\":true} to enroll the account", gotBody)
 	}
 	if token.Access != "LLM|minted" {
 		t.Errorf("access = %q, want the minted key", token.Access)
@@ -295,5 +296,99 @@ func TestMuseAccessTokenLazyMintsFromDcaOnly(t *testing.T) {
 	}
 	if !saved.Expires.IsZero() {
 		t.Errorf("saved expires = %v, want zero", saved.Expires)
+	}
+}
+
+// fastMetaMintRetry removes the mint backoff so the retry test does not wait.
+func fastMetaMintRetry(t *testing.T) {
+	t.Helper()
+	previous := metaMintRetryWait
+	metaMintRetryWait = 0
+	t.Cleanup(func() { metaMintRetryWait = previous })
+}
+
+// TestMintMetaKeyRetriesTransientFailures proves a rate-limited or flaky mint
+// is replayed with the onboard flag instead of failing the login: the device
+// code is one-shot, so giving up on the first 429 wastes the whole login.
+func TestMintMetaKeyRetriesTransientFailures(t *testing.T) {
+	fastMetaMintRetry(t)
+	var hits int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		if hits == 1 {
+			writer.WriteHeader(http.StatusTooManyRequests)
+			_, _ = writer.Write([]byte(`{"error":"rate limited"}`))
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]string{"api_key": "LLM|after-retry"})
+	}))
+	defer server.Close()
+
+	token, err := MintMetaKey(context.Background(), server.URL, "dca:abc123")
+	if err != nil {
+		t.Fatalf("MintMetaKey: %v", err)
+	}
+	if hits != 2 {
+		t.Fatalf("hits = %d, want 2 (one 429 then success)", hits)
+	}
+	if token.Access != "LLM|after-retry" || token.Refresh != "dca:abc123" {
+		t.Errorf("token = %+v, want the retried key with the dca refresh", token)
+	}
+}
+
+// TestMintMetaKeyReportsSubscriptionProblems proves an account without an
+// active Muse Code subscription fails the login with an actionable message
+// instead of minting a key the model endpoint answers with 404.
+func TestMintMetaKeyReportsSubscriptionProblems(t *testing.T) {
+	inactive := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"api_key":"LLM|dead","is_subs_active":false}`))
+	}))
+	defer inactive.Close()
+	if _, err := MintMetaKey(context.Background(), inactive.URL, "dca:abc"); err == nil {
+		t.Errorf("an inactive subscription must fail the login")
+	} else if !strings.Contains(strings.ToLower(err.Error()), "inactive") {
+		t.Errorf("error = %q, want it to name the inactive subscription", err)
+	}
+
+	unpaid := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"require_payment":true,"action_url":"https://muse.ai/pay"}`))
+	}))
+	defer unpaid.Close()
+	if _, err := MintMetaKey(context.Background(), unpaid.URL, "dca:abc"); err == nil {
+		t.Errorf("a subscription demand must fail the login")
+	} else if !strings.Contains(err.Error(), "https://muse.ai/pay") {
+		t.Errorf("error = %q, want it to carry the payment URL", err)
+	}
+}
+
+// TestCheckMintSubscriptionRejectsUnusableAccounts pins the rejection without
+// a network server: an inactive subscription or a payment demand fails even
+// when a key is present, while a plain keyless body keeps the api_key error.
+func TestCheckMintSubscriptionRejectsUnusableAccounts(t *testing.T) {
+	inactive := false
+	if err := checkMintSubscription(metaMintedKey{APIKey: "LLM|dead", IsSubsActive: &inactive}); err == nil {
+		t.Errorf("an inactive subscription must be rejected")
+	} else if !strings.Contains(strings.ToLower(err.Error()), "inactive") {
+		t.Errorf("error = %q, want it to name the inactive subscription", err)
+	}
+	if err := checkMintSubscription(metaMintedKey{RequirePayment: true, ActionURL: "https://muse.ai/pay"}); err == nil {
+		t.Errorf("a payment demand must be rejected")
+	} else if !strings.Contains(err.Error(), "https://muse.ai/pay") {
+		t.Errorf("error = %q, want it to carry the payment URL", err)
+	}
+	if err := checkMintSubscription(metaMintedKey{}); err == nil {
+		t.Errorf("a keyless response must be rejected")
+	} else if !strings.Contains(err.Error(), "no api_key") {
+		t.Errorf("error = %q, want the missing-key message", err)
+	}
+	active := true
+	if err := checkMintSubscription(metaMintedKey{APIKey: "LLM|ok", IsSubsActive: &active}); err != nil {
+		t.Errorf("an active subscription with a key must pass, got %v", err)
+	}
+	if err := checkMintSubscription(metaMintedKey{APIKey: "LLM|ok"}); err != nil {
+		t.Errorf("a key without subscription signals must pass, got %v", err)
 	}
 }

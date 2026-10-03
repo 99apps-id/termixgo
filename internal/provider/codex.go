@@ -67,6 +67,14 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 func decodeResponsesStream(label string, body io.Reader, emit func(StreamEvent) error) error {
 	reader := newSSEReader(body)
 	usage := &cumulativeUsage{}
+	// Muse finalizes a function call's arguments in a dedicated
+	// response.function_call_arguments.done event, and the output_item.done
+	// item can carry them empty. Track the arguments per item id so the tool
+	// call is emitted with the full JSON; a blank string stored in history is
+	// replayed as an invalid `arguments` and Meta rejects the next turn with
+	// HTTP 400.
+	finalArgs := map[string]string{}
+	deltaArgs := map[string]*strings.Builder{}
 	for {
 		payload, err := reader.next()
 		if err == io.EOF {
@@ -95,9 +103,36 @@ func decodeResponsesStream(label string, body io.Reader, emit func(StreamEvent) 
 					return err
 				}
 			}
+		case "response.function_call_arguments.delta":
+			if event.ItemID != "" && event.Delta != "" {
+				if deltaArgs[event.ItemID] == nil {
+					deltaArgs[event.ItemID] = &strings.Builder{}
+				}
+				deltaArgs[event.ItemID].WriteString(event.Delta)
+			}
+		case "response.function_call_arguments.done":
+			if event.ItemID != "" {
+				args := event.Arguments
+				if strings.TrimSpace(args) == "" {
+					if b := deltaArgs[event.ItemID]; b != nil {
+						args = b.String()
+					}
+				}
+				finalArgs[event.ItemID] = args
+			}
 		case "response.output_item.done":
 			if event.Item != nil && event.Item.Type == "function_call" && event.Item.Name != "" {
-				call := ToolCall{ID: event.Item.CallID, Name: event.Item.Name, Arguments: event.Item.Arguments}
+				arguments := event.Item.Arguments
+				if strings.TrimSpace(arguments) == "" {
+					if id := event.Item.ID; id != "" {
+						if args, ok := finalArgs[id]; ok && strings.TrimSpace(args) != "" {
+							arguments = args
+						} else if b := deltaArgs[id]; b != nil {
+							arguments = b.String()
+						}
+					}
+				}
+				call := ToolCall{ID: event.Item.CallID, Name: event.Item.Name, Arguments: arguments}
 				if err := emit(StreamEvent{Type: EventToolCall, ToolCall: &call}); err != nil {
 					return err
 				}
@@ -133,23 +168,28 @@ func encodeResponsesInput(req ChatRequest) []map[string]any {
 				"content": responsesUserContent(message),
 			})
 		case RoleAssistant:
-			if strings.TrimSpace(message.Content) != "" {
+			// Meta validates the replayed conversation shape: assistant text
+			// that precedes a function_call in the same turn is intermediate
+			// commentary, and replaying it as a plain final answer before the
+			// call returns HTTP 400 (invalid_request_error, param "input").
+			// The phase marker is only needed when the turn also called tools.
+			if text := strings.TrimSpace(message.Content); text != "" {
+				block := map[string]any{"type": "output_text", "text": message.Content}
+				if len(message.ToolCalls) > 0 {
+					block["phase"] = "commentary"
+				}
 				items = append(items, map[string]any{
 					"type":    "message",
 					"role":    "assistant",
-					"content": []map[string]any{{"type": "output_text", "text": message.Content}},
+					"content": []map[string]any{block},
 				})
 			}
 			for _, call := range message.ToolCalls {
-				arguments := call.Arguments
-				if strings.TrimSpace(arguments) == "" {
-					arguments = "{}"
-				}
 				items = append(items, map[string]any{
 					"type":      "function_call",
 					"call_id":   call.ID,
 					"name":      call.Name,
-					"arguments": arguments,
+					"arguments": responsesArguments(call.Arguments),
 				})
 			}
 		case RoleTool:
@@ -161,6 +201,20 @@ func encodeResponsesInput(req ChatRequest) []map[string]any {
 		}
 	}
 	return items
+}
+
+// responsesArguments returns wire-safe arguments for a Responses function_call
+// item. The model sometimes emits a half-built or plain-text argument string,
+// which the stream decoder keeps verbatim in the history; Meta replays are
+// validated and answered with 400 "`arguments` must be valid JSON". Blank or
+// broken arguments degrade to an empty object — the tool error already
+// recorded in the history explains why — instead of failing every later turn.
+func responsesArguments(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || !json.Valid([]byte(trimmed)) {
+		return "{}"
+	}
+	return trimmed
 }
 
 func responsesUserContent(message Message) []map[string]any {
@@ -225,10 +279,16 @@ func applyResponsesLite(payload map[string]any, input []map[string]any, tools []
 type responsesEvent struct {
 	Type  string `json:"type"`
 	Delta string `json:"delta"`
+	// ItemID and Arguments arrive on the response.function_call_arguments.*
+	// events, which carry the finalized tool arguments separately from the
+	// output item.
+	ItemID    string `json:"item_id"`
+	Arguments string `json:"arguments"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error"`
 	Item *struct {
+		ID        string `json:"id"`
 		Type      string `json:"type"`
 		CallID    string `json:"call_id"`
 		Name      string `json:"name"`

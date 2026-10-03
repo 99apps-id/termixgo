@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -355,5 +356,110 @@ func TestMuseProviderIsRegistered(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("muse-spark-1.3 is missing from %v", models)
+	}
+}
+
+// TestMusePersistentNotFoundNamesModelAndTier pins the last-resort error: when
+// retries and a fresh key still answer 404, the operator gets the model id
+// and the tier to check. Meta reuses 404 for a stale key, its own overload
+// and a model the account is not entitled to, so the generic base-URL hint
+// alone sends the operator after the wrong cause.
+func TestMusePersistentNotFoundNamesModelAndTier(t *testing.T) {
+	fastMuseRetry(t)
+	var hits int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.WriteHeader(http.StatusNotFound)
+		_, _ = writer.Write([]byte(`{"error":{"code":"model_not_found","message":"The requested model was not found."}}`))
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "muse", Label: "Meta Muse Code", Kind: KindMuse}, server.URL, "LLM|stale")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	client.(interface{ SetForceKeyResolver(KeyResolver) }).SetForceKeyResolver(func(string) string { return "LLM|fresh" })
+
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "muse-spark-1.3-contributor",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	}, func(StreamEvent) error { return nil })
+	if err == nil {
+		t.Fatal("a persistent 404 must be reported")
+	}
+	if hits != 2*museRetryAttempts {
+		t.Errorf("hits = %d, want %d (stale retried, reminted, fresh retried)", hits, 2*museRetryAttempts)
+	}
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, "muse-spark-1.3-contributor") {
+		t.Errorf("error = %q, want it to name the model", err)
+	}
+	if !strings.Contains(message, "subscription") || !strings.Contains(message, "contributor") {
+		t.Errorf("error = %q, want the subscription/tier hint", err)
+	}
+}
+
+// TestMuseCoercesInvalidArgumentsToAnObject pins the wire contract Meta
+// enforces: a replayed function_call whose arguments are not valid JSON is
+// answered with 400 "`arguments` must be valid JSON". A model that emitted a
+// half-built or plain-text argument string leaves exactly that in the
+// history, so the encoder degrades it to {} (the tool error already recorded
+// in the history explains why) instead of failing every later turn.
+func TestMuseCoercesInvalidArgumentsToAnObject(t *testing.T) {
+	payload := (&museClient{}).payload(ChatRequest{
+		Model: "muse-spark-1.3",
+		Messages: []Message{
+			{Role: RoleAssistant, ToolCalls: []ToolCall{
+				{ID: "call_bad", Name: "read_file", Arguments: "not json"},
+				{ID: "call_truncated", Name: "grep", Arguments: `{"pattern": "foo`},
+				{ID: "call_empty", Name: "read_file", Arguments: "  "},
+				{ID: "call_good", Name: "read_file", Arguments: `{"path":"a.go"}`},
+			}},
+		},
+	})
+	input, ok := payload["input"].([]map[string]any)
+	if !ok {
+		t.Fatalf("input = %T, want a list of items", payload["input"])
+	}
+	got := map[string]string{}
+	for _, item := range input {
+		if item["type"] != "function_call" {
+			continue
+		}
+		callID, _ := item["call_id"].(string)
+		args, _ := item["arguments"].(string)
+		got[callID] = args
+	}
+	for _, callID := range []string{"call_bad", "call_truncated", "call_empty"} {
+		if got[callID] != "{}" {
+			t.Errorf("%s arguments = %q, want {} so Meta accepts the replay", callID, got[callID])
+		}
+	}
+	if got["call_good"] != `{"path":"a.go"}` {
+		t.Errorf("call_good arguments = %q, want the original JSON untouched", got["call_good"])
+	}
+}
+
+// TestMuseModelHintNamesModelOnlyOnNotFound pins the wrapper without any
+// network: a persistent 404 names the model and the tier check while keeping
+// the typed status visible to errors.As, and any other status passes through
+// untouched.
+func TestMuseModelHintNamesModelOnlyOnNotFound(t *testing.T) {
+	notFound := &providerStatusError{label: "Meta Muse Code", status: http.StatusNotFound, message: "The requested model was not found."}
+	err := museModelHint("muse-spark-1.3-contributor", notFound)
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, "muse-spark-1.3-contributor") || !strings.Contains(message, "subscription") {
+		t.Errorf("error = %q, want the model and the subscription hint", err)
+	}
+	var status *providerStatusError
+	if !errors.As(err, &status) || status.status != http.StatusNotFound {
+		t.Errorf("error = %#v, want the 404 status preserved for errors.As", err)
+	}
+	badRequest := &providerStatusError{label: "Meta Muse Code", status: http.StatusBadRequest, message: "bad request"}
+	if out := museModelHint("muse-spark-1.3", badRequest); out != badRequest {
+		t.Errorf("a non-404 must pass through untouched, got %v", out)
+	}
+	if out := museModelHint("", notFound); !strings.Contains(strings.ToLower(out.Error()), "selected model") {
+		t.Errorf("an empty model must fall back to a generic name, got %v", out)
 	}
 }

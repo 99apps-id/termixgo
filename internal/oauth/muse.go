@@ -36,6 +36,15 @@ type metaMintedKey struct {
 	BaseURL      string `json:"base_url"`
 	UserEmail    string `json:"user_email"`
 	UserFullName string `json:"user_full_name"`
+	// IsSubsActive is false when the account's Muse Code subscription is
+	// inactive, in which case the minted key (if any) cannot chat.
+	IsSubsActive *bool `json:"is_subs_active"`
+	// RequirePayment and the action URLs mark an account that must
+	// subscribe before the model endpoint serves it.
+	RequirePayment          bool   `json:"require_payment"`
+	ActionURL               string `json:"action_url"`
+	RequirePaymentActionURL string `json:"require_payment_action_url"`
+	SubscriptionTierName    string `json:"subs_tier_name"`
 }
 
 // key returns the minted credential under any name the server uses.
@@ -48,11 +57,24 @@ func (m metaMintedKey) key() string {
 	return ""
 }
 
+// metaMintAttempts bounds the mint retries. The endpoint is aggressively
+// rate-limited (429) and intermittently fails (5xx), and the device code is
+// one-shot, so a transient failure is retried here instead of failing the
+// login.
+const metaMintAttempts = 3
+
+// metaMintRetryWait pauses between mint retries. It is a variable so a test
+// can remove the delay.
+var metaMintRetryWait = 2 * time.Second
+
 // MintMetaKey exchanges a Meta device (dca) token for the API key the Responses
 // endpoint accepts.
 //
-// The key becomes the stored access token and the dca token is kept as the
-// refresh, so a revoked or expired key can be re-minted without another login.
+// The onboard flag enrolls the account on first login; without it a fresh
+// account mints a key the model endpoint answers with 404 model_not_found,
+// which reads as a broken chat rather than a missing subscription. The key
+// becomes the stored access token and the dca token is kept as the refresh,
+// so a revoked or expired key can be re-minted without another login.
 func MintMetaKey(ctx context.Context, mintURL, dcaToken string) (Token, error) {
 	dcaToken = strings.TrimSpace(dcaToken)
 	if dcaToken == "" {
@@ -61,13 +83,25 @@ func MintMetaKey(ctx context.Context, mintURL, dcaToken string) (Token, error) {
 	if strings.TrimSpace(mintURL) == "" {
 		mintURL = metaDefaultMintURL
 	}
-	body, status, err := requestJSON(ctx, http.MethodPost, mintURL, map[string]string{
-		"Authorization": "Bearer " + dcaToken,
-		"User-Agent":    metaUserAgent,
-		"x-api-version": "1.0.0",
-	}, map[string]string{})
-	if err != nil {
-		return Token{}, fmt.Errorf("muse: mint request failed: %w", err)
+	var body []byte
+	var status int
+	var err error
+	for attempt := 1; ; attempt++ {
+		body, status, err = requestJSON(ctx, http.MethodPost, mintURL, map[string]string{
+			"Authorization": "Bearer " + dcaToken,
+			"User-Agent":    metaUserAgent,
+			"x-api-version": "1.0.0",
+		}, map[string]any{"onboard": true})
+		if err != nil {
+			return Token{}, fmt.Errorf("muse: mint request failed: %w", err)
+		}
+		transient := status == http.StatusTooManyRequests || status >= 500
+		if !transient || attempt >= metaMintAttempts {
+			break
+		}
+		if waitErr := sleepWithContext(ctx, metaMintRetryWait); waitErr != nil {
+			return Token{}, waitErr
+		}
 	}
 	if status >= 300 {
 		return Token{}, statusError(mintURL, status, body)
@@ -76,10 +110,50 @@ func MintMetaKey(ctx context.Context, mintURL, dcaToken string) (Token, error) {
 	if err := json.Unmarshal(body, &minted); err != nil {
 		return Token{}, fmt.Errorf("muse: read mint response: %v", err)
 	}
-	if minted.key() == "" {
-		return Token{}, fmt.Errorf("muse: the mint response had no api_key")
+	if err := checkMintSubscription(minted); err != nil {
+		return Token{}, err
 	}
 	return Token{Access: minted.key(), Refresh: dcaToken}, nil
+}
+
+// checkMintSubscription rejects a mint response whose account cannot chat: an
+// inactive subscription or a payment demand. Failing here keeps a key the
+// model endpoint would answer with 404 model_not_found out of the store, so
+// the operator gets the real cause at login instead of a broken chat. It is a
+// pure function so the rejection is testable without a network server.
+func checkMintSubscription(minted metaMintedKey) error {
+	if minted.IsSubsActive != nil && !*minted.IsSubsActive {
+		return fmt.Errorf("muse: the Muse Code subscription is inactive — activate it on muse.ai first")
+	}
+	if minted.key() == "" {
+		action := strings.TrimSpace(minted.ActionURL)
+		if action == "" {
+			action = strings.TrimSpace(minted.RequirePaymentActionURL)
+		}
+		if minted.RequirePayment || action != "" {
+			if action != "" {
+				return fmt.Errorf("muse: a Muse Code subscription is required: %s", action)
+			}
+			return fmt.Errorf("muse: a Muse Code subscription is required")
+		}
+		return fmt.Errorf("muse: the mint response had no api_key")
+	}
+	return nil
+}
+
+// sleepWithContext pauses, returning early when the context ends.
+func sleepWithContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // museTokenFromDevice builds the stored Muse credential from a completed
