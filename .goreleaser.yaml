@@ -63,7 +63,10 @@ archives:
         dst: install.ps1
       - src: 'packaging/{{ if eq .Os "windows" }}windows/uninstall.ps1{{ else }}__platform__/*{{ end }}'
         dst: uninstall.ps1
-      - src: 'packaging/{{ if eq .Os "windows" }}__platform__/*{{ else }}linux/install.sh{{ end }}'
+      # install.sh rides in every archive, including the Windows one, so a
+      # single zip carries the entry point for cmd, PowerShell and a Linux
+      # shell beside the binary.
+      - src: 'packaging/linux/install.sh'
         dst: install.sh
 
 checksum:
