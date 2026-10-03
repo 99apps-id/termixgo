@@ -104,12 +104,19 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   nothing.
 - The approval decision is taken before a mutating tool runs, through
   `Env.Approve`. The desktop build has no gates; Termixgo adds real ones, so
-  trust and `ApprovalMode` must be honoured.
+  trust and `ApprovalMode` must be honoured. The untrusted-folder gate must
+  still honour the operator's answer AT that gate: session and folder-always
+  answers ride on `Env.SessionAllowed` (re-seeded every turn from the app's
+  folder grants, folder-always persisted per folder in config) - an answer
+  the gate never reads is a dead promise. Tool-level allowances are not that
+  answer: they speak about a tool, not about this folder.
 - The edit diff preview is computed at that same pre-run moment and travels
   on `EventToolStart`: once the tool has succeeded the old text is gone and
   a late preview would describe a change that cannot be found anymore. The
   transcript colors it only for a finished, successful tool - running or
-  failed edits show no preview.
+  failed edits show no preview. Compact view peeks a few unified lines; the
+  details view goes two-column (the /diff renderer) on wide terminals and
+  stays unified when the width cannot hold two readable columns.
 - Tool schemas are JSON Schema objects. `edit` matches exact strings: never
   change it to line-based editing without a matching change to the prompt.
 - `read_file` returns line-count metadata, not inline line numbers, so an exact

@@ -243,7 +243,9 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 		return shimmerTool(line, styles)
 	}
 	rendered := style.Render(line + styles.Dim.Render(timing))
-	if peek := previewLines(item, styles, width, previewFullLines); peek != "" {
+	if side := previewColumns(item, styles, width); side != "" {
+		rendered += "\n" + side
+	} else if peek := previewLines(item, styles, width, previewFullLines); peek != "" {
 		rendered += "\n" + peek
 	}
 	result := strings.TrimSpace(item.toolResult)
@@ -273,6 +275,33 @@ func previewLines(item block, styles Styles, width, maxLines int) string {
 		return ""
 	}
 	body := renderApprovalDiff(item.preview, styles, width-4, maxLines)
+	if body == "" {
+		return ""
+	}
+	lines := strings.Split(body, "\n")
+	for index := range lines {
+		lines[index] = "    " + lines[index]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// previewSideMinWidth is where two columns stop being a joke about code: half
+// of the terminal minus gutters still has to hold a readable statement.
+const previewSideMinWidth = 76
+
+// previewColumns draws a finished edit's preview in the two-column layout of
+// the /diff view, so the details screen shows old and new side by side. Under
+// the minimum width it returns "" and the caller keeps the unified preview -
+// half a code column is worse than a full-width diff.
+func previewColumns(item block, styles Styles, width int) string {
+	if item.preview == "" || item.running || !item.toolOK || width < previewSideMinWidth {
+		return ""
+	}
+	files := sanitizeDiffFiles(parseUnifiedDiff(item.preview))
+	if len(files) == 0 {
+		return ""
+	}
+	body := renderDiffSideBySide(files, styles, width-4, previewFullLines)
 	if body == "" {
 		return ""
 	}

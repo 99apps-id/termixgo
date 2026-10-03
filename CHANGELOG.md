@@ -6,14 +6,28 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Fixed
+
+- In an untrusted folder, `allow session` and `always` at the trust prompt
+  actually stick now. The folder gate re-asked every mutating tool on every
+  turn whatever the operator answered, because the answer was never recorded
+  anywhere the gate reads. Session answers now live for the run and
+  folder-always answers persist under the folder (a new `folderAllowedTools`
+  config key), re-seeded into every turn's environment. The security design
+  stands: a folder-level grant only silences this folder's gate, and
+  tool-level `always-allowed` entries - statements about a tool, not the
+  folder - still do not unlock writes somewhere new.
+
 ### Added
 
 - The transcript now shows what an edit changed: the diff preview the approval
   dialog already computed before the run rides on the tool-start event, and a
   finished, successful edit renders its changed lines colored (a six-line peek
-  in compact view, the whole capped preview under the details toggle). A
-  running or failed tool shows nothing - a preview of a change that did not
-  happen would lie.
+  in compact view, the whole capped preview under the details toggle, and on
+  a wide terminal the details view draws the change side by side in the
+  /diff-style two-column layout, falling back to the unified form when the
+  screen is too narrow to keep both columns readable). A running or failed
+  tool shows nothing - a preview of a change that did not happen would lie.
 - `review_changes` runs the read-only reviewer over the working change set
   before a commit, and a reviewer that opens no file no longer gets to say
   "Looks good.": `RunSubagent` counts the nested run's tool calls, retries an

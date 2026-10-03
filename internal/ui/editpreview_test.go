@@ -22,7 +22,9 @@ func TestToolBlockShowsColoredPreviewAfterSuccess(t *testing.T) {
 	// go test lipgloss detects a non-terminal and styles render plain)
 
 	details := stripANSI(renderToolBlock(done, styles, 80, true))
-	if !strings.Contains(details, "+hello changed") {
+	// At 80 columns the details view may be side-by-side (no +/- markers,
+	// the columns carry the meaning); either way the changed text is there.
+	if !strings.Contains(details, "hello changed") {
 		t.Error("the details view must show the preview too")
 	}
 }
@@ -54,5 +56,28 @@ func TestToolBlockCompactPeeksAndStaysBounded(t *testing.T) {
 	}
 	if seen < 2 {
 		t.Errorf("compact must show some of the diff, showed %d", seen)
+	}
+}
+
+func TestToolBlockDetailsGoesSideBySideWhenWide(t *testing.T) {
+	styles := NewStyles(DefaultPalette())
+	item := block{kind: blockTool, toolName: "edit", toolLabel: "Edited note.txt", toolOK: true, preview: samplePreview}
+
+	wide := stripANSI(renderToolBlock(item, styles, 96, true))
+	if !strings.Contains(wide, "|") {
+		t.Errorf("the details view on a wide terminal must draw two columns, got %q", wide)
+	}
+	if !strings.Contains(wide, "hello from disk") || !strings.Contains(wide, "hello changed") {
+		t.Error("both sides of the change must be visible side by side")
+	}
+
+	narrow := stripANSI(renderToolBlock(item, styles, 50, true))
+	if !strings.Contains(narrow, "-hello from disk") || !strings.Contains(narrow, "+hello changed") {
+		t.Error("a narrow terminal keeps the unified preview: half a code column is worse")
+	}
+
+	compact := stripANSI(renderToolBlock(item, styles, 96, false))
+	if !strings.Contains(compact, "-hello from disk") {
+		t.Error("the compact peek stays unified even on a wide terminal")
 	}
 }
