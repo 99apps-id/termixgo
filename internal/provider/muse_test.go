@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -387,8 +388,11 @@ func TestMusePersistentNotFoundNamesModelAndTier(t *testing.T) {
 	if err == nil {
 		t.Fatal("a persistent 404 must be reported")
 	}
-	if hits != 2*museRetryAttempts {
-		t.Errorf("hits = %d, want %d (stale retried, reminted, fresh retried)", hits, 2*museRetryAttempts)
+	// The last-resort hint reads the model list once more, because whether Meta
+	// offers the id here is the one local fact that separates a tier problem
+	// from an egress that is not served this model.
+	if hits != 2*museRetryAttempts+1 {
+		t.Errorf("hits = %d, want %d (stale retried, reminted, fresh retried, catalogue read)", hits, 2*museRetryAttempts+1)
 	}
 	message := strings.ToLower(err.Error())
 	if !strings.Contains(message, "muse-spark-1.3-contributor") {
@@ -396,6 +400,18 @@ func TestMusePersistentNotFoundNamesModelAndTier(t *testing.T) {
 	}
 	if !strings.Contains(message, "subscription") || !strings.Contains(message, "contributor") {
 		t.Errorf("error = %q, want the subscription/tier hint", err)
+	}
+	// This server answers the model list with the same 404, so the hint cannot
+	// learn whether the id is offered. It must keep the checks that still apply
+	// and say the list was unavailable, instead of silently implying it read it.
+	if !strings.Contains(message, "could not be read") {
+		t.Errorf("error = %q, want the hint to admit the catalogue failed", err)
+	}
+	// The catalogue read is one extra request on a path that has already ended
+	// the turn, and it is the only local evidence separating a tier problem
+	// from an egress Meta refuses to serve the model to.
+	if hits != 2*museRetryAttempts+1 {
+		t.Errorf("hits = %d, want one catalogue read after the two retry rounds", hits)
 	}
 }
 
@@ -471,26 +487,144 @@ func TestMuseTagsCommentaryPhase(t *testing.T) {
 	}
 }
 
-// TestMuseModelHintNamesModelOnlyOnNotFound pins the wrapper without any
-// network: a persistent 404 names the model and the tier check while keeping
-// the typed status visible to errors.As, and any other status passes through
-// untouched.
-func TestMuseModelHintNamesModelOnlyOnNotFound(t *testing.T) {
-	notFound := &providerStatusError{label: "Meta Muse Code", status: http.StatusNotFound, message: "The requested model was not found."}
-	err := museModelHint("muse-spark-1.3-contributor", notFound)
-	message := strings.ToLower(err.Error())
-	if !strings.Contains(message, "muse-spark-1.3-contributor") || !strings.Contains(message, "subscription") {
-		t.Errorf("error = %q, want the model and the subscription hint", err)
+// museCatalogueServer answers the model list with the ids it is given and
+// counts the calls, so a test can prove the hint reads the catalogue for a 404
+// and stays off the network when it has nothing to ask.
+func museCatalogueServer(t *testing.T, ids []string, status int) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	hits := &atomic.Int64{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits.Add(1)
+		if request.URL.Path != "/models" || status != http.StatusOK {
+			writer.WriteHeader(status)
+			return
+		}
+		entries := make([]map[string]any, 0, len(ids))
+		for _, id := range ids {
+			entries = append(entries, map[string]any{"id": id, "object": "model"})
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{"object": "list", "data": entries})
+	}))
+	t.Cleanup(server.Close)
+	return server, hits
+}
+
+// museHintClient builds the Muse client a hint test needs.
+func museHintClient(t *testing.T, baseURL string) *museClient {
+	t.Helper()
+	client, err := newHTTPClient(Provider{ID: "muse", Label: "Meta Muse Code", Kind: KindMuse}, baseURL, "LLM|test-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	return client.(*museClient)
+}
+
+// museNotFound is what Meta answers for a model it does not serve.
+var museNotFound = &providerStatusError{label: "Meta Muse Code", status: http.StatusNotFound, message: "The requested model was not found."}
+
+// TestMuseModelHintSaysWhenTheCatalogueExcludesTheModel is the case this
+// wrapper exists for. Meta answers a stale key, an overload and a model it
+// refuses to serve with the same 404, and a hint that only blames the
+// subscription sends the operator to the wrong console. When the live list
+// omits the id, the error has to name the ids that are offered instead.
+func TestMuseModelHintSaysWhenTheCatalogueExcludesTheModel(t *testing.T) {
+	server, hits := museCatalogueServer(t, []string{"muse-image-1.0"}, http.StatusOK)
+	client := museHintClient(t, server.URL)
+	client.SetAccountID("operator@example.com")
+
+	err := client.modelHint(context.Background(), "muse-spark-1.3", museNotFound)
+	message := err.Error()
+	if hits.Load() == 0 {
+		t.Errorf("the hint did not read the catalogue")
+	}
+	// Two machines on one subscription fail differently, and the account behind
+	// the stored key is what tells them apart, so the error has to name it.
+	if !strings.Contains(message, "operator@example.com") {
+		t.Errorf("error = %q, want the account the credential belongs to", message)
+	}
+	for _, want := range []string{"muse-spark-1.3", "does not offer", "muse-image-1.0", "source address"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("error = %q, want it to mention %q", message, want)
+		}
+	}
+	if strings.Contains(message, "subscription") {
+		t.Errorf("error = %q, want the tier guess dropped once the catalogue proves the model is not served", message)
 	}
 	var status *providerStatusError
 	if !errors.As(err, &status) || status.status != http.StatusNotFound {
-		t.Errorf("error = %#v, want the 404 status preserved for errors.As", err)
+		t.Errorf("the typed 404 was lost: %v", err)
 	}
-	badRequest := &providerStatusError{label: "Meta Muse Code", status: http.StatusBadRequest, message: "bad request"}
-	if out := museModelHint("muse-spark-1.3", badRequest); out != badRequest {
-		t.Errorf("a non-404 must pass through untouched, got %v", out)
+}
+
+// TestMuseModelHintKeepsTheTierCheckWhenTheModelIsListed is the other half of
+// the split: the catalogue offers the id, so what is left to check really is
+// the credential and its tier, and egress advice would be noise.
+func TestMuseModelHintKeepsTheTierCheckWhenTheModelIsListed(t *testing.T) {
+	server, _ := museCatalogueServer(t, []string{"muse-spark-1.3", "muse-image-1.0"}, http.StatusOK)
+	client := museHintClient(t, server.URL)
+
+	message := client.modelHint(context.Background(), "muse-spark-1.3", museNotFound).Error()
+	if !strings.Contains(message, "subscription") || !strings.Contains(message, "tier") {
+		t.Errorf("error = %q, want the tier and subscription checks", message)
 	}
-	if out := museModelHint("", notFound); !strings.Contains(strings.ToLower(out.Error()), "selected model") {
-		t.Errorf("an empty model must fall back to a generic name, got %v", out)
+	if strings.Contains(message, "source address") {
+		t.Errorf("error = %q, want no egress advice when the model is listed", message)
+	}
+}
+
+// TestMuseModelHintFallsBackWhenTheCatalogueCannotBeRead keeps the hint useful
+// when Meta will not answer the list. The turn already failed, so refusing to
+// explain it because a second call broke would be worse, but the operator has
+// to be told the list was unavailable rather than be given advice that assumed
+// it had been read.
+func TestMuseModelHintFallsBackWhenTheCatalogueCannotBeRead(t *testing.T) {
+	server, _ := museCatalogueServer(t, nil, http.StatusForbidden)
+	client := museHintClient(t, server.URL)
+
+	message := client.modelHint(context.Background(), "muse-spark-1.2", museNotFound).Error()
+	if !strings.Contains(message, "muse-spark-1.2") || !strings.Contains(message, "subscription") {
+		t.Errorf("error = %q, want the model and the checks that still apply", message)
+	}
+	if !strings.Contains(message, "could not be read") {
+		t.Errorf("error = %q, want the hint to admit the catalogue failed", message)
+	}
+}
+
+// TestMuseModelHintLeavesOtherStatusesAndSkipsTheNetwork pins that only a 404
+// earns a catalogue read. A 429 carries its own meaning, and spending a request
+// on it would add load to an account that is already refusing work.
+func TestMuseModelHintLeavesOtherStatusesAndSkipsTheNetwork(t *testing.T) {
+	server, hits := museCatalogueServer(t, []string{"muse-spark-1.3"}, http.StatusOK)
+	client := museHintClient(t, server.URL)
+
+	tooMany := &providerStatusError{label: "Meta Muse Code", status: http.StatusTooManyRequests, message: "slow down"}
+	err := client.modelHint(context.Background(), "muse-spark-1.3", tooMany)
+	if err != tooMany {
+		t.Errorf("error = %v, want the original untouched", err)
+	}
+	if hits.Load() != 0 {
+		t.Errorf("the hint read the catalogue %d times for a non-404", hits.Load())
+	}
+}
+
+// TestJudgeMuseCatalog pins the three-way sort the hint branches on, including
+// the empty list, which must read as unknown rather than as not offered.
+func TestJudgeMuseCatalog(t *testing.T) {
+	ids := []string{"muse-spark-1.3", "muse-image-1.0"}
+	cases := []struct {
+		name  string
+		model string
+		list  []string
+		want  museCatalogVerdict
+	}{
+		{"listed", "muse-spark-1.3", ids, museCatalogServed},
+		{"absent", "muse-spark-1.2", ids, museCatalogNotOffered},
+		{"blank model", "", ids, museCatalogNotOffered},
+		{"empty list", "muse-spark-1.3", nil, museCatalogUnknown},
+	}
+	for _, test := range cases {
+		if got := judgeMuseCatalog(test.model, test.list); got != test.want {
+			t.Errorf("%s: verdict = %d, want %d", test.name, got, test.want)
+		}
 	}
 }

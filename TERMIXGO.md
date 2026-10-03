@@ -185,6 +185,14 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   process group elsewhere. `cmd.WaitDelay` bounds the wait for the output pipe,
   which a surviving grandchild would otherwise hold open forever. Shutdown
   waits for the processes to go, because the caller exits immediately after.
+- A provider's live model list outranks this build's catalogue. Meta answers the
+  same `404 model_not_found` for a stale key, for its own overload and for a
+  model it refuses to serve, and Muse Code availability moves with the source
+  address of the request, not only with the account: one login lists the
+  `muse-spark` family from a residential IP and lists only `muse-image-1.0` from
+  a datacenter one. So a persistent 404 is explained by reading `GET /v1/models`
+  before naming a cause, and the registry states what the wire accepts, never
+  what a given account or address is entitled to.
 - The agent-event observer is one slot with one owner. `App.SetObserver` returns a
   claim and refuses to install over a live one, so a second surface cannot detach
   the sink of the turn that is streaming; the holder releases it with

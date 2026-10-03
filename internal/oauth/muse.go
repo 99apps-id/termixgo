@@ -113,7 +113,12 @@ func MintMetaKey(ctx context.Context, mintURL, dcaToken string) (Token, error) {
 	if err := checkMintSubscription(minted); err != nil {
 		return Token{}, err
 	}
-	return Token{Access: minted.key(), Refresh: dcaToken}, nil
+	// user_email is the one field in the mint that says which Meta account this
+	// key came from. It is stored as the account id, which App already hands to
+	// the client, so a credential that cannot reach a model can name the account
+	// behind it instead of leaving the operator to work out which machine
+	// logged in as whom.
+	return Token{Access: minted.key(), Refresh: dcaToken, AccountID: strings.TrimSpace(minted.UserEmail)}, nil
 }
 
 // checkMintSubscription rejects a mint response whose account cannot chat: an

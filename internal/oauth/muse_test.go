@@ -105,6 +105,12 @@ func TestMintMetaKeyExchangesTheDeviceToken(t *testing.T) {
 	if token.Refresh != "dca:abc123" {
 		t.Errorf("refresh = %q, want the dca token", token.Refresh)
 	}
+	// The account the key belongs to is the fact an operator needs when two
+	// machines behave differently on one subscription, so the mint has to carry
+	// it out instead of dropping it with the rest of the identity fields.
+	if token.AccountID != "engineer@meta.com" {
+		t.Errorf("account = %q, want the email the mint reported", token.AccountID)
+	}
 }
 
 func TestMintMetaKeyReportsFailures(t *testing.T) {

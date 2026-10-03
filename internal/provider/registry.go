@@ -136,6 +136,12 @@ var contextWindows = map[string]int{
 	"muse-spark-1.3":             1048576,
 	"muse-spark-1.3-contributor": 1048576,
 	"muse-spark-1.2":             1048576,
+	// The published window for the two ids below is not known to this build, so
+	// they are pinned to the conservative default rather than inheriting the
+	// family's 1M. An over-large budget makes the provider reject the request;
+	// an over-small one only shortens the history the operator keeps.
+	"muse-spark-1.1":             DefaultContextWindow,
+	"muse-spark-1.2-contributor": DefaultContextWindow,
 
 	// xAI.
 	"grok-4.7":       500000,
@@ -452,10 +458,16 @@ func Models() []Model {
 		{ID: "copilot-mai-code-1-flash", Provider: "github-copilot", Label: "MAI-Code-1.1-Flash (Copilot)", APIID: "mai-code-1.1-flash", Description: "Fast coding model through GitHub Copilot.", Tags: []string{"coding", "fast"}},
 		// Meta Muse Code models served through a Meta login (OAuth). The wire
 		// ids are the ones api.meta.ai serves; a Muse login only reaches the
-		// models its account is entitled to.
+		// models its account is entitled to, and the list also changes with the
+		// source address of the request, so a datacenter egress can be served
+		// only muse-image-1.0 while the same login lists muse-spark from home.
+		// GET /v1/models also answers with sam-3.1 and muse-voice-transcribe-1.0,
+		// which are not chat models and are deliberately not offered here.
 		{ID: "muse-spark-1.3", Provider: "muse", Label: "Muse Spark 1.3", Description: "Meta's flagship reasoning and agentic coding model through a Muse login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "muse-spark-1.3-contributor", Provider: "muse", Label: "Muse Spark 1.3 Contributor", Description: "Muse contributor model through a Meta login.", Tags: []string{"coding", "tools"}},
 		{ID: "muse-spark-1.2", Provider: "muse", Label: "Muse Spark 1.2", Description: "Previous Muse generation through a Meta login.", Tags: []string{"reasoning", "coding"}},
+		{ID: "muse-spark-1.2-contributor", Provider: "muse", Label: "Muse Spark 1.2 Contributor", Description: "Previous-generation Muse contributor model through a Meta login.", Tags: []string{"coding"}},
+		{ID: "muse-spark-1.1", Provider: "muse", Label: "Muse Spark 1.1", Description: "Older Muse generation, still listed by some accounts.", Tags: []string{"coding"}},
 
 		// Google Antigravity serves Gemini and Claude models through its Cloud
 		// Code backend under an Antigravity login.

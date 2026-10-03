@@ -6,8 +6,32 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- Two Muse Spark ids the live service offers and this build did not know:
+  `muse-spark-1.2-contributor` and `muse-spark-1.1`. Their published context
+  windows are unknown, so they are pinned to the conservative default instead of
+  inheriting the family's 1M: an over-large budget makes Meta reject the request,
+  an over-small one only shortens the history the operator keeps. `sam-3.1` and
+  `muse-voice-transcribe-1.0` also appear in the Muse model list and are
+  deliberately not offered here, because they are not chat models.
+
 ### Fixed
 
+- A persistent Muse 404 now says which of its causes it is. Meta answers a stale
+  key, its own overload and a model it refuses to serve with the same
+  `404 model_not_found`, and the hint blamed the subscription and the base URL
+  whatever the reason. The client reads `GET /v1/models` before explaining the
+  failure. When that list omits the requested id, the error names the ids that
+  are offered and says the catalogue changes with the source address, because one
+  login can list `muse-spark` from a home network and only `muse-image` from a
+  datacenter server. When the list includes the id it keeps the tier and
+  custom-endpoint checks and says the entitlement is not the problem. When the
+  list cannot be read it admits that instead of implying it had looked.
+- The Muse mint's `user_email` is kept as the account id and named in that error.
+  Two machines on one subscription behave differently, and which account each
+  stored key belongs to is the fact that tells them apart; it used to be dropped
+  with the rest of the identity fields.
 - Compaction now always hands back a request that fits the model's window. The
   newest four messages were beyond its reach, so a single large recent tool
   result (a `read_file` at its 64 KB cap costs about 25k tokens against the

@@ -2,8 +2,10 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -82,18 +84,97 @@ func (c *museClient) Stream(ctx context.Context, req ChatRequest, emit func(Stre
 	}
 	response, err = c.sendWithRetry(ctx, key, payload)
 	if err != nil {
-		return museModelHint(req.Model, err)
+		return c.modelHint(ctx, req.Model, err)
 	}
 	defer response.Body.Close()
 	return decodeResponsesStream(c.info.Label, response.Body, emit)
 }
 
-// museModelHint names the model a persistent failure belongs to. Meta answers
-// a stale key, its own overload AND a model the account is not entitled to
-// with the same 404 model_not_found, so when retries and a fresh key still
-// fail the operator needs the model id and the tier to check, not the generic
-// base-URL hint.
-func museModelHint(model string, err error) error {
+// museCatalogueTimeout bounds the model-list probe. It runs only on a failure
+// that has already ended the turn, and a hung probe must not delay the error
+// the operator is waiting for.
+const museCatalogueTimeout = 10 * time.Second
+
+// museCatalogVerdict is what the live Muse catalogue says about a model id.
+type museCatalogVerdict int
+
+const (
+	// museCatalogUnknown means the list could not be read, so no conclusion
+	// about the id is available.
+	museCatalogUnknown museCatalogVerdict = iota
+	// museCatalogServed means Meta offers this id to this credential here.
+	museCatalogServed
+	// museCatalogNotOffered means Meta answered the list without this id.
+	// This is the case that used to be misdiagnosed: Meta answers a stale key,
+	// an overload and a model it does not serve with the same 404
+	// model_not_found, and the catalogue is the only local evidence that tells
+	// "not served here" apart from "subscription or tier problem".
+	museCatalogNotOffered
+)
+
+// judgeMuseCatalog sorts one model id against a model list.
+func judgeMuseCatalog(model string, ids []string) museCatalogVerdict {
+	if len(ids) == 0 {
+		return museCatalogUnknown
+	}
+	target := strings.TrimSpace(model)
+	for _, id := range ids {
+		if id == target {
+			return museCatalogServed
+		}
+	}
+	return museCatalogNotOffered
+}
+
+// catalogue reads the model ids Meta offers at this endpoint. The response is
+// a plain list, so it is fetched with a bare GET rather than the streaming
+// post helper, and the Muse identity headers are repeated because the backend
+// gates on them.
+func (c *museClient) catalogue(ctx context.Context) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, museCatalogueTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Authorization", "Bearer "+c.currentKey())
+	request.Header.Set("User-Agent", museUserAgent)
+	request.Header.Set("X-Client-Id", "tbh:tui")
+	request.Header.Set("x-api-version", "1.0.0")
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<14))
+		response.Body.Close()
+	}()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", response.StatusCode)
+	}
+	var doc struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&doc); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(doc.Data))
+	for _, entry := range doc.Data {
+		if id := strings.TrimSpace(entry.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+// modelHint names the model a persistent failure belongs to and says what the
+// live catalogue proves about it. A 404 that survives the retries and a fresh
+// key is either an entitlement the credential does not have or a model Meta
+// refuses to serve to this source address, and those two need opposite fixes,
+// so guessing is worse than saying which check is left.
+func (c *museClient) modelHint(ctx context.Context, model string, err error) error {
 	var status *providerStatusError
 	if !errors.As(err, &status) || status.status != http.StatusNotFound {
 		return err
@@ -102,7 +183,27 @@ func museModelHint(model string, err error) error {
 	if trimmed := strings.TrimSpace(model); trimmed != "" {
 		name = fmt.Sprintf("model %q", trimmed)
 	}
-	return fmt.Errorf("%w: this Muse login cannot reach %s — check that the Muse Code subscription is active and covers its tier (standard vs contributor), and that no custom base URL overrides the Muse endpoint", err, name)
+	// The mint records which Meta account the key belongs to and App hands it to
+	// the client. Naming it here is what shows an operator that a second machine
+	// logged in as a different account, which no amount of endpoint checking
+	// would reveal.
+	who := "this credential"
+	if account := strings.TrimSpace(c.accountID); account != "" {
+		who = fmt.Sprintf("the Meta account %s", account)
+	}
+	ids, catalogueErr := c.catalogue(ctx)
+	switch judgeMuseCatalog(model, ids) {
+	case museCatalogNotOffered:
+		return fmt.Errorf("%w: Meta does not offer %s to %s at %s. The models it lists are: %s. The Muse catalogue changes with the account and with the source address of the request, so one login can list muse-spark from a home network and list only muse-image from a datacenter server. Run the process behind an eligible egress (HTTPS_PROXY or ALL_PROXY), or choose a listed model", err, name, who, c.baseURL, strings.Join(ids, ", "))
+	case museCatalogServed:
+		return fmt.Errorf("%w: Meta lists %s at %s for %s, so this is not an entitlement gap. Check that the Muse Code subscription is active and covers its tier (standard vs contributor), and that no custom base URL moves the Muse client off %s", err, name, c.baseURL, who, c.baseURL)
+	default:
+		cause := "its model list could not be read"
+		if catalogueErr != nil {
+			cause = fmt.Sprintf("its model list could not be read (%v)", catalogueErr)
+		}
+		return fmt.Errorf("%w: this Muse login cannot reach %s and %s. Check that the Muse Code subscription is active and covers its tier (standard vs contributor), and that no custom base URL overrides the Muse endpoint at %s", err, name, cause, c.baseURL)
+	}
 }
 
 // send posts a Responses request with the Muse identity headers.
