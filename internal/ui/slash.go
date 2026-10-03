@@ -106,11 +106,16 @@ var slashCommands = []SlashCommand{
 		{Value: "list", Detail: "show workers and whether each is ready"},
 		{Value: "start", Detail: "start a worker, then type: <kind> <task>", Complete: true},
 	}},
+	{Trigger: "/workers", Args: "", Summary: "Show parallel worktrees with live worker state"},
 	{Trigger: "/init", Args: "", Summary: "Generate a TERMIXGO.md for this project"},
 	{Trigger: "/cost", Args: "", Summary: "Show token usage for this session"},
 	{Trigger: "/ps", Args: "[kill <handle>]", Summary: "List background processes, or stop one"},
 	{Trigger: "/checkpoint", Args: "[list|<message>]", Summary: "Save or list working-tree checkpoints", Options: []SlashOption{
 		{Value: "list", Detail: "show the checkpoints Termixgo saved"},
+	}},
+	{Trigger: "/diff", Args: "[side|unified]", Summary: "Show the working tree diff side-by-side", Options: []SlashOption{
+		{Value: "side", Detail: "old and new columns together"},
+		{Value: "unified", Detail: "single column with both line numbers"},
 	}},
 	{Trigger: "/rewind", Args: "[ref]", Summary: "Restore the newest checkpoint, undoing later edits"},
 	{Trigger: "/worktree", Args: "[list|add|remove|touch|prune]", Summary: "Manage git worktrees for parallel tasks", Options: []SlashOption{
@@ -120,6 +125,7 @@ var slashCommands = []SlashCommand{
 		{Value: "touch", Detail: "mark a worktree as just used", Complete: true},
 		{Value: "prune", Detail: "reclaim idle clean worktrees, snapshotted first", Complete: true},
 	}},
+	{Trigger: "/batch", Args: "<task> :: <task> ...", Summary: "Start parallel workers, one worktree each"},
 	{Trigger: "/exit", Args: "", Summary: "Quit Termixgo"},
 }
 

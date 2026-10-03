@@ -165,6 +165,7 @@ func DefaultRegistry() *Registry {
 		&gitRestoreTool{},
 		&gitWorktreeTool{},
 		&codeWorkerTool{},
+		&parallelBatchTool{},
 		&checkpointTool{},
 		&rewindTool{},
 	)

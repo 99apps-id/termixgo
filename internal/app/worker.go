@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/99apps-id/termixgo/internal/agent"
 )
@@ -74,4 +75,38 @@ func (a *App) StartCodeWorker(ctx context.Context, kind, task, name string) (str
 		return "", errors.New(result.Output)
 	}
 	return result.Output, nil
+}
+
+// StartParallelBatch fans tasks out to one worker per worktree.
+func (a *App) StartParallelBatch(ctx context.Context, tasks []string, kind string) (string, error) {
+	tool, ok := a.tools.Lookup("parallel_batch")
+	if !ok {
+		return "", errors.New("the parallel batch tool is unavailable")
+	}
+	raw := make([]any, 0, len(tasks))
+	for _, task := range tasks {
+		if strings.TrimSpace(task) == "" {
+			continue
+		}
+		raw = append(raw, map[string]any{"task": task})
+	}
+	args := map[string]any{"tasks": raw}
+	if strings.TrimSpace(kind) != "" {
+		args["worker"] = kind
+	}
+	result, err := tool.Run(ctx, a.env(), args)
+	if err != nil {
+		return "", err
+	}
+	if result.IsError {
+		return "", errors.New(result.Output)
+	}
+	return result.Output, nil
+}
+
+// BatchStatus reports every tracked parallel worktree with its live worker
+// state. It joins the worktree registry with the process table so one screen
+// answers which checkout is running, done, failed or idle.
+func (a *App) BatchStatus() string {
+	return agent.BatchStatusFor(a.workspace, a.processes, time.Now())
 }

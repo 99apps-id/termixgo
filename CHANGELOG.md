@@ -8,6 +8,16 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Added
 
+- `parallel_batch` starts several coding workers at once, one per git worktree,
+  each detached so it survives the turn, and announces every completion in chat.
+  The terminal gains `/batch <task> :: <task>` for a line of independent work,
+  `/workers` for the state of each tracked checkout (running, done, failed or
+  idle), and `/diff [side|unified]`, which draws the working tree as two columns
+  and falls back to one column when the terminal is too narrow to keep both
+  readable. A batch is checked through before it starts: an unknown worker, a
+  worker binary that is not installed, an empty task or two tasks claiming the
+  same worktree name is refused with nothing created, and the approval prompt
+  names the worker kinds because one confirmation starts all of them.
 - Two Muse Spark ids the live service offers and this build did not know:
   `muse-spark-1.2-contributor` and `muse-spark-1.1`. Their published context
   windows are unknown, so they are pinned to the conservative default instead of

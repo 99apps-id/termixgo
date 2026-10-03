@@ -194,6 +194,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashCheckpoint(args)
 	case "rewind":
 		return m.slashRewind(args)
+	case "diff":
+		return m.slashDiff(args)
 	case "worktree":
 		return m.slashWorktree(args)
 	case "telegram":
@@ -206,6 +208,10 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashAudit(args)
 	case "worker":
 		return m.slashWorker(args)
+	case "workers":
+		return m.slashWorkers()
+	case "batch":
+		return m.slashBatch(args)
 	case "init":
 		if !m.app.HasModel() {
 			m.blocks = append(m.blocks, block{kind: blockError, text: "Pick a model first with /setup."})
@@ -993,6 +999,71 @@ func (m *Model) slashCheckpoint(args string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// slashDiff renders the working tree diff as a visual side-by-side view.
+// /diff [unified|side] [path...] defaults to side-by-side. Narrow terminals
+// fall back to unified automatically so columns never wrap and shift the frame.
+func (m *Model) slashDiff(args string) (tea.Model, tea.Cmd) {
+	fields := strings.Fields(args)
+	layout := "side"
+	var paths []string
+	for _, field := range fields {
+		switch strings.ToLower(field) {
+		case "side", "side-by-side", "split":
+			layout = "side"
+		case "unified", "single":
+			layout = "unified"
+		default:
+			paths = append(paths, field)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	tool, ok := m.app.Tools().Lookup("git_diff")
+	if !ok {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "The diff tool is not available."})
+		m.refresh()
+		return m, nil
+	}
+	callArgs := map[string]any{}
+	if len(paths) > 0 {
+		// The tool reads a list here. A space-joined string would be taken for one
+		// path containing a space, match nothing, and report a clean tree.
+		callArgs["paths"] = paths
+	}
+	result, err := tool.Run(ctx, &agent.Env{Workspace: m.app.Workspace()}, callArgs)
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		m.refresh()
+		return m, nil
+	}
+	if result.IsError {
+		m.blocks = append(m.blocks, block{kind: blockError, text: result.Output})
+		m.refresh()
+		return m, nil
+	}
+	raw := strings.TrimSpace(result.Output)
+	if diffIsClean(raw) {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Working tree is clean."})
+		m.refresh()
+		return m, nil
+	}
+	files := parseUnifiedDiff(raw)
+	width := max(40, m.width-4)
+	if layout == "side" && width < 100 {
+		layout = "unified"
+	}
+	budget := max(10, m.modalRowBudget()*3)
+	var body string
+	if layout == "side" {
+		body = renderDiffSideBySide(files, m.styles, width, budget)
+	} else {
+		body = renderDiffUnified(files, m.styles, width, budget)
+	}
+	m.blocks = append(m.blocks, block{kind: blockDiff, diffFiles: files, diffText: body, diffLayout: layout})
+	m.refresh()
+	return m, nil
+}
+
 func (m *Model) slashRewind(args string) (tea.Model, tea.Cmd) {
 	trimmed := strings.TrimSpace(args)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -1284,6 +1355,43 @@ func (m *Model) slashAudit(args string) (tea.Model, tea.Cmd) {
 		lines = append(lines, fmt.Sprintf("  %s  %-5s %-16s %-5s %s", entry.Time.Format("01-02 15:04:05"), entry.Kind, entry.Name, status, detail))
 	}
 	m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
+	m.refresh()
+	return m, nil
+}
+
+// slashBatch starts parallel workers from one line: /batch fix login :: add tests.
+// Tasks split on "::", each runs in its own worktree and announces completion.
+func (m *Model) slashBatch(args string) (tea.Model, tea.Cmd) {
+	parts := strings.Split(args, "::")
+	var tasks []string
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			tasks = append(tasks, trimmed)
+		}
+	}
+	if len(tasks) == 0 {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /batch <task> :: <task> [...]"})
+		m.refresh()
+		return m, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	output, err := m.app.StartParallelBatch(ctx, tasks, "")
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+	} else {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: output})
+	}
+	m.refresh()
+	return m, nil
+}
+
+// slashWorkers shows every tracked parallel worktree with its live worker
+// state: running, done, failed or idle. It is the one screen that answers
+// which checkout is safe to review without hunting process logs.
+func (m *Model) slashWorkers() (tea.Model, tea.Cmd) {
+	text := m.app.BatchStatus()
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: text})
 	m.refresh()
 	return m, nil
 }

@@ -158,6 +158,19 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   completion is an `EventProcessEnd` the app forwards to chat. A native worker
   (`termixgo`) runs this same binary and needs no external account, and it sets
   `TERMIXGO_WORKER_DEPTH` in the child so a worker cannot start another worker.
+- `parallel_batch` fans independent tasks over that same machinery, one worker per
+  worktree, capped so a single call cannot flood the process table or the disk.
+  Every task is resolved, its worker binary found and its name checked against the
+  other tasks before any checkout exists, because a batch that fails halfway would
+  leave half the checkouts behind and the operator guessing which half. Worktree
+  creation is serialised, since the registry is one read-modify-write JSON file,
+  while the workers themselves run in parallel. Approval is the operator's only
+  brake on a fan-out, so the tool label names the worker kinds and not just the
+  count. The detached process keeps its own context on purpose: the caller's
+  context, and a slash command's timeout with it, must not end a worker.
+- `/diff` is a rendering path, not a turn: it reads `git_diff` output and draws
+  numbered rows side by side, falling back to the single column when the terminal
+  is too narrow for two. It is not fed back to the model.
 - Web search is keyless-first but key-aware: a configured Tavily or Brave key
   is tried before the keyless DuckDuckGo/Wikipedia/GitHub chain, because an ISP
   can block one hostname by DNS without blocking a paid API on another domain.

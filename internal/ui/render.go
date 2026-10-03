@@ -22,6 +22,7 @@ const (
 	blockPlan
 	blockNotice
 	blockError
+	blockDiff
 )
 
 // block is one rendered transcript entry.
@@ -43,6 +44,10 @@ type block struct {
 	toolResult string
 	toolOK     bool
 	toolMillis int64
+
+	diffFiles  []diffFile
+	diffText   string
+	diffLayout string
 
 	plan []agent.Todo
 }
@@ -94,6 +99,14 @@ func renderBlock(item block, styles Styles, width int, showDetails bool) string 
 		return renderPrefixed(item.text, "  ", styles.Notice, width)
 	case blockError:
 		return renderPrefixed(item.text, "  ", styles.Error, width)
+	case blockDiff:
+		if strings.TrimSpace(item.diffText) == "" {
+			return ""
+		}
+		if width < 24 {
+			width = 24
+		}
+		return item.diffText
 	default:
 		return item.text
 	}
