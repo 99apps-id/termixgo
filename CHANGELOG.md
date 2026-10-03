@@ -4,7 +4,7 @@ All notable changes to Termixgo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.1.5 - 2026-10-03
 
 ### Changed
 
@@ -45,12 +45,12 @@ All notable changes to Termixgo are recorded here. The format follows
 
 - The transcript now shows what an edit changed: the diff preview the approval
   dialog already computed before the run rides on the tool-start event, and a
-  finished, successful edit renders its changed lines colored (a six-line peek
-  in compact view, the whole capped preview under the details toggle, and on
-  a wide terminal the details view draws the change side by side in the
-  /diff-style two-column layout, falling back to the unified form when the
-  screen is too narrow to keep both columns readable). A running or failed
-  tool shows nothing - a preview of a change that did not happen would lie.
+  finished, successful edit draws it inside a bordered box as a code review - a
+  removed line red, an added line blue and an unchanged line green, the way the
+  Muse CLI shows an edit. Compact view peeks a few rows, the details toggle
+  shows more, and a long diff ends in a "... (N more lines)" marker. A running
+  or failed tool shows nothing - a preview of a change that did not happen
+  would lie.
 - `review_changes` runs the read-only reviewer over the working change set
   before a commit, and a reviewer that opens no file no longer gets to say
   "Looks good.": `RunSubagent` counts the nested run's tool calls, retries an
