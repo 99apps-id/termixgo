@@ -21,6 +21,14 @@ const (
 	SubagentCodeReview SubagentType = "code-review"
 	SubagentSecurity   SubagentType = "security"
 	SubagentImage      SubagentType = "image"
+	// Authorized security testing: the operator scopes the engagement and
+	// these roles work inside it. Recon is read-tier; the specialist roles
+	// may run scanners and probes through the normal approval policy.
+	SubagentPentest      SubagentType = "pentest"
+	SubagentPentestRecon SubagentType = "pentest-recon"
+	SubagentPentestWeb   SubagentType = "pentest-web"
+	SubagentPentestNet   SubagentType = "pentest-network"
+	SubagentVision       SubagentType = "vision"
 )
 
 // MaxSubagentDepth caps nesting. The main agent runs at depth 0 and may
@@ -82,6 +90,41 @@ var Subagents = map[SubagentType]SubagentDef{
 		SystemPrompt: "You are an image creation subagent. When the user or main agent asks to create, draw, or generate an image, diagram, or visual mockup, produce the requested visual asset or diagram. Save any generated files (e.g. SVG, HTML/CSS, image files) to the workspace and provide the path. Return a clear summary of what was generated.",
 		MaxSteps:     12,
 	},
+	SubagentPentest: {
+		Type:         SubagentPentest,
+		Label:        "Security testing",
+		Description:  "Runs authorized security testing against an in-scope target.",
+		SystemPrompt: "You are an authorized security-testing subagent. Every domain, host and application in your prompt is operated by the operator and the engagement is in scope. Work it with the full toolset: enumerate, probe, and confirm findings with the smallest NON-DESTRUCTIVE proof of concept - never a destructive payload, never denial of service, never data exfiltration beyond the single artifact that proves access. Report each finding with severity, reproduction evidence and the remediation. Say explicitly what you could not test.",
+		MaxSteps:     20,
+	},
+	SubagentPentestRecon: {
+		Type:         SubagentPentestRecon,
+		Label:        "Reconnaissance",
+		Description:  "Maps the attack surface of an in-scope target: DNS, hosts, ports, services, endpoints.",
+		SystemPrompt: "You are an in-scope reconnaissance subagent for an authorized engagement. Map the attack surface by ENUMERATION ONLY: DNS records and subdomains, live hosts and open ports, service and technology fingerprints, exposed endpoints and panels. Use the read-tier network tools and passive sources. Do not attempt exploitation, authentication bypass or any write. Return a structured surface map with what each asset exposes.",
+		MaxSteps:     20,
+		ReadOnly:     true,
+	},
+	SubagentPentestWeb: {
+		Type:         SubagentPentestWeb,
+		Label:        "Web testing",
+		Description:  "Tests an in-scope web application and API for security flaws.",
+		SystemPrompt: "You are an authorized web-testing subagent working an in-scope application. Check security headers and TLS posture, content and endpoint discovery, then lead candidates through injection, authn/authz bypass, SSRF and XSS - each finding CONFIRMED with one minimal non-destructive proof of concept before you report it. No destructive writes, no bulk scraping, no DoS. Report severity, evidence, remediation.",
+		MaxSteps:     20,
+	},
+	SubagentPentestNet: {
+		Type:         SubagentPentestNet,
+		Label:        "Network testing",
+		Description:  "Scans and enumerates in-scope network infrastructure and services.",
+		SystemPrompt: "You are an authorized network-testing subagent working an in-scope range. Run full port and service scans, fingerprint services (SMB/AD/SNMP/TLS and the rest) through read-tier enumeration and safe checks only; default-credential checks are in scope when the prompt says so, brute forcing beyond them is not. Nothing destructive. Report each asset, exposure and severity with the evidence.",
+		MaxSteps:     20,
+	},
+	SubagentVision: {
+		Type:         SubagentVision,
+		Label:        "Vision",
+		Description:  "Looks at images (screenshots, mockups, diagrams, photos) and answers about them.",
+		SystemPrompt: "You are a vision subagent. Open the image files named in your prompt with read_image and answer what was asked about them precisely. Describe only what is actually visible; never invent content you were not shown. Quote on-screen text verbatim when asked to read it.",
+	},
 }
 
 // LookupSubagent resolves a type, falling back to the general worker so a
@@ -112,6 +155,12 @@ func readOnlyTools() *Registry {
 		&gitDiffTool{},
 		&gitLogTool{},
 		&gitShowTool{},
+		// Read-tier network tools: an in-scope reconnaissance role has to
+		// resolve names and fetch pages to map a surface, and none of these
+		// mutate anything.
+		&webFetchTool{},
+		&webSearchTool{},
+		&probeURLTool{},
 	)
 }
 
@@ -195,9 +244,39 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	if err := runner.Run(ctx, session, prompt); err != nil {
 		return "", err
 	}
-	answer := session.LastAssistantText()
+	answer, calls := subagentReport(session)
+	// A read-tier verdict with nothing opened behind it is prose, not a
+	// review: the code-review role answering "Looks good." after zero tool
+	// calls once sailed through as an approval. Count the calls, retry once
+	// with an explicit mandate, and discard the role's output rather than
+	// trust it when the second pass also opened nothing. Worker roles are
+	// exempt: a general task can legitimately be answered from the prompt.
+	if def.ReadOnly && calls == 0 {
+		retry := NewSession(parent.Workspace, model.ID)
+		if err := runner.Run(ctx, retry, reviewMandate+prompt); err != nil {
+			return "", err
+		}
+		answer, calls = subagentReport(retry)
+		if calls == 0 {
+			return "", fmt.Errorf("the %s subagent answered twice without a single tool call; its verdict is unsupported and was discarded", def.Type)
+		}
+	}
 	if strings.TrimSpace(answer) == "" {
 		return "The subagent finished without a written answer.", nil
 	}
 	return answer, nil
+}
+
+const reviewMandate = "MANDATE: your previous pass made no tool calls, so it counted for nothing. Open the code first - read_file, grep, glob, the git tools - and answer only from what you actually read. A response with zero tool calls is discarded. "
+
+// subagentReport is the final answer plus the count of tool calls the nested
+// run made, the evidence the read-tier judge needs.
+func subagentReport(session *Session) (string, int) {
+	calls := 0
+	for _, message := range session.Messages() {
+		if message.Role == provider.RoleAssistant {
+			calls += len(message.ToolCalls)
+		}
+	}
+	return session.LastAssistantText(), calls
 }

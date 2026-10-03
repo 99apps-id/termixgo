@@ -4,6 +4,30 @@ All notable changes to Termixgo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- `review_changes` runs the read-only reviewer over the working change set
+  before a commit, and a reviewer that opens no file no longer gets to say
+  "Looks good.": `RunSubagent` counts the nested run's tool calls, retries an
+  empty read-tier pass once with an explicit mandate, and returns an error
+  when the second pass also inspected nothing. Worker roles are exempt.
+- `git_diff` takes a `base` revision (a sha, branch or range) behind
+  `--end-of-options`, so a change set can be compared against a commit
+  instead of only the working tree.
+- `git_push` and `git_pull`: a plain push to the current upstream, and a
+  fast-forward-only pull. Neither takes model-chosen flags; a force push has
+  to go through `run_command`, where the operator reads it in the approval.
+- The tool registry folds camelCase, hyphen and space spellings onto the
+  registry name before reporting a miss, so `ReadFile` or `git-diff` reaches
+  the real tool instead of costing a round on the did-you-mean path.
+- The subagent roster gains `vision` and the in-scope security family
+  (`pentest`, read-tier `pentest-recon`, `pentest-web`, `pentest-network`).
+  The read-tier registry now carries the non-mutating network tools
+  `web_fetch`, `web_search` and `probe_url`, so recon can map a surface
+  without ever reaching a mutating tool.
+
 ## 0.1.4 - 2026-10-03
 
 ### Added

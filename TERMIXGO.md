@@ -72,6 +72,12 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   turn pauses there while the loop guard and the cost cap stay the real stops
   for a run that goes nowhere. A subagent sets its own smaller `MaxSteps` and
   keeps a hard budget.
+- A read-tier verdict with zero tool calls behind it is prose, not a review.
+  `agent.RunSubagent` counts the nested run's assistant tool calls: an empty
+  pass for a read-only role is retried once with an explicit mandate, and a
+  second empty pass comes back as an error so it can never read as an
+  approval. Worker roles keep the plain answer, because a general task can be
+  settled from the prompt alone.
 - Any string bound in `internal/agent` goes through `clipBytes` or
   `clipTailBytes`. A byte slice at a fixed offset can land inside a multi-byte
   character, and the terminal then paints a replacement glyph. The same rule

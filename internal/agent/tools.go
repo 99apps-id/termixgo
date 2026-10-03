@@ -154,6 +154,7 @@ func DefaultRegistry() *Registry {
 		&githubMergePRTool{},
 		&thinkTool{},
 		&subagentTool{},
+		&reviewChangesTool{},
 		&gitStatusTool{},
 		&gitDiffTool{},
 		&gitLogTool{},
@@ -161,6 +162,8 @@ func DefaultRegistry() *Registry {
 		&gitBlameTool{},
 		&gitAddTool{},
 		&gitCommitTool{},
+		&gitPushTool{},
+		&gitPullTool{},
 		&gitBranchTool{},
 		&gitRestoreTool{},
 		&gitWorktreeTool{},
@@ -172,9 +175,48 @@ func DefaultRegistry() *Registry {
 }
 
 // Lookup finds a tool by name or alias.
+//
+// A miss is retried through canonicalToolName first: models trained on other
+// ecosystems emit "ReadFile", "git-diff" or "multiEdit", and the plain
+// lowercase lookup drops all three into the unknown-tool error path even
+// though each is one keystroke from a registered tool. Repairing the spelling
+// here costs nothing when the name already matches.
 func (r *Registry) Lookup(name string) (Tool, bool) {
-	tool, ok := r.byName[strings.ToLower(strings.TrimSpace(name))]
-	return tool, ok
+	trimmed := strings.TrimSpace(name)
+	if tool, ok := r.byName[strings.ToLower(trimmed)]; ok {
+		return tool, true
+	}
+	if canonical := canonicalToolName(trimmed); canonical != strings.ToLower(trimmed) {
+		tool, ok := r.byName[canonical]
+		return tool, ok
+	}
+	return nil, false
+}
+
+// canonicalToolName folds the spellings a model reaches for onto the
+// registry shape: camelCase boundaries become underscores, hyphens, dots and
+// spaces become underscores, and the result is lowercase.
+func canonicalToolName(name string) string {
+	var b strings.Builder
+	b.Grow(len(name) + 4)
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'A' && c <= 'Z':
+			if b.Len() > 0 {
+				prev := name[i-1]
+				if (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9') {
+					b.WriteByte('_')
+				}
+			}
+			b.WriteByte(c - 'A' + 'a')
+		case c == '-' || c == ' ' || c == '.':
+			b.WriteByte('_')
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 // With returns a new registry holding this registry's tools plus the extras.

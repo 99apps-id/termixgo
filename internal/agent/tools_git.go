@@ -130,6 +130,46 @@ func gitArgs(prefix []string, flags map[string]bool, paths []string) []string {
 	return args
 }
 
+// validGitRev keeps a model-supplied revision out of the option position.
+// Real revisions (shas, branch names, ranges) never start with a dash, and
+// whitespace or control bytes would split one argument into several; git
+// itself validates the rest.
+func validGitRev(rev string) bool {
+	if rev == "" || len(rev) > 255 || rev[0] == '-' {
+		return false
+	}
+	for _, r := range rev {
+		if r <= ' ' || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// gitDiffArgv orders one `git diff` call: flags, then an optional base
+// revision behind --end-of-options, then pathspecs. It is pure so the argv
+// shape is assertable without git. An empty base keeps the old behavior.
+func gitDiffArgv(staged, stat bool, base string, paths []string) ([]string, error) {
+	argv := []string{"diff"}
+	if staged {
+		argv = append(argv, "--staged")
+	}
+	if stat {
+		argv = append(argv, "--stat")
+	}
+	if base != "" {
+		if !validGitRev(base) {
+			return nil, fmt.Errorf("invalid base revision %q: a revision cannot start with a dash or contain spaces", base)
+		}
+		argv = append(argv, "--end-of-options", base)
+	}
+	if len(paths) > 0 {
+		argv = append(argv, "--")
+		argv = append(argv, paths...)
+	}
+	return argv, nil
+}
+
 type gitStatusTool struct{}
 
 func (t *gitStatusTool) Name() string                      { return "git_status" }
@@ -186,23 +226,25 @@ func (t *gitDiffTool) Risk() Risk                        { return RiskEdit }
 func (t *gitDiffTool) Label(a map[string]any) string     { return "Reading git diff" }
 func (t *gitDiffTool) DoneLabel(a map[string]any) string { return "Read git diff" }
 func (t *gitDiffTool) Description() string {
-	return "Show the changes in the working tree, or staged changes with staged=true. Pass a path to limit it to one file."
+	return "Show the changes in the working tree, staged changes with staged=true, or the change set since a commit with base (e.g. a sha or branch). Pass a path to limit it to one file."
 }
 func (t *gitDiffTool) Schema() map[string]any {
 	return object(map[string]any{
 		"staged": boolProp("Show staged changes instead of unstaged ones."),
 		"path":   strProp("Limit the diff to one file or directory."),
 		"stat":   boolProp("Show only the summary of added and removed lines."),
+		"base":   strProp("Diff against this commit, branch or range instead of HEAD."),
 	})
 }
 
 func (t *gitDiffTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
-	flags := map[string]bool{
-		"--staged": argBool(args, "staged", false),
-		"--stat":   argBool(args, "stat", false),
-	}
+	base := strings.TrimSpace(argString(args, "base", "ref", "since"))
 	paths := argList(args, "path", "paths", "files")
-	output, err := runGit(ctx, env, gitArgs([]string{"diff"}, flags, paths)...)
+	argv, argvErr := gitDiffArgv(argBool(args, "staged", false), argBool(args, "stat", false), base, paths)
+	if argvErr != nil {
+		return Result{Output: argvErr.Error(), IsError: true}, nil
+	}
+	output, err := runGit(ctx, env, argv...)
 	if err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
@@ -210,6 +252,70 @@ func (t *gitDiffTool) Run(ctx context.Context, env *Env, args map[string]any) (R
 		return Result{Output: "No changes."}, nil
 	}
 	return Result{Output: output}, nil
+}
+
+// gitPushTool publishes the current branch. It takes no arguments at all:
+// a force push or a remote override must go through run_command, where the
+// operator reads it in the approval dialog, not through a model-chosen flag.
+type gitPushTool struct{}
+
+func (t *gitPushTool) Name() string      { return "git_push" }
+func (t *gitPushTool) Aliases() []string { return []string{"git_publish"} }
+func (t *gitPushTool) Mutating() bool    { return true }
+func (t *gitPushTool) Risk() Risk        { return RiskNetwork }
+func (t *gitPushTool) Label(a map[string]any) string {
+	return "Publishing the current branch"
+}
+func (t *gitPushTool) DoneLabel(a map[string]any) string {
+	return "Published the current branch"
+}
+func (t *gitPushTool) Description() string {
+	return "Push the current branch to its upstream remote. No arguments: it never force-pushes and never touches another branch. Commit first; review_changes before this is the convention."
+}
+func (t *gitPushTool) Schema() map[string]any { return object(map[string]any{}) }
+
+func (t *gitPushTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	output, err := runGit(ctx, env, "push")
+	if err != nil {
+		return Result{Output: output, IsError: true}, nil
+	}
+	summary := strings.TrimSpace(output)
+	if summary == "" {
+		summary = "Pushed the current branch."
+	}
+	return Result{Output: summary}, nil
+}
+
+// gitPullTool updates the working branch. --ff-only is the deliberate
+// default: a model that meets divergence should report it, not resolve it
+// with a merge commit nobody asked for.
+type gitPullTool struct{}
+
+func (t *gitPullTool) Name() string      { return "git_pull" }
+func (t *gitPullTool) Aliases() []string { return []string{"git_update", "git_fetch_merge"} }
+func (t *gitPullTool) Mutating() bool    { return true }
+func (t *gitPullTool) Risk() Risk        { return RiskNetwork }
+func (t *gitPullTool) Label(a map[string]any) string {
+	return "Fetching upstream changes"
+}
+func (t *gitPullTool) DoneLabel(a map[string]any) string {
+	return "Fetched upstream changes"
+}
+func (t *gitPullTool) Description() string {
+	return "Pull the latest commits for the current branch, fast-forward only. A refused pull means local work diverged: report it to the operator rather than merging or rebasing behind their back."
+}
+func (t *gitPullTool) Schema() map[string]any { return object(map[string]any{}) }
+
+func (t *gitPullTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	output, err := runGit(ctx, env, "pull", "--ff-only")
+	if err != nil {
+		return Result{Output: output, IsError: true}, nil
+	}
+	summary := strings.TrimSpace(output)
+	if summary == "" {
+		summary = "Already up to date."
+	}
+	return Result{Output: summary}, nil
 }
 
 type gitLogTool struct{}
