@@ -26,11 +26,12 @@ everything the agent does printed as terminal output.
 
 ## Screenshot
 
-![Termixgo running in a terminal on a Linux VPS](termixgo-vps.png)
+[![The Termixgo welcome screen in a terminal](termigo-welcome.png)]
 
-Termixgo running over SSH on a Linux VPS. The header names the workspace and the
-active model, the transcript shows the onboarding summary, and the status line
-keeps the context usage, the session id and the session spend in view.
+Termixgo right after launch: the bold gradient wordmark, the welcome summary
+that names the workspace and the active model, and the composer waiting for
+the first request. The wordmark here is the same paint the README banner and
+`internal/ui/banner.go` carry.
 
 ## Table of contents
 

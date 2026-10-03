@@ -12,7 +12,9 @@ All notable changes to Termixgo are recorded here. The format follows
   (`termixgo-banner.svg`) built from the same block glyphs and the same
   teal-to-amber per-letter hues as `internal/ui/banner.go`, replacing the
   thin figlet art. The Install section points at the `installer/` folder as
-  the run-from-source entry point.
+  the run-from-source entry point, and the screenshot now shows the welcome
+  screen on launch (`termigo-welcome.png`) instead of the old VPS transcript
+  (`termixgo-vps.png`).
 - The Windows installer scripts live in `installer/` now (they moved from
   `packaging/windows/`): the double-click `install.bat`, the per-user
   `install.ps1`, `uninstall.ps1` and a folder README, with

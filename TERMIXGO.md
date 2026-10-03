@@ -117,6 +117,10 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   failed edits show no preview. Compact view peeks a few unified lines; the
   details view goes two-column (the /diff renderer) on wide terminals and
   stays unified when the width cannot hold two readable columns.
+- The wordmark has one source of truth: the block glyphs and per-letter hues
+  in `internal/ui/banner.go`. The README banner (`termixgo-banner.svg`) and the
+  welcome screenshot (`termigo-welcome.png`) mirror that paint. Change the TUI
+  banner first and re-derive the README assets from it, never the other way.
 - Tool schemas are JSON Schema objects. `edit` matches exact strings: never
   change it to line-based editing without a matching change to the prompt.
 - `read_file` returns line-count metadata, not inline line numbers, so an exact
