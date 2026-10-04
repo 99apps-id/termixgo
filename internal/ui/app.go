@@ -470,29 +470,45 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// mouseFragment matches the numeric tail of an SGR mouse report, with or
-// without the leading bracket, for example "<35;106;27M" or "[<0;12;9".
-var mouseFragment = regexp.MustCompile(`^\[?<\d+(;\d+){1,2}[Mm]?$`)
+// mouseNoiseChars matches a run of characters an SGR mouse report is made of:
+// the bracket, the private '<', the parameter semicolons and digits, and the
+// final M/m. Any rune outside this set means the text is real typing.
+var mouseNoiseChars = regexp.MustCompile(`^[][<;0-9Mm]+$`)
 
-// isTerminalNoise reports a key message that is a fragment of a terminal escape
-// sequence rather than something the operator typed.
+// isTerminalNoise reports a key message that is a fragment of an SGR mouse
+// report rather than something the operator typed.
 //
-// bubbletea v1.3.10 detectOneMsg only recognises an SGR mouse report when the
+// bubbletea v1.3.10 detectOneMsg recognises an SGR mouse report only when the
 // whole "\x1b[<...M" sits in one read and matches its regex; when the report is
 // split across reads it falls through, decodes the leading ESC as an Alt
-// modifier and hands back "[" alone, then the numeric tail as runes. The
-// textarea typed both into the composer, so moving the mouse over a running
-// turn sprayed escape bytes into a draft. Dropping the two fragments keeps the
-// composer to real typing; a complete report still arrives as a tea.MouseMsg
-// and scrolls the transcript.
+// modifier, and hands back "[" then the remaining bytes as runes in arbitrary
+// chunks. The chunks are not always a tidy "<35;106;27M": a report whose ESC
+// fell in the previous read can arrive as a bare tail like ";27M" or
+// "35;106;27". The textarea typed every chunk into the composer, so moving the
+// mouse over a running turn sprayed escape bytes into a draft.
+//
+// A chunk is dropped when it is made only of mouse-report characters and also
+// carries a mouse signature: a '<', a terminating M/m, or two parameter
+// semicolons. A number, a lone 'M' or a lone '[' the operator typed has none of
+// those and is kept, so the filter is not a blanket mute.
 func isTerminalNoise(key tea.KeyMsg) bool {
 	if key.Type != tea.KeyRunes || len(key.Runes) == 0 {
 		return false
 	}
-	if key.Alt && len(key.Runes) == 1 && key.Runes[0] == '[' {
+	text := string(key.Runes)
+	if key.Alt && text == "[" {
 		return true
 	}
-	return mouseFragment.MatchString(string(key.Runes))
+	if len(key.Runes) < 2 || !mouseNoiseChars.MatchString(text) {
+		return false
+	}
+	return strings.ContainsAny(text, "<") ||
+		strings.HasSuffix(text, "M") ||
+		strings.HasSuffix(text, "m") ||
+		// A truncated tail with a full b;x;y triple, e.g. "35;106;27", has no
+		// '<' and no final byte. The length check keeps a short pasted "1;2;3"
+		// from being mistaken for one.
+		(strings.Count(text, ";") >= 2 && len(text) >= 6)
 }
 
 // handleKey routes keys by what is currently on screen.

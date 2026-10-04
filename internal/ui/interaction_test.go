@@ -2027,16 +2027,31 @@ func TestComposerIgnoresSplitMouseEscape(t *testing.T) {
 	model := chatModel(t)
 	model.composer.SetValue("draft")
 
-	afterFirst, _ := send(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true})
-	afterTail, _ := send(t, afterFirst, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("<35;106;27")})
-	if got := afterTail.composer.Value(); got != "draft" {
-		t.Errorf("composer = %q, want the draft untouched", got)
+	// The chunks a split SGR mouse report arrives in: the ESC decoded as Alt+[,
+	// a head without its final byte, a bare tail, and a truncated b;x;y triple.
+	noise := []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true},
+		{Type: tea.KeyRunes, Runes: []rune("<35;106;27")},
+		{Type: tea.KeyRunes, Runes: []rune(";27M")},
+		{Type: tea.KeyRunes, Runes: []rune(";107;28M")},
+		{Type: tea.KeyRunes, Runes: []rune("[<32;61;29M")},
+		{Type: tea.KeyRunes, Runes: []rune("35;106;27")},
+	}
+	current := model
+	for _, key := range noise {
+		current, _ = send(t, current, key)
+	}
+	if got := current.composer.Value(); got != "draft" {
+		t.Errorf("mouse fragments leaked into the composer: %q", got)
 	}
 
-	// A normal rune still types, so the guard is not a blanket mute.
-	afterTyped, _ := send(t, afterTail, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello")})
-	if got := afterTyped.composer.Value(); got != "drafthello" {
-		t.Errorf("composer = %q, want the typed runes appended", got)
+	// Real typing survives: a number, a lone M, a lone bracket, a short triple.
+	for _, typed := range []string{"123", "M", "[", "1;2;3"} {
+		next, _ := send(t, current, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(typed)})
+		current = next
+	}
+	if got := current.composer.Value(); got != "draft123M[1;2;3" {
+		t.Errorf("typing was muted: %q", got)
 	}
 }
 
