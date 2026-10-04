@@ -109,6 +109,13 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	// past a budget one small step at a time.
 	sessionCost := session.Cost()
 	costKnown := r.CostKnown || r.Pricing.Known()
+	// unpriced counts delegated runs whose model had no price, so their
+	// tokens are counted but their dollars are not. Keeping this separate from
+	// costKnown means one unpriced subagent no longer erases the known spend
+	// the parent's own priced model earned: the measured dollars stay visible
+	// and the unmeasured component is named instead of vanishing into "cost
+	// unknown".
+	unpriced := 0
 
 	// One turn runs up to maxSteps steps, and that number is the operator's
 	// maxSteps: the ceiling is explicit rather than a hidden multiple of the
@@ -175,7 +182,7 @@ runLoop:
 				if event.Usage != nil {
 					turnUsage = turnUsage.Add(*event.Usage)
 					sessionCost += r.Pricing.Cost(*event.Usage)
-					emit(Event{Kind: EventUsage, Usage: *event.Usage, CostUSD: sessionCost, CostKnown: costKnown})
+					emit(Event{Kind: EventUsage, Usage: *event.Usage, CostUSD: sessionCost, CostKnown: costKnown, CostUnpriced: unpriced})
 				}
 			}
 			return nil
@@ -252,7 +259,7 @@ runLoop:
 			// second time, so a one step turn persisted twice its usage and
 			// the session file disagreed with the status line.
 			session.SetCost(sessionCost)
-			emit(Event{Kind: EventTurnEnd, StopReason: "stop", Usage: turnUsage, CostUSD: sessionCost, CostKnown: costKnown})
+			emit(Event{Kind: EventTurnEnd, StopReason: "stop", Usage: turnUsage, CostUSD: sessionCost, CostKnown: costKnown, CostUnpriced: unpriced})
 			return nil
 		}
 		guard.noteProgress()
@@ -297,8 +304,14 @@ runLoop:
 				// combined figure toward unknown: a subagent that failed before
 				// running returns zero tokens, and zero tokens should not cast
 				// doubt on the parent's own priced cost.
+				// A delegated run whose model had no price spent real tokens
+				// that this fold cannot put a dollar figure on. SubagentUnpriced
+				// already counts the run itself plus any nested children, so it
+				// is added as-is rather than AND-collapsing CostKnown. Zero-
+				// token failed runs carry a zero count: they spent nothing, so
+				// they cast no doubt.
 				if result.SubagentUsage.TotalTokens > 0 {
-					costKnown = costKnown && result.SubagentCostKnown
+					unpriced += result.SubagentUnpriced
 				}
 				turnUsage = turnUsage.Add(result.SubagentUsage)
 				sessionCost += result.SubagentCost
@@ -306,7 +319,7 @@ runLoop:
 				// (they would have streamed its transcript), so this one event
 				// is their only route into the app total, the session and the
 				// audit ledger.
-				emit(Event{Kind: EventUsage, Usage: result.SubagentUsage, CostUSD: sessionCost, CostKnown: costKnown})
+				emit(Event{Kind: EventUsage, Usage: result.SubagentUsage, CostUSD: sessionCost, CostKnown: costKnown, CostUnpriced: unpriced})
 			}
 			if !result.IsError && taskJustCompleted(before, r.todoSnapshot()) {
 				pendingVerify = ledger.BuildVerifyNudge(nudges, false)
@@ -364,7 +377,7 @@ runLoop:
 	// ledger reads it off this event, so omitting it here recorded a turn that
 	// ran thirty steps as a thirty-step turn that spent nothing.
 	session.SetCost(sessionCost)
-	emit(Event{Kind: EventTurnEnd, StopReason: stopReason, Usage: turnUsage, CostUSD: sessionCost, CostKnown: costKnown})
+	emit(Event{Kind: EventTurnEnd, StopReason: stopReason, Usage: turnUsage, CostUSD: sessionCost, CostKnown: costKnown, CostUnpriced: unpriced})
 	return nil
 }
 

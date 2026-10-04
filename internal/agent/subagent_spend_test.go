@@ -71,3 +71,51 @@ func TestParentTurnFoldsDelegatedSpend(t *testing.T) {
 		t.Errorf("session cost = %f, want at least the delegated 0.0123", session.Cost())
 	}
 }
+
+// TestParentTurnKeepsItsOwnCostWhenASubagentIsUnpriced is the ledger guard
+// behind CostUnpriced. The old code AND-combined the parent's CostKnown with
+// the subagent's, so one unpriced delegated run erased the parent's measured
+// dollars and the whole session read "cost unknown". Now the parent's known
+// spend stays known and the unpriced component is counted separately.
+func TestParentTurnKeepsItsOwnCostWhenASubagentIsUnpriced(t *testing.T) {
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{usageChunk(50, 10), callChunk("c1", "run_subagent", `{"prompt":"summarise"}`)},
+		{textChunk("done.")},
+	}}
+	runner, env, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	env.RunSubagent = func(ctx context.Context, subType, prompt string) (string, SubagentSpend, error) {
+		return "the report", SubagentSpend{
+			Usage:     provider.Usage{PromptTokens: 500, CompletionTokens: 40, TotalTokens: 540},
+			Cost:      0,
+			CostKnown: false,
+			Unpriced:  1,
+		}, nil
+	}
+	// The parent's own model is priced.
+	runner.Pricing = provider.Pricing{InputPerMillion: 2, OutputPerMillion: 6}
+	runner.CostKnown = true
+
+	session := NewSession(env.Workspace, "test-model")
+	if err := runner.Run(context.Background(), session, "delegate this"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var end Event
+	for _, event := range recorder.events {
+		if event.Kind == EventTurnEnd {
+			end = event
+		}
+	}
+	// The parent's own step cost (50 in + 10 out at $2/$6 per million) must
+	// stay known; a zero-token spend from an unpriced subagent must not have.
+	parentCost := 50.0/1_000_000*2 + 10.0/1_000_000*6
+	if !end.CostKnown {
+		t.Errorf("the parent's own priced spend must stay known even though a subagent was unpriced")
+	}
+	if end.CostUSD != parentCost {
+		t.Errorf("turn cost = %f, want the parent's own %f (the unpriced subagent adds no dollars)", end.CostUSD, parentCost)
+	}
+	if end.CostUnpriced != 1 {
+		t.Errorf("CostUnpriced = %d, want 1 for the unpriced delegated run", end.CostUnpriced)
+	}
+}

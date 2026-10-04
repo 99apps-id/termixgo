@@ -67,10 +67,15 @@ type Event struct {
 	Usage    provider.Usage
 
 	// CostUSD is the estimated spend of the run so far, and CostKnown
-	// says whether a price was recorded for the model. Without the flag
-	// a free local model and an unpriced one would both read as zero.
+	// says whether every spend component had a recorded price. Without the
+	// flag a free local model and an unpriced one would both read as zero.
 	CostUSD   float64
 	CostKnown bool
+	// CostUnpriced counts spend components that had no price. Zero means
+	// CostKnown is the whole story. It keeps one unpriced subagent from
+	// erasing the known dollars the rest of the session earned: the known
+	// spend stays in CostUSD and the unpriceable part is named, not hidden.
+	CostUnpriced int
 
 	// StopReason is set on EventTurnEnd: stop, step-cap, aborted, error.
 	StopReason string

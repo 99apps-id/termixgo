@@ -40,6 +40,11 @@ type SubagentSpend struct {
 	Usage     provider.Usage
 	Cost      float64
 	CostKnown bool
+	// Unpriced counts delegated components inside this run whose model had no
+	// price, so their tokens are known but their dollars are not. It is the
+	// explicit ledger that replaces the old CostKnown AND-collapse: a priced
+	// parent keeps its known dollars while the unmeasured parts stay countable.
+	Unpriced int
 }
 
 // SubagentSpend.Fold adds another delegated run's spend into this one, the
@@ -48,6 +53,7 @@ func (s *SubagentSpend) Fold(other SubagentSpend) {
 	s.Usage = s.Usage.Add(other.Usage)
 	s.Cost += other.Cost
 	s.CostKnown = s.CostKnown && other.CostKnown
+	s.Unpriced += other.Unpriced
 }
 
 // NewSubagentSpend is the zero total whose CostKnown is the identity of the
@@ -241,7 +247,13 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	// must NOT fold a grandchild's spend again: it would land here a second
 	// time in that same turn-end total.
 	var spend SubagentSpend
-	spend.CostKnown = costKnown
+	// The child counts as one unpriced delegated component when its own model
+	// has no price, separate from any nested unpriced runs it spawns. Zero for
+	// a priced child.
+	ownUnpriced := 0
+	if !costKnown {
+		ownUnpriced = 1
+	}
 	child := &Env{
 		Workspace: parent.Workspace,
 		Config:    parent.Config,
@@ -255,7 +267,10 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 			if event.Kind == EventTurnEnd {
 				spend.Usage = spend.Usage.Add(event.Usage)
 				spend.Cost += event.CostUSD
-				spend.CostKnown = spend.CostKnown && event.CostKnown
+				// The turn-end event carries the subtree's nested unpriced
+				// count; add this child's own unpricedness on top, once.
+				spend.CostKnown = event.CostKnown && costKnown
+				spend.Unpriced = event.CostUnpriced + ownUnpriced
 			}
 		},
 		Processes: parent.Processes,

@@ -98,6 +98,11 @@ type App struct {
 	// costUSD is the estimated spend across the live session, mirrored from
 	// the runner so the status bar and /cost can show it without a lookup.
 	costUSD float64
+	// costUnpriced counts delegated runs whose model had no price, so their
+	// tokens are counted but their dollars are not. It is separate from
+	// costKnown so one unpriced subagent does not erase the parent's measured
+	// spend: the known dollars stay visible and the unmeasured part is named.
+	costUnpriced int
 
 	// ephemeral suppresses session files. A one-shot `termixgo run` must not
 	// leave a conversation behind on every invocation.
@@ -552,6 +557,15 @@ func (a *App) Cost() (float64, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.costUSD, a.costKnown
+}
+
+// CostUnpriced returns how many delegated runs spent tokens without a known
+// price. Zero is the common case; nonzero means the spend figure is a floor,
+// not a ceiling, because those runs' dollars are untracked.
+func (a *App) CostUnpriced() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.costUnpriced
 }
 
 // SetInteractor installs the UI callbacks.
@@ -1014,6 +1028,7 @@ func (a *App) emitInto(event agent.Event, foldUsage bool) {
 			a.mu.Lock()
 			a.costUSD = event.CostUSD
 			a.costKnown = event.CostKnown
+			a.costUnpriced = event.CostUnpriced
 			a.mu.Unlock()
 		}
 	}

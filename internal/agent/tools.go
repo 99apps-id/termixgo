@@ -34,6 +34,10 @@ type Result struct {
 	SubagentUsage     provider.Usage
 	SubagentCost      float64
 	SubagentCostKnown bool
+	// SubagentUnpriced counts delegated runs nested inside this one whose
+	// model had no price, so their dollars could not be folded. It is added to
+	// the parent's own unpriced counter rather than collapsing CostKnown.
+	SubagentUnpriced int
 	SubagentSpent     bool
 }
 

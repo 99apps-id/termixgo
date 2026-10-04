@@ -472,9 +472,13 @@ func runPlainSlash(ctx context.Context, application *app.App, name, args string,
 	case "cost":
 		usage := application.Usage()
 		howMuch, known := application.Cost()
+		unpriced := application.CostUnpriced()
 		spend := "cost unknown for this model"
 		if known {
 			spend = fmt.Sprintf("about $%.4f", howMuch)
+			if unpriced > 0 {
+				spend += fmt.Sprintf(" (a floor: %d delegated run(s) with no priced model)", unpriced)
+			}
 		}
 		fmt.Fprintf(out, "  tokens: %d in, %d out, %d total\n", usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
 		fmt.Fprintf(out, "  estimated spend: %s\n", spend)

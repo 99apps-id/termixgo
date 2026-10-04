@@ -1751,6 +1751,7 @@ func (m *Model) viewStatus() string {
 	done, total := m.app.Todos().Progress()
 	usage := m.app.Usage()
 	spend, known := m.app.Cost()
+	unpriced := m.app.CostUnpriced()
 
 	// The vitals are the numbers the operator watches while a turn runs, so they
 	// are built first and always kept on screen. A narrow terminal drops the
@@ -1767,7 +1768,11 @@ func (m *Model) viewStatus() string {
 		// is more useful than "cost n/a".
 		vitals = append(vitals, costStyle.Render("plan "+plan.CreditUnit))
 	} else if known {
-		vitals = append(vitals, costStyle.Render(fmt.Sprintf("$%.4f", spend)))
+		costLabel := fmt.Sprintf("$%.4f", spend)
+		if unpriced > 0 {
+			costLabel += "*"
+		}
+		vitals = append(vitals, costStyle.Render(costLabel))
 	} else {
 		// A model with no price cannot be budgeted, and saying so is better than
 		// a zero that reads as "free".

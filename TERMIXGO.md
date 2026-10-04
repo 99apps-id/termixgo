@@ -175,6 +175,12 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   that would pass it and names the amount in the message. `Pricing.Known()`
   separates "free" (a local model) from "unpriced", and a budget of zero means
   unlimited rather than "stop at once".
+- Delegated spend is a count, not a boolean collapse. `SubagentSpend.Unpriced`
+  and `Event.CostUnpriced` count the delegated runs whose model had no price,
+  while the parent's own priced spend stays known: one unpriced subagent must
+  never erase the dollars the parent already measured. The count is the
+  authoritative ledger; `CostKnown` alone is not, because an AND over it loses
+  the "how many unpriced" information and flips a whole session to unknown.
 - `App.SetEphemeral(true)` is what stops a one-shot `termixgo run` writing
   session files. Persistence is the default for a conversation; a command is
   not a conversation.- `Session` is written by the goroutine running a turn while the terminal keeps

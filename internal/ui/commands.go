@@ -137,6 +137,7 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 	case "cost":
 		usage := m.app.Usage()
 		howMuch, known := m.app.Cost()
+		unpriced := m.app.CostUnpriced()
 		plan, planBilled := m.app.CurrentModel().Plan()
 		spend := "cost unknown for this model"
 		switch {
@@ -144,6 +145,12 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 			spend = fmt.Sprintf("covered by the %s, billed in %s rather than dollars", plan.Name, plan.CreditUnit)
 		case known:
 			spend = fmt.Sprintf("about $%.4f", howMuch)
+			if unpriced > 0 {
+				// The figure is a floor, not the whole spend: some delegated
+				// runs cost tokens nobody priced. Name that rather than
+				// silently under-reporting.
+				spend += fmt.Sprintf(" (a floor: %d delegated run(s) cost tokens with no priced model)", unpriced)
+			}
 		}
 		budget := "no budget set"
 		limit := m.appConfig().CostBudgetUSD

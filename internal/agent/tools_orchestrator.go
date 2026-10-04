@@ -62,6 +62,7 @@ func (t *orchestrateTool) Run(ctx context.Context, env *Env, args map[string]any
 		SubagentUsage:     result.Spend.Usage,
 		SubagentCost:      result.Spend.Cost,
 		SubagentCostKnown: result.Spend.CostKnown,
+		SubagentUnpriced:  result.Spend.Unpriced,
 		SubagentSpent:     true,
 	}, nil
 }

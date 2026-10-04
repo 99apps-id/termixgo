@@ -73,6 +73,7 @@ func (t *reviewChangesTool) Run(ctx context.Context, env *Env, args map[string]a
 			SubagentUsage:     spend.Usage,
 			SubagentCost:      spend.Cost,
 			SubagentCostKnown: spend.CostKnown,
+			SubagentUnpriced:  spend.Unpriced,
 			SubagentSpent:     true,
 		}, nil
 	}
@@ -81,6 +82,7 @@ func (t *reviewChangesTool) Run(ctx context.Context, env *Env, args map[string]a
 		SubagentUsage:     spend.Usage,
 		SubagentCost:      spend.Cost,
 		SubagentCostKnown: spend.CostKnown,
+		SubagentUnpriced:  spend.Unpriced,
 		SubagentSpent:     true,
 	}, nil
 }
