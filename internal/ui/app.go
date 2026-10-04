@@ -70,6 +70,13 @@ type Model struct {
 
 	blocks []block
 
+	// escapeNoiseActive tracks an in-flight terminal escape sequence (an SGR
+	// mouse report or cursor position report) that bubbletea split across reads,
+	// so its fragments are dropped instead of typed into the composer.
+	escapeNoiseActive bool
+	escapeNoiseAt     time.Time
+	lastEscAt         time.Time
+
 	slashMatches []SlashCommand
 	slashCursor  int
 
@@ -439,11 +446,199 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// csiNoiseTerminators contains standard CSI final bytes for terminal reports:
+// SGR mouse (M, m), cursor position (R), device attributes (c), window ops (t),
+// and mode/private (~, y, h, l, n).
+const csiNoiseTerminators = "MmRct~yhln"
+
+// isCSINoiseChunk reports whether every rune in text is a valid CSI sequence
+// parameter or intermediate character, with an optional terminator at the end.
+func isCSINoiseChunk(text string) bool {
+	if text == "" {
+		return false
+	}
+	runes := []rune(text)
+	for i, r := range runes {
+		isLast := (i == len(runes)-1)
+		isParam := (r >= '0' && r <= '9') || r == ';' || r == ':' || r == '<' ||
+			r == '>' || r == '=' || r == '?' || r == ',' || r == '-' || r == '[' || r == ']'
+		if isParam {
+			continue
+		}
+		if isLast && strings.ContainsRune(csiNoiseTerminators, r) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func endsCSITerminator(text string) bool {
+	if text == "" {
+		return false
+	}
+	runes := []rune(text)
+	return strings.ContainsRune(csiNoiseTerminators, runes[len(runes)-1])
+}
+
+// isStandaloneNoise inspects a single key message without prior sequence state
+// to detect split escape sequence fragments that carry an unambiguous escape
+// signature.
+func isStandaloneNoise(key tea.KeyMsg) (isNoise bool, isPrefix bool) {
+	if key.Paste || key.Type != tea.KeyRunes || len(key.Runes) == 0 {
+		return false, false
+	}
+	text := string(key.Runes)
+	if key.Alt && (text == "[" || text == "O") {
+		return true, true
+	}
+
+	// An SGR mouse fragment carries a '<' and a parameter separator. The ';' is
+	// required because a lone '<' or '<<' has neither and is what someone
+	// coding types ("<=", "<<", "<int>"), so it must not be muted.
+	if strings.ContainsRune(text, '<') && strings.ContainsRune(text, ';') && isCSINoiseChunk(text) {
+		return true, !endsCSITerminator(text)
+	}
+
+	// A chunk starting with "[<" and a parameter separator (split SGR report).
+	if strings.HasPrefix(text, "[<") && strings.ContainsRune(text, ';') && isCSINoiseChunk(text) {
+		return true, !endsCSITerminator(text)
+	}
+
+	// A tail ending in an SGR mouse terminator (M or m) with digits or
+	// semicolons. Minimum 2 runes keeps a lone 'M' or 'm' from being muted.
+	if len(key.Runes) >= 2 && (strings.HasSuffix(text, "M") || strings.HasSuffix(text, "m")) &&
+		isCSINoiseChunk(text) && strings.ContainsAny(text, "0123456789;") {
+		return true, false
+	}
+
+	// A tail ending in CPR/DA/window terminators (R, c, t) with parameter
+	// digits and a semicolon (e.g. "24;80R", "?1;2c", "4;600;800t").
+	if len(key.Runes) >= 3 && strings.ContainsAny(text, "Rct") &&
+		strings.ContainsRune(text, ';') && isCSINoiseChunk(text) && endsCSITerminator(text) {
+		return true, false
+	}
+
+	// A truncated parameter triple with two semicolons and sufficient length
+	// (e.g. "35;106;27"). The length check keeps a short pasted "1;2;3" from
+	// being mistaken for one.
+	if strings.Count(text, ";") >= 2 && len(text) >= 6 && isCSINoiseChunk(text) {
+		return true, false
+	}
+
+	// A parameter chunk starting with a semicolon and containing digits (e.g.
+	// ";106;27"). Typing never emits a multi-character rune slice starting ';'.
+	if len(key.Runes) >= 2 && strings.HasPrefix(text, ";") && isCSINoiseChunk(text) && strings.ContainsAny(text, "0123456789") {
+		return true, false
+	}
+
+	return false, false
+}
+
+// isMouseNoiseText reports whether a whole input burst is nothing but SGR mouse
+// reports: it carries a digit and a mouse signature ('<' or a terminating M/m)
+// and no other character. A real paste has letters or punctuation and is kept.
+func isMouseNoiseText(text string) bool {
+	hasDigit := false
+	hasSignature := false
+	for _, r := range text {
+		switch {
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		case r == '<' || r == 'M' || r == 'm':
+			hasSignature = true
+		case r == '[', r == ']', r == ';', r == ' ', r == '\t', r == '\n', r == '\r':
+		default:
+			return false
+		}
+	}
+	return hasDigit && hasSignature
+}
+
+// isTerminalNoise reports whether a key message is a fragment of a terminal
+// escape sequence (such as an SGR mouse report, cursor position report, or
+// device attribute) rather than something the operator typed.
+//
+// bubbletea v1.3.10 detectOneMsg recognises an SGR mouse report only when the
+// whole "\x1b[<...M" sits in one read and matches its regex; when the report is
+// split across reads it falls through, decodes the leading ESC as an Alt
+// modifier, and hands back "[" then the remaining bytes as runes in arbitrary
+// chunks. This filter combines stateful tracking of an in-flight escape
+// sequence with signature-based detection for standalone fragments, dropping
+// every piece while preserving real typing and bracketed pastes.
+func (m *Model) isTerminalNoise(key tea.KeyMsg) bool {
+	if key.Paste {
+		m.escapeNoiseActive = false
+		return isMouseNoiseText(string(key.Runes))
+	}
+
+	if key.Type != tea.KeyRunes || len(key.Runes) == 0 {
+		if key.Type == tea.KeyEscape {
+			m.lastEscAt = time.Now()
+		}
+		return false
+	}
+
+	text := string(key.Runes)
+
+	// A typed key never carries a raw C0 control; a leaked escape fragment does.
+	if strings.ContainsFunc(text, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		m.escapeNoiseActive = false
+		return true
+	}
+
+	// CSI introducer: bubbletea decodes the leading ESC [ as Alt+"[".
+	if key.Alt && (text == "[" || text == "O") {
+		m.escapeNoiseActive = true
+		m.escapeNoiseAt = time.Now()
+		return true
+	}
+
+	// An escape sequence whose ESC arrived as a lone KeyEscape just before "["
+	// arrives in the immediately next read.
+	if text == "[" && !key.Alt && time.Since(m.lastEscAt) < 50*time.Millisecond {
+		m.escapeNoiseActive = true
+		m.escapeNoiseAt = time.Now()
+		return true
+	}
+
+	// While an escape sequence is in-flight:
+	if m.escapeNoiseActive {
+		if time.Since(m.escapeNoiseAt) > 100*time.Millisecond {
+			m.escapeNoiseActive = false
+		} else if isCSINoiseChunk(text) {
+			m.escapeNoiseAt = time.Now()
+			if endsCSITerminator(text) {
+				m.escapeNoiseActive = false
+			}
+			return true
+		} else {
+			m.escapeNoiseActive = false
+		}
+	}
+
+	noise, isPrefix := isStandaloneNoise(key)
+	if noise {
+		if isPrefix {
+			m.escapeNoiseActive = true
+			m.escapeNoiseAt = time.Now()
+		}
+		return true
+	}
+
+	return false
+}
+
 // handleKey routes keys by what is currently on screen.
 func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Global quit.
 	if key.String() == "ctrl+c" {
 		return m, tea.Quit
+	}
+
+	// A raw terminal escape fragment is never text the operator typed.
+	if m.isTerminalNoise(key) {
+		return m, nil
 	}
 
 	if m.pendingApproval != nil {
