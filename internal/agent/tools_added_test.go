@@ -170,12 +170,12 @@ func TestLoadPipelineRejectsUnsafeAndMissing(t *testing.T) {
 func TestRunPipelineRespectsDependenciesAndFailures(t *testing.T) {
 	env := testEnv(t)
 	var ran []string
-	env.RunSubagent = func(ctx context.Context, subType, prompt string) (string, error) {
+	env.RunSubagent = func(ctx context.Context, subType, prompt string) (string, SubagentSpend, error) {
 		ran = append(ran, prompt)
 		if strings.Contains(prompt, "boom") {
-			return "", errors.New("step failed")
+			return "", SubagentSpend{}, errors.New("step failed")
 		}
-		return "out:" + prompt, nil
+		return "out:" + prompt, SubagentSpend{}, nil
 	}
 
 	pipeline := OrchestrationPipeline{ID: "p", Steps: []OrchestrationStep{

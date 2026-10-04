@@ -1132,7 +1132,7 @@ func (a *App) ask(question string, options []string) (string, error) {
 	return a.interactor.Ask(question, options)
 }
 
-func (a *App) runSubagent(ctx context.Context, subType, prompt string) (string, error) {
+func (a *App) runSubagent(ctx context.Context, subType, prompt string) (string, agent.SubagentSpend, error) {
 	a.mu.Lock()
 	client := a.client
 	model := a.model
@@ -1143,7 +1143,7 @@ func (a *App) runSubagent(ctx context.Context, subType, prompt string) (string, 
 	fallbacks := append([]string(nil), a.cfg.SubagentFallbacks...)
 	a.mu.Unlock()
 	if client == nil {
-		return "", errors.New("no provider client is available")
+		return "", agent.SubagentSpend{}, errors.New("no provider client is available")
 	}
 
 	// An explicit fallback chain is authoritative: a subagent stays on the
@@ -1162,30 +1162,30 @@ func (a *App) runSubagent(ctx context.Context, subType, prompt string) (string, 
 				continue
 			}
 			seen[key] = true
-			report, runErr := agent.RunSubagent(ctx, a.env(), roleClient, roleModel, subType, prompt, agent.SubagentMaxSteps)
+			report, spend, runErr := agent.RunSubagent(ctx, a.env(), roleClient, roleModel, subType, prompt, agent.SubagentMaxSteps)
 			if runErr == nil {
-				return report, nil
+				return report, spend, nil
 			}
 			if !subagentFallback(runErr) {
-				return "", runErr
+				return "", spend, runErr
 			}
 			lastErr = runErr
 		}
 		if lastErr == nil {
 			lastErr = errors.New("no subagent model is available")
 		}
-		return "", lastErr
+		return "", agent.SubagentSpend{}, lastErr
 	}
 
 	// No chain: the role model, then the active model.
 	if primary != "" {
 		if roleClient, roleModel, err := a.subagentClient(primary); err == nil && roleModel.ID != model.ID {
-			report, runErr := agent.RunSubagent(ctx, a.env(), roleClient, roleModel, subType, prompt, agent.SubagentMaxSteps)
+			report, spend, runErr := agent.RunSubagent(ctx, a.env(), roleClient, roleModel, subType, prompt, agent.SubagentMaxSteps)
 			if runErr == nil {
-				return report, nil
+				return report, spend, nil
 			}
 			if !subagentFallback(runErr) {
-				return "", runErr
+				return "", spend, runErr
 			}
 		}
 	}
@@ -1506,7 +1506,7 @@ func (a *App) RunVoicePrompt(ctx context.Context, prompt string, progress func(s
 		return "", fmt.Errorf("active turn failed (%v), and voice fallback model error: %w", err, clientErr)
 	}
 
-	report, subErr := agent.RunSubagent(ctx, a.env(), roleClient, roleModel, string(agent.SubagentGeneral), prompt, maxSteps)
+	report, spend, subErr := agent.RunSubagent(ctx, a.env(), roleClient, roleModel, string(agent.SubagentGeneral), prompt, maxSteps)
 	if subErr != nil {
 		return "", fmt.Errorf("active turn failed (%v), and voice fallback turn error: %w", err, subErr)
 	}
@@ -1514,6 +1514,14 @@ func (a *App) RunVoicePrompt(ctx context.Context, prompt string, progress func(s
 	session := a.currentSession()
 	session.AddUser(prompt)
 	session.AddAssistant(report, "", nil)
+	// The fallback run happens outside the normal emit path, so its usage and
+	// cost must be folded into the live session by hand rather than lost.
+	if spend.Usage.TotalTokens > 0 {
+		session.AddUsage(spend.Usage)
+	}
+	if spend.Cost > 0 {
+		session.AddCost(spend.Cost)
+	}
 	_ = session.Save()
 
 	return report, nil

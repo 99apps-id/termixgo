@@ -65,9 +65,22 @@ func (t *reviewChangesTool) Run(ctx context.Context, env *Env, args map[string]a
 	}
 	// One attempt at the tool level; the empty-pass retry lives inside
 	// RunSubagent where the tool-call count is visible.
-	report, runErr := env.RunSubagent(ctx, string(SubagentCodeReview), buildReviewPrompt(diff, false))
+	report, spend, runErr := env.RunSubagent(ctx, string(SubagentCodeReview), buildReviewPrompt(diff, false))
 	if runErr != nil {
-		return Result{Output: runErr.Error(), IsError: true}, nil
+		return Result{
+			Output:            runErr.Error(),
+			IsError:           true,
+			SubagentUsage:     spend.Usage,
+			SubagentCost:      spend.Cost,
+			SubagentCostKnown: spend.CostKnown,
+			SubagentSpent:     true,
+		}, nil
 	}
-	return Result{Output: report}, nil
+	return Result{
+		Output:            report,
+		SubagentUsage:     spend.Usage,
+		SubagentCost:      spend.Cost,
+		SubagentCostKnown: spend.CostKnown,
+		SubagentSpent:     true,
+	}, nil
 }

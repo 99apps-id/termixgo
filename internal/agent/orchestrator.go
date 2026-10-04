@@ -43,6 +43,10 @@ type OrchestrationResult struct {
 	Skipped    []string       `json:"skipped"`
 	Results    map[string]any `json:"results"`
 	StoppedAt  string         `json:"stoppedAt,omitempty"`
+	// Spend is the delegated accounting of every step the pipeline ran. It is
+	// not part of the JSON the model sees, so it travels to the tool result
+	// silently and into the parent turn's /cost and cost budget.
+	Spend SubagentSpend `json:"-"`
 }
 
 // pipelineDir returns the absolute pipelines directory for a workspace.
@@ -174,6 +178,9 @@ func runPipeline(ctx context.Context, env *Env, pipeline OrchestrationPipeline, 
 	failed := map[string]bool{}
 	skipped := map[string]bool{}
 	results := map[string]any{}
+	// The whole pipeline's delegated spend is folded into one total, which
+	// the orchestrate tool hands back so the parent turn charges it.
+	spend := NewSubagentSpend()
 	for key, value := range initial {
 		results[key] = value
 	}
@@ -245,6 +252,7 @@ func runPipeline(ctx context.Context, env *Env, pipeline OrchestrationPipeline, 
 			type outcome struct {
 				id     string
 				output string
+				spend  SubagentSpend
 				err    error
 			}
 			collected := make([]outcome, len(parallel))
@@ -254,12 +262,13 @@ func runPipeline(ctx context.Context, env *Env, pipeline OrchestrationPipeline, 
 				go func(index int, step OrchestrationStep) {
 					defer wait.Done()
 					snapshot := snapshotContext(results)
-					output, err := runPipelineStep(ctx, env, step, snapshot)
-					collected[index] = outcome{id: step.ID, output: output, err: err}
+					output, stepSpend, err := runPipelineStep(ctx, env, step, snapshot)
+					collected[index] = outcome{id: step.ID, output: output, spend: stepSpend, err: err}
 				}(index, step)
 			}
 			wait.Wait()
 			for _, item := range collected {
+				spend.Fold(item.spend)
 				if item.err == nil {
 					completed[item.id] = true
 					results[item.id] = item.output
@@ -288,8 +297,9 @@ func runPipeline(ctx context.Context, env *Env, pipeline OrchestrationPipeline, 
 				stoppedAt = "aborted"
 				break
 			}
-			output, err := runPipelineStep(ctx, env, step, snapshotContext(results))
+			output, stepSpend, err := runPipelineStep(ctx, env, step, snapshotContext(results))
 			if err != nil {
+				spend.Fold(stepSpend)
 				failed[step.ID] = true
 				results[step.ID] = map[string]any{"error": err.Error()}
 				stoppedAt = step.ID
@@ -298,32 +308,39 @@ func runPipeline(ctx context.Context, env *Env, pipeline OrchestrationPipeline, 
 				}
 				break
 			}
+			spend.Fold(stepSpend)
 			completed[step.ID] = true
 			results[step.ID] = output
 		}
 	}
 
-	return OrchestrationResult{
+	result := OrchestrationResult{
 		PipelineID: pipeline.ID,
 		Completed:  sortedKeys(completed),
 		Failed:     sortedKeys(failed),
 		Skipped:    sortedKeys(skipped),
 		Results:    results,
 		StoppedAt:  stoppedAt,
+		Spend:      spend,
 	}
+	return result
 }
 
 // runPipelineStep runs one step as a subagent.
-func runPipelineStep(ctx context.Context, env *Env, step OrchestrationStep, context map[string]any) (string, error) {
+func runPipelineStep(ctx context.Context, env *Env, step OrchestrationStep, context map[string]any) (string, SubagentSpend, error) {
 	if env == nil || env.RunSubagent == nil {
-		return "", fmt.Errorf("subagents are not available in this session")
+		return "", SubagentSpend{}, fmt.Errorf("subagents are not available in this session")
 	}
 	prompt := interpolatePrompt(step.Prompt, context)
 	subType := strings.TrimSpace(step.Type)
 	if subType == "" {
 		subType = string(SubagentGeneral)
 	}
-	return env.RunSubagent(ctx, subType, prompt)
+	report, spend, err := env.RunSubagent(ctx, subType, prompt)
+	if err != nil {
+		return "", spend, err
+	}
+	return report, spend, nil
 }
 
 // snapshotContext copies the results map so parallel steps read a stable view.

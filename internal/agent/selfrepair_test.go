@@ -111,7 +111,7 @@ func TestReviewRoleDiscardsTwoEmptyPasses(t *testing.T) {
 	}}
 	parent := testEnv(t)
 	parent.Config = config.Default()
-	_, err := RunSubagent(context.Background(), parent, client, provider.Model{ID: "test-model"}, string(SubagentCodeReview), "review it", 4)
+	_, _, err := RunSubagent(context.Background(), parent, client, provider.Model{ID: "test-model"}, string(SubagentCodeReview), "review it", 4)
 	if err == nil || !strings.Contains(err.Error(), "without a single tool call") {
 		t.Fatalf("want the empty-pass discard error, got %v", err)
 	}
@@ -130,7 +130,7 @@ func TestReviewRoleAcceptsTheInspectedRetry(t *testing.T) {
 	}}
 	parent := testEnv(t)
 	parent.Config = config.Default()
-	answer, err := RunSubagent(context.Background(), parent, client, provider.Model{ID: "test-model"}, string(SubagentCodeReview), "review it", 4)
+	answer, _, err := RunSubagent(context.Background(), parent, client, provider.Model{ID: "test-model"}, string(SubagentCodeReview), "review it", 4)
 	if err != nil {
 		t.Fatalf("a retry that inspects must be accepted: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestWorkerRoleIsNotJudgedForEmptyPasses(t *testing.T) {
 	}}
 	parent := testEnv(t)
 	parent.Config = config.Default()
-	answer, err := RunSubagent(context.Background(), parent, client, provider.Model{ID: "test-model"}, string(SubagentGeneral), "compute", 4)
+	answer, _, err := RunSubagent(context.Background(), parent, client, provider.Model{ID: "test-model"}, string(SubagentGeneral), "compute", 4)
 	if err != nil || !strings.Contains(answer, "42") {
 		t.Fatalf("worker role must pass through: answer=%q err=%v", answer, err)
 	}

@@ -208,7 +208,7 @@ func TestInteractorReceivesApprovalsAndQuestions(t *testing.T) {
 
 func TestRunSubagentNeedsAClient(t *testing.T) {
 	application := newTestApp(t)
-	_, err := application.runSubagent(context.Background(), "general", "look around")
+	_, _, err := application.runSubagent(context.Background(), "general", "look around")
 	if err == nil {
 		t.Fatalf("a subagent without a client must fail")
 	}

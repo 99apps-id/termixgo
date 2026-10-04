@@ -27,6 +27,14 @@ type Result struct {
 	// Images, when set, are attached to the conversation so a vision model can
 	// see them. read_image is the only producer.
 	Images []provider.Image
+	// SubagentUsage and SubagentCost carry a delegated run's tokens and spend,
+	// and SubagentSpent says such a run actually happened. The loop folds them
+	// into the parent turn so /cost, the session ledger and the cost budget
+	// include delegated work instead of charging it to a discarded session.
+	SubagentUsage     provider.Usage
+	SubagentCost      float64
+	SubagentCostKnown bool
+	SubagentSpent     bool
 }
 
 // Tool is one capability offered to the model.
@@ -79,8 +87,10 @@ type Env struct {
 	Ask func(question string, options []string) (string, error)
 
 	// RunSubagent is injected by the app; nil disables the subagent tool.
-	// The type names a SubagentType; empty means the general worker.
-	RunSubagent func(ctx context.Context, subType, prompt string) (string, error)
+	// The type names a SubagentType; empty means the general worker. The
+	// SubagentSpend it returns is the delegated run's tokens and dollars,
+	// which the loop folds into the parent turn's accounting.
+	RunSubagent func(ctx context.Context, subType, prompt string) (string, SubagentSpend, error)
 
 	// ToolIndex lists every tool a run may load, so find_tools can search them
 	// by keyword. It is set by the runner for the duration of one turn.

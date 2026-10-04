@@ -56,7 +56,14 @@ func (t *orchestrateTool) Run(ctx context.Context, env *Env, args map[string]any
 	if len(output) > 16000 {
 		output = clipBytes(output, 16000) + "\n... [truncated]"
 	}
-	return Result{Output: output, IsError: len(result.Failed) > 0}, nil
+	return Result{
+		Output:            output,
+		IsError:           len(result.Failed) > 0,
+		SubagentUsage:     result.Spend.Usage,
+		SubagentCost:      result.Spend.Cost,
+		SubagentCostKnown: result.Spend.CostKnown,
+		SubagentSpent:     true,
+	}, nil
 }
 
 // listPipelinesTool names the pipelines an operator has authored.

@@ -31,6 +31,32 @@ const (
 	SubagentVision       SubagentType = "vision"
 )
 
+// SubagentSpend is the accounting a delegated run hands back to its parent:
+// the tokens it spent and the dollars those tokens cost in its own session.
+// The parent folds it into its turn total so /cost, the session ledger and
+// the cost budget include delegated work instead of charging it to a
+// throwaway session nobody ever reads.
+type SubagentSpend struct {
+	Usage     provider.Usage
+	Cost      float64
+	CostKnown bool
+}
+
+// SubagentSpend.Fold adds another delegated run's spend into this one, the
+// path a pipeline takes when it sums every step it spawned.
+func (s *SubagentSpend) Fold(other SubagentSpend) {
+	s.Usage = s.Usage.Add(other.Usage)
+	s.Cost += other.Cost
+	s.CostKnown = s.CostKnown && other.CostKnown
+}
+
+// NewSubagentSpend is the zero total whose CostKnown is the identity of the
+// AND the Fold performs, so a pipeline starts as "known until a step says
+// otherwise" rather than poisoning every fold that follows.
+func NewSubagentSpend() SubagentSpend {
+	return SubagentSpend{CostKnown: true}
+}
+
 // MaxSubagentDepth caps nesting. The main agent runs at depth 0 and may
 // spawn down to this depth; at the cap the spawn tool is withheld.
 const MaxSubagentDepth = 3
@@ -190,13 +216,13 @@ func subagentRegistry(subType string, depth int) *Registry {
 // than running free: an unpriced default silently disables the cost cap, an
 // oversized default history overflows a small local window, and a hardcoded
 // allow-all policy let plan mode mutate through a subagent.
-func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model provider.Model, subType, prompt string, maxSteps int) (string, error) {
+func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model provider.Model, subType, prompt string, maxSteps int) (string, SubagentSpend, error) {
 	def := LookupSubagent(subType)
 	if client == nil {
-		return "", fmt.Errorf("no provider client is available for a subagent")
+		return "", SubagentSpend{}, fmt.Errorf("no provider client is available for a subagent")
 	}
 	if strings.TrimSpace(prompt) == "" {
-		return "", fmt.Errorf("a subagent prompt is required")
+		return "", SubagentSpend{}, fmt.Errorf("a subagent prompt is required")
 	}
 	if maxSteps <= 0 {
 		maxSteps = def.MaxSteps
@@ -205,6 +231,17 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		maxSteps = SubagentMaxSteps
 	}
 	pricing, costKnown := provider.PricedFor(parent.Config, model)
+	// The child's activity must not flood the parent transcript, so text and
+	// tool events are dropped. Its accounting is not: the turn-end event is
+	// the one the runner always emits exactly once per pass, and it carries
+	// the pass's token total and dollar spend. That total already includes any
+	// grandchild the pass spawned, because the loop folds a delegated tool's
+	// spend into the turn before the turn-end event is emitted, so capturing
+	// it here counts the whole tree once. The child's own RunSubagent closure
+	// must NOT fold a grandchild's spend again: it would land here a second
+	// time in that same turn-end total.
+	var spend SubagentSpend
+	spend.CostKnown = costKnown
 	child := &Env{
 		Workspace: parent.Workspace,
 		Config:    parent.Config,
@@ -214,14 +251,20 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		Todos:     NewTodoStore(),
 		Trusted:   parent.Trusted,
 		Depth:     parent.Depth + 1,
-		Emit:      nil,
+		Emit: func(event Event) {
+			if event.Kind == EventTurnEnd {
+				spend.Usage = spend.Usage.Add(event.Usage)
+				spend.Cost += event.CostUSD
+				spend.CostKnown = spend.CostKnown && event.CostKnown
+			}
+		},
 		Processes: parent.Processes,
 		Approve:   parent.Approve,
 		Ask:       parent.Ask,
 		Journal:   parent.Journal,
 		Search:    parent.Search,
 	}
-	child.RunSubagent = func(childCtx context.Context, childType, childPrompt string) (string, error) {
+	child.RunSubagent = func(childCtx context.Context, childType, childPrompt string) (string, SubagentSpend, error) {
 		return RunSubagent(childCtx, child, client, model, childType, childPrompt, maxSteps)
 	}
 	runner := &Runner{
@@ -242,7 +285,7 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	}
 	session := NewSession(parent.Workspace, model.ID)
 	if err := runner.Run(ctx, session, prompt); err != nil {
-		return "", err
+		return "", spend, err
 	}
 	answer, calls := subagentReport(session)
 	// A read-tier verdict with nothing opened behind it is prose, not a
@@ -254,17 +297,17 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	if def.ReadOnly && calls == 0 {
 		retry := NewSession(parent.Workspace, model.ID)
 		if err := runner.Run(ctx, retry, reviewMandate+prompt); err != nil {
-			return "", err
+			return "", spend, err
 		}
 		answer, calls = subagentReport(retry)
 		if calls == 0 {
-			return "", fmt.Errorf("the %s subagent answered twice without a single tool call; its verdict is unsupported and was discarded", def.Type)
+			return "", spend, fmt.Errorf("the %s subagent answered twice without a single tool call; its verdict is unsupported and was discarded", def.Type)
 		}
 	}
 	if strings.TrimSpace(answer) == "" {
-		return "The subagent finished without a written answer.", nil
+		return "The subagent finished without a written answer.", spend, nil
 	}
-	return answer, nil
+	return answer, spend, nil
 }
 
 const reviewMandate = "MANDATE: your previous pass made no tool calls, so it counted for nothing. Open the code first - read_file, grep, glob, the git tools - and answer only from what you actually read. A response with zero tool calls is discarded. "

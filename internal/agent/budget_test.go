@@ -43,7 +43,7 @@ func TestSubagentDepthCapIsReachable(t *testing.T) {
 	grandchild := &Env{Depth: MaxSubagentDepth, Todos: NewTodoStore()}
 	// A grandchild does have a runner injected, so the depth cap, not the
 	// availability check, is what has to stop it.
-	grandchild.RunSubagent = func(context.Context, string, string) (string, error) { return "", nil }
+	grandchild.RunSubagent = func(context.Context, string, string) (string, SubagentSpend, error) { return "", SubagentSpend{}, nil }
 	child := &Env{Depth: 1, Todos: NewTodoStore()}
 
 	tool := &subagentTool{}

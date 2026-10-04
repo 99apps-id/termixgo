@@ -224,6 +224,13 @@ func (s *Session) SetCost(cost float64) {
 	s.mu.Unlock()
 }
 
+func (s *Session) AddCost(cost float64) {
+	s.mu.Lock()
+	s.costUSD += cost
+	s.updatedAt = time.Now()
+	s.mu.Unlock()
+}
+
 // AddUser appends a user turn.
 func (s *Session) AddUser(text string) {
 	s.mu.Lock()

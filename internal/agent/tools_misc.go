@@ -677,11 +677,24 @@ func (t *subagentTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	if subType == "" {
 		subType = string(SubagentGeneral)
 	}
-	report, err := env.RunSubagent(ctx, subType, prompt)
+	report, spend, err := env.RunSubagent(ctx, subType, prompt)
 	if err != nil {
-		return Result{Output: err.Error(), IsError: true}, nil
+		return Result{
+			Output:            err.Error(),
+			IsError:           true,
+			SubagentUsage:     spend.Usage,
+			SubagentCost:      spend.Cost,
+			SubagentCostKnown: spend.CostKnown,
+			SubagentSpent:     true,
+		}, nil
 	}
-	return Result{Output: report}, nil
+	return Result{
+		Output:            report,
+		SubagentUsage:     spend.Usage,
+		SubagentCost:      spend.Cost,
+		SubagentCostKnown: spend.CostKnown,
+		SubagentSpent:     true,
+	}, nil
 }
 
 // webFetchTool retrieves a URL as text.

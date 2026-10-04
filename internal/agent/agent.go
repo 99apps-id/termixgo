@@ -287,6 +287,27 @@ runLoop:
 			if len(result.Images) > 0 {
 				pendingImages = append(pendingImages, result.Images...)
 			}
+			if result.SubagentSpent {
+				// A delegated run folded its tokens and dollars in here, on the
+				// parent's own accumulator, so the turn total, /cost, the
+				// session ledger and the cost budget all include the child's
+				// spend rather than losing it with the throwaway session.
+				//
+				// Only a delegated run that actually spent tokens can pull the
+				// combined figure toward unknown: a subagent that failed before
+				// running returns zero tokens, and zero tokens should not cast
+				// doubt on the parent's own priced cost.
+				if result.SubagentUsage.TotalTokens > 0 {
+					costKnown = costKnown && result.SubagentCostKnown
+				}
+				turnUsage = turnUsage.Add(result.SubagentUsage)
+				sessionCost += result.SubagentCost
+				// The child's own usage events were dropped inside RunSubagent
+				// (they would have streamed its transcript), so this one event
+				// is their only route into the app total, the session and the
+				// audit ledger.
+				emit(Event{Kind: EventUsage, Usage: result.SubagentUsage, CostUSD: sessionCost, CostKnown: costKnown})
+			}
 			if !result.IsError && taskJustCompleted(before, r.todoSnapshot()) {
 				pendingVerify = ledger.BuildVerifyNudge(nudges, false)
 			}
