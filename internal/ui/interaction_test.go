@@ -88,6 +88,19 @@ func press(t *testing.T, model *Model, name string) *Model {
 	return updated
 }
 
+// pressEsc sends Escape and then the settle message the runtime timer produces,
+// so a chat-mode Escape acts the way it does in a live program.
+func pressEsc(t *testing.T, model *Model) *Model {
+	t.Helper()
+	held, _ := model.Update(key("esc"))
+	m := held.(*Model)
+	if !m.escPending {
+		return m
+	}
+	settled, _ := m.Update(settleEscMsg{})
+	return settled.(*Model)
+}
+
 // display refreshes the viewport and returns the rendered view without colour.
 //
 // applyEvent updates the transcript; refresh is what the real Update loop calls
@@ -473,7 +486,7 @@ func TestEscStopsARunningTurn(t *testing.T) {
 	model := chatModel(t)
 	model.running = true
 
-	updated := press(t, model, "esc")
+	updated := pressEsc(t, model)
 	if updated.notice == "" {
 		t.Errorf("stopping should tell the operator what is happening")
 	}
@@ -486,7 +499,7 @@ func TestEscClearsTheComposerWhenIdle(t *testing.T) {
 	model := chatModel(t)
 	model.composer.SetValue("half a thought")
 
-	updated := press(t, model, "esc")
+	updated := pressEsc(t, model)
 	if updated.composer.Value() != "" {
 		t.Errorf("esc should clear the composer, got %q", updated.composer.Value())
 	}
@@ -681,7 +694,7 @@ func TestSlashEntryBackRowAndEscapeDiscardTheToken(t *testing.T) {
 
 	typed = openSlashPalette(t, model)
 	typed = press(t, typed, "s")
-	escaped := press(t, typed, "esc")
+	escaped := pressEsc(t, typed)
 	if escaped.slashOpen || len(escaped.slashMatches) != 0 {
 		t.Fatalf("Esc should close the popup")
 	}
@@ -823,7 +836,7 @@ func TestEscDuringSlashEntryStopsTheRunningTurn(t *testing.T) {
 		t.Fatalf("slash should open the popup while a turn runs")
 	}
 
-	stopped := press(t, typed, "esc")
+	stopped := pressEsc(t, typed)
 	if !stopped.slashOpen {
 		t.Fatalf("the first Esc during a run should stop, not close the popup")
 	}
@@ -832,7 +845,7 @@ func TestEscDuringSlashEntryStopsTheRunningTurn(t *testing.T) {
 	}
 
 	stopped.running = false
-	closed := press(t, stopped, "esc")
+	closed := pressEsc(t, stopped)
 	if closed.slashOpen || len(closed.slashMatches) != 0 {
 		t.Fatalf("the second Esc should close the popup")
 	}
@@ -945,7 +958,7 @@ func TestEscClearsTypedSlashTextWithoutAMenu(t *testing.T) {
 		t.Fatalf("a typed command must not open a menu")
 	}
 
-	cleared := press(t, model, "esc")
+	cleared := pressEsc(t, model)
 	if got := cleared.composer.Value(); got != "" {
 		t.Errorf("Esc should clear the composer, got %q", got)
 	}

@@ -103,7 +103,11 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   arrives as an Alt+`[` key followed by the numeric tail as runes, which the
   textarea then typed into a draft. `isTerminalNoise` drops those fragments
   before they reach the composer, so moving the mouse over a running turn never
-  sprays escape bytes into the input.
+  sprays escape bytes into the input. When the ESC byte alone lands in its own
+  read, bubbletea delivers a bare Escape; that Escape is held for a short settle
+  window and resolved by the next key burst (a CSI fragment with digits marks it
+  as report noise) or by the settle timer, so a scroll mid-run neither clears a
+  draft nor reads as the stop shortcut.
 - Selection is a first-class gesture. A left drag over the transcript selects
   by content line and display column, draws the range in reverse video without
   disturbing the styling underneath (`insertHighlight` injects only the two

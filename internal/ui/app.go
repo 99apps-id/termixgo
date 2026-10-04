@@ -50,7 +50,16 @@ type (
 		reply    chan string
 	}
 	telegramPairedMsg struct{ paired bool }
+	settleEscMsg       struct{}
 )
+
+// escSettleDelay is how long a lone Escape waits for a CSI report whose ESC
+// byte arrived in its own read. A mouse report is delivered as a burst with
+// sub-millisecond gaps, so any CSI body that follows within this window is the
+// continuation of the report, not an operator pressing Escape and then typing.
+// It matches the in-flight escape window so the settle cannot fire before a
+// report fragment that still falls inside escapeNoiseActive.
+const escSettleDelay = 100 * time.Millisecond
 
 // Model is the Bubble Tea program state.
 type Model struct {
@@ -77,6 +86,12 @@ type Model struct {
 	escapeNoiseActive bool
 	escapeNoiseAt     time.Time
 	lastEscAt         time.Time
+	// escPending marks a lone Escape whose meaning is not yet known. A real
+	// Escape acts at once; a split mouse report is a lone Escape followed by
+	// the CSI body within escSettleDelay, so the Escape is held until either a
+	// body arrives (and the Escape is dropped) or the settle timer fires (and
+	// the Escape acts).
+	escPending bool
 
 	slashMatches []SlashCommand
 	slashCursor  int
@@ -343,6 +358,29 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// While a lone Escape is held for settlement, the next key burst
+		// decides its meaning: a CSI report fragment that follows means the
+		// Escape was the leading byte of a split mouse report, so the burst is
+		// dropped and the noise machine armed if needed; any other key means
+		// the Escape was real, so it acts first and the key is then handled.
+		if m.escPending {
+			if m.isEscFollowOn(typed) {
+				m.escPending = false
+				// A complete report body is fully consumed here; only an
+				// incomplete head leaves fragments to track, so arm the noise
+				// machine only then, matching isStandaloneNoise's contract.
+				if !endsCSITerminator(string(typed.Runes)) {
+					m.armEscapeNoise()
+				}
+				return m, nil
+			}
+			m.escPending = false
+			var settleCmd tea.Cmd
+			m, settleCmd = m.settleEscape()
+			if settleCmd != nil {
+				return m, settleCmd
+			}
+		}
 		updated, cmd := m.handleKey(typed)
 		if model, ok := updated.(*Model); ok {
 			model.scrubComposer()
@@ -359,6 +397,16 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		// once so tool boundaries never lag behind the text.
 		m.maybeRefresh(event.Kind == agent.EventText || event.Kind == agent.EventThinking)
 		return m, waitForEvent(m.app.Events())
+
+	case settleEscMsg:
+		// The settle window ended without a CSI body arriving, so the lone
+		// Escape was the operator's. If it armed but a fragment is somehow
+		// still in flight, hold off rather than act on an ambiguous Escape.
+		if !m.escPending {
+			return m, nil
+		}
+		m.escPending = false
+		return m.settleEscape()
 
 	case tickMsg:
 		if m.running {
@@ -656,6 +704,59 @@ func (m *Model) isTerminalNoise(key tea.KeyMsg) bool {
 	return false
 }
 
+// settleEscape performs the real Escape action now that any ambiguity with a
+// split mouse report has been resolved. It replaces the old inline esc case in
+// handleKey and always returns a nil command.
+func (m *Model) settleEscape() (*Model, tea.Cmd) {
+	if m.running {
+		m.app.Stop()
+		if count := m.queuedCount(); count > 0 {
+			m.notice = fmt.Sprintf("Stopping... (%d queued)", count)
+		} else {
+			m.notice = "Stopping..."
+		}
+		return m, nil
+	}
+	if m.slashOpen {
+		m.cancelSlashMenu()
+		return m, nil
+	}
+	if len(m.slashMatches) > 0 || len(m.mentionMatches) > 0 {
+		// First Esc steps back to typing and keeps the text; a second
+		// Esc clears the composer.
+		m.slashMatches = nil
+		m.mentionMatches = nil
+		m.refresh()
+		return m, nil
+	}
+	m.composer.SetValue("")
+	m.slashMatches = nil
+	m.mentionMatches = nil
+	m.refresh()
+	return m, nil
+}
+
+// isEscFollowOn reports whether a rune burst arriving right after a pending
+// lone Escape is a CSI report fragment that the standalone detector cannot pin:
+// a parameter head such as "[<35" whose terminator has not arrived yet. A
+// digit is required because a real SGR report always carries coordinate numbers
+// (the "numbers leak" symptom); a lone '[' or '<' a programmer types right
+// after Escape is then still treated as typing.
+func (m *Model) isEscFollowOn(key tea.KeyMsg) bool {
+	if key.Paste || key.Type != tea.KeyRunes || len(key.Runes) == 0 {
+		return false
+	}
+	text := string(key.Runes)
+	return isCSINoiseChunk(text) && strings.ContainsAny(text, "0123456789")
+}
+
+// armEscapeNoise marks the noise state machine as inside a split report, so the
+// remaining fragments are dropped until the terminator arrives.
+func (m *Model) armEscapeNoise() {
+	m.escapeNoiseActive = true
+	m.escapeNoiseAt = time.Now()
+}
+
 // handleKey routes keys by what is currently on screen.
 func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Global quit.
@@ -704,32 +805,14 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 	case "esc":
-		if m.running {
-			m.app.Stop()
-			if count := m.queuedCount(); count > 0 {
-				m.notice = fmt.Sprintf("Stopping... (%d queued)", count)
-			} else {
-				m.notice = "Stopping..."
-			}
-			return m, nil
-		}
-		if m.slashOpen {
-			m.cancelSlashMenu()
-			return m, nil
-		}
-		if len(m.slashMatches) > 0 || len(m.mentionMatches) > 0 {
-			// First Esc steps back to typing and keeps the text; a second
-			// Esc clears the composer.
-			m.slashMatches = nil
-			m.mentionMatches = nil
-			m.refresh()
-			return m, nil
-		}
-		m.composer.SetValue("")
-		m.slashMatches = nil
-		m.mentionMatches = nil
-		m.refresh()
-		return m, nil
+		// A mouse report whose lone ESC byte arrived in its own read is
+		// delivered as a bare Escape. Every Escape is therefore ambiguous with
+		// a split report, so it is held briefly and settled once the next body
+		// (or the settle timer) arrives. The settle acts at the state of the
+		// moment it fires, so a scroll mid-run neither stops the turn nor
+		// clears a draft.
+		m.escPending = true
+		return m, tea.Tick(escSettleDelay, func(time.Time) tea.Msg { return settleEscMsg{} })
 	case "enter":
 		raw := m.composer.Value()
 		value := strings.TrimSpace(raw)
