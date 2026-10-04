@@ -44,15 +44,20 @@ func (g *loopGuard) noteCall(name, args string) (stop bool, reason string) {
 	return false, ""
 }
 
-// noteResult records whether the tool result was an error.
-func (g *loopGuard) noteResult(isError bool) (stop bool, reason string) {
+// noteResult records whether the tool result was an error. A streak of errors
+// does not end the run: the caller delivers the reason as a nudge that asks the
+// model to diagnose and try a different approach. The streak resets so the next
+// batch starts fresh; the step budget stays the outer bound and the same-call
+// guard still catches a genuine loop.
+func (g *loopGuard) noteResult(isError bool) (nudge bool, reason string) {
 	if isError {
 		g.errorStreak++
 	} else {
 		g.errorStreak = 0
 	}
 	if g.errorStreak >= MaxErrorStreak {
-		return true, "the last 4 tool calls failed in a row; stopping instead of retrying the same failing path. Diagnose the first error before continuing."
+		g.errorStreak = 0
+		return true, "the last 4 tool calls failed in a row. Diagnose the first error above and try a different approach instead of retrying the same call."
 	}
 	return false, ""
 }

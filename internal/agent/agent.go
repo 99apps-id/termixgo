@@ -261,6 +261,7 @@ runLoop:
 		// the next task would otherwise build on a change nobody checked.
 		pendingVerify := ""
 		var pendingImages []provider.Image
+		diagnose := ""
 		for index, call := range calls {
 			if ctx.Err() != nil {
 				stopReason = "aborted"
@@ -289,11 +290,12 @@ runLoop:
 			if !result.IsError && taskJustCompleted(before, r.todoSnapshot()) {
 				pendingVerify = ledger.BuildVerifyNudge(nudges, false)
 			}
-			if stop, reason := guard.noteResult(result.IsError); stop {
-				stopReason = "loop-guard"
+			if nudge, reason := guard.noteResult(result.IsError); nudge {
+				// A streak of errors is not a loop: keep the run alive, tell the
+				// model to diagnose, and let it try a different approach. The
+				// remaining calls in the batch still run.
+				diagnose = reason
 				emit(Event{Kind: EventNotice, Text: reason})
-				answerSkippedCalls(session, calls[index+1:], reason)
-				break
 			}
 			if ctx.Err() != nil {
 				stopReason = "aborted"
@@ -312,6 +314,10 @@ runLoop:
 		}
 		if ctx.Err() != nil {
 			break runLoop
+		}
+		if diagnose != "" {
+			session.AddUser(diagnose)
+			continue
 		}
 		if strings.TrimSpace(pendingVerify) != "" && nudges < MaxVerifyNudges {
 			nudges++

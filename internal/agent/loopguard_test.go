@@ -41,15 +41,17 @@ func TestLoopGuardTripsOnRepeatedCalls(t *testing.T) {
 	}
 }
 
-// TestLoopGuardTripsOnErrorStreak covers a different stuck shape: every call
-// is new, but all of them fail. Four in a row ends the run so the operator
-// can diagnose the first error instead of watching retries.
-func TestLoopGuardTripsOnErrorStreak(t *testing.T) {
+// TestErrorStreakNudgesInsteadOfStopping covers a stuck shape: every call is
+// new, but all of them fail. Four in a row must not end the run; it asks the
+// model to diagnose the first error and lets it try again, which is how a run
+// recovers instead of dying on a rough patch.
+func TestErrorStreakNudgesInsteadOfStopping(t *testing.T) {
 	steps := [][]provider.StreamEvent{
 		{callChunk("c1", "no_such_tool_a", `{}`)},
 		{callChunk("c2", "no_such_tool_b", `{}`)},
 		{callChunk("c3", "no_such_tool_c", `{}`)},
 		{callChunk("c4", "no_such_tool_d", `{}`)},
+		{textChunk("recovered after diagnosing.")},
 	}
 	client := &fakeClient{steps: steps}
 	runner, _, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
@@ -60,15 +62,22 @@ func TestLoopGuardTripsOnErrorStreak(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	var stopReason string
+	var nudged bool
 	recorder.mu.Lock()
 	for _, event := range recorder.events {
 		if event.Kind == EventTurnEnd {
 			stopReason = event.StopReason
 		}
+		if event.Kind == EventNotice && strings.Contains(event.Text, "Diagnose") {
+			nudged = true
+		}
 	}
 	recorder.mu.Unlock()
-	if stopReason != "loop-guard" {
-		t.Errorf("stop reason = %q, want loop-guard", stopReason)
+	if stopReason != "stop" {
+		t.Errorf("stop reason = %q, want a clean stop after the nudge", stopReason)
+	}
+	if !nudged {
+		t.Errorf("the error streak should nudge the model to diagnose")
 	}
 }
 
