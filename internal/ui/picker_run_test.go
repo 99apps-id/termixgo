@@ -204,17 +204,16 @@ func TestInitReturnsACommand(t *testing.T) {
 }
 
 // TestRunWithOptionsStartsAndStops is an integration check of the real entry
-// point: the program must start, accept a Ctrl+X over its input stream, and
-// return rather than running forever. Ctrl+X is the quit key; Ctrl+C now copies
-// a selection and no longer ends the program.
+// point: the program must start, accept a Ctrl+C over its input stream, and
+// return rather than running forever.
 func TestRunWithOptionsStartsAndStops(t *testing.T) {
 	t.Setenv("TERM", "dumb")
 	t.Setenv("NO_COLOR", "1")
 
 	application := plainApp(t)
-	// A Ctrl+X byte (CAN) is what a terminal sends for the quit key, and is the
-	// one input that ends the program without any model configured.
-	input := &oneShotReader{data: []byte{0x18}}
+	// A Ctrl+C byte is what a terminal sends, and is the one input that ends
+	// the program without any model configured.
+	input := &oneShotReader{data: []byte{0x03}}
 	var out bytes.Buffer
 
 	done := make(chan error, 1)
@@ -232,7 +231,7 @@ func TestRunWithOptionsStartsAndStops(t *testing.T) {
 			t.Fatalf("RunWithOptions returned %v", err)
 		}
 	case <-time.After(30 * time.Second):
-		t.Fatalf("the program did not return after a Ctrl+X")
+		t.Fatalf("the program did not return after a Ctrl+C")
 	}
 }
 

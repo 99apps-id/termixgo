@@ -132,42 +132,6 @@ type Model struct {
 	// often, so a fast model cannot flood the terminal with full frames.
 	lastPaint  time.Time
 	pendingAsk *askRequestMsg
-
-	// contentLines is the plain transcript as last rendered, one string per
-	// line, before any selection highlight. Mouse selection maps a screen point
-	// to a line and column here, and the same lines are re-rendered with the
-	// selection in reverse video.
-	contentLines []string
-
-	// Mouse text selection. selAnchor is where the drag began and selFocus
-	// where it is now, in content coordinates. selecting is true while the
-	// button is held; selActive keeps the highlight after release so the
-	// operator sees what was copied.
-	selecting bool
-	selActive bool
-	selAnchor selPoint
-	selFocus  selPoint
-
-	// composerSelected marks a Ctrl+A select-all over the composer text. The
-	// next destructive or printable key replaces it, and Ctrl+C copies it.
-	composerSelected bool
-
-	// composerSelActive marks a drag selection inside the composer, with the
-	// anchor and focus in the composer's rendered content coordinates.
-	composerSelActive bool
-	composerSelAnchor selPoint
-	composerSelFocus  selPoint
-
-	// escapeNoiseActive tracks an in-flight terminal escape sequence (e.g. SGR
-	// mouse report or cursor position report) split across read buffers.
-	escapeNoiseActive bool
-	escapeNoiseAt     time.Time
-	lastEscAt         time.Time
-
-	// Smooth scrolling: the wheel sets scrollTarget and a tick eases YOffset
-	// toward it so the transcript slides instead of jumping.
-	scrollTarget  int
-	scrollTicking bool
 }
 
 // Limits bundles size thresholds used by the layout and the setup wizard.
@@ -273,11 +237,7 @@ func NewWithOptions(application *app.App, options Options) *Model {
 func RunWithOptions(application *app.App, options Options) error {
 	model := NewWithOptions(application, options)
 
-	// Mouse tracking stays off: the terminal owns the mouse. With it on, every
-	// pointer move made the terminal send SGR reports that bubbletea can split
-	// into key fragments, and it also took native select and copy away. The
-	// transcript scrolls with PgUp/PgDn and the wheel is the terminal's own.
-	programOptions := []tea.ProgramOption{}
+	programOptions := []tea.ProgramOption{tea.WithMouseCellMotion()}
 	if !options.NoAlternateScreen {
 		programOptions = append(programOptions, tea.WithAltScreen())
 	}
@@ -465,262 +425,25 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		// The wheel glides the transcript and a left drag selects text; both
-		// are handled here so the composer keeps only real typing.
-		return m.handleMouse(typed)
-
-	case scrollTickMsg:
-		m.stepScroll()
-		if m.viewport.YOffset == m.scrollTarget {
-			m.scrollTicking = false
-			return m, nil
-		}
-		return m, scrollTick()
+		// The wheel scrolls the transcript. Keys stay with the composer:
+		// forwarding them to the viewport would scroll while typing.
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(message)
+		return m, cmd
 	}
 
 	var cmd tea.Cmd
-	oldVal := m.composer.Value()
 	m.composer, cmd = m.composer.Update(message)
-	if m.composer.Value() != oldVal {
-		m.updateSlashMatches()
-		m.refresh()
-	}
+	m.updateSlashMatches()
+	m.refresh()
 	return m, cmd
-}
-
-// csiNoiseTerminators contains standard CSI final bytes for terminal reports:
-// SGR mouse (M, m), cursor position (R), device attributes (c), window ops (t),
-// and mode/private (~, y, h, l, n).
-const csiNoiseTerminators = "MmRct~yhln"
-
-// isCSINoiseChunk reports whether every rune in text is a valid CSI sequence
-// parameter or intermediate character, with an optional terminator at the end.
-func isCSINoiseChunk(text string) bool {
-	if text == "" {
-		return false
-	}
-	runes := []rune(text)
-	for i, r := range runes {
-		isLast := (i == len(runes)-1)
-		isParam := (r >= '0' && r <= '9') || r == ';' || r == ':' || r == '<' ||
-			r == '>' || r == '=' || r == '?' || r == ',' || r == '-' || r == '[' || r == ']'
-		if isParam {
-			continue
-		}
-		if isLast && strings.ContainsRune(csiNoiseTerminators, r) {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func endsCSITerminator(text string) bool {
-	if text == "" {
-		return false
-	}
-	runes := []rune(text)
-	return strings.ContainsRune(csiNoiseTerminators, runes[len(runes)-1])
-}
-
-// isStandaloneNoise inspects a single key message without prior sequence state
-// to detect split escape sequence fragments that carry an unambiguous escape signature.
-func isStandaloneNoise(key tea.KeyMsg) (isNoise bool, isPrefix bool) {
-	if key.Paste || key.Type != tea.KeyRunes || len(key.Runes) == 0 {
-		return false, false
-	}
-	text := string(key.Runes)
-	if key.Alt && (text == "[" || text == "O") {
-		return true, true
-	}
-
-	// An SGR mouse fragment carries a '<' and a parameter separator. The ';' is
-	// required because a lone '<' or '<<' has neither and is what someone
-	// coding types ("<=", "<<", "<int>"), so it must not be muted.
-	if strings.ContainsRune(text, '<') && strings.ContainsRune(text, ';') && isCSINoiseChunk(text) {
-		return true, !endsCSITerminator(text)
-	}
-
-	// A chunk starting with "[<" and a parameter separator (split SGR report).
-	if strings.HasPrefix(text, "[<") && strings.ContainsRune(text, ';') && isCSINoiseChunk(text) {
-		return true, !endsCSITerminator(text)
-	}
-
-	// A tail ending in an SGR mouse terminator (M or m) with digits or semicolons.
-	// Minimum 2 runes keeps a lone 'M' or 'm' the operator typed from being muted.
-	if len(key.Runes) >= 2 && (strings.HasSuffix(text, "M") || strings.HasSuffix(text, "m")) &&
-		isCSINoiseChunk(text) && strings.ContainsAny(text, "0123456789;") {
-		return true, false
-	}
-
-	// A tail ending in CPR/DA/window terminators (R, c, t) with parameter digits and semicolon.
-	// Minimum 3 runes (e.g. "24;80R", "?1;2c", "4;600;800t").
-	if len(key.Runes) >= 3 && strings.ContainsAny(text, "Rct") &&
-		strings.ContainsRune(text, ';') && isCSINoiseChunk(text) && endsCSITerminator(text) {
-		return true, false
-	}
-
-	// A truncated parameter triple with two semicolons and sufficient length
-	// (e.g. "35;106;27"). The length check keeps a short pasted "1;2;3" from
-	// being mistaken for one.
-	if strings.Count(text, ";") >= 2 && len(text) >= 6 && isCSINoiseChunk(text) {
-		return true, false
-	}
-
-	// A parameter chunk starting with a semicolon and containing digits (e.g. ";106;27", ";27").
-	// Real typing from a keyboard never emits a multi-character rune slice starting with ';'.
-	if len(key.Runes) >= 2 && strings.HasPrefix(text, ";") && isCSINoiseChunk(text) && strings.ContainsAny(text, "0123456789") {
-		return true, false
-	}
-
-	return false, false
-}
-
-// isMouseNoiseText reports whether a whole input burst is nothing but SGR mouse
-// reports: it carries a digit and a mouse signature ('<' or a terminating M/m)
-// and no other character. A real paste has letters or punctuation and is kept.
-func isMouseNoiseText(text string) bool {
-	hasDigit := false
-	hasSignature := false
-	for _, r := range text {
-		switch {
-		case r >= '0' && r <= '9':
-			hasDigit = true
-		case r == '<' || r == 'M' || r == 'm':
-			hasSignature = true
-		case r == '[', r == ']', r == ';', r == ' ', r == '\t', r == '\n', r == '\r':
-		default:
-			return false
-		}
-	}
-	return hasDigit && hasSignature
-}
-
-// isTerminalNoise reports whether a key message is a fragment of a terminal
-// escape sequence (such as an SGR mouse report, cursor position report, or
-// device attribute) rather than something the operator typed.
-//
-// bubbletea v1.3.10 detectOneMsg recognises an SGR mouse report only when the
-// whole "\x1b[<...M" sits in one read and matches its regex; when the report is
-// split across reads it falls through, decodes the leading ESC as an Alt
-// modifier, and hands back "[" then the remaining bytes as runes in arbitrary
-// chunks. The chunks can arrive as Alt+[ followed by "<35;106;", "27", "M", or
-// bare tails like ";27M" or "35;106;27".
-//
-// This filter combines stateful tracking of active in-flight escape sequences
-// with signature-based detection for standalone fragments, dropping every piece
-// while preserving real typing and bracketed pastes.
-func (m *Model) isTerminalNoise(key tea.KeyMsg) bool {
-	if key.Paste {
-		m.escapeNoiseActive = false
-		// A burst of mouse reports can arrive as one bulk read. A paste made
-		// only of mouse-report characters is never text the operator copied, so
-		// drop it; a paste with any other character is real and kept.
-		return isMouseNoiseText(string(key.Runes))
-	}
-
-	if key.Type != tea.KeyRunes || len(key.Runes) == 0 {
-		if key.Type == tea.KeyEscape {
-			m.lastEscAt = time.Now()
-		}
-		return false
-	}
-
-	text := string(key.Runes)
-
-	// A typed key never carries a raw C0 control; a leaked escape fragment does
-	// (the ESC byte, or a control a reporter split in). A paste was handled
-	// above, so any control here is noise.
-	if strings.ContainsFunc(text, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
-		m.escapeNoiseActive = false
-		return true
-	}
-
-	// CSI introducer: bubbletea decodes the leading ESC [ as Alt+"[".
-	if key.Alt && (text == "[" || text == "O") {
-		m.escapeNoiseActive = true
-		m.escapeNoiseAt = time.Now()
-		return true
-	}
-
-	// An escape sequence whose ESC arrived as a lone KeyEscape in the
-	// immediately preceding read, followed at once by "[".
-	if text == "[" && !key.Alt && time.Since(m.lastEscAt) < 50*time.Millisecond {
-		m.escapeNoiseActive = true
-		m.escapeNoiseAt = time.Now()
-		return true
-	}
-
-	// While an escape sequence is in-flight:
-	if m.escapeNoiseActive {
-		if time.Since(m.escapeNoiseAt) > 100*time.Millisecond {
-			m.escapeNoiseActive = false
-		} else if isCSINoiseChunk(text) {
-			m.escapeNoiseAt = time.Now()
-			if endsCSITerminator(text) {
-				m.escapeNoiseActive = false
-			}
-			return true
-		} else {
-			m.escapeNoiseActive = false
-		}
-	}
-
-	// Check standalone signatures.
-	noise, isPrefix := isStandaloneNoise(key)
-	if noise {
-		if isPrefix {
-			m.escapeNoiseActive = true
-			m.escapeNoiseAt = time.Now()
-		}
-		return true
-	}
-
-	return false
 }
 
 // handleKey routes keys by what is currently on screen.
 func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Ctrl+X is the deliberate quit. Ctrl+C copies a selection and never quits,
-	// so a copy cannot close the program by mistake.
-	if key.String() == "ctrl+x" {
-		return m, tea.Quit
-	}
+	// Global quit.
 	if key.String() == "ctrl+c" {
-		if m.composerSelActive {
-			return m.copyComposerRange()
-		}
-		if m.composerSelected {
-			return m.copyComposerSelection()
-		}
-		if m.selActive {
-			return m.copyTranscriptSelection()
-		}
-		return m, nil
-	}
-
-	// A raw terminal escape fragment is never text the operator typed.
-	if m.isTerminalNoise(key) {
-		return m, nil
-	}
-
-	// Typing or acting drops the transcript and composer-drag highlights.
-	if m.selecting || m.selActive || m.composerSelActive {
-		m.selecting = false
-		m.selActive = false
-		m.composerSelActive = false
-		m.refresh()
-	}
-
-	// The first keystroke replaces a composer select-all: backspace and delete
-	// clear it, a printable rune or a paste overwrites it.
-	if m.composerSelected && replacesComposerSelection(key) {
-		m.composer.SetValue("")
-		m.composerSelected = false
-		if deletesComposerSelection(key) {
-			m.refresh()
-			return m, nil
-		}
+		return m, tea.Quit
 	}
 
 	if m.pendingApproval != nil {
@@ -747,17 +470,6 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key.String() {
-	case "ctrl+a":
-		// Select all in the composer. Ctrl+C then copies it and Backspace
-		// deletes it, which is the familiar select-all gesture.
-		if strings.TrimSpace(m.composer.Value()) == "" {
-			return m, nil
-		}
-		m.composerSelActive = false
-		m.composerSelected = true
-		m.notice = "All text selected. Ctrl+C copies, Backspace deletes."
-		m.refresh()
-		return m, nil
 	case "ctrl+y":
 		return m.slashCopy("")
 	case "ctrl+o":
@@ -952,7 +664,7 @@ var approvalOptions = []struct {
 // ordinary submit path with the slash value staged only at the last moment.
 func (m *Model) handleSlashMenuKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
-	case "ctrl+x":
+	case "ctrl+c":
 		return m, tea.Quit
 	case "ctrl+o":
 		m.showDetails = !m.showDetails
@@ -1514,10 +1226,6 @@ func (m *Model) refresh() {
 	m.applyComposerStyle()
 	follow := m.viewport.AtBottom()
 	content := transcript(m.blocks, m.styles, m.viewport.Width, m.showDetails)
-	m.contentLines = strings.Split(content, "\n")
-	if m.selecting || m.selActive {
-		content = strings.Join(highlightSelection(m.contentLines, m.selAnchor, m.selFocus), "\n")
-	}
 	m.viewport.SetContent(content)
 	if follow {
 		m.viewport.GotoBottom()
@@ -1848,14 +1556,7 @@ func shortID(id string) string {
 }
 
 func (m *Model) viewComposer() string {
-	view := m.composer.View()
-	// A mouse drag inside the composer paints the selected columns in reverse
-	// video. The select-all state paints the whole text through the textarea's
-	// own style instead (applyComposerStyle), so the two never stack.
-	if m.composerSelActive {
-		view = highlightComposerSelection(view, m.composerSelAnchor, m.composerSelFocus)
-	}
-	return view
+	return m.composer.View()
 }
 
 // applyComposerStyle moves the composer's border between its idle and busy
@@ -1864,22 +1565,11 @@ func (m *Model) viewComposer() string {
 // line spill onto the next row.
 func (m *Model) applyComposerStyle() {
 	base := m.styles.Composer
-	// A running turn and a select-all both want the composer to stand out, so
-	// the operator can see why the next key will be swallowed.
-	if m.running || m.composerSelected {
+	if m.running {
 		base = m.styles.ComposerBusy
-	}
-	// A select-all must be visible: paint the text in reverse video, the same
-	// cue the transcript selection uses, so "Ctrl+A then Ctrl+C" reads as a
-	// selection rather than a silent state.
-	text := lipgloss.NewStyle()
-	if m.composerSelected {
-		text = lipgloss.NewStyle().Reverse(true)
 	}
 	m.composer.FocusedStyle.Base = base
 	m.composer.BlurredStyle.Base = base
-	m.composer.FocusedStyle.Text = text
-	m.composer.BlurredStyle.Text = text
 }
 
 // hintsVisible reports whether the row that carries the live working
@@ -1896,12 +1586,12 @@ func (m *Model) viewHints() string {
 	if m.running {
 		elapsed := time.Since(m.runStarted).Round(time.Second)
 		if count := m.queuedCount(); count > 0 {
-			text = fmt.Sprintf(" %s working (%s) | %d queued | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C copy | Ctrl+X quit", m.spin.View(), elapsed, count)
+			text = fmt.Sprintf(" %s working (%s) | %d queued | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C quit", m.spin.View(), elapsed, count)
 		} else {
-			text = fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C copy | Ctrl+X quit", m.spin.View(), elapsed)
+			text = fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C quit", m.spin.View(), elapsed)
 		}
 	} else {
-		text = " Enter send | Ctrl+J newline | Ctrl+A all | Ctrl+C copy | Ctrl+X quit | Ctrl+O details | PgUp/PgDn scroll"
+		text = " Enter send | Ctrl+J newline | / commands @ files | Tab complete | PgUp/PgDn scroll | Ctrl+O details | Ctrl+C quit"
 	}
 	// A hint longer than the terminal would wrap and push the frame down, so it
 	// is clipped rather than allowed to reflow the whole screen.
@@ -2180,8 +1870,8 @@ func (m *Model) viewHelp() string {
 	header := []string{m.styles.BoxTitle.Render("Commands"), ""}
 	keys := []string{
 		"", m.styles.BoxTitle.Render("Keys"), "",
-		m.styles.MenuDesc.Render("  Enter send | Ctrl+J newline | Tab complete | PgUp/PgDn scroll | Ctrl+A all | Ctrl+C copy"),
-		m.styles.MenuDesc.Render("  Ctrl+A select all | Ctrl+C copy | Ctrl+X quit | Ctrl+Y copy answer | Ctrl+O details | Esc stop or clear"),
+		m.styles.MenuDesc.Render("  Enter send | Ctrl+J newline | Tab complete | PgUp/PgDn scroll"),
+		m.styles.MenuDesc.Render("  Esc stop or clear | Ctrl+O toggle details | Ctrl+Y copy answer | Ctrl+C quit"),
 	}
 	trailer := []string{m.styles.Hint.Render(fmt.Sprintf("Press any key to close. %d commands in total.", len(entries)))}
 

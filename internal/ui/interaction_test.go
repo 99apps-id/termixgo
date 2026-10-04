@@ -68,8 +68,6 @@ func key(name string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEnd}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
-	case "ctrl+x":
-		return tea.KeyMsg{Type: tea.KeyCtrlX}
 	case "ctrl+o":
 		return tea.KeyMsg{Type: tea.KeyCtrlO}
 	case "backspace":
@@ -433,14 +431,14 @@ func (errFixture) Error() string { return "fixture failure" }
 
 // ---------------------------------------------------------------- key routing
 
-func TestCtrlXQuits(t *testing.T) {
+func TestCtrlCQuits(t *testing.T) {
 	model := chatModel(t)
-	_, cmd := model.Update(key("ctrl+x"))
+	_, cmd := model.Update(key("ctrl+c"))
 	if cmd == nil {
-		t.Fatalf("ctrl+x should return a command")
+		t.Fatalf("ctrl+c should return a command")
 	}
 	if msg := cmd(); msg == nil {
-		t.Fatalf("ctrl+x should produce a message")
+		t.Fatalf("ctrl+c should produce a message")
 	}
 }
 
@@ -2001,141 +1999,14 @@ func TestEndResumesFollowing(t *testing.T) {
 }
 
 // TestMouseWheelScrollsTheTranscript proves the wheel path: wheel messages
-// reach the smooth scroll and the offset eases toward the target over the
-// animation frames instead of jumping.
+// reach the viewport instead of dying in the composer.
 func TestMouseWheelScrollsTheTranscript(t *testing.T) {
 	model := scrollFixture(chatModel(t))
 	before := model.viewport.YOffset
-	next, cmd := model.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	next, _ := model.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
 	moved := next.(*Model)
-	if cmd == nil {
-		t.Fatalf("the wheel must schedule a smooth-scroll frame")
-	}
-	for i := 0; i < 40 && moved.viewport.YOffset >= before; i++ {
-		step, _ := moved.Update(scrollTickMsg{})
-		moved = step.(*Model)
-	}
 	if moved.viewport.YOffset >= before {
 		t.Errorf("wheel up should scroll, offset %d did not drop below %d", moved.viewport.YOffset, before)
-	}
-}
-
-// TestComposerIgnoresSplitMouseEscape pins the escape-fragment fix: one SGR
-// mouse report split across two reads arrives as Alt+"[" then a numeric tail,
-// and neither may become text in the composer. See isTerminalNoise.
-func TestComposerIgnoresSplitMouseEscape(t *testing.T) {
-	model := chatModel(t)
-	model.composer.SetValue("draft")
-
-	// The chunks a split SGR mouse report arrives in: the ESC decoded as Alt+[,
-	// a head without its final byte, a bare tail, and a truncated b;x;y triple.
-	noise := []tea.KeyMsg{
-		{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true},
-		{Type: tea.KeyRunes, Runes: []rune("<35;106;27")},
-		{Type: tea.KeyRunes, Runes: []rune(";27M")},
-		{Type: tea.KeyRunes, Runes: []rune(";107;28M")},
-		{Type: tea.KeyRunes, Runes: []rune("[<32;61;29M")},
-		{Type: tea.KeyRunes, Runes: []rune("35;106;27")},
-	}
-	current := model
-	for _, key := range noise {
-		current, _ = send(t, current, key)
-	}
-	if got := current.composer.Value(); got != "draft" {
-		t.Errorf("mouse fragments leaked into the composer: %q", got)
-	}
-
-	// Real typing survives: a number, a lone M, a lone bracket, a short triple.
-	for _, typed := range []string{"123", "M", "[", "1;2;3"} {
-		next, _ := send(t, current, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(typed)})
-		current = next
-	}
-	if got := current.composer.Value(); got != "draft123M[1;2;3" {
-		t.Errorf("typing was muted: %q", got)
-	}
-}
-
-// TestComposerDropsFragmentedTerminalNoiseDuringRun pins the deep terminal noise
-// filtering: arbitrary buffer splits of SGR mouse reports (including bare digit chunks
-// and lone M/m terminators), mouse release reports, CPR, DA, and standalone tails
-// are dropped without corrupting the composer, while real typing and pastes survive.
-func TestComposerDropsFragmentedTerminalNoiseDuringRun(t *testing.T) {
-	model := chatModel(t)
-	model.running = true
-	model.composer.SetValue("hello")
-
-	// Multi-fragment split: Alt+[ then <35; then 106; then 27 then M.
-	// In the old code, "27" and "M" leaked into the composer.
-	splitMouse := []tea.KeyMsg{
-		{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true},
-		{Type: tea.KeyRunes, Runes: []rune("<35;")},
-		{Type: tea.KeyRunes, Runes: []rune("106;")},
-		{Type: tea.KeyRunes, Runes: []rune("27")},
-		{Type: tea.KeyRunes, Runes: []rune("M")},
-	}
-	current := model
-	for _, key := range splitMouse {
-		current, _ = send(t, current, key)
-	}
-	if got := current.composer.Value(); got != "hello" {
-		t.Errorf("split mouse digits/terminators leaked: %q", got)
-	}
-
-	// Mouse release report split: Alt+[ then <0;50; then 10 then m.
-	splitRelease := []tea.KeyMsg{
-		{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true},
-		{Type: tea.KeyRunes, Runes: []rune("<0;50;")},
-		{Type: tea.KeyRunes, Runes: []rune("10")},
-		{Type: tea.KeyRunes, Runes: []rune("m")},
-	}
-	for _, key := range splitRelease {
-		current, _ = send(t, current, key)
-	}
-	if got := current.composer.Value(); got != "hello" {
-		t.Errorf("split mouse release leaked: %q", got)
-	}
-
-	// Cursor position report: Alt+[ then 24;80R.
-	splitCPR := []tea.KeyMsg{
-		{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true},
-		{Type: tea.KeyRunes, Runes: []rune("24;80R")},
-	}
-	for _, key := range splitCPR {
-		current, _ = send(t, current, key)
-	}
-	if got := current.composer.Value(); got != "hello" {
-		t.Errorf("CPR report leaked: %q", got)
-	}
-
-	// Standalone tails that arrived after a dropped header.
-	tails := []tea.KeyMsg{
-		{Type: tea.KeyRunes, Runes: []rune(";27M")},
-		{Type: tea.KeyRunes, Runes: []rune("106;27m")},
-		{Type: tea.KeyRunes, Runes: []rune(";106;27M")},
-		{Type: tea.KeyRunes, Runes: []rune("27m")},
-		{Type: tea.KeyRunes, Runes: []rune("?1;2c")},
-		{Type: tea.KeyRunes, Runes: []rune("4;600;800t")},
-	}
-	for _, key := range tails {
-		current, _ = send(t, current, key)
-	}
-	if got := current.composer.Value(); got != "hello" {
-		t.Errorf("standalone noise tails leaked: %q", got)
-	}
-
-	// Real typing while running survives untouched.
-	for _, ch := range " world" {
-		current, _ = send(t, current, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
-	}
-	if got := current.composer.Value(); got != "hello world" {
-		t.Errorf("real typing was affected: %q", got)
-	}
-
-	// Bracketed paste survives even if it contains mouse-like characters.
-	pasted := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("<script>35;106;27M</script>"), Paste: true}
-	current, _ = send(t, current, pasted)
-	if got := current.composer.Value(); got != "hello world<script>35;106;27M</script>" {
-		t.Errorf("bracketed paste was dropped: %q", got)
 	}
 }
 
