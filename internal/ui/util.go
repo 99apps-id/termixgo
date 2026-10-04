@@ -17,9 +17,16 @@ var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 // Escape sequences to remove from untrusted text: a control sequence (CSI), an
 // operating system command (OSC), and any other two-byte escape.
 var (
-	ansiCSI    = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+	// The full CSI grammar ([0-?]* params, [ -/]* intermediates, [@-~] final),
+	// not [0-9;?]*: a mouse report carries a private '<' prefix
+	// (ESC[<35;106;27M, SGR mode 1006, sent on every pointer move) that the
+	// narrow class missed, so the sequence survived and its parameter bytes
+	// leaked as visible text like "[<35;106;27M".
+	ansiCSI    = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
 	ansiOSC    = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
 	ansiEscape = regexp.MustCompile(`\x1b[^\[]`)
+	// A mouse report whose ESC an earlier layer already stripped.
+	mouseSGR = regexp.MustCompile(`\[<\d+(?:;\d+)*[Mm]`)
 )
 
 // isTerminalReader reports whether a reader is an interactive terminal.
@@ -66,6 +73,9 @@ func sanitizeText(text string) string {
 		text = ansiOSC.ReplaceAllString(text, "")
 		text = ansiEscape.ReplaceAllString(text, "")
 	}
+	// A mouse report can arrive with its ESC already stripped; drop the
+	// parameter bytes rather than render them.
+	text = mouseSGR.ReplaceAllString(text, "")
 	if !hasControl(text) {
 		return text
 	}
