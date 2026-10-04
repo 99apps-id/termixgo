@@ -68,6 +68,8 @@ func key(name string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEnd}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
+	case "ctrl+x":
+		return tea.KeyMsg{Type: tea.KeyCtrlX}
 	case "ctrl+o":
 		return tea.KeyMsg{Type: tea.KeyCtrlO}
 	case "backspace":
@@ -431,14 +433,14 @@ func (errFixture) Error() string { return "fixture failure" }
 
 // ---------------------------------------------------------------- key routing
 
-func TestCtrlCQuits(t *testing.T) {
+func TestCtrlXQuits(t *testing.T) {
 	model := chatModel(t)
-	_, cmd := model.Update(key("ctrl+c"))
+	_, cmd := model.Update(key("ctrl+x"))
 	if cmd == nil {
-		t.Fatalf("ctrl+c should return a command")
+		t.Fatalf("ctrl+x should return a command")
 	}
 	if msg := cmd(); msg == nil {
-		t.Fatalf("ctrl+c should produce a message")
+		t.Fatalf("ctrl+x should produce a message")
 	}
 }
 
@@ -1999,14 +2001,42 @@ func TestEndResumesFollowing(t *testing.T) {
 }
 
 // TestMouseWheelScrollsTheTranscript proves the wheel path: wheel messages
-// reach the viewport instead of dying in the composer.
+// reach the smooth scroll and the offset eases toward the target over the
+// animation frames instead of jumping.
 func TestMouseWheelScrollsTheTranscript(t *testing.T) {
 	model := scrollFixture(chatModel(t))
 	before := model.viewport.YOffset
-	next, _ := model.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	next, cmd := model.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
 	moved := next.(*Model)
+	if cmd == nil {
+		t.Fatalf("the wheel must schedule a smooth-scroll frame")
+	}
+	for i := 0; i < 40 && moved.viewport.YOffset >= before; i++ {
+		step, _ := moved.Update(scrollTickMsg{})
+		moved = step.(*Model)
+	}
 	if moved.viewport.YOffset >= before {
 		t.Errorf("wheel up should scroll, offset %d did not drop below %d", moved.viewport.YOffset, before)
+	}
+}
+
+// TestComposerIgnoresSplitMouseEscape pins the escape-fragment fix: one SGR
+// mouse report split across two reads arrives as Alt+"[" then a numeric tail,
+// and neither may become text in the composer. See isTerminalNoise.
+func TestComposerIgnoresSplitMouseEscape(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("draft")
+
+	afterFirst, _ := send(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true})
+	afterTail, _ := send(t, afterFirst, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("<35;106;27")})
+	if got := afterTail.composer.Value(); got != "draft" {
+		t.Errorf("composer = %q, want the draft untouched", got)
+	}
+
+	// A normal rune still types, so the guard is not a blanket mute.
+	afterTyped, _ := send(t, afterTail, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello")})
+	if got := afterTyped.composer.Value(); got != "drafthello" {
+		t.Errorf("composer = %q, want the typed runes appended", got)
 	}
 }
 

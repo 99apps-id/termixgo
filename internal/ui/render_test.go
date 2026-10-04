@@ -463,7 +463,7 @@ func TestWindowSizeAndQuitAreHandled(t *testing.T) {
 	if view := display(after); strings.Contains(view, "Loading Termixgo") {
 		t.Errorf("a sized model should render the real view:\n%s", view)
 	}
-	if _, cmd := send(t, after, key("ctrl+c")); cmd == nil {
-		t.Errorf("ctrl+c should return the quit command")
+	if _, cmd := send(t, after, key("ctrl+x")); cmd == nil {
+		t.Errorf("ctrl+x should return the quit command")
 	}
 }

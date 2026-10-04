@@ -97,6 +97,22 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   slash typed while composing stays literal, and only a bare slash committed
   with Enter opens the palette. Typing never summons the menu, so a path such as
   `c:/project` or prose that contains a slash stays intact.
+- The composer only ever holds text the operator typed. bubbletea v1.3.10
+  `detectOneMsg` recognises an SGR mouse report only when the whole
+  `\x1b[<...M` lands in one read; a report split across reads falls through and
+  arrives as an Alt+`[` key followed by the numeric tail as runes, which the
+  textarea then typed into a draft. `isTerminalNoise` drops those fragments
+  before they reach the composer, so moving the mouse over a running turn never
+  sprays escape bytes into the input.
+- Selection is a first-class gesture. A left drag over the transcript selects
+  by content line and display column, draws the range in reverse video without
+  disturbing the styling underneath (`insertHighlight` injects only the two
+  reverse toggles), and copies it over OSC 52 on release. `Ctrl+A` selects the
+  whole composer, `Ctrl+C` copies that or the transcript selection and never
+  quits, and the first printable or destructive key replaces a composer
+  select-all. `Ctrl+X` is the quit, kept separate from copy so one gesture can
+  never close the program by accident. The wheel does not jump: the offset eases
+  toward a target over `scrollTickMsg` frames, so the transcript glides.
 - `search_memory` is backed by the FTS5 store in `internal/search`, which the app
   opens at `<workspace>/.termixgo/search.db`. The database is state, not content:
   the workspace walk skips that directory, and a checkpoint stash excludes it.
