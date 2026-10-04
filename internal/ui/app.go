@@ -273,7 +273,11 @@ func NewWithOptions(application *app.App, options Options) *Model {
 func RunWithOptions(application *app.App, options Options) error {
 	model := NewWithOptions(application, options)
 
-	programOptions := []tea.ProgramOption{tea.WithMouseCellMotion()}
+	// Mouse tracking stays off: the terminal owns the mouse. With it on, every
+	// pointer move made the terminal send SGR reports that bubbletea can split
+	// into key fragments, and it also took native select and copy away. The
+	// transcript scrolls with PgUp/PgDn and the wheel is the terminal's own.
+	programOptions := []tea.ProgramOption{}
 	if !options.NoAlternateScreen {
 		programOptions = append(programOptions, tea.WithAltScreen())
 	}
@@ -1897,7 +1901,7 @@ func (m *Model) viewHints() string {
 			text = fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C copy | Ctrl+X quit", m.spin.View(), elapsed)
 		}
 	} else {
-		text = " Enter send | Ctrl+J newline | Drag select | Ctrl+A all | Ctrl+C copy | Ctrl+X quit | Ctrl+O details | PgUp/PgDn scroll"
+		text = " Enter send | Ctrl+J newline | Ctrl+A all | Ctrl+C copy | Ctrl+X quit | Ctrl+O details | PgUp/PgDn scroll"
 	}
 	// A hint longer than the terminal would wrap and push the frame down, so it
 	// is clipped rather than allowed to reflow the whole screen.
