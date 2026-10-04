@@ -64,7 +64,7 @@ func signalContext() (context.Context, context.CancelFunc) {
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return runInteractive(stdin, stdout, ui.Options{})
+		return runInteractive(stdin, stdout, uiOptions(false))
 	}
 	switch args[0] {
 	case "help", "--help", "-h":
@@ -74,7 +74,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		_, err := fmt.Fprintf(stdout, "%s (%s/%s)\n", version.Full(), runtime.GOOS, runtime.GOARCH)
 		return err
 	case "setup":
-		return runInteractive(stdin, stdout, ui.Options{StartSetup: true})
+		return runInteractive(stdin, stdout, uiOptions(true))
 	case "run", "-p", "--print":
 		if len(args) < 2 {
 			return fmt.Errorf("run needs a prompt")
@@ -123,6 +123,26 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("unknown command %q; run 'termixgo help'", args[0])
 	}
+}
+
+// uiOptions builds the interactive options, honoring the environment. A
+// terminal whose own scrollbar and wheel should scroll the transcript sets
+// TERMIXGO_NO_ALT_SCREEN=1 to run inline instead of taking the alternate
+// screen, which has no scrollback.
+func uiOptions(setup bool) ui.Options {
+	return ui.Options{
+		StartSetup:        setup,
+		NoAlternateScreen: envTruthy("TERMIXGO_NO_ALT_SCREEN"),
+	}
+}
+
+// envTruthy reports a boolean-ish environment variable (1, true, yes or on).
+func envTruthy(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // runInteractive starts the full-screen UI when the streams are terminals and
