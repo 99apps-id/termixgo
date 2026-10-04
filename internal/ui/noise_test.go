@@ -1,10 +1,28 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// TestScrubComposerRemovesLeakedMouseReports pins the backstop: whatever path
+// delivered a mouse report, the composer draft ends clean.
+func TestScrubComposerRemovesLeakedMouseReports(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("draft [<65;75;20M[<35;75;20M 1;15M end")
+	model.scrubComposer()
+	if value := model.composer.Value(); strings.Contains(value, "[<") || strings.Contains(value, "1;15M") {
+		t.Errorf("composer still has noise: %q", value)
+	}
+
+	model.composer.SetValue("keep \x1b[<35;63;32M this")
+	model.scrubComposer()
+	if value := model.composer.Value(); strings.Contains(value, "[<") || !strings.Contains(value, "keep") || !strings.Contains(value, "this") {
+		t.Errorf("composer = %q, want the text with the escape removed", value)
+	}
+}
 
 // TestComposerDropsMouseFragments pins the leak fix: SGR mouse reports that
 // bubbletea split into key fragments (a wheel report, a head without its final

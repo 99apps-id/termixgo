@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -342,7 +343,12 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		return m.handleKey(typed)
+		updated, cmd := m.handleKey(typed)
+		if model, ok := updated.(*Model); ok {
+			model.scrubComposer()
+			return model, cmd
+		}
+		return updated, cmd
 
 	case eventMsg:
 		event := agent.Event(typed)
@@ -441,6 +447,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.composer, cmd = m.composer.Update(message)
+	m.scrubComposer()
 	m.updateSlashMatches()
 	m.refresh()
 	return m, cmd
@@ -553,6 +560,26 @@ func isMouseNoiseText(text string) bool {
 		}
 	}
 	return hasDigit && hasSignature
+}
+
+// composerNoiseRe matches terminal escape noise that a split read can leave in
+// the composer: a whole CSI or OSC sequence (with its ESC), a stray escape, or
+// an SGR mouse report whose ESC was already stripped ("[<b;x;yM", or a bare
+// tail like "1;15M").
+var composerNoiseRe = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[^\[]|\[?<\d+(?:;\d+)+[Mm]|\[?\d+;\d+(?:;\d+)*[Mm]`)
+
+// scrubComposer removes terminal escape noise that reached the composer by any
+// path, including one the key filter cannot see. It only removes escape and
+// mouse-report shapes, so an ordinary draft is untouched.
+func (m *Model) scrubComposer() {
+	for i := 0; i < 4; i++ {
+		value := m.composer.Value()
+		clean := composerNoiseRe.ReplaceAllString(value, "")
+		if clean == value {
+			return
+		}
+		m.composer.SetValue(clean)
+	}
 }
 
 // isTerminalNoise reports whether a key message is a fragment of a terminal
