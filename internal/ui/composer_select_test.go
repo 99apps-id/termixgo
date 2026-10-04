@@ -27,6 +27,24 @@ func TestComposerSelectionTextExtractsPartial(t *testing.T) {
 	}
 }
 
+// TestComposerDropsMouseNoisePaste pins the bulk shape: a burst of mouse
+// reports that arrives as one paste is dropped, while a real paste survives.
+func TestComposerDropsMouseNoisePaste(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("draft")
+
+	noise := "[<35;60;19M[<35;60;18M20M[<35;61;17M"
+	next, _ := send(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(noise), Paste: true})
+	if got := next.composer.Value(); got != "draft" {
+		t.Errorf("a mouse-noise paste leaked: %q", got)
+	}
+
+	next2, _ := send(t, next, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("func main() { x := 3M }"), Paste: true})
+	if got := next2.composer.Value(); !strings.Contains(got, "func main()") {
+		t.Errorf("a real paste was dropped: %q", got)
+	}
+}
+
 // TestComposerDropsControlCharacters pins the last leak shape: a fragment that
 // still carries the ESC byte must never reach the composer.
 func TestComposerDropsControlCharacters(t *testing.T) {

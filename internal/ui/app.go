@@ -572,6 +572,26 @@ func isStandaloneNoise(key tea.KeyMsg) (isNoise bool, isPrefix bool) {
 	return false, false
 }
 
+// isMouseNoiseText reports whether a whole input burst is nothing but SGR mouse
+// reports: it carries a digit and a mouse signature ('<' or a terminating M/m)
+// and no other character. A real paste has letters or punctuation and is kept.
+func isMouseNoiseText(text string) bool {
+	hasDigit := false
+	hasSignature := false
+	for _, r := range text {
+		switch {
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		case r == '<' || r == 'M' || r == 'm':
+			hasSignature = true
+		case r == '[', r == ']', r == ';', r == ' ', r == '\t', r == '\n', r == '\r':
+		default:
+			return false
+		}
+	}
+	return hasDigit && hasSignature
+}
+
 // isTerminalNoise reports whether a key message is a fragment of a terminal
 // escape sequence (such as an SGR mouse report, cursor position report, or
 // device attribute) rather than something the operator typed.
@@ -589,7 +609,10 @@ func isStandaloneNoise(key tea.KeyMsg) (isNoise bool, isPrefix bool) {
 func (m *Model) isTerminalNoise(key tea.KeyMsg) bool {
 	if key.Paste {
 		m.escapeNoiseActive = false
-		return false
+		// A burst of mouse reports can arrive as one bulk read. A paste made
+		// only of mouse-report characters is never text the operator copied, so
+		// drop it; a paste with any other character is real and kept.
+		return isMouseNoiseText(string(key.Runes))
 	}
 
 	if key.Type != tea.KeyRunes || len(key.Runes) == 0 {
