@@ -139,6 +139,19 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if msg.Button != tea.MouseButtonLeft {
 			return m, nil
 		}
+		// A press in the composer starts a partial selection there; the
+		// transcript selection and the Ctrl+A state are dropped so only one
+		// selection is live.
+		if m.hintsVisible() && m.inComposer(msg) {
+			m.composerSelAnchor = m.composerPoint(msg)
+			m.composerSelFocus = m.composerSelAnchor
+			m.composerSelActive = true
+			m.composerSelected = false
+			m.selecting = false
+			m.selActive = false
+			m.refresh()
+			return m, nil
+		}
 		point, inside := m.mousePoint(msg)
 		if !inside {
 			// A click outside the transcript takes the highlight away.
@@ -154,6 +167,11 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 	case tea.MouseActionMotion:
+		if m.composerSelActive {
+			m.composerSelFocus = m.composerPoint(msg)
+			m.refresh()
+			return m, nil
+		}
 		if !m.selecting {
 			return m, nil
 		}
@@ -162,6 +180,10 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 	case tea.MouseActionRelease:
+		if m.composerSelActive {
+			m.composerSelFocus = m.composerPoint(msg)
+			return m.copyComposerRange()
+		}
 		if !m.selecting {
 			return m, nil
 		}
@@ -179,6 +201,20 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, writeClipboard(text)
 	}
 	return m, nil
+}
+
+// copyComposerRange copies the composer's drag selection and clears the
+// highlight, so typing afterwards is not confused by a stale selection.
+func (m *Model) copyComposerRange() (tea.Model, tea.Cmd) {
+	text := m.composerSelectionText()
+	m.composerSelActive = false
+	if strings.TrimSpace(text) == "" {
+		m.refresh()
+		return m, nil
+	}
+	m.notice = fmt.Sprintf("Copied %d characters.", utf8.RuneCountInString(text))
+	m.refresh()
+	return m, writeClipboard(text)
 }
 
 // copyComposerSelection copies the whole composer and clears the selection.

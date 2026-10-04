@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -152,6 +151,18 @@ type Model struct {
 	// composerSelected marks a Ctrl+A select-all over the composer text. The
 	// next destructive or printable key replaces it, and Ctrl+C copies it.
 	composerSelected bool
+
+	// composerSelActive marks a drag selection inside the composer, with the
+	// anchor and focus in the composer's rendered content coordinates.
+	composerSelActive bool
+	composerSelAnchor selPoint
+	composerSelFocus  selPoint
+
+	// escapeNoiseActive tracks an in-flight terminal escape sequence (e.g. SGR
+	// mouse report or cursor position report) split across read buffers.
+	escapeNoiseActive bool
+	escapeNoiseAt     time.Time
+	lastEscAt         time.Time
 
 	// Smooth scrolling: the wheel sets scrollTarget and a tick eases YOffset
 	// toward it so the transcript slides instead of jumping.
@@ -464,51 +475,178 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
+	oldVal := m.composer.Value()
 	m.composer, cmd = m.composer.Update(message)
-	m.updateSlashMatches()
-	m.refresh()
+	if m.composer.Value() != oldVal {
+		m.updateSlashMatches()
+		m.refresh()
+	}
 	return m, cmd
 }
 
-// mouseNoiseChars matches a run of characters an SGR mouse report is made of:
-// the bracket, the private '<', the parameter semicolons and digits, and the
-// final M/m. Any rune outside this set means the text is real typing.
-var mouseNoiseChars = regexp.MustCompile(`^[][<;0-9Mm]+$`)
+// csiNoiseTerminators contains standard CSI final bytes for terminal reports:
+// SGR mouse (M, m), cursor position (R), device attributes (c), window ops (t),
+// and mode/private (~, y, h, l, n).
+const csiNoiseTerminators = "MmRct~yhln"
 
-// isTerminalNoise reports a key message that is a fragment of an SGR mouse
-// report rather than something the operator typed.
+// isCSINoiseChunk reports whether every rune in text is a valid CSI sequence
+// parameter or intermediate character, with an optional terminator at the end.
+func isCSINoiseChunk(text string) bool {
+	if text == "" {
+		return false
+	}
+	runes := []rune(text)
+	for i, r := range runes {
+		isLast := (i == len(runes)-1)
+		isParam := (r >= '0' && r <= '9') || r == ';' || r == ':' || r == '<' ||
+			r == '>' || r == '=' || r == '?' || r == ',' || r == '-' || r == '[' || r == ']'
+		if isParam {
+			continue
+		}
+		if isLast && strings.ContainsRune(csiNoiseTerminators, r) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func endsCSITerminator(text string) bool {
+	if text == "" {
+		return false
+	}
+	runes := []rune(text)
+	return strings.ContainsRune(csiNoiseTerminators, runes[len(runes)-1])
+}
+
+// isStandaloneNoise inspects a single key message without prior sequence state
+// to detect split escape sequence fragments that carry an unambiguous escape signature.
+func isStandaloneNoise(key tea.KeyMsg) (isNoise bool, isPrefix bool) {
+	if key.Paste || key.Type != tea.KeyRunes || len(key.Runes) == 0 {
+		return false, false
+	}
+	text := string(key.Runes)
+	if key.Alt && (text == "[" || text == "O") {
+		return true, true
+	}
+
+	// Any chunk containing '<' and composed only of CSI noise characters is an SGR
+	// mouse report fragment (e.g. "<35;106;27M", "<35;106;", "[<32;61;29M", "<").
+	if strings.ContainsRune(text, '<') && isCSINoiseChunk(text) {
+		return true, !endsCSITerminator(text)
+	}
+
+	// Any chunk starting with "[<" (split SGR report).
+	if strings.HasPrefix(text, "[<") && isCSINoiseChunk(text) {
+		return true, !endsCSITerminator(text)
+	}
+
+	// A tail ending in an SGR mouse terminator (M or m) with digits or semicolons.
+	// Minimum 2 runes keeps a lone 'M' or 'm' the operator typed from being muted.
+	if len(key.Runes) >= 2 && (strings.HasSuffix(text, "M") || strings.HasSuffix(text, "m")) &&
+		isCSINoiseChunk(text) && strings.ContainsAny(text, "0123456789;") {
+		return true, false
+	}
+
+	// A tail ending in CPR/DA/window terminators (R, c, t) with parameter digits and semicolon.
+	// Minimum 3 runes (e.g. "24;80R", "?1;2c", "4;600;800t").
+	if len(key.Runes) >= 3 && strings.ContainsAny(text, "Rct") &&
+		strings.ContainsRune(text, ';') && isCSINoiseChunk(text) && endsCSITerminator(text) {
+		return true, false
+	}
+
+	// A truncated parameter triple with two semicolons and sufficient length
+	// (e.g. "35;106;27"). The length check keeps a short pasted "1;2;3" from
+	// being mistaken for one.
+	if strings.Count(text, ";") >= 2 && len(text) >= 6 && isCSINoiseChunk(text) {
+		return true, false
+	}
+
+	// A parameter chunk starting with a semicolon and containing digits (e.g. ";106;27", ";27").
+	// Real typing from a keyboard never emits a multi-character rune slice starting with ';'.
+	if len(key.Runes) >= 2 && strings.HasPrefix(text, ";") && isCSINoiseChunk(text) && strings.ContainsAny(text, "0123456789") {
+		return true, false
+	}
+
+	return false, false
+}
+
+// isTerminalNoise reports whether a key message is a fragment of a terminal
+// escape sequence (such as an SGR mouse report, cursor position report, or
+// device attribute) rather than something the operator typed.
 //
 // bubbletea v1.3.10 detectOneMsg recognises an SGR mouse report only when the
 // whole "\x1b[<...M" sits in one read and matches its regex; when the report is
 // split across reads it falls through, decodes the leading ESC as an Alt
 // modifier, and hands back "[" then the remaining bytes as runes in arbitrary
-// chunks. The chunks are not always a tidy "<35;106;27M": a report whose ESC
-// fell in the previous read can arrive as a bare tail like ";27M" or
-// "35;106;27". The textarea typed every chunk into the composer, so moving the
-// mouse over a running turn sprayed escape bytes into a draft.
+// chunks. The chunks can arrive as Alt+[ followed by "<35;106;", "27", "M", or
+// bare tails like ";27M" or "35;106;27".
 //
-// A chunk is dropped when it is made only of mouse-report characters and also
-// carries a mouse signature: a '<', a terminating M/m, or two parameter
-// semicolons. A number, a lone 'M' or a lone '[' the operator typed has none of
-// those and is kept, so the filter is not a blanket mute.
-func isTerminalNoise(key tea.KeyMsg) bool {
-	if key.Type != tea.KeyRunes || len(key.Runes) == 0 {
+// This filter combines stateful tracking of active in-flight escape sequences
+// with signature-based detection for standalone fragments, dropping every piece
+// while preserving real typing and bracketed pastes.
+func (m *Model) isTerminalNoise(key tea.KeyMsg) bool {
+	if key.Paste {
+		m.escapeNoiseActive = false
 		return false
 	}
+
+	if key.Type != tea.KeyRunes || len(key.Runes) == 0 {
+		if key.Type == tea.KeyEscape {
+			m.lastEscAt = time.Now()
+		}
+		return false
+	}
+
 	text := string(key.Runes)
-	if key.Alt && text == "[" {
+
+	// CSI introducer: bubbletea decodes the leading ESC [ as Alt+"[".
+	if key.Alt && (text == "[" || text == "O") {
+		m.escapeNoiseActive = true
+		m.escapeNoiseAt = time.Now()
 		return true
 	}
-	if len(key.Runes) < 2 || !mouseNoiseChars.MatchString(text) {
-		return false
+
+	// An escape sequence whose ESC arrived as a lone KeyEscape in the
+	// immediately preceding read, followed at once by "[".
+	if text == "[" && !key.Alt && time.Since(m.lastEscAt) < 50*time.Millisecond {
+		m.escapeNoiseActive = true
+		m.escapeNoiseAt = time.Now()
+		return true
 	}
-	return strings.ContainsAny(text, "<") ||
-		strings.HasSuffix(text, "M") ||
-		strings.HasSuffix(text, "m") ||
-		// A truncated tail with a full b;x;y triple, e.g. "35;106;27", has no
-		// '<' and no final byte. The length check keeps a short pasted "1;2;3"
-		// from being mistaken for one.
-		(strings.Count(text, ";") >= 2 && len(text) >= 6)
+
+	// While an escape sequence is in-flight:
+	if m.escapeNoiseActive {
+		if time.Since(m.escapeNoiseAt) > 100*time.Millisecond {
+			m.escapeNoiseActive = false
+		} else if isCSINoiseChunk(text) {
+			m.escapeNoiseAt = time.Now()
+			if endsCSITerminator(text) {
+				m.escapeNoiseActive = false
+			}
+			return true
+		} else {
+			m.escapeNoiseActive = false
+		}
+	}
+
+	// Check standalone signatures.
+	noise, isPrefix := isStandaloneNoise(key)
+	if noise {
+		if isPrefix {
+			m.escapeNoiseActive = true
+			m.escapeNoiseAt = time.Now()
+		}
+		return true
+	}
+
+	return false
+}
+
+// isTerminalNoise checks standalone escape noise for callers without model state.
+func isTerminalNoise(key tea.KeyMsg) bool {
+	var m Model
+	return m.isTerminalNoise(key)
 }
 
 // handleKey routes keys by what is currently on screen.
@@ -519,6 +657,9 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	if key.String() == "ctrl+c" {
+		if m.composerSelActive {
+			return m.copyComposerRange()
+		}
 		if m.composerSelected {
 			return m.copyComposerSelection()
 		}
@@ -529,14 +670,15 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// A raw terminal escape fragment is never text the operator typed.
-	if isTerminalNoise(key) {
+	if m.isTerminalNoise(key) {
 		return m, nil
 	}
 
-	// Typing or acting drops the transcript highlight.
-	if m.selecting || m.selActive {
+	// Typing or acting drops the transcript and composer-drag highlights.
+	if m.selecting || m.selActive || m.composerSelActive {
 		m.selecting = false
 		m.selActive = false
+		m.composerSelActive = false
 		m.refresh()
 	}
 
@@ -581,6 +723,7 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(m.composer.Value()) == "" {
 			return m, nil
 		}
+		m.composerSelActive = false
 		m.composerSelected = true
 		m.notice = "All text selected. Ctrl+C copies, Backspace deletes."
 		m.refresh()
@@ -1675,7 +1818,14 @@ func shortID(id string) string {
 }
 
 func (m *Model) viewComposer() string {
-	return m.composer.View()
+	view := m.composer.View()
+	// A mouse drag inside the composer paints the selected columns in reverse
+	// video. The select-all state paints the whole text through the textarea's
+	// own style instead (applyComposerStyle), so the two never stack.
+	if m.composerSelActive {
+		view = highlightComposerSelection(view, m.composerSelAnchor, m.composerSelFocus)
+	}
+	return view
 }
 
 // applyComposerStyle moves the composer's border between its idle and busy
