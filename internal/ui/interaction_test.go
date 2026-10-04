@@ -2055,6 +2055,90 @@ func TestComposerIgnoresSplitMouseEscape(t *testing.T) {
 	}
 }
 
+// TestComposerDropsFragmentedTerminalNoiseDuringRun pins the deep terminal noise
+// filtering: arbitrary buffer splits of SGR mouse reports (including bare digit chunks
+// and lone M/m terminators), mouse release reports, CPR, DA, and standalone tails
+// are dropped without corrupting the composer, while real typing and pastes survive.
+func TestComposerDropsFragmentedTerminalNoiseDuringRun(t *testing.T) {
+	model := chatModel(t)
+	model.running = true
+	model.composer.SetValue("hello")
+
+	// Multi-fragment split: Alt+[ then <35; then 106; then 27 then M.
+	// In the old code, "27" and "M" leaked into the composer.
+	splitMouse := []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true},
+		{Type: tea.KeyRunes, Runes: []rune("<35;")},
+		{Type: tea.KeyRunes, Runes: []rune("106;")},
+		{Type: tea.KeyRunes, Runes: []rune("27")},
+		{Type: tea.KeyRunes, Runes: []rune("M")},
+	}
+	current := model
+	for _, key := range splitMouse {
+		current, _ = send(t, current, key)
+	}
+	if got := current.composer.Value(); got != "hello" {
+		t.Errorf("split mouse digits/terminators leaked: %q", got)
+	}
+
+	// Mouse release report split: Alt+[ then <0;50; then 10 then m.
+	splitRelease := []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true},
+		{Type: tea.KeyRunes, Runes: []rune("<0;50;")},
+		{Type: tea.KeyRunes, Runes: []rune("10")},
+		{Type: tea.KeyRunes, Runes: []rune("m")},
+	}
+	for _, key := range splitRelease {
+		current, _ = send(t, current, key)
+	}
+	if got := current.composer.Value(); got != "hello" {
+		t.Errorf("split mouse release leaked: %q", got)
+	}
+
+	// Cursor position report: Alt+[ then 24;80R.
+	splitCPR := []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true},
+		{Type: tea.KeyRunes, Runes: []rune("24;80R")},
+	}
+	for _, key := range splitCPR {
+		current, _ = send(t, current, key)
+	}
+	if got := current.composer.Value(); got != "hello" {
+		t.Errorf("CPR report leaked: %q", got)
+	}
+
+	// Standalone tails that arrived after a dropped header.
+	tails := []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune(";27M")},
+		{Type: tea.KeyRunes, Runes: []rune("106;27m")},
+		{Type: tea.KeyRunes, Runes: []rune(";106;27M")},
+		{Type: tea.KeyRunes, Runes: []rune("27m")},
+		{Type: tea.KeyRunes, Runes: []rune("?1;2c")},
+		{Type: tea.KeyRunes, Runes: []rune("4;600;800t")},
+	}
+	for _, key := range tails {
+		current, _ = send(t, current, key)
+	}
+	if got := current.composer.Value(); got != "hello" {
+		t.Errorf("standalone noise tails leaked: %q", got)
+	}
+
+	// Real typing while running survives untouched.
+	for _, ch := range " world" {
+		current, _ = send(t, current, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+	if got := current.composer.Value(); got != "hello world" {
+		t.Errorf("real typing was affected: %q", got)
+	}
+
+	// Bracketed paste survives even if it contains mouse-like characters.
+	pasted := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("<script>35;106;27M</script>"), Paste: true}
+	current, _ = send(t, current, pasted)
+	if got := current.composer.Value(); got != "hello world<script>35;106;27M</script>" {
+		t.Errorf("bracketed paste was dropped: %q", got)
+	}
+}
+
 // TestWindowTitleMirrorsTheRunState pins the tab title: idle names the
 // workspace folder, working names the elapsed turn, approval asks for help.
 func TestWindowTitleMirrorsTheRunState(t *testing.T) {

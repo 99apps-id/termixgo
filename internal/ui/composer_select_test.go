@@ -27,6 +27,20 @@ func TestComposerSelectionTextExtractsPartial(t *testing.T) {
 	}
 }
 
+// TestComposerKeepsCodingCharacters pins that the terminal-noise filter does
+// not mute printable characters a coder types: '<' begins comparisons, shifts
+// and template arguments.
+func TestComposerKeepsCodingCharacters(t *testing.T) {
+	model := chatModel(t)
+	for _, text := range []string{"<", "=", ">", "<=", "<<", "->", "a<b"} {
+		next, _ := send(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)})
+		model = next
+	}
+	if want := "<=><=<<->a<b"; model.composer.Value() != want {
+		t.Errorf("composer = %q, want %q (a printable key was muted as noise)", model.composer.Value(), want)
+	}
+}
+
 // TestComposerDragSelectsAndCopies drives the gesture: a press in the composer
 // begins a selection, motion extends it, and release copies it.
 func TestComposerDragSelectsAndCopies(t *testing.T) {

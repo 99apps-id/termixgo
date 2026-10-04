@@ -530,14 +530,15 @@ func isStandaloneNoise(key tea.KeyMsg) (isNoise bool, isPrefix bool) {
 		return true, true
 	}
 
-	// Any chunk containing '<' and composed only of CSI noise characters is an SGR
-	// mouse report fragment (e.g. "<35;106;27M", "<35;106;", "[<32;61;29M", "<").
-	if strings.ContainsRune(text, '<') && isCSINoiseChunk(text) {
+	// An SGR mouse fragment carries a '<' and a parameter separator. The ';' is
+	// required because a lone '<' or '<<' has neither and is what someone
+	// coding types ("<=", "<<", "<int>"), so it must not be muted.
+	if strings.ContainsRune(text, '<') && strings.ContainsRune(text, ';') && isCSINoiseChunk(text) {
 		return true, !endsCSITerminator(text)
 	}
 
-	// Any chunk starting with "[<" (split SGR report).
-	if strings.HasPrefix(text, "[<") && isCSINoiseChunk(text) {
+	// A chunk starting with "[<" and a parameter separator (split SGR report).
+	if strings.HasPrefix(text, "[<") && strings.ContainsRune(text, ';') && isCSINoiseChunk(text) {
 		return true, !endsCSITerminator(text)
 	}
 
