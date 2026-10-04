@@ -27,6 +27,17 @@ func TestComposerSelectionTextExtractsPartial(t *testing.T) {
 	}
 }
 
+// TestComposerDropsControlCharacters pins the last leak shape: a fragment that
+// still carries the ESC byte must never reach the composer.
+func TestComposerDropsControlCharacters(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("draft")
+	next, _ := send(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("\x1b[<35;106;27M")})
+	if got := next.composer.Value(); got != "draft" {
+		t.Errorf("an ESC-bearing fragment leaked: %q", got)
+	}
+}
+
 // TestComposerKeepsCodingCharacters pins that the terminal-noise filter does
 // not mute printable characters a coder types: '<' begins comparisons, shifts
 // and template arguments.

@@ -82,15 +82,8 @@ func isGitRepository(workspace string) bool {
 	if err != nil {
 		return false
 	}
-	toplevel := filepath.Clean(strings.TrimSpace(string(output)))
-	absWorkspace := filepath.Clean(workspace)
-	if abs, resolveErr := filepath.Abs(workspace); resolveErr == nil {
-		absWorkspace = filepath.Clean(abs)
-	}
-	// On Windows git returns forward-slash paths; normalise both to the
-	// OS separator so the comparison works everywhere.
-	toplevel = filepath.FromSlash(toplevel)
-	absWorkspace = filepath.FromSlash(absWorkspace)
+	toplevel := canonicalGitPath(strings.TrimSpace(string(output)))
+	absWorkspace := canonicalGitPath(workspace)
 
 	if strings.EqualFold(absWorkspace, toplevel) {
 		return true
@@ -113,6 +106,23 @@ func isGitRepository(workspace string) bool {
 		}
 	}
 	return depth <= maxGitAncestorDepth
+}
+
+// canonicalGitPath resolves a path the way git reports its toplevel: absolute,
+// separator-normalised, symlink-free and with any 8.3 short name expanded.
+//
+// A temp directory is a short name on a Windows runner (RUNNER~1) and /var on
+// macOS; git prints the resolved long form. Without resolving the workspace the
+// same way, a real repository would compare unequal and be rejected as "not a
+// git repository".
+func canonicalGitPath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	return filepath.Clean(filepath.FromSlash(path))
 }
 
 // gitArgs builds argv from optional flags and paths.

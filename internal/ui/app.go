@@ -601,6 +601,14 @@ func (m *Model) isTerminalNoise(key tea.KeyMsg) bool {
 
 	text := string(key.Runes)
 
+	// A typed key never carries a raw C0 control; a leaked escape fragment does
+	// (the ESC byte, or a control a reporter split in). A paste was handled
+	// above, so any control here is noise.
+	if strings.ContainsFunc(text, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		m.escapeNoiseActive = false
+		return true
+	}
+
 	// CSI introducer: bubbletea decodes the leading ESC [ as Alt+"[".
 	if key.Alt && (text == "[" || text == "O") {
 		m.escapeNoiseActive = true
@@ -642,12 +650,6 @@ func (m *Model) isTerminalNoise(key tea.KeyMsg) bool {
 	}
 
 	return false
-}
-
-// isTerminalNoise checks standalone escape noise for callers without model state.
-func isTerminalNoise(key tea.KeyMsg) bool {
-	var m Model
-	return m.isTerminalNoise(key)
 }
 
 // handleKey routes keys by what is currently on screen.
