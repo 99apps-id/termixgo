@@ -88,6 +88,14 @@ func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers ma
 			if chunk.Usage.PromptTokensDetails != nil {
 				cached = chunk.Usage.PromptTokensDetails.CachedTokens
 			}
+			// DeepSeek's disk cache is reported through prompt_cache_hit_tokens
+			// rather than prompt_tokens_details.cached_tokens. Its hit part sits
+			// inside prompt_tokens, exactly like the OpenAI cached_tokens field,
+			// so the same "subtract the cached part before applying the full
+			// input rate" rule prices it once.
+			if chunk.Usage.PromptCacheHitTokens > cached {
+				cached = chunk.Usage.PromptCacheHitTokens
+			}
 			if step, ok := usage.step(Usage{
 				PromptTokens:     chunk.Usage.PromptTokens,
 				CompletionTokens: chunk.Usage.CompletionTokens,
@@ -261,12 +269,20 @@ type openAIChunk struct {
 	// exactly like the frame this is meant to catch.
 	Error json.RawMessage `json:"error"`
 	Usage *struct {
-		PromptTokens        int `json:"prompt_tokens"`
-		CompletionTokens    int `json:"completion_tokens"`
-		TotalTokens         int `json:"total_tokens"`
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
 		PromptTokensDetails *struct {
 			CachedTokens int `json:"cached_tokens"`
 		} `json:"prompt_tokens_details"`
+		// DeepSeek reports its disk cache through these two fields instead of
+		// prompt_tokens_details: prompt_cache_hit_tokens is the part served from
+		// the cache at a tenth of the full input rate, prompt_cache_miss_tokens
+		// the part that was not. The hit count is the cache read; the miss count
+		// is already inside prompt_tokens, so recording only the hit keeps the
+		// cached part priced once.
+		PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+		PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
 	} `json:"usage"`
 }
 
