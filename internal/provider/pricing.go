@@ -15,6 +15,15 @@ import (
 type Pricing struct {
 	InputPerMillion  float64
 	OutputPerMillion float64
+	// CacheReadMultiplier is the fraction of the input rate charged for a
+	// cache read. Zero means the default (0.10), which is Anthropic, OpenAI
+	// GPT-5/6 and Gemini's published rate. A model that prices a cached read at
+	// 50% of input (some earlier OpenAI tiers) records 0.50 here.
+	CacheReadMultiplier float64
+	// CacheWriteMultiplier is the fraction of the input rate charged for a
+	// cache write. Zero means the default (1.25), Anthropic's published rate.
+	// Most non-Anthropic providers report no cache write at all.
+	CacheWriteMultiplier float64
 }
 
 // Known reports whether a price is recorded for this model. A zero price is
@@ -30,122 +39,122 @@ func (p Pricing) Known() bool { return p.InputPerMillion > 0 || p.OutputPerMilli
 // very large prompt is under-estimated rather than over-estimated.
 var pricingTable = map[string]Pricing{
 	// OpenAI.
-	"gpt-6-astra":   {10.00, 50.00},
-	"gpt-6-sol":     {2.00, 10.00},
-	"gpt-6-luna":    {0.10, 0.50},
-	"gpt-5.6-terra": {2.00, 12.00},
-	"gpt-5.6-sol":   {2.00, 10.00},
-	"gpt-5.6-luna":  {0.15, 0.75},
-	"gpt-5.5":       {5.00, 30.00},
-	"gpt-5.4":       {2.50, 15.00},
-	"gpt-5.4-mini":  {0.75, 4.50},
-	"gpt-5.3-codex": {1.75, 14.00},
+	"gpt-6-astra":   {InputPerMillion: 10.00, OutputPerMillion: 50.00},
+	"gpt-6-sol":     {InputPerMillion: 2.00, OutputPerMillion: 10.00},
+	"gpt-6-luna":    {InputPerMillion: 0.10, OutputPerMillion: 0.50},
+	"gpt-5.6-terra": {InputPerMillion: 2.00, OutputPerMillion: 12.00},
+	"gpt-5.6-sol":   {InputPerMillion: 2.00, OutputPerMillion: 10.00},
+	"gpt-5.6-luna":  {InputPerMillion: 0.15, OutputPerMillion: 0.75},
+	"gpt-5.5":       {InputPerMillion: 5.00, OutputPerMillion: 30.00},
+	"gpt-5.4":       {InputPerMillion: 2.50, OutputPerMillion: 15.00},
+	"gpt-5.4-mini":  {InputPerMillion: 0.75, OutputPerMillion: 4.50},
+	"gpt-5.3-codex": {InputPerMillion: 1.75, OutputPerMillion: 14.00},
 
 	// Anthropic.
-	"claude-fable-5-1":  {10.00, 50.00},
-	"claude-opus-5-5":   {4.00, 20.00},
-	"claude-opus-5":     {5.00, 25.00},
-	"claude-sonnet-5":   {2.00, 10.00},
-	"claude-sonnet-4-6": {3.00, 15.00},
-	"claude-haiku-4-5":  {1.00, 5.00},
+	"claude-fable-5-1":  {InputPerMillion: 10.00, OutputPerMillion: 50.00},
+	"claude-opus-5-5":   {InputPerMillion: 4.00, OutputPerMillion: 20.00},
+	"claude-opus-5":     {InputPerMillion: 5.00, OutputPerMillion: 25.00},
+	"claude-sonnet-5":   {InputPerMillion: 2.00, OutputPerMillion: 10.00},
+	"claude-sonnet-4-6": {InputPerMillion: 3.00, OutputPerMillion: 15.00},
+	"claude-haiku-4-5":  {InputPerMillion: 1.00, OutputPerMillion: 5.00},
 
 	// Google.
-	"gemini-3.1-pro-preview": {2.00, 12.00},
-	"gemini-3.8-flash":       {0.75, 3.75},
-	"gemini-3.7-flash":       {0.75, 3.75},
-	"gemini-3.5-flash":       {1.50, 9.00},
-	"gemini-3.5-flash-lite":  {0.30, 2.50},
+	"gemini-3.1-pro-preview": {InputPerMillion: 2.00, OutputPerMillion: 12.00},
+	"gemini-3.8-flash":       {InputPerMillion: 0.75, OutputPerMillion: 3.75},
+	"gemini-3.7-flash":       {InputPerMillion: 0.75, OutputPerMillion: 3.75},
+	"gemini-3.5-flash":       {InputPerMillion: 1.50, OutputPerMillion: 9.00},
+	"gemini-3.5-flash-lite":  {InputPerMillion: 0.30, OutputPerMillion: 2.50},
 
 	// xAI.
-	"grok-4.7":       {2.00, 6.00},
-	"grok-4.6":       {2.00, 6.00},
-	"grok-4.5":       {2.00, 6.00},
-	"grok-build-0.1": {1.00, 2.00},
+	"grok-4.7":       {InputPerMillion: 2.00, OutputPerMillion: 6.00},
+	"grok-4.6":       {InputPerMillion: 2.00, OutputPerMillion: 6.00},
+	"grok-4.5":       {InputPerMillion: 2.00, OutputPerMillion: 6.00},
+	"grok-build-0.1": {InputPerMillion: 1.00, OutputPerMillion: 2.00},
 
 	// DeepSeek. The published table has an off-peak rate at half price; the
 	// peak (standard) rate is recorded, so a budget errs high.
-	"deepseek-v4-pro":        {1.32, 3.96},
-	"deepseek-v4-pro-0813":   {1.32, 3.96},
-	"deepseek-v4.1-flash":    {0.30, 1.20},
-	"deepseek-v4-flash":      {0.30, 1.20},
-	"deepseek-v4-flash-0731": {0.30, 1.20},
+	"deepseek-v4-pro":        {InputPerMillion: 1.32, OutputPerMillion: 3.96},
+	"deepseek-v4-pro-0813":   {InputPerMillion: 1.32, OutputPerMillion: 3.96},
+	"deepseek-v4.1-flash":    {InputPerMillion: 0.30, OutputPerMillion: 1.20},
+	"deepseek-v4-flash":      {InputPerMillion: 0.30, OutputPerMillion: 1.20},
+	"deepseek-v4-flash-0731": {InputPerMillion: 0.30, OutputPerMillion: 1.20},
 
 	// StepFun.
-	"step-3.7-flash": {0.20, 1.15},
-	"step-3.5-flash": {0.10, 0.30},
+	"step-3.7-flash": {InputPerMillion: 0.20, OutputPerMillion: 1.15},
+	"step-3.5-flash": {InputPerMillion: 0.10, OutputPerMillion: 0.30},
 
 	// Moonshot.
-	"kimi-k3":        {3.00, 15.00},
-	"kimi-k2.7-code": {0.95, 4.00},
-	"kimi-k2.6":      {0.95, 4.00},
+	"kimi-k3":        {InputPerMillion: 3.00, OutputPerMillion: 15.00},
+	"kimi-k2.7-code": {InputPerMillion: 0.95, OutputPerMillion: 4.00},
+	"kimi-k2.6":      {InputPerMillion: 0.95, OutputPerMillion: 4.00},
 
 	// MiniMax.
-	"minimax-m3":   {0.30, 1.20},
-	"minimax-m2.7": {0.30, 1.20},
+	"minimax-m3":   {InputPerMillion: 0.30, OutputPerMillion: 1.20},
+	"minimax-m2.7": {InputPerMillion: 0.30, OutputPerMillion: 1.20},
 
 	// Zhipu.
-	"glm-5.3":       {1.40, 4.40},
-	"glm-5.3-flash": {0.15, 0.50},
-	"glm-5.2":       {0.40, 2.00},
-	"glm-4.7":       {0.60, 2.20},
+	"glm-5.3":       {InputPerMillion: 1.40, OutputPerMillion: 4.40},
+	"glm-5.3-flash": {InputPerMillion: 0.15, OutputPerMillion: 0.50},
+	"glm-5.2":       {InputPerMillion: 0.40, OutputPerMillion: 2.00},
+	"glm-4.7":       {InputPerMillion: 0.60, OutputPerMillion: 2.20},
 
 	// Alibaba Qwen.
-	"qwen3.8-max":   {2.00, 6.00},
-	"qwen3.8-27b":   {0.50, 3.00},
-	"qwen3.8-flash": {0.30, 1.20},
-	"qwen3.7-max":   {2.50, 7.50},
-	"qwen3.6-flash": {0.20, 0.80},
+	"qwen3.8-max":   {InputPerMillion: 2.00, OutputPerMillion: 6.00},
+	"qwen3.8-27b":   {InputPerMillion: 0.50, OutputPerMillion: 3.00},
+	"qwen3.8-flash": {InputPerMillion: 0.30, OutputPerMillion: 1.20},
+	"qwen3.7-max":   {InputPerMillion: 2.50, OutputPerMillion: 7.50},
+	"qwen3.6-flash": {InputPerMillion: 0.20, OutputPerMillion: 0.80},
 
 	// Mistral.
-	"mistral-large-2512": {0.50, 1.50},
-	"devstral-2512":      {0.40, 2.00},
-	"mistral-medium-3-5": {1.50, 7.50},
-	"codestral-2508":     {0.30, 0.90},
+	"mistral-large-2512": {InputPerMillion: 0.50, OutputPerMillion: 1.50},
+	"devstral-2512":      {InputPerMillion: 0.40, OutputPerMillion: 2.00},
+	"mistral-medium-3-5": {InputPerMillion: 1.50, OutputPerMillion: 7.50},
+	"codestral-2508":     {InputPerMillion: 0.30, OutputPerMillion: 0.90},
 
 	// Baidu.
-	"ernie-4.5-300b-a47b": {0.90, 3.60},
+	"ernie-4.5-300b-a47b": {InputPerMillion: 0.90, OutputPerMillion: 3.60},
 
 	// Volcengine.
-	"doubao-seed-2-1-pro":   {0.60, 3.00},
-	"doubao-seed-2-1-turbo": {0.30, 1.50},
+	"doubao-seed-2-1-pro":   {InputPerMillion: 0.60, OutputPerMillion: 3.00},
+	"doubao-seed-2-1-turbo": {InputPerMillion: 0.30, OutputPerMillion: 1.50},
 
 	// Fast inference hosts.
-	"openai/gpt-oss-120b":     {0.15, 0.75},
-	"openai/gpt-oss-20b":      {0.10, 0.50},
-	"llama-3.3-70b-versatile": {0.59, 0.79},
-	"qwen/qwen3.8-27b":        {0.80, 4.00},
-	"gpt-oss-120b":            {0.35, 0.75},
-	"qwen-3.8-27b":            {0.35, 0.75},
+	"openai/gpt-oss-120b":     {InputPerMillion: 0.15, OutputPerMillion: 0.75},
+	"openai/gpt-oss-20b":      {InputPerMillion: 0.10, OutputPerMillion: 0.50},
+	"llama-3.3-70b-versatile": {InputPerMillion: 0.59, OutputPerMillion: 0.79},
+	"qwen/qwen3.8-27b":        {InputPerMillion: 0.80, OutputPerMillion: 4.00},
+	"gpt-oss-120b":            {InputPerMillion: 0.35, OutputPerMillion: 0.75},
+	"qwen-3.8-27b":            {InputPerMillion: 0.35, OutputPerMillion: 0.75},
 
 	// Third-party hosts of open weights.
-	"together/kimi-k3":            {3.00, 15.00},
-	"together/qwen3.8-27b":        {0.42, 3.00},
-	"deepinfra/kimi-k3":           {2.85, 14.25},
-	"deepinfra/qwen3.8-27b":       {0.20, 2.50},
-	"fireworks/deepseek-v4-pro":   {0.90, 3.60},
-	"fireworks/kimi-k3":           {3.00, 15.00},
-	"siliconflow/deepseek-v4-pro": {1.50, 3.14},
-	"novita/deepseek-v4-pro":      {1.60, 3.20},
-	"nvidia/kimi-k3":              {3.00, 15.00},
-	"nebius/kimi-k3":              {2.80, 14.00},
-	"sambanova/minimax-m2.7":      {0.60, 2.40},
-	"hyperbolic/qwen3.8-27b":      {0.40, 2.50},
-	"huggingface/glm-5.3":         {1.40, 4.40},
-	"vercel/minimax-m3":           {0.24, 0.96},
-	"github/gpt-6-astra":          {10.00, 50.00},
+	"together/kimi-k3":            {InputPerMillion: 3.00, OutputPerMillion: 15.00},
+	"together/qwen3.8-27b":        {InputPerMillion: 0.42, OutputPerMillion: 3.00},
+	"deepinfra/kimi-k3":           {InputPerMillion: 2.85, OutputPerMillion: 14.25},
+	"deepinfra/qwen3.8-27b":       {InputPerMillion: 0.20, OutputPerMillion: 2.50},
+	"fireworks/deepseek-v4-pro":   {InputPerMillion: 0.90, OutputPerMillion: 3.60},
+	"fireworks/kimi-k3":           {InputPerMillion: 3.00, OutputPerMillion: 15.00},
+	"siliconflow/deepseek-v4-pro": {InputPerMillion: 1.50, OutputPerMillion: 3.14},
+	"novita/deepseek-v4-pro":      {InputPerMillion: 1.60, OutputPerMillion: 3.20},
+	"nvidia/kimi-k3":              {InputPerMillion: 3.00, OutputPerMillion: 15.00},
+	"nebius/kimi-k3":              {InputPerMillion: 2.80, OutputPerMillion: 14.00},
+	"sambanova/minimax-m2.7":      {InputPerMillion: 0.60, OutputPerMillion: 2.40},
+	"hyperbolic/qwen3.8-27b":      {InputPerMillion: 0.40, OutputPerMillion: 2.50},
+	"huggingface/glm-5.3":         {InputPerMillion: 1.40, OutputPerMillion: 4.40},
+	"vercel/minimax-m3":           {InputPerMillion: 0.24, OutputPerMillion: 0.96},
+	"github/gpt-6-astra":          {InputPerMillion: 10.00, OutputPerMillion: 50.00},
 
 	// Aggregators.
-	"anthropic/claude-opus-5.5": {4.00, 20.00},
-	"openai/gpt-6-astra":        {10.00, 50.00},
-	"moonshotai/kimi-k3":        {3.00, 15.00},
-	"z-ai/glm-5.3":              {1.40, 4.40},
-	"qwen/qwen3.8-max":          {2.00, 6.00},
-	"deepseek/deepseek-v4-pro":  {0.94, 1.87},
+	"anthropic/claude-opus-5.5": {InputPerMillion: 4.00, OutputPerMillion: 20.00},
+	"openai/gpt-6-astra":        {InputPerMillion: 10.00, OutputPerMillion: 50.00},
+	"moonshotai/kimi-k3":        {InputPerMillion: 3.00, OutputPerMillion: 15.00},
+	"z-ai/glm-5.3":              {InputPerMillion: 1.40, OutputPerMillion: 4.40},
+	"qwen/qwen3.8-max":          {InputPerMillion: 2.00, OutputPerMillion: 6.00},
+	"deepseek/deepseek-v4-pro":  {InputPerMillion: 0.94, OutputPerMillion: 1.87},
 
 	// Search and enterprise endpoints.
-	"sonar-pro":              {3.00, 15.00},
-	"sonar-deep-research":    {2.00, 8.00},
-	"command-a-plus-05-2026": {2.50, 10.00},
+	"sonar-pro":              {InputPerMillion: 3.00, OutputPerMillion: 15.00},
+	"sonar-deep-research":    {InputPerMillion: 2.00, OutputPerMillion: 8.00},
+	"command-a-plus-05-2026": {InputPerMillion: 2.50, OutputPerMillion: 10.00},
 }
 
 // PlanInfo describes a subscription that bills in credits rather than in
@@ -264,11 +273,11 @@ func (m Model) PricingWith(overrides map[string]Pricing) Pricing {
 // Cost estimates the dollars a usage report costs at this price. An unknown
 // price yields zero, and callers use Known() to say unknown, not zero.
 //
-// A cache read is billed at a tenth of the input rate and a cache write at
-// 1.25x, both Anthropic's published multipliers. Cache read and write are
-// subtracted from the prompt total before the regular rate is applied, so a
-// token that is reported in both PromptTokens and the cache counters is charged
-// once, not twice.
+// A cache read and write are subtracted from the prompt total before the
+// regular rate is applied, so a token that is reported in both PromptTokens and
+// the cache counters is charged once, not twice. The cached parts are billed at
+// p.CacheReadMultiplier and p.CacheWriteMultiplier of the input rate, falling
+// back to the Anthropic/GPT/Gemini defaults of a tenth and 1.25x.
 func (p Pricing) Cost(usage Usage) float64 {
 	inputTokens := usage.PromptTokens
 	cacheRead := usage.CacheReadTokens
@@ -287,16 +296,28 @@ func (p Pricing) Cost(usage Usage) float64 {
 	}
 	regularInput := inputTokens - cacheRead - cacheWrite
 
+	readMultiplier := p.CacheReadMultiplier
+	if readMultiplier == 0 {
+		readMultiplier = DefaultCacheReadMultiplier
+	}
+	writeMultiplier := p.CacheWriteMultiplier
+	if writeMultiplier == 0 {
+		writeMultiplier = DefaultCacheWriteMultiplier
+	}
+
 	return (float64(regularInput)*p.InputPerMillion +
-		float64(cacheRead)*p.InputPerMillion*cacheReadMultiplier +
-		float64(cacheWrite)*p.InputPerMillion*cacheWriteMultiplier +
+		float64(cacheRead)*p.InputPerMillion*readMultiplier +
+		float64(cacheWrite)*p.InputPerMillion*writeMultiplier +
 		float64(usage.CompletionTokens)*p.OutputPerMillion) / 1_000_000
 }
 
-// Cache price multipliers relative to the standard input rate.
+// Default cache price multipliers relative to the standard input rate. They
+// are Anthropic's published figures, shared by OpenAI GPT-5/6 (cached input at
+// a tenth) and Gemini 3 (cached input at a tenth). A model that deviates
+// records its own rate on the Pricing entry instead.
 const (
-	cacheReadMultiplier  = 0.10
-	cacheWriteMultiplier = 1.25
+	DefaultCacheReadMultiplier  = 0.10
+	DefaultCacheWriteMultiplier = 1.25
 )
 
 // Cost estimates the dollars a usage report costs on this model. An unknown
@@ -338,8 +359,10 @@ func OverridesFrom(prices map[string]config.ModelPrice) map[string]Pricing {
 	overrides := make(map[string]Pricing, len(prices))
 	for id, price := range prices {
 		overrides[id] = Pricing{
-			InputPerMillion:  price.InputPerMillion,
-			OutputPerMillion: price.OutputPerMillion,
+			InputPerMillion:      price.InputPerMillion,
+			OutputPerMillion:     price.OutputPerMillion,
+			CacheReadMultiplier:  price.CacheReadMultiplier,
+			CacheWriteMultiplier: price.CacheWriteMultiplier,
 		}
 	}
 	return overrides

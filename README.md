@@ -284,7 +284,7 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
 | `costBudgetUsd` | stop the run once estimated session spend passes this |
 | `baseUrls` | a custom base URL per provider id |
 | `modelOverrides` | map a stable model id to the id sent on the wire |
-| `modelPricing` | give an unpriced model a price so a budget can fire |
+| `modelPricing` | give an unpriced model a price so a budget can fire; `inputPerMillion` and `outputPerMillion` are the rates, and optional `cacheReadMultiplier` / `cacheWriteMultiplier` override the cached-token price as a fraction of input (defaults 0.10 / 1.25) |
 | `mcpServers` | MCP servers to start with a session |
 | `workerCommands` | override a background worker's argv, keyed by worker id |
 | `subagentModels` | run a subagent role (`explore`, `general`, `builder`, `code-review`, `security`) on another model, as a catalogue id, `provider:model` or `provider/model` |

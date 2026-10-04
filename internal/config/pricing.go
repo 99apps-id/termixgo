@@ -9,6 +9,11 @@ package config
 type ModelPrice struct {
 	InputPerMillion  float64 `json:"inputPerMillion"`
 	OutputPerMillion float64 `json:"outputPerMillion"`
+	// CacheReadMultiplier and CacheWriteMultiplier override the vendor's
+	// cached-input rate as a fraction of input, for a model whose cache is
+	// priced differently. Zero means "use the provider default".
+	CacheReadMultiplier  float64 `json:"cacheReadMultiplier,omitempty"`
+	CacheWriteMultiplier float64 `json:"cacheWriteMultiplier,omitempty"`
 }
 
 // Known reports whether either rate is set above zero.

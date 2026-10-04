@@ -27,7 +27,7 @@ func TestPricingWithFallsBackToTheTable(t *testing.T) {
 	model := pickModel(t, "a priced cloud model", func(m Model) bool {
 		return !m.Free() && m.Pricing().Known()
 	})
-	if got := model.PricingWith(map[string]Pricing{"something-else": {1, 2}}); got != model.Pricing() {
+	if got := model.PricingWith(map[string]Pricing{"something-else": {InputPerMillion: 1, OutputPerMillion: 2}}); got != model.Pricing() {
 		t.Errorf("an unrelated override must not change the price: %+v", got)
 	}
 	if got := model.PricingWith(nil); got != model.Pricing() {

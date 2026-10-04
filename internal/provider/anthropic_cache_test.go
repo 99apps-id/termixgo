@@ -183,3 +183,35 @@ func TestPricingCostCachedTokensDiscount(t *testing.T) {
 		t.Errorf("costWrite = %v, want 11.0", costWrite)
 	}
 }
+
+func TestPricingCostPerModelCacheMultiplier(t *testing.T) {
+	// A model whose cache read is priced at half the input rate (some earlier
+	// OpenAI tiers) records its own multiplier, which wins over the shared
+	// default. With $10/M input, 1M cached tokens cost $5, not the default
+	// $1.
+	halfCache := Pricing{InputPerMillion: 10.0, CacheReadMultiplier: 0.50}
+	if got := halfCache.Cost(Usage{
+		PromptTokens:    1_000_000,
+		CacheReadTokens: 1_000_000,
+	}); math.Abs(got-5.0) > 1e-9 {
+		t.Errorf("half-cache cost = %v, want 5.0", got)
+	}
+
+	// A zero multiplier is "unset", so the default a-tenth applies.
+	defaulted := Pricing{InputPerMillion: 10.0}
+	if got := defaulted.Cost(Usage{
+		PromptTokens:    1_000_000,
+		CacheReadTokens: 1_000_000,
+	}); math.Abs(got-1.0) > 1e-9 {
+		t.Errorf("default cache cost = %v, want 1.0", got)
+	}
+
+	// A cache write multiplier overrides the 1.25 default independently.
+	tripleWrite := Pricing{InputPerMillion: 10.0, CacheWriteMultiplier: 3.0}
+	if got := tripleWrite.Cost(Usage{
+		PromptTokens:     1_000_000,
+		CacheWriteTokens: 1_000_000,
+	}); math.Abs(got-30.0) > 1e-9 {
+		t.Errorf("triple-write cost = %v, want 30.0", got)
+	}
+}

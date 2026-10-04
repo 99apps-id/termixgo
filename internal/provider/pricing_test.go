@@ -71,7 +71,7 @@ func TestPlanModelsBillInCredits(t *testing.T) {
 	}
 	// An operator override still wins, so a plan can be approximated in dollars
 	// when the operator knows the rate.
-	override := map[string]Pricing{"qwen-token-plan/qwen3.8-max": {1, 2}}
+	override := map[string]Pricing{"qwen-token-plan/qwen3.8-max": {InputPerMillion: 1, OutputPerMillion: 2}}
 	if _, known := (Model{ID: "qwen-token-plan/qwen3.8-max", Provider: "qwen-token-plan"}).CostModel(override); !known {
 		t.Errorf("a modelPricing override should still price a plan model")
 	}
@@ -83,26 +83,26 @@ func TestPlanModelsBillInCredits(t *testing.T) {
 func TestVerifiedVendorRates(t *testing.T) {
 	cases := map[string]Pricing{
 		// DeepSeek (peak/standard cache-miss rate).
-		"deepseek-v4-pro":     {1.32, 3.96},
-		"deepseek-v4.1-flash": {0.30, 1.20},
-		"deepseek-v4-flash":   {0.30, 1.20},
+		"deepseek-v4-pro":     {InputPerMillion: 1.32, OutputPerMillion: 3.96},
+		"deepseek-v4.1-flash": {InputPerMillion: 0.30, OutputPerMillion: 1.20},
+		"deepseek-v4-flash":   {InputPerMillion: 0.30, OutputPerMillion: 1.20},
 		// Moonshot. Zhipu. Qwen.
-		"kimi-k2.7-code": {0.95, 4.00},
-		"kimi-k2.6":      {0.95, 4.00},
-		"glm-5.3":        {1.40, 4.40},
-		"qwen3.8-27b":    {0.50, 3.00},
-		"qwen3.7-max":    {2.50, 7.50},
+		"kimi-k2.7-code": {InputPerMillion: 0.95, OutputPerMillion: 4.00},
+		"kimi-k2.6":      {InputPerMillion: 0.95, OutputPerMillion: 4.00},
+		"glm-5.3":        {InputPerMillion: 1.40, OutputPerMillion: 4.40},
+		"qwen3.8-27b":    {InputPerMillion: 0.50, OutputPerMillion: 3.00},
+		"qwen3.7-max":    {InputPerMillion: 2.50, OutputPerMillion: 7.50},
 		// Third-party hosts.
-		"deepinfra/kimi-k3":           {2.85, 14.25},
-		"deepinfra/qwen3.8-27b":       {0.20, 2.50},
-		"siliconflow/deepseek-v4-pro": {1.50, 3.14},
-		"novita/deepseek-v4-pro":      {1.60, 3.20},
-		"huggingface/glm-5.3":         {1.40, 4.40},
-		"vercel/minimax-m3":           {0.24, 0.96},
-		"sambanova/minimax-m2.7":      {0.60, 2.40},
+		"deepinfra/kimi-k3":           {InputPerMillion: 2.85, OutputPerMillion: 14.25},
+		"deepinfra/qwen3.8-27b":       {InputPerMillion: 0.20, OutputPerMillion: 2.50},
+		"siliconflow/deepseek-v4-pro": {InputPerMillion: 1.50, OutputPerMillion: 3.14},
+		"novita/deepseek-v4-pro":      {InputPerMillion: 1.60, OutputPerMillion: 3.20},
+		"huggingface/glm-5.3":         {InputPerMillion: 1.40, OutputPerMillion: 4.40},
+		"vercel/minimax-m3":           {InputPerMillion: 0.24, OutputPerMillion: 0.96},
+		"sambanova/minimax-m2.7":      {InputPerMillion: 0.60, OutputPerMillion: 2.40},
 		// Fast hosts.
-		"openai/gpt-oss-120b": {0.15, 0.75},
-		"openai/gpt-oss-20b":  {0.10, 0.50},
+		"openai/gpt-oss-120b": {InputPerMillion: 0.15, OutputPerMillion: 0.75},
+		"openai/gpt-oss-20b":  {InputPerMillion: 0.10, OutputPerMillion: 0.50},
 	}
 	for id, want := range cases {
 		model, ok := ModelByID(id)
