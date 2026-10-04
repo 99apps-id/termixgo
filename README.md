@@ -840,6 +840,7 @@ issue.
 termixgo                        # terminal UI (setup runs on first use)
 termixgo setup                  # open the onboarding wizard
 termixgo run "<prompt>"         # one prompt, streamed to stdout
+termixgo run --yes "<prompt>"   # auto-approve tool prompts for this run
 termixgo models [--provider id] # list the model catalogue
 termixgo model [id]             # show or set the default model
 termixgo endpoint [provider url]# show or set a provider custom base URL
@@ -866,6 +867,10 @@ termixgo help
 `termixgo run` and any invocation without a TTY fall back to a plain streaming
 mode, so it composes with pipes and CI. It exits non-zero when the turn failed,
 so a pipeline can tell a rejected key from a completed answer.
+
+`--yes` (or `-y`) answers every tool approval with "once" for that run. It is
+scoped to the process: nothing is added to the always-allowed list, learned
+memory, or a folder grant, so a CI run never loosens the interactive policy.
 
 ## Reliability
 

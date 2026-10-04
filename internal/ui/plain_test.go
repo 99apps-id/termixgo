@@ -127,6 +127,20 @@ func TestPlainInteractorApproval(t *testing.T) {
 	}
 }
 
+// TestPlainInteractorAutoApprove answers without reading stdin and without
+// prompting, which is the --yes contract for a pipeline where stdin is the
+// request stream, not an answer channel.
+func TestPlainInteractorAutoApprove(t *testing.T) {
+	var out bytes.Buffer
+	interactor := &plainInteractor{in: strings.NewReader(""), out: &out, autoApprove: true}
+	if got := interactor.Approve(agent.ApprovalRequest{Tool: "write_file", Risk: "edit"}); got != agent.DecisionAllowOnce {
+		t.Fatalf("auto-approve = %v, want allow once", got)
+	}
+	if out.Len() != 0 {
+		t.Errorf("auto-approve wrote a prompt: %q", out.String())
+	}
+}
+
 // TestPlainInteractorKeepsTheNextLine covers the reader lifecycle. A
 // bufio.Reader buffers ahead of the line it returns, so building a new one for
 // every question throws away whatever else arrived in the same read. Over a

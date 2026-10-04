@@ -46,7 +46,7 @@ func TestRunOnceCompletesATurnAndLeavesNoSession(t *testing.T) {
 	defer server.Close()
 
 	var stdout, stderr bytes.Buffer
-	if err := runOnce("say hi", &stdout, &stderr); err != nil {
+	if err := runOnce("say hi", false, &stdout, &stderr); err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "hello from the model") {
@@ -78,8 +78,37 @@ func TestRunOnceReportsATurnFailure(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if err := runOnce("say hi", &stdout, &stderr); err == nil {
+	if err := runOnce("say hi", false, &stdout, &stderr); err == nil {
 		t.Fatalf("a rejected request must fail the command")
+	}
+}
+
+// TestParseRunArgsHandlesYesInEveryPosition pins the --yes/-y placement: the
+// flag may lead or trail the prompt, and prompt words are never eaten by the
+// flag scan.
+func TestParseRunArgsHandlesYesInEveryPosition(t *testing.T) {
+	cases := []struct {
+		args []string
+		prompt string
+		yes   bool
+	}{
+		{[]string{"--yes", "fix", "the", "test"}, "fix the test", true},
+		{[]string{"-y", "fix the test"}, "fix the test", true},
+		{[]string{"fix the test", "--yes"}, "fix the test", true},
+		{[]string{"fix the test"}, "fix the test", false},
+		{[]string{"answer", "--yes", "me"}, "answer me", true},
+	}
+	for _, c := range cases {
+		prompt, yes, err := parseRunArgs(c.args)
+		if err != nil {
+			t.Fatalf("%v: %v", c.args, err)
+		}
+		if prompt != c.prompt || yes != c.yes {
+			t.Errorf("%v = (%q, %v), want (%q, %v)", c.args, prompt, yes, c.prompt, c.yes)
+		}
+	}
+	if _, _, err := parseRunArgs([]string{"--yes"}); err == nil {
+		t.Errorf("a --yes with no prompt must fail")
 	}
 }
 

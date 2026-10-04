@@ -76,10 +76,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	case "setup":
 		return runInteractive(stdin, stdout, ui.Options{StartSetup: true})
 	case "run", "-p", "--print":
-		if len(args) < 2 {
-			return fmt.Errorf("run needs a prompt")
+		prompt, autoApprove, err := parseRunArgs(args[1:])
+		if err != nil {
+			return err
 		}
-		return runOnce(strings.Join(args[1:], " "), stdout, stderr)
+		return runOnce(prompt, autoApprove, stdout, stderr)
 	case "models":
 		return runModels(args[1:], stdout)
 	case "model":
@@ -150,7 +151,28 @@ func enableTelegram(application *app.App) {
 	}
 }
 
-func runOnce(prompt string, stdout, stderr io.Writer) error {
+// parseRunArgs splits the run subcommand's tail into the prompt and the
+// auto-approve flag. --yes and -y may appear before or after the prompt, so
+// scripts can write either `termixgo run --yes "...`" or `termixgo run "..."
+// --yes`. Everything else is the prompt.
+func parseRunArgs(args []string) (prompt string, autoApprove bool, err error) {
+	var words []string
+	for _, arg := range args {
+		switch arg {
+		case "--yes", "-y":
+			autoApprove = true
+		default:
+			words = append(words, arg)
+		}
+	}
+	prompt = strings.Join(words, " ")
+	if strings.TrimSpace(prompt) == "" {
+		return "", false, fmt.Errorf("run needs a prompt")
+	}
+	return prompt, autoApprove, nil
+}
+
+func runOnce(prompt string, autoApprove bool, stdout, stderr io.Writer) error {
 	application, err := app.New("")
 	if err != nil {
 		return err
@@ -167,6 +189,9 @@ func runOnce(prompt string, stdout, stderr io.Writer) error {
 	application.SetEphemeral(true)
 	ctx, stop := signalContext()
 	defer stop()
+	if autoApprove {
+		return ui.RunOnceAutoApprove(ctx, application, prompt, stdout)
+	}
 	return ui.RunOnceWithContext(ctx, application, prompt, stdout)
 }
 
@@ -1323,7 +1348,8 @@ func writeUsage(stdout io.Writer) {
 Usage:
   termixgo                        Start the terminal UI (setup runs on first use)
   termixgo setup                  Start the UI in the onboarding wizard
-  termixgo run "<prompt>"         Run one prompt and stream the answer
+  termixgo run [--yes] "<prompt>" Run one prompt and stream the answer
+                                  --yes auto-approves tool prompts for this run
   termixgo models [--provider id] List the model catalogue
   termixgo model [id]             Show or set the default model
   termixgo endpoint [provider url]

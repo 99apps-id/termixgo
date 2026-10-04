@@ -124,6 +124,10 @@ func (p *plainPrinter) print(event agent.Event) {
 type plainInteractor struct {
 	in  io.Reader
 	out io.Writer
+	// autoApprove answers every tool prompt with "once" without asking. It is
+	// the `--yes` flag on a headless run: bounded to that one process, and it
+	// never persists an allowance to config or memory.
+	autoApprove bool
 	// reader is built once and reused. A bufio.Reader buffers ahead of the line
 	// it returns, so a fresh one per question throws away whatever else arrived
 	// in the same read: over a pipe that is the operator's next request, which
@@ -148,6 +152,9 @@ func (i *plainInteractor) readLine() (string, error) {
 }
 
 func (i *plainInteractor) Approve(request agent.ApprovalRequest) agent.Decision {
+	if i.autoApprove {
+		return agent.DecisionAllowOnce
+	}
 	fmt.Fprintf(i.out, "\nApproval needed: %s (%s)\n  %s\n", request.Tool, request.Risk, request.Detail)
 	if diff := strings.TrimSpace(request.Diff); diff != "" {
 		lines := strings.Split(diff, "\n")
@@ -303,8 +310,20 @@ func RunOnce(application *app.App, prompt string, out io.Writer) error {
 
 // RunOnceWithContext is RunOnce under a caller-supplied context.
 func RunOnceWithContext(ctx context.Context, application *app.App, prompt string, out io.Writer) error {
+	return runOnceWithOptions(ctx, application, prompt, out, false)
+}
+
+// RunOnceAutoApprove runs a single prompt and answers every tool approval
+// with "once" without asking. It is the `--yes` flag on a headless run: the
+// allowance lives only for this one process and is never persisted to config
+// or learned memory.
+func RunOnceAutoApprove(ctx context.Context, application *app.App, prompt string, out io.Writer) error {
+	return runOnceWithOptions(ctx, application, prompt, out, true)
+}
+
+func runOnceWithOptions(ctx context.Context, application *app.App, prompt string, out io.Writer, autoApprove bool) error {
 	printer := newPlainPrinter(out, isTerminalWriter(out))
-	application.SetInteractor(&plainInteractor{in: os.Stdin, out: out})
+	application.SetInteractor(&plainInteractor{in: os.Stdin, out: out, autoApprove: autoApprove})
 	stop := drainEvents(application, printer)
 	err := application.RunTurn(ctx, ExpandMentions(application.Workspace(), prompt))
 	// Stopping first waits for the printer, so the answer is fully written and
