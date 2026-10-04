@@ -125,21 +125,6 @@ func canonicalGitPath(path string) string {
 	return filepath.Clean(filepath.FromSlash(path))
 }
 
-// gitArgs builds argv from optional flags and paths.
-func gitArgs(prefix []string, flags map[string]bool, paths []string) []string {
-	args := append([]string{}, prefix...)
-	for _, flag := range []string{"--staged", "--stat", "--all"} {
-		if flags[flag] {
-			args = append(args, flag)
-		}
-	}
-	if len(paths) > 0 {
-		args = append(args, "--")
-		args = append(args, paths...)
-	}
-	return args
-}
-
 // validGitRev keeps a model-supplied revision out of the option position.
 // Real revisions (shas, branch names, ranges) never start with a dash, and
 // whitespace or control bytes would split one argument into several; git

@@ -24,11 +24,6 @@ var bannerGlyphs = [][5]string{
 	{" ███ ", "█   █", "█   █", "█   █", " ███ "},        // O
 }
 
-// glyphWidth is the uniform row width inside one glyph.
-func glyphWidth(glyph [5]string) int {
-	return lipgloss.Width(glyph[0])
-}
-
 // bannerRows assembles the plain art with every row padded to the same width.
 func bannerRows() []string {
 	rows := make([]string, len(bannerGlyphs[0]))
