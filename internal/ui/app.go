@@ -1689,8 +1689,17 @@ func (m *Model) applyComposerStyle() {
 	if m.running || m.composerSelected {
 		base = m.styles.ComposerBusy
 	}
+	// A select-all must be visible: paint the text in reverse video, the same
+	// cue the transcript selection uses, so "Ctrl+A then Ctrl+C" reads as a
+	// selection rather than a silent state.
+	text := lipgloss.NewStyle()
+	if m.composerSelected {
+		text = lipgloss.NewStyle().Reverse(true)
+	}
 	m.composer.FocusedStyle.Base = base
 	m.composer.BlurredStyle.Base = base
+	m.composer.FocusedStyle.Text = text
+	m.composer.BlurredStyle.Text = text
 }
 
 // hintsVisible reports whether the row that carries the live working

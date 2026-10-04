@@ -150,6 +150,21 @@ func TestScrollByEasesTowardTheTarget(t *testing.T) {
 	}
 }
 
+// TestComposerSelectAllIsVisible proves Ctrl+A is not a silent state: the
+// composer text is painted in reverse video, the same cue the transcript uses.
+func TestComposerSelectAllIsVisible(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("some draft")
+
+	if model.composer.FocusedStyle.Text.GetReverse() {
+		t.Fatal("the composer must not be reversed before a select-all")
+	}
+	selected, _ := send(t, model, tea.KeyMsg{Type: tea.KeyCtrlA})
+	if !selected.composer.FocusedStyle.Text.GetReverse() {
+		t.Errorf("a select-all must be visible: the composer text style is not reversed")
+	}
+}
+
 // TestScrollStopsWhenTheContentShrinks pins the guard against a spin: a target
 // set before the transcript was cleared must be clamped so the tick loop can
 // reach it, instead of chasing an offset the viewport keeps clamping.
