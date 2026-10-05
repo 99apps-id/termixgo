@@ -185,7 +185,10 @@ Keys:
 | `Ctrl+Y` | copy the newest answer to the clipboard |
 | `Esc` | stop the running turn, then clear the input |
 | `PgUp` / `PgDn`, wheel | scroll the transcript |
-| `Ctrl+C` | quit |
+| Drag mouse | select text in the transcript or composer |
+| `Ctrl+A` | select all text in the composer |
+| `Ctrl+C` | copy selected text (or range) to clipboard |
+| `Ctrl+X` | quit |
 
 While a turn runs, `Enter` steers it: the message is folded into the running
 turn at its next step so you can change course without stopping it. A slash

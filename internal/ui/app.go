@@ -155,6 +155,31 @@ type Model struct {
 	// often, so a fast model cannot flood the terminal with full frames.
 	lastPaint  time.Time
 	pendingAsk *askRequestMsg
+
+	// contentLines holds the rendered transcript lines used to map mouse
+	// selections and cut copied text.
+	contentLines []string
+
+	// selecting reports a mouse drag in flight over the transcript.
+	// selActive reports an established transcript selection with its
+	// highlight painted on the viewport.
+	selecting bool
+	selActive bool
+	selAnchor selPoint
+	selFocus  selPoint
+
+	// composerSelected reports a Ctrl+A select-all in the composer.
+	composerSelected bool
+
+	// composerSelActive reports a drag selection inside the composer.
+	composerSelActive bool
+	composerSelAnchor selPoint
+	composerSelFocus  selPoint
+
+	// scrollTarget is the offset the transcript is gliding toward.
+	// scrollTicking reports whether an animation frame is already scheduled.
+	scrollTarget  int
+	scrollTicking bool
 }
 
 // Limits bundles size thresholds used by the layout and the setup wizard.
@@ -486,11 +511,15 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		// The wheel scrolls the transcript. Keys stay with the composer:
-		// forwarding them to the viewport would scroll while typing.
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(message)
-		return m, cmd
+		return m.handleMouse(typed)
+
+	case scrollTickMsg:
+		m.stepScroll()
+		if m.viewport.YOffset == m.scrollTarget {
+			m.scrollTicking = false
+			return m, nil
+		}
+		return m, scrollTick()
 	}
 
 	var cmd tea.Cmd
@@ -781,8 +810,43 @@ func (m *Model) armEscapeNoise() {
 // handleKey routes keys by what is currently on screen.
 func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Global quit.
-	if key.String() == "ctrl+c" {
+	if key.String() == "ctrl+x" {
 		return m, tea.Quit
+	}
+
+	// Copy shortcuts: Ctrl+C copies what is currently selected, in the
+	// order composer range, composer select-all, then transcript selection.
+	// Outside a selection it is a no-op so the key never quits silently.
+	if key.String() == "ctrl+c" {
+		if m.composerSelActive {
+			return m.copyComposerRange()
+		}
+		if m.composerSelected {
+			return m.copyComposerSelection()
+		}
+		if m.selActive {
+			return m.copyTranscriptSelection()
+		}
+		return m, nil
+	}
+
+	// Any typing, movement or shortcut drops an active transcript or
+	// composer drag selection so new input is not highlighted.
+	if m.selecting || m.selActive || m.composerSelActive {
+		m.selecting = false
+		m.selActive = false
+		m.composerSelActive = false
+		m.refresh()
+	}
+
+	// Typing over a selected composer replaces the whole buffer.
+	if m.composerSelected && replacesComposerSelection(key) {
+		m.composer.SetValue("")
+		m.composerSelected = false
+		if deletesComposerSelection(key) {
+			m.refresh()
+			return m, nil
+		}
 	}
 
 	// A raw terminal escape fragment is never text the operator typed.
@@ -814,6 +878,15 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key.String() {
+	case "ctrl+a":
+		if strings.TrimSpace(m.composer.Value()) == "" {
+			return m, nil
+		}
+		m.composerSelActive = false
+		m.composerSelected = true
+		m.notice = "All text selected. Ctrl+C copies, Backspace deletes."
+		m.refresh()
+		return m, nil
 	case "ctrl+y":
 		return m.slashCopy("")
 	case "ctrl+o":
@@ -990,7 +1063,7 @@ var approvalOptions = []struct {
 // ordinary submit path with the slash value staged only at the last moment.
 func (m *Model) handleSlashMenuKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
-	case "ctrl+c":
+	case "ctrl+x", "ctrl+c":
 		return m, tea.Quit
 	case "ctrl+o":
 		m.showDetails = !m.showDetails
@@ -1552,6 +1625,10 @@ func (m *Model) refresh() {
 	m.applyComposerStyle()
 	follow := m.viewport.AtBottom()
 	content := transcript(m.blocks, m.styles, m.viewport.Width, m.showDetails)
+	m.contentLines = strings.Split(content, "\n")
+	if m.selecting || m.selActive {
+		content = strings.Join(highlightSelection(m.contentLines, m.selAnchor, m.selFocus), "\n")
+	}
 	m.viewport.SetContent(content)
 	if follow {
 		m.viewport.GotoBottom()
@@ -1893,7 +1970,11 @@ func shortID(id string) string {
 }
 
 func (m *Model) viewComposer() string {
-	return m.composer.View()
+	view := m.composer.View()
+	if m.composerSelActive {
+		view = highlightComposerSelection(view, m.composerSelAnchor, m.composerSelFocus)
+	}
+	return view
 }
 
 // applyComposerStyle moves the composer's border between its idle and busy
@@ -1902,11 +1983,17 @@ func (m *Model) viewComposer() string {
 // line spill onto the next row.
 func (m *Model) applyComposerStyle() {
 	base := m.styles.Composer
-	if m.running {
+	if m.running || m.composerSelected {
 		base = m.styles.ComposerBusy
+	}
+	text := lipgloss.NewStyle()
+	if m.composerSelected {
+		text = lipgloss.NewStyle().Reverse(true)
 	}
 	m.composer.FocusedStyle.Base = base
 	m.composer.BlurredStyle.Base = base
+	m.composer.FocusedStyle.Text = text
+	m.composer.BlurredStyle.Text = text
 }
 
 // hintsVisible reports whether the row that carries the live working
@@ -1923,12 +2010,12 @@ func (m *Model) viewHints() string {
 	if m.running {
 		elapsed := time.Since(m.runStarted).Round(time.Second)
 		if count := m.queuedCount(); count > 0 {
-			text = fmt.Sprintf(" %s working (%s) | %d queued | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C quit", m.spin.View(), elapsed, count)
+			text = fmt.Sprintf(" %s working (%s) | %d queued | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C copy | Ctrl+X quit", m.spin.View(), elapsed, count)
 		} else {
-			text = fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C quit", m.spin.View(), elapsed)
+			text = fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C copy | Ctrl+X quit", m.spin.View(), elapsed)
 		}
 	} else {
-		text = " Enter send | Ctrl+J newline | / commands @ files | Tab complete | PgUp/PgDn scroll | Ctrl+O details | Ctrl+C quit"
+		text = " Enter send | Ctrl+J newline | Drag select | Ctrl+A all | Ctrl+C copy | Ctrl+X quit | Ctrl+O details | PgUp/PgDn scroll"
 	}
 	// A hint longer than the terminal would wrap and push the frame down, so it
 	// is clipped rather than allowed to reflow the whole screen.
@@ -2207,8 +2294,8 @@ func (m *Model) viewHelp() string {
 	header := []string{m.styles.BoxTitle.Render("Commands"), ""}
 	keys := []string{
 		"", m.styles.BoxTitle.Render("Keys"), "",
-		m.styles.MenuDesc.Render("  Enter send | Ctrl+J newline | Tab complete | PgUp/PgDn scroll"),
-		m.styles.MenuDesc.Render("  Esc stop or clear | Ctrl+O toggle details | Ctrl+Y copy answer | Ctrl+C quit"),
+		m.styles.MenuDesc.Render("  Enter send | Ctrl+J newline | Tab complete | PgUp/PgDn scroll | Drag to select"),
+		m.styles.MenuDesc.Render("  Ctrl+A select all | Ctrl+C copy | Ctrl+X quit | Ctrl+Y copy answer | Ctrl+O details | Esc stop or clear"),
 	}
 	trailer := []string{m.styles.Hint.Render(fmt.Sprintf("Press any key to close. %d commands in total.", len(entries)))}
 
