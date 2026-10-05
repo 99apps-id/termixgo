@@ -127,6 +127,15 @@ type Config struct {
 	// on every step, which matters with a large toolset.
 	ToolSearchEnabled bool `json:"toolSearchEnabled,omitempty"`
 
+	// Effort is the reasoning effort asked of models that accept one: low,
+	// medium, high or max. Empty leaves the provider's own default, which is
+	// what the API does when the field is absent.
+	Effort string `json:"effort,omitempty"`
+
+	// ModelEfforts overrides Effort per model id, so a fast model can run at
+	// low while a planner runs at high in the same session.
+	ModelEfforts map[string]string `json:"modelEfforts,omitempty"`
+
 	// BaseURLs overrides provider endpoints, keyed by provider id. Local
 	// providers (ollama, lmstudio) read it too.
 	BaseURLs map[string]string `json:"baseUrls,omitempty"`
@@ -280,6 +289,20 @@ func (c *Config) normalise() {
 	if c.BaseURLs == nil {
 		c.BaseURLs = map[string]string{}
 	}
+	// A hand-edited effort that names no known level is dropped rather than
+	// sent: these wire fields are strict, and a wrong one costs the turn.
+	c.Effort = strings.ToLower(strings.TrimSpace(c.Effort))
+	if c.Effort != "" && !ValidEffort(c.Effort) {
+		c.Effort = ""
+	}
+	for id, level := range c.ModelEfforts {
+		normalised := strings.ToLower(strings.TrimSpace(level))
+		if !ValidEffort(normalised) {
+			delete(c.ModelEfforts, id)
+			continue
+		}
+		c.ModelEfforts[id] = normalised
+	}
 	if strings.TrimSpace(c.Heartbeat.Interval) == "" {
 		c.Heartbeat.Interval = "30m"
 	}
@@ -303,6 +326,34 @@ func (c *Config) normalise() {
 		configured = append(configured, server)
 	}
 	c.MCPServers = configured
+}
+
+// EffortLevels is the accepted reasoning effort levels, in escalation order.
+// The vocabulary is duplicated here by value rather than imported from
+// provider, which already imports this package.
+var EffortLevels = []string{"low", "medium", "high", "max"}
+
+// ValidEffort reports whether a level is one this build accepts.
+func ValidEffort(effort string) bool {
+	for _, known := range EffortLevels {
+		if effort == known {
+			return true
+		}
+	}
+	return false
+}
+
+// EffortFor returns the reasoning effort for one model: the per-model entry
+// when it names a valid level, otherwise the session-wide setting, otherwise
+// empty for the provider's own default.
+func (c Config) EffortFor(modelID string) string {
+	if value := strings.ToLower(strings.TrimSpace(c.ModelEfforts[modelID])); ValidEffort(value) {
+		return value
+	}
+	if value := strings.ToLower(strings.TrimSpace(c.Effort)); ValidEffort(value) {
+		return value
+	}
+	return ""
 }
 
 // BaseURL returns the configured endpoint for a provider, or the fallback.

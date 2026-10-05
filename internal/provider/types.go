@@ -82,7 +82,23 @@ type ChatRequest struct {
 	Tools       []ToolDef
 	Temperature *float64
 	MaxTokens   int
+	// Effort is the reasoning effort the operator asked for: one of
+	// EffortLow, EffortMedium, EffortHigh or EffortMax, or empty for the
+	// provider default. Each client maps it onto its own wire field, and a
+	// provider that accepts no such control sends nothing rather than a
+	// guess, because these fields are strict and a 400 costs the whole turn.
+	Effort string
 }
+
+// Reasoning effort levels. They are one shared vocabulary across providers;
+// the per-provider mapping in effort.go decides which of them each endpoint
+// accepts.
+const (
+	EffortLow    = "low"
+	EffortMedium = "medium"
+	EffortHigh   = "high"
+	EffortMax    = "max"
+)
 
 // StreamEventType discriminates the chunks a client emits.
 type StreamEventType string

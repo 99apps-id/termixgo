@@ -185,6 +185,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashApproval(args)
 	case "harness":
 		return m.slashHarness(args)
+	case "effort":
+		return m.slashEffort(args)
 	case "plan":
 		m.blocks = append(m.blocks, block{kind: blockPlan, plan: m.app.Todos().Items()})
 		m.refresh()
@@ -769,6 +771,49 @@ func (m *Model) slashApproval(args string) (tea.Model, tea.Cmd) {
 	}
 	if mode == config.ApprovalPlan {
 		note += " Mutating tools are blocked: the agent can only read and plan."
+	}
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: note})
+	m.refresh()
+	return m, nil
+}
+
+// slashEffort shows or selects the reasoning effort.
+//
+// The level is one setting shared by every provider; each client maps it onto
+// its own wire field and a provider with no such control simply sends nothing.
+// "default" clears it, which is how the operator gets the vendor's own choice
+// back after experimenting.
+func (m *Model) slashEffort(args string) (tea.Model, tea.Cmd) {
+	trimmed := strings.ToLower(strings.TrimSpace(args))
+	if trimmed == "" {
+		active := m.app.EffortFor(m.app.CurrentModel().ID)
+		if active == "" {
+			active = "(provider default)"
+		}
+		lines := []string{"Reasoning effort: " + active}
+		for _, level := range config.EffortLevels {
+			marker := "  "
+			if level == active {
+				marker = "> "
+			}
+			lines = append(lines, marker+level)
+		}
+		lines = append(lines, "  default   leave it to the provider")
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
+		m.refresh()
+		return m, nil
+	}
+	if trimmed == "default" {
+		trimmed = ""
+	}
+	if err := m.app.SetEffort(trimmed); err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		m.refresh()
+		return m, nil
+	}
+	note := "Reasoning effort is now the provider default."
+	if trimmed != "" {
+		note = "Reasoning effort is now " + trimmed + "."
 	}
 	m.blocks = append(m.blocks, block{kind: blockNotice, text: note})
 	m.refresh()

@@ -296,6 +296,7 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		CostKnown:     costKnown,
 		CostBudgetUSD: parent.Config.CostBudgetUSD,
 		ToolSearch:    parent.Config.ToolSearchEnabled,
+		Effort:        parent.Config.EffortFor(model.ID),
 		System:        def.SystemPrompt,
 	}
 	session := NewSession(parent.Workspace, model.ID)

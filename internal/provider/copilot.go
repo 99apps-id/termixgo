@@ -101,6 +101,9 @@ func (c *copilotClient) streamResponses(ctx context.Context, headers map[string]
 		payload["tools"] = tools
 		payload["tool_choice"] = "auto"
 	}
+	if effort := compatibleEffort(c.info.ID, req.Effort); effort != "" {
+		payload["reasoning_effort"] = effort
+	}
 	response, err := c.post(ctx, c.baseURL+"/responses", headers, payload)
 	if err != nil {
 		return err

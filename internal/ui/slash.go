@@ -67,6 +67,13 @@ var slashCommands = []SlashCommand{
 		{Value: "plan", Detail: "read only: mutating tools are blocked"},
 	}},
 	{Trigger: "/harness", Args: "[id]", Summary: "Show or change the agent harness"},
+	{Trigger: "/effort", Args: "[low|medium|high|max|default]", Summary: "Show or change the reasoning effort", Options: []SlashOption{
+		{Value: "low", Detail: "least thinking, fastest and cheapest"},
+		{Value: "medium", Detail: "balanced"},
+		{Value: "high", Detail: "more thinking for hard work"},
+		{Value: "max", Detail: "deepest thinking the model allows"},
+		{Value: "default", Detail: "leave the provider's own default"},
+	}},
 	{Trigger: "/plan", Args: "", Summary: "Show the current task plan"},
 	{Trigger: "/tools", Args: "", Summary: "List the tools the agent can call"},
 	{Trigger: "/mcp", Args: "[reload]", Summary: "Show the MCP servers and their tools", Options: []SlashOption{

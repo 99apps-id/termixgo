@@ -34,6 +34,11 @@ func (c *openAIClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 		payload["tools"] = encodeOpenAITools(req.Tools)
 		payload["tool_choice"] = "auto"
 	}
+	// Kimi and GLM spell the same field with their own value sets, so one
+	// mapping function decides the value rather than the caller.
+	if value := compatibleEffort(c.info.ID, req.Effort); value != "" {
+		payload["reasoning_effort"] = value
+	}
 	if streamOptionsProviders[c.info.ID] {
 		payload["stream_options"] = map[string]any{"include_usage": true}
 	}

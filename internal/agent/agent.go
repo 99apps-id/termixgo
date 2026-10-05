@@ -39,6 +39,10 @@ type Runner struct {
 	Harness string
 	// ContextBudget overrides the token budget for history compaction.
 	ContextBudget int
+	// Effort is the reasoning effort sent with every step: low, medium, high,
+	// max, or empty for the provider default. It is resolved per model by the
+	// caller so a subagent on a different model can ask for a different level.
+	Effort string
 	// Pricing is the model's cost per million tokens. Costs are reported
 	// through every usage event so the UI can show spend as it accrues.
 	Pricing provider.Pricing
@@ -156,6 +160,7 @@ runLoop:
 			SystemParts: r.systemParts(session),
 			Messages:    compactForModel(session.Messages(), r.ContextBudget),
 			Tools:       r.stepTools(discovered).Definitions(),
+			Effort:      r.Effort,
 		}
 
 		var answer strings.Builder

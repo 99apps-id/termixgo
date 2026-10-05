@@ -387,7 +387,13 @@ func agGenerationConfig(req ChatRequest) map[string]any {
 	config["maxOutputTokens"] = maxTokens
 	// Gemini 3 models cannot disable thinking; ask for a thought summary so the
 	// transcript shows the reasoning rather than dropping it.
-	config["thinkingConfig"] = map[string]any{"thinkingLevel": "medium", "includeThoughts": true}
+	level := googleEffort(req.Effort)
+	if level == "" {
+		// The Cloud Code backend expects a level, so an unset effort keeps the
+		// balanced default rather than omitting the field.
+		level = "medium"
+	}
+	config["thinkingConfig"] = map[string]any{"thinkingLevel": level, "includeThoughts": true}
 	return config
 }
 

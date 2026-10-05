@@ -38,8 +38,15 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 		payload["tools"] = tools
 		payload["tool_choice"] = "auto"
 	}
+	// A lite model rejects the top-level field and carries the level inside the
+	// reasoning object instead, so the two must not both be written.
+	if !isCodexResponsesLiteModel(req.Model) {
+		if effort := compatibleEffort(c.info.ID, req.Effort); effort != "" {
+			payload["reasoning_effort"] = effort
+		}
+	}
 	if isCodexResponsesLiteModel(req.Model) {
-		applyResponsesLite(payload, input, tools, instructions)
+		applyResponsesLite(payload, input, tools, instructions, req.Effort)
 	}
 
 	key := c.currentKey()
@@ -245,7 +252,7 @@ func encodeResponsesTools(tools []ToolDef) []map[string]any {
 // applyResponsesLite rewrites a request for the responses-lite models. They
 // carry tools and instructions as input prefix items and reject the top-level
 // tools and instructions fields; the reference executor does the same.
-func applyResponsesLite(payload map[string]any, input []map[string]any, tools []map[string]any, instructions string) {
+func applyResponsesLite(payload map[string]any, input []map[string]any, tools []map[string]any, instructions string, effort string) {
 	if tools == nil {
 		tools = []map[string]any{}
 	}
@@ -262,7 +269,13 @@ func applyResponsesLite(payload map[string]any, input []map[string]any, tools []
 	delete(payload, "tools")
 	payload["tool_choice"] = "auto"
 	payload["parallel_tool_calls"] = false
-	payload["reasoning"] = map[string]any{"effort": "medium", "context": "all_turns"}
+	// The lite models reject a top-level reasoning_effort, so the level has to
+	// travel inside the reasoning object; medium is the reference default when
+	// the operator set none.
+	if effort := openAIEffortValues(effort); effort == "" {
+		effort = "medium"
+	}
+	payload["reasoning"] = map[string]any{"effort": effort, "context": "all_turns"}
 	payload["include"] = []string{"reasoning.encrypted_content"}
 }
 

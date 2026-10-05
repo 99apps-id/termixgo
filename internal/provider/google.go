@@ -30,6 +30,17 @@ func (c *googleClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 	}
 	if supportsThoughts(req.Model) {
 		generation["thinkingConfig"] = map[string]any{"includeThoughts": true}
+		if level := googleEffort(req.Effort); level != "" {
+			// Gemini 3 takes a named level. Sending thinkingLevel and
+			// thinkingBudget together would be worse than sending neither: the
+			// API rejects the pair.
+			thinking := generation["thinkingConfig"].(map[string]any)
+			thinking["thinkingLevel"] = level
+		}
+	} else if budget := googleThinkingBudget(req.Effort); budget > 0 {
+		// The 2.5 series predates thinkingLevel and answers a named level with
+		// an error, so a level becomes a token budget instead.
+		generation["thinkingConfig"] = map[string]any{"thinkingBudget": budget}
 	}
 	if req.MaxTokens > 0 {
 		generation["maxOutputTokens"] = req.MaxTokens

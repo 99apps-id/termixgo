@@ -56,6 +56,13 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 	if req.Temperature != nil {
 		payload["temperature"] = *req.Temperature
 	}
+	// output_config.effort is the Anthropic effort control and needs no beta
+	// header. It is separate from extended thinking: it shapes how much work
+	// the whole response gets, and it is left out entirely when the operator
+	// set no effort, so the model keeps its own default.
+	if effort := anthropicEffortValues(req.Effort); effort != "" {
+		payload["output_config"] = map[string]any{"effort": effort}
+	}
 
 	applyPromptCacheToMessages(messages)
 

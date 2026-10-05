@@ -172,6 +172,43 @@ func TestCodexResponsesLiteMovesToolsAndInstructions(t *testing.T) {
 	if reasoning["context"] != "all_turns" {
 		t.Errorf("reasoning = %#v, want context all_turns", reasoning)
 	}
+	// The lite models reject the top-level field, so writing both it and the
+	// reasoning object would make every request fail.
+	if _, present := gotBody["reasoning_effort"]; present {
+		t.Errorf("a lite request must not also carry a top-level reasoning_effort")
+	}
+}
+
+// TestCodexLiteCarriesTheEffortInsideReasoning pins the level's route on a lite
+// model: it travels in the reasoning object, which is the only place the model
+// accepts it.
+func TestCodexLiteCarriesTheEffortInsideReasoning(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		raw, _ := io.ReadAll(request.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		writer.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "openai-codex", Label: "Codex", Kind: KindOpenAI}, server.URL, "token")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "gpt-6-sol",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		Effort:   EffortLow,
+	}, func(StreamEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	reasoning, _ := gotBody["reasoning"].(map[string]any)
+	if reasoning["effort"] != "low" {
+		t.Errorf("reasoning.effort = %v, want low", reasoning["effort"])
+	}
 }
 
 // TestDecodeResponsesStreamUsesFunctionCallArgumentsDone proves the decoder

@@ -1723,6 +1723,12 @@ func (m *Model) viewHeader() string {
 	label := "Termixgo "
 	workspace := m.app.Workspace()
 	right := fmt.Sprintf("%s / %s", m.app.ModelLabel(), m.app.CurrentModel().Provider)
+	// The effort is named only when the provider is actually being told one.
+	// An empty effort means the vendor's own default, and printing "default"
+	// next to every model would be noise.
+	if effort := m.app.EffortFor(m.app.CurrentModel().ID); effort != "" {
+		right += " " + effort
+	}
 
 	// The header must never be wider than the terminal: a longer line wraps in
 	// the terminal and pushes the rest of the frame down, which is what made

@@ -858,6 +858,22 @@ func (a *App) SetHarnessProfile(id string) (agent.HarnessProfile, error) {
 	return profile, nil
 }
 
+// SetEffort sets the session-wide reasoning effort and saves it. A level the
+// build does not know is rejected here rather than sent on the wire, where the
+// provider would answer 400 and lose the turn.
+func (a *App) SetEffort(effort string) error {
+	trimmed := strings.ToLower(strings.TrimSpace(effort))
+	if trimmed != "" && !config.ValidEffort(trimmed) {
+		return fmt.Errorf("effort must be one of %s, or empty for the provider default", strings.Join(config.EffortLevels, ", "))
+	}
+	return a.UpdateConfig(func(cfg *config.Config) { cfg.Effort = trimmed })
+}
+
+// EffortFor returns the reasoning effort in force for one model.
+func (a *App) EffortFor(modelID string) string {
+	return a.Config().EffortFor(modelID)
+}
+
 // TakeSteer drains the steering queue and returns what was in it. Both the
 // runner and the UI call this, so whichever gets there first owns the message
 // and it is never run twice.
@@ -1343,6 +1359,9 @@ func (a *App) runOn(ctx context.Context, input string, images []provider.Image, 
 	a.mu.Lock()
 	client := a.client
 	model := a.wireModel
+	// The effort is resolved against the model id, not the wire id, because the
+	// per-model override is keyed by the id the operator configured.
+	currentModel := a.model
 	window := a.model.Window()
 	price := a.pricing
 	costKnown := a.costKnown
@@ -1396,6 +1415,7 @@ func (a *App) runOn(ctx context.Context, input string, images []provider.Image, 
 		Pricing:       price,
 		CostKnown:     costKnown,
 		CostBudgetUSD: cfg.CostBudgetUSD,
+		Effort:        cfg.EffortFor(currentModel.ID),
 		Steer:         a.TakeSteer,
 		Journal:       a.journal,
 		ToolSearch:    cfg.ToolSearchEnabled,
