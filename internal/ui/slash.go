@@ -74,6 +74,11 @@ var slashCommands = []SlashCommand{
 		{Value: "max", Detail: "deepest thinking the model allows"},
 		{Value: "default", Detail: "leave the provider's own default"},
 	}},
+	{Trigger: "/taskmodel", Args: "[title|compaction|default|<id>]", Summary: "Model for internal jobs: naming and condensing", Options: []SlashOption{
+		{Value: "title", Detail: "the model that names a session"},
+		{Value: "compaction", Detail: "the model that condenses old turns"},
+		{Value: "default", Detail: "use the active model, as before"},
+	}},
 	{Trigger: "/plan", Args: "", Summary: "Show the current task plan"},
 	{Trigger: "/tools", Args: "", Summary: "List the tools the agent can call"},
 	{Trigger: "/mcp", Args: "[reload]", Summary: "Show the MCP servers and their tools", Options: []SlashOption{

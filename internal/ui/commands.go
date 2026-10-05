@@ -187,6 +187,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashHarness(args)
 	case "effort":
 		return m.slashEffort(args)
+	case "taskmodel":
+		return m.slashTaskModel(args)
 	case "plan":
 		m.blocks = append(m.blocks, block{kind: blockPlan, plan: m.app.Todos().Items()})
 		m.refresh()
@@ -814,6 +816,67 @@ func (m *Model) slashEffort(args string) (tea.Model, tea.Cmd) {
 	note := "Reasoning effort is now the provider default."
 	if trimmed != "" {
 		note = "Reasoning effort is now " + trimmed + "."
+	}
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: note})
+	m.refresh()
+	return m, nil
+}
+
+// slashTaskModel shows or selects the model used for the internal jobs.
+//
+// These jobs are short and mechanical, so the point of a separate model is
+// price, not capability. "default" puts the job back on the active model, which
+// is the behaviour an install that never sets one already has.
+func (m *Model) slashTaskModel(args string) (tea.Model, tea.Cmd) {
+	fields := strings.Fields(args)
+	if len(fields) == 0 {
+		title := m.app.TaskModel(agent.TaskTitle)
+		compaction := m.app.TaskModel(agent.TaskCompaction)
+		if title == "" {
+			title = "(active model)"
+		}
+		if compaction == "" {
+			compaction = "(active model)"
+		}
+		lines := []string{
+			"Internal task models",
+			"  title       " + title,
+			"  compaction  " + compaction,
+			"Usage: /taskmodel <title|compaction> <model id|default>",
+		}
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
+		m.refresh()
+		return m, nil
+	}
+
+	kind := strings.ToLower(fields[0])
+	if kind != agent.TaskTitle && kind != agent.TaskCompaction {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "usage: /taskmodel <title|compaction> <model id|default>"})
+		m.refresh()
+		return m, nil
+	}
+	if len(fields) == 1 {
+		current := m.app.TaskModel(kind)
+		if current == "" {
+			current = "(active model)"
+		}
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: kind + " model: " + current})
+		m.refresh()
+		return m, nil
+	}
+
+	value := strings.Join(fields[1:], " ")
+	if strings.EqualFold(value, "default") {
+		value = ""
+	}
+	if err := m.app.SetTaskModel(kind, value); err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		m.refresh()
+		return m, nil
+	}
+	note := kind + " model is now the active model."
+	if value != "" {
+		note = kind + " model is now " + value + "."
 	}
 	m.blocks = append(m.blocks, block{kind: blockNotice, text: note})
 	m.refresh()

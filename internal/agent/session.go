@@ -313,6 +313,44 @@ func (s *Session) Reset() {
 	s.mu.Unlock()
 }
 
+// summaryPrefix marks a brief that stands in for turns which are no longer in
+// the history. The model has to know the text is a record, not a fresh
+// instruction, or a summary of an old request reads as a new one.
+const summaryPrefix = "Earlier in this session, condensed:\n"
+
+// InsertSummary replaces the messages before the current turn with one brief of
+// them, keeping the brief's role as user so the sequence stays valid.
+//
+// This is the one place a summary rewrites stored history. It exists because
+// the brief is read on every later step: keeping it only in the request would
+// mean paying for the same summarisation call again at every step, and the
+// point of the call is to stop re-reading the turns it replaced.
+//
+// It refuses to change anything when there is nothing before the current turn
+// to replace, or when an inserted brief would not begin the list, which is the
+// same rule Compact obeys: a request may not open with a tool result.
+func (s *Session) InsertSummary(brief string) bool {
+	trimmed := strings.TrimSpace(brief)
+	if trimmed == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	start := currentTurnStart(s.messages)
+	if start < 1 {
+		return false
+	}
+	replacement := make([]provider.Message, 0, len(s.messages)-start+1)
+	replacement = append(replacement, provider.Message{
+		Role:    provider.RoleUser,
+		Content: summaryPrefix + trimmed,
+	})
+	replacement = append(replacement, s.messages[start:]...)
+	s.messages = replacement
+	s.updatedAt = time.Now()
+	return true
+}
+
 // Turns counts user messages.
 func (s *Session) Turns() int {
 	s.mu.Lock()

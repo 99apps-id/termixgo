@@ -154,7 +154,20 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   only costs detail while a request over the window is refused, and a refused
   request stops the session for every step after it. The budget comes from
   `provider.Model.Window()` through `agent.HistoryBudget`, never from a global
-  constant.
+  constant. A configured `compactionModel` adds one condensation call between
+  turns, in the 60 to 85 percent band, and that call is what rewrites stored
+  history (`Session.InsertSummary`); with no such model the plain local trim is
+  the whole story. Naming a session is opt-in the same way, on `titleModel`.
+- Reasoning effort is one shared vocabulary (`low`, `medium`, `high`, `max`) in
+  `provider.ChatRequest.Effort`, mapped per vendor in `internal/provider/effort.go`.
+  The wire field differs by vendor and each vendor's value set is its own, so a
+  provider with no such control is sent nothing rather than a guess: these fields
+  are strict and a wrong value returns 400, which loses the turn. An empty effort
+  means the vendor's own default and must stay absent from the body.
+- The Anthropic cache anchor is the first message plus a moving marker near the
+  tail (`applyPromptCacheToMessages`). Marking only the second-to-last message,
+  as this once did, moved the cached prefix on every turn and made a long
+  conversation pay full input price for its own history again.
 - A transient HTTP failure is retried only before the response body is read.
   Once a caller starts consuming streamed chunks the request has produced
   output, so a retry would double-apply it.

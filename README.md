@@ -207,6 +207,8 @@ command typed mid-turn is queued and runs when the turn ends.
 | `/trust [on\|off]` | show or change folder trust |
 | `/approval [ask\|edits\|all\|plan]` | when a tool waits for you |
 | `/harness [id]` | how hard the agent plans and verifies, and the step budget |
+| `/effort [low\|medium\|high\|max\|default]` | reasoning effort for the active model |
+| `/taskmodel [title\|compaction\|default\|<id>]` | model for the internal jobs: naming and condensing |
 | `/plan` | show the current task plan |
 | `/tools` | list the tools the agent can call |
 | `/mcp [reload]` | show the MCP servers and the tools they add |
@@ -239,6 +241,15 @@ does; `/approval` also keeps a `(no argument)` row that prints the current
 policy. The same menu opens with `Tab`. A value that only starts an argument,
 such as `delete` for `/sessions`, fills the composer and waits for the rest.
 
+`/effort` and `/taskmodel` answer two different cost questions. `/effort` says
+how hard the active model should think, and the level reaches whichever provider
+is in use under that vendor's own field name; a provider that accepts no such
+control is sent nothing rather than a guess, because these fields are strict and
+a rejected request loses the whole turn. `/taskmodel` names a cheaper model for
+the two internal jobs, `title` and `compaction`. Both settings are opt-in: an
+empty effort leaves the vendor's default, and an empty task model keeps the
+active model and the plain local trim.
+
 Slash commands are local: they never reach the model as text, so `/cost` while a
 turn is running reports the spend instead of asking the agent about it.
 
@@ -260,6 +271,10 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
   "maxSteps": 300,
   "harnessProfile": "critical",
   "toolSearchEnabled": false,
+  "effort": "high",
+  "modelEfforts": { "deepseek-v4.1-flash": "low" },
+  "compactionModel": "deepseek:deepseek-v4.1-flash",
+  "titleModel": "deepseek:deepseek-v4.1-flash",
   "costBudgetUsd": 2.0,
   "systemPrompt": "",
   "baseUrls": { "openai-compatible": "https://my-server/v1" },
@@ -281,6 +296,10 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
 | `maxSteps` | the whole per-turn ceiling: the agent pauses after this many steps and continues when you reply |
 | `harnessProfile` | `balanced`, `plan_briefly`, `verify_before_finish`, `terminal_first`, `shorter_loop`, `no_todo`, `autonomous` or `critical` |
 | `toolSearchEnabled` | load the ecosystem tools on demand instead of every request |
+| `effort` | reasoning effort asked of models that accept one: `low`, `medium`, `high`, `max`. Empty leaves the vendor's own default |
+| `modelEfforts` | override `effort` per model id, so a fast model can run at `low` while a planner runs at `high` |
+| `compactionModel` | model for condensing old turns before they are trimmed, as a catalogue id, `provider:model` or `provider/model`. Empty keeps the plain trim and makes no extra call |
+| `titleModel` | model that names a session after its first turn. Empty keeps the title derived from your first line |
 | `costBudgetUsd` | stop the run once estimated session spend passes this |
 | `baseUrls` | a custom base URL per provider id |
 | `modelOverrides` | map a stable model id to the id sent on the wire |

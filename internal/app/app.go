@@ -858,6 +858,36 @@ func (a *App) SetHarnessProfile(id string) (agent.HarnessProfile, error) {
 	return profile, nil
 }
 
+// TaskModel reports the model configured for an internal task, or "" when the
+// active model is used.
+func (a *App) TaskModel(kind string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cfg := a.cfg
+	if kind == agent.TaskTitle {
+		return strings.TrimSpace(cfg.TitleModel)
+	}
+	return strings.TrimSpace(cfg.CompactionModel)
+}
+
+// SetTaskModel sets and saves the model for an internal task. A blank value
+// clears it back to the active model.
+func (a *App) SetTaskModel(kind, id string) error {
+	trimmed := strings.TrimSpace(id)
+	if trimmed != "" {
+		if _, err := resolveSubagentModel(a.Config(), trimmed); err != nil {
+			return err
+		}
+	}
+	return a.UpdateConfig(func(cfg *config.Config) {
+		if kind == agent.TaskTitle {
+			cfg.TitleModel = trimmed
+			return
+		}
+		cfg.CompactionModel = trimmed
+	})
+}
+
 // SetEffort sets the session-wide reasoning effort and saves it. A level the
 // build does not know is rejected here rather than sent on the wire, where the
 // provider would answer 400 and lose the turn.
@@ -872,6 +902,101 @@ func (a *App) SetEffort(effort string) error {
 // EffortFor returns the reasoning effort in force for one model.
 func (a *App) EffortFor(modelID string) string {
 	return a.Config().EffortFor(modelID)
+}
+
+// taskClient resolves the client, model id and effort for an internal task.
+//
+// A configured task model that has no usable credential or endpoint is not an
+// error the caller should surface: the task still has to run, and the active
+// model is a correct fallback. Only an app with no working model at all fails.
+func (a *App) taskClient(kind string) (provider.Client, string, string, error) {
+	a.mu.Lock()
+	activeClient := a.client
+	activeModel := a.model
+	wire := a.wireModel
+	taskModel := ""
+	if kind == agent.TaskTitle {
+		taskModel = strings.TrimSpace(a.cfg.TitleModel)
+	} else {
+		taskModel = strings.TrimSpace(a.cfg.CompactionModel)
+	}
+	cfg := a.cfg
+	a.mu.Unlock()
+
+	if taskModel != "" {
+		if client, model, err := a.subagentClient(taskModel); err == nil {
+			return client, provider.WireModel(cfg, model), cfg.EffortFor(model.ID), nil
+		}
+	}
+	if activeClient == nil {
+		return nil, "", "", fmt.Errorf("%w: no model is configured for the %s task", ErrNoModel, kind)
+	}
+	return activeClient, wire, cfg.EffortFor(activeModel.ID), nil
+}
+
+// PendingWindow returns the model's context window when the history has grown
+// past the point where a brief of the older turns would pay for itself, and 0
+// when it is still small enough to keep whole.
+//
+// The band is 60 to 85 percent of the history budget. Above the top the request
+// itself has to be trimmed, and there is no room left to spend on a summary
+// call; below the bottom the brief would cost more than the turns it replaces,
+// so the plain trim is cheaper and just as correct.
+func (a *App) PendingWindow() int {
+	a.mu.Lock()
+	window := a.model.Window()
+	cfg := a.cfg
+	session := a.session
+	a.mu.Unlock()
+	if session == nil {
+		return 0
+	}
+	if strings.TrimSpace(cfg.CompactionModel) == "" {
+		// A dedicated model is the reason this is worth doing on its own; with
+		// none configured the plain trim stays the whole story.
+		return 0
+	}
+	budget := agent.HistoryBudget(window)
+	if budget <= 0 {
+		return 0
+	}
+	used := agent.EstimateMessages(session.Messages())
+	if used < budget*3/5 || used > budget*85/100 {
+		return 0
+	}
+	return window
+}
+
+// maybeCompactHistory runs the condensation call at most once per crossing.
+//
+// It is deliberately best effort: a summary that fails leaves the plain trim in
+// charge, which is exactly what happened before this existed, so a provider
+// hiccup degrades the session instead of stopping it.
+func (a *App) maybeCompactHistory(ctx context.Context, session *agent.Session) {
+	window := a.PendingWindow()
+	if window == 0 {
+		return
+	}
+	messages := session.Messages()
+	start := agent.CurrentTurnStart(messages)
+	if start < 1 {
+		return
+	}
+	transcript := agent.RenderTranscript(messages[:start])
+	if strings.TrimSpace(transcript) == "" {
+		return
+	}
+	client, model, effort, err := a.taskClient(agent.TaskCompaction)
+	if err != nil {
+		return
+	}
+	brief, err := agent.SummarizeHistory(ctx, client, model, effort, transcript)
+	if err != nil || brief == "" {
+		return
+	}
+	if session.InsertSummary(brief) {
+		a.emit(agent.Event{Kind: agent.EventNotice, Text: "Condensed the earlier turns into a brief to keep the context small."})
+	}
 }
 
 // TakeSteer drains the steering queue and returns what was in it. Both the
@@ -1434,7 +1559,46 @@ func (a *App) runOn(ctx context.Context, input string, images []provider.Image, 
 	if isolated != nil || a.Ephemeral() {
 		return nil
 	}
+	// Condensation runs between turns, never inside one: rewriting history
+	// while the loop is reading it would change the conversation under the
+	// model that is answering. It is best effort, so a failed call leaves the
+	// plain trim in charge.
+	a.maybeCompactHistory(ctx, session)
+	// Naming happens after the turn, off the critical path, and is best effort:
+	// a session keeps its derived title rather than losing it to a failed call.
+	a.maybeNameSession(ctx, session)
 	return session.Save()
+}
+
+// maybeNameSession asks the title model for a name. Only the first turn can
+// name a session: after that the operator has seen the title and a silent
+// rename would read as a different session.
+//
+// Like compaction, this runs only when a title model is configured. Falling
+// back to the active model here would put a second request inside every session
+// and delay the end of the first turn, which is a cost and a latency the
+// operator never asked for; an explicit setting is the whole point of the
+// feature.
+func (a *App) maybeNameSession(ctx context.Context, session *agent.Session) {
+	if session == nil || session.Turns() != 1 || strings.TrimSpace(session.Title()) != "" {
+		return
+	}
+	if strings.TrimSpace(a.Config().TitleModel) == "" {
+		return
+	}
+	transcript := agent.RenderTranscript(session.Messages())
+	if strings.TrimSpace(transcript) == "" {
+		return
+	}
+	client, model, effort, err := a.taskClient(agent.TaskTitle)
+	if err != nil {
+		return
+	}
+	title, err := agent.SuggestTitle(ctx, client, model, effort, transcript)
+	if err != nil || title == "" {
+		return
+	}
+	session.SetTitle(title)
 }
 
 // GitDiff returns the current git diff of the workspace.

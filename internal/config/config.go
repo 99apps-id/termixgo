@@ -136,6 +136,16 @@ type Config struct {
 	// low while a planner runs at high in the same session.
 	ModelEfforts map[string]string `json:"modelEfforts,omitempty"`
 
+	// CompactionModel and TitleModel name the model for an internal task, as a
+	// catalogue id or "provider:model". Empty means the active model, so an
+	// install that never sets them behaves exactly as before.
+	//
+	// The point of a separate model is cost, not capability: summarising a long
+	// conversation and naming it are short, mechanical jobs that do not need the
+	// frontier model the operator picked for the actual work.
+	CompactionModel string `json:"compactionModel,omitempty"`
+	TitleModel      string `json:"titleModel,omitempty"`
+
 	// BaseURLs overrides provider endpoints, keyed by provider id. Local
 	// providers (ollama, lmstudio) read it too.
 	BaseURLs map[string]string `json:"baseUrls,omitempty"`

@@ -167,6 +167,13 @@ func hardFit(messages []provider.Message, budgetTokens int) []provider.Message {
 	return messages
 }
 
+// CurrentTurnStart is the index of the message that begins the turn being
+// answered. Everything before it belongs to an earlier turn, which is exactly
+// the part a brief may stand in for.
+func CurrentTurnStart(messages []provider.Message) int {
+	return currentTurnStart(messages)
+}
+
 // currentTurnStart is the index of the last user message, which begins the turn
 // being answered. Everything before it belongs to an earlier turn and may be
 // trimmed; the messages from it onward are the live context the model needs to
