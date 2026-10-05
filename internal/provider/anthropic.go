@@ -337,28 +337,52 @@ func rawObject(arguments string) any {
 	return decoded
 }
 
-// applyPromptCacheToMessages marks the second-to-last turn with ephemeral cache_control
-// so multi-turn conversation prefix is cached by Anthropic.
+// applyPromptCacheToMessages keeps a stable cache anchor at the head of the
+// conversation and a moving one near the tail.
+//
+// Marking only the second-to-last message, as this once did, moved the cached
+// prefix on every turn: each new turn rewrote the region the previous turn had
+// just cached, so a long conversation paid full input price for its own history
+// again and again. Cache reads cost a fraction of that, which is the whole
+// point of the feature.
+//
+// The first message never changes once written, so an anchor there is read from
+// cache on every later turn. The marker near the tail extends the cached prefix
+// over the newest turns, which is what lets the whole prefix stay warm instead
+// of being re-billed from the top.
 func applyPromptCacheToMessages(messages []map[string]any) {
-	if len(messages) < 2 {
+	if len(messages) == 0 {
 		return
 	}
-	target := messages[len(messages)-2]
+	markMessageCache(messages[0])
+	if tail := len(messages) - 2; tail > 0 {
+		markMessageCache(messages[tail])
+	}
+}
+
+// markMessageCache attaches an ephemeral cache breakpoint to one message. The
+// breakpoint goes on the last content block, which is how Anthropic reads it:
+// the marker caches everything up to and including that block.
+func markMessageCache(target map[string]any) {
 	switch content := target["content"].(type) {
 	case string:
-		if strings.TrimSpace(content) != "" {
-			target["content"] = []map[string]any{
-				{
-					"type":          "text",
-					"text":          content,
-					"cache_control": map[string]any{"type": "ephemeral"},
-				},
-			}
+		// A blank string carries nothing to cache, and rewriting it into a block
+		// would only add noise to the request.
+		if strings.TrimSpace(content) == "" {
+			return
+		}
+		target["content"] = []map[string]any{
+			{
+				"type":          "text",
+				"text":          content,
+				"cache_control": map[string]any{"type": "ephemeral"},
+			},
 		}
 	case []map[string]any:
-		if len(content) > 0 {
-			content[len(content)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
+		if len(content) == 0 {
+			return
 		}
+		content[len(content)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
 	}
 }
 
