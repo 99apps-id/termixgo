@@ -21,6 +21,8 @@ type taskClientStub struct {
 
 func (c *taskClientStub) ID() string { return "task-stub" }
 
+func (c *taskClientStub) FetchQuota(context.Context) *provider.QuotaSnapshot { return nil }
+
 func (c *taskClientStub) Stream(_ context.Context, req provider.ChatRequest, emit func(provider.StreamEvent) error) error {
 	c.mu.Lock()
 	c.requests = append(c.requests, req)

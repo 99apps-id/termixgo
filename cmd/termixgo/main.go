@@ -75,6 +75,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	case "setup":
 		return runInteractive(stdin, stdout, ui.Options{StartSetup: true})
+	case "resume", "-r", "--resume":
+		sessionID := "last"
+		if len(args) > 1 && !strings.HasPrefix(args[1], "-") {
+			sessionID = args[1]
+		}
+		return runInteractive(stdin, stdout, ui.Options{ResumeSessionID: sessionID})
 	case "run", "-p", "--print":
 		prompt, autoApprove, err := parseRunArgs(args[1:])
 		if err != nil {
@@ -1347,6 +1353,8 @@ func writeUsage(stdout io.Writer) {
 
 Usage:
   termixgo                        Start the terminal UI (setup runs on first use)
+  termixgo resume [id]            Resume the last (or specified) session
+  termixgo -r, --resume [id]      Resume the last (or specified) session
   termixgo setup                  Start the UI in the onboarding wizard
   termixgo run [--yes] "<prompt>" Run one prompt and stream the answer
                                   --yes auto-approves tool prompts for this run

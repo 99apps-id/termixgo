@@ -95,6 +95,8 @@ type App struct {
 	// first moment. A local model is known-free, which is not "unknown".
 	pricing   provider.Pricing
 	costKnown bool
+	// quotaTracker tracks 5-hour rolling usage and vendor rate limits.
+	quotaTracker *QuotaTracker
 	// costUSD is the estimated spend across the live session, mirrored from
 	// the runner so the status bar and /cost can show it without a lookup.
 	costUSD float64
@@ -223,6 +225,8 @@ func New(workspace string) (*App, error) {
 		instance.search = store
 		agent.IndexLearnedContent(store, instance.memory, instance.journal)
 	}
+
+	instance.quotaTracker = NewQuotaTracker()
 
 	// MCP servers are connected before the first turn so the model sees their
 	// tools from the start. A server that fails is recorded and skipped: the
@@ -464,6 +468,10 @@ func (a *App) applyModel(model provider.Model) error {
 		a.session.SetModel(model.ID)
 	}
 	a.modelErr = nil
+	// A newly selected model may belong to a different login, so fetch its
+	// official quota in the background and skip providers that cannot
+	// answer: the fetch is a no-op snapshot for them.
+	go a.RefreshQuota(context.Background())
 	return nil
 }
 
@@ -566,6 +574,46 @@ func (a *App) CostUnpriced() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.costUnpriced
+}
+
+// QuotaTracker returns the quota and rolling usage tracker.
+func (a *App) QuotaTracker() *QuotaTracker {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.quotaTracker
+}
+
+// QuotaSnapshot returns the stored official quota snapshot for a provider.
+func (a *App) QuotaSnapshot(providerID string) *provider.QuotaSnapshot {
+	tracker := a.QuotaTracker()
+	if tracker == nil {
+		return nil
+	}
+	return tracker.Snapshot(providerID)
+}
+
+// RefreshQuota asks the active provider for its official usage windows and
+// stores the snapshot on the tracker. A failed or unsupported fetch leaves
+// the previous snapshot untouched so the gauge keeps showing the last known
+// official numbers instead of blanking. It runs synchronously with a short
+// timeout; callers that must not block a turn should run it in a goroutine.
+func (a *App) RefreshQuota(ctx context.Context) *provider.QuotaSnapshot {
+	a.mu.Lock()
+	client := a.client
+	providerID := a.model.Provider
+	tracker := a.quotaTracker
+	a.mu.Unlock()
+	if client == nil || tracker == nil || providerID == "" {
+		return nil
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	snap := client.FetchQuota(fetchCtx)
+	if snap == nil || len(snap.Windows) == 0 {
+		return tracker.Snapshot(providerID)
+	}
+	tracker.RecordSnapshot(providerID, snap)
+	return snap
 }
 
 // SetInteractor installs the UI callbacks.
@@ -1154,6 +1202,36 @@ func (a *App) emitInto(event agent.Event, foldUsage bool) {
 		go func(text string) {
 			_ = a.Notify(context.Background(), text)
 		}(event.Text)
+	}
+	if event.Kind == agent.EventRateLimit && event.RateLimit != nil {
+		a.mu.Lock()
+		tracker := a.quotaTracker
+		prov := a.model.Provider
+		a.mu.Unlock()
+		if tracker != nil {
+			tracker.RecordRateLimit(prov, event.RateLimit)
+		}
+	}
+	if event.Kind == agent.EventTurnEnd {
+		a.mu.Lock()
+		tracker := a.quotaTracker
+		prov := a.model.Provider
+		mod := a.model.ID
+		a.mu.Unlock()
+		if tracker != nil {
+			tracker.RecordUsage(prov, mod, event.Usage)
+		}
+		// The turn just consumed real provider quota, so re-fetch the
+		// official numbers in the background. The snapshot lands on the
+		// tracker and the header gauge picks it up on the next render.
+		// Ephemeral one-shot runs skip it: they exit immediately and the
+		// extra request would only slow the answer.
+		a.mu.Lock()
+		ephemeral := a.ephemeral
+		a.mu.Unlock()
+		if !ephemeral {
+			go a.RefreshQuota(context.Background())
+		}
 	}
 	if foldUsage && event.Kind == agent.EventUsage {
 		a.AddUsage(event.Usage)

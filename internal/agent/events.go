@@ -40,6 +40,8 @@ const (
 	// EventProcessEnd reports a worker process that asked to be announced when
 	// it finishes. ToolName carries the process handle; Text is the notice.
 	EventProcessEnd EventKind = "process-end"
+	// EventRateLimit reports rate limit and quota information from the provider.
+	EventRateLimit EventKind = "rate-limit"
 )
 
 // Event is one unit of agent activity.
@@ -62,9 +64,10 @@ type Event struct {
 	ToolOK     bool
 	ToolMillis int64
 
-	Approval *ApprovalRequest
-	Plan     []Todo
-	Usage    provider.Usage
+	Approval  *ApprovalRequest
+	Plan      []Todo
+	Usage     provider.Usage
+	RateLimit *provider.RateLimitInfo
 
 	// CostUSD is the estimated spend of the run so far, and CostKnown
 	// says whether every spend component had a recorded price. Without the

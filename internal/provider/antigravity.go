@@ -108,6 +108,10 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 	}
 	defer response.Body.Close()
 
+	if rl := ParseGenericRateLimit(response.Header); rl != nil {
+		_ = emit(StreamEvent{Type: EventRateLimit, RateLimit: rl})
+	}
+
 	reader := newSSEReader(response.Body)
 	usage := &cumulativeUsage{}
 	emitted := false

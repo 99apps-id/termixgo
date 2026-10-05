@@ -87,6 +87,10 @@ func (c *museClient) Stream(ctx context.Context, req ChatRequest, emit func(Stre
 		return c.modelHint(ctx, req.Model, err)
 	}
 	defer response.Body.Close()
+
+	if rl := ParseGenericRateLimit(response.Header); rl != nil {
+		_ = emit(StreamEvent{Type: EventRateLimit, RateLimit: rl})
+	}
 	return decodeResponsesStream(c.info.Label, response.Body, emit)
 }
 

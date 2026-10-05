@@ -116,10 +116,11 @@ const (
 
 // StreamEvent is one chunk of a streaming completion.
 type StreamEvent struct {
-	Type     StreamEventType
-	Text     string
-	ToolCall *ToolCall
-	Usage    *Usage
+	Type      StreamEventType
+	Text      string
+	ToolCall  *ToolCall
+	Usage     *Usage
+	RateLimit *RateLimitInfo
 }
 
 // Client streams one provider.
@@ -129,6 +130,12 @@ type Client interface {
 	// Stream runs one completion, calling emit for every chunk. emit
 	// returning an error aborts the stream.
 	Stream(ctx context.Context, req ChatRequest, emit func(StreamEvent) error) error
+	// FetchQuota asks the provider for this login's usage windows. A
+	// provider with no usage endpoint returns a snapshot carrying
+	// Unavailable, never an empty window list that would read as zero
+	// usage. The default is a snapshot saying the provider offers no
+	// usage endpoint, so callers need no type switch.
+	FetchQuota(ctx context.Context) *QuotaSnapshot
 }
 
 // KeyResolver returns the API key for a provider, or "" when none is set.

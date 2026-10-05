@@ -189,6 +189,10 @@ runLoop:
 					sessionCost += r.Pricing.Cost(*event.Usage)
 					emit(Event{Kind: EventUsage, Usage: *event.Usage, CostUSD: sessionCost, CostKnown: costKnown, CostUnpriced: unpriced})
 				}
+			case provider.EventRateLimit:
+				if event.RateLimit != nil {
+					emit(Event{Kind: EventRateLimit, RateLimit: event.RateLimit})
+				}
 			}
 			return nil
 		})

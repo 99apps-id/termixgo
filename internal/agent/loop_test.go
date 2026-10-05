@@ -21,6 +21,8 @@ type fakeClient struct {
 
 func (f *fakeClient) ID() string { return "fake" }
 
+func (f *fakeClient) FetchQuota(context.Context) *provider.QuotaSnapshot { return nil }
+
 func (f *fakeClient) Stream(_ context.Context, _ provider.ChatRequest, emit func(provider.StreamEvent) error) error {
 	f.mu.Lock()
 	index := f.calls
@@ -367,6 +369,8 @@ func TestRunPropagatesStreamErrors(t *testing.T) {
 type errorClient struct{}
 
 func (errorClient) ID() string { return "error" }
+
+func (errorClient) FetchQuota(context.Context) *provider.QuotaSnapshot { return nil }
 
 func (errorClient) Stream(context.Context, provider.ChatRequest, func(provider.StreamEvent) error) error {
 	return context.DeadlineExceeded

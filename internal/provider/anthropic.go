@@ -126,6 +126,10 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 	}
 	defer response.Body.Close()
 
+	if rl := ParseAnthropicRateLimit(response.Header); rl != nil {
+		_ = emit(StreamEvent{Type: EventRateLimit, RateLimit: rl})
+	}
+
 	reader := newSSEReader(response.Body)
 	blocks := map[int]*anthropicBlock{}
 	// The counters Anthropic streams are cumulative for the request, and one

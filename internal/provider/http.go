@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -134,6 +135,17 @@ func newHTTPClient(info Provider, baseURL, apiKey string) (Client, error) {
 }
 
 func (c *httpClient) ID() string { return c.info.ID }
+
+// FetchQuota is the default: providers without a usage endpoint say so, so
+// the gauge falls back to response headers instead of inventing a number.
+func (c *httpClient) FetchQuota(ctx context.Context) *QuotaSnapshot {
+	_ = ctx
+	return &QuotaSnapshot{
+		Provider:    c.info.ID,
+		FetchedAt:   time.Now(),
+		Unavailable: c.info.Label + " exposes no usage endpoint; gauge uses response headers",
+	}
+}
 
 // providerStatusError is a non-2xx response. The status is carried so a client
 // can react to it: a login whose credential went stale answers 401, and Meta

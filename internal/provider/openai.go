@@ -60,6 +60,10 @@ func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers ma
 	}
 	defer response.Body.Close()
 
+	if rl := ParseOpenAIRateLimit(response.Header); rl != nil {
+		_ = emit(StreamEvent{Type: EventRateLimit, RateLimit: rl})
+	}
+
 	reader := newSSEReader(response.Body)
 	accumulator := newToolCallAccumulator()
 	// A server may repeat the request-wide usage on every chunk, so the increase

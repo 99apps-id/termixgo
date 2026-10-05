@@ -66,6 +66,10 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 		return err
 	}
 	defer response.Body.Close()
+
+	if rl := ParseOpenAIRateLimit(response.Header); rl != nil {
+		_ = emit(StreamEvent{Type: EventRateLimit, RateLimit: rl})
+	}
 	return decodeResponsesStream(c.info.Label, response.Body, emit)
 }
 

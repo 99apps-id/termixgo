@@ -21,6 +21,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/app"
 	"github.com/99apps-id/termixgo/internal/command"
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/version"
 )
 
@@ -40,6 +41,9 @@ type (
 	eventMsg           agent.Event
 	tickMsg            time.Time
 	runDoneMsg         struct{ err error }
+	quotaRefreshDoneMsg struct {
+		snap *provider.QuotaSnapshot
+	}
 	approvalRequestMsg struct {
 		request agent.ApprovalRequest
 		reply   chan agent.Decision
@@ -207,6 +211,10 @@ type Options struct {
 	// instead of taking over the screen. It suits an embedded or logged run,
 	// where losing the scrollback is worse than losing the fixed layout.
 	NoAlternateScreen bool
+
+	// ResumeSessionID loads the given session (or the most recent if "last"
+	// or "latest") and restores its transcript upon startup.
+	ResumeSessionID string
 }
 
 // composerHeight is the composer rows. Five fits a two-line prompt plus a
@@ -273,6 +281,20 @@ func NewWithOptions(application *app.App, options Options) *Model {
 	application.SetInteractor(model)
 	_ = model.reloadCustomCommands()
 	model.welcome()
+	if strings.TrimSpace(options.ResumeSessionID) != "" {
+		sessionID := options.ResumeSessionID
+		if sessionID == "last" || sessionID == "latest" {
+			sessions, err := agent.ListSessions()
+			if err == nil && len(sessions) > 0 {
+				sessionID = sessions[0].ID
+			}
+		}
+		session, err := agent.LoadSession(sessionID)
+		if err == nil && session != nil {
+			application.LoadSession(session)
+			model.restoreSession(session)
+		}
+	}
 	if options.StartSetup || application.NeedsSetup() {
 		model.startSetup()
 	} else {
@@ -300,6 +322,42 @@ func RunWithOptions(application *app.App, options Options) error {
 	model.program = program
 	_, err := program.Run()
 	return err
+}
+
+// restoreSession populates the transcript and plan from a loaded session.
+func (m *Model) restoreSession(session *agent.Session) {
+	if session == nil {
+		return
+	}
+	m.blocks = nil
+	for _, msg := range session.Messages() {
+		switch msg.Role {
+		case provider.RoleUser:
+			if strings.TrimSpace(msg.Content) != "" {
+				m.blocks = append(m.blocks, block{kind: blockUser, text: msg.Content})
+			}
+		case provider.RoleAssistant:
+			if strings.TrimSpace(msg.Reasoning) != "" {
+				m.blocks = append(m.blocks, block{kind: blockThinking, reasoning: msg.Reasoning, finalized: true})
+			}
+			if strings.TrimSpace(msg.Content) != "" {
+				m.blocks = append(m.blocks, block{kind: blockAssistant, text: msg.Content})
+			}
+			for _, tc := range msg.ToolCalls {
+				m.blocks = append(m.blocks, block{kind: blockTool, toolName: tc.Name, toolArgs: tc.Arguments, toolOK: true})
+			}
+		}
+	}
+	if todos := session.Todos(); len(todos) > 0 {
+		m.blocks = append(m.blocks, block{kind: blockPlan, plan: todos})
+	}
+	title := session.Title()
+	if title != "" {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Resumed session %s: %s (%d turns)", shortID(session.ID()), title, session.Turns())})
+	} else {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Resumed session %s (%d turns)", shortID(session.ID()), session.Turns())})
+	}
+	m.refresh()
 }
 
 // welcome appends the opening screen block.
@@ -487,6 +545,17 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refresh()
 		return m, tea.SetWindowTitle(m.windowTitle())
+
+	case quotaRefreshDoneMsg:
+		if typed.snap != nil && len(typed.snap.Windows) > 0 {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "Quota refreshed from provider."})
+		} else if typed.snap != nil && typed.snap.Unavailable != "" {
+			m.blocks = append(m.blocks, block{kind: blockError, text: "Quota refresh failed: " + typed.snap.Unavailable})
+		} else {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "Quota refresh returned no provider numbers; showing local counts."})
+		}
+		m.refresh()
+		return m.slashQuota("")
 
 	case approvalRequestMsg:
 		request := typed.request
@@ -1376,7 +1445,7 @@ func (m *Model) queuedCount() int { return len(m.queue) + m.app.SteerCount() }
 // sent to the model as prose.
 var liveSlashCommands = map[string]bool{
 	"stop": true, "exit": true, "quit": true,
-	"help": true, "?": true, "status": true, "cost": true, "plan": true,
+	"help": true, "?": true, "status": true, "quota": true, "cost": true, "plan": true,
 	"tools": true, "harness": true, "trust": true, "approval": true,
 	"mcp": true, "skills": true, "memory": true, "ps": true,
 }
@@ -1827,6 +1896,11 @@ func (m *Model) viewHeader() string {
 	if effort := m.app.EffortFor(m.app.CurrentModel().ID); effort != "" {
 		right += " " + effort
 	}
+	if tracker := m.app.QuotaTracker(); tracker != nil {
+		if gauge := tracker.ActiveQuotaGauge(m.app.CurrentModel().Provider, 8); gauge != "" {
+			right += " " + gauge
+		}
+	}
 
 	// The header must never be wider than the terminal: a longer line wraps in
 	// the terminal and pushes the rest of the frame down, which is what made
@@ -1881,6 +1955,12 @@ func (m *Model) viewStatus() string {
 		// A model with no price cannot be budgeted, and saying so is better than
 		// a zero that reads as "free".
 		vitals = append(vitals, costStyle.Render("cost n/a"))
+	}
+	if tracker := m.app.QuotaTracker(); tracker != nil {
+		stats := tracker.Stats(m.app.CurrentModel().Provider, app.RollingWindow)
+		if stats.Requests > 0 {
+			vitals = append(vitals, m.styles.Dim.Render(fmt.Sprintf("5h:%dr/%dk", stats.Requests, (stats.TotalTokens+500)/1000)))
+		}
 	}
 	if m.running && !m.hintsVisible() {
 		// The hints row carries the live working indicator while it is on screen,

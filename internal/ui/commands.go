@@ -134,6 +134,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: m.app.Status()})
 		m.refresh()
 		return m, nil
+	case "quota":
+		return m.slashQuota(args)
 	case "cost":
 		usage := m.app.Usage()
 		howMuch, known := m.app.Cost()
@@ -1460,6 +1462,123 @@ func (m *Model) slashAudit(args string) (tea.Model, tea.Cmd) {
 		lines = append(lines, fmt.Sprintf("  %s  %-5s %-16s %-5s %s", entry.Time.Format("01-02 15:04:05"), entry.Kind, entry.Name, status, detail))
 	}
 	m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
+	m.refresh()
+	return m, nil
+}
+
+func (m *Model) slashQuota(args string) (tea.Model, tea.Cmd) {
+	tracker := m.app.QuotaTracker()
+	if tracker == nil {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Quota tracker is not available."})
+		m.refresh()
+		return m, nil
+	}
+
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "refresh" || trimmed == "sync" {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Refreshing official provider quota..."})
+		m.refresh()
+		return m, func() tea.Msg {
+			snap := m.app.RefreshQuota(context.Background())
+			return quotaRefreshDoneMsg{snap: snap}
+		}
+	}
+
+	currentModel := m.app.CurrentModel()
+	providerID := currentModel.Provider
+	stats := tracker.Stats(providerID, app.RollingWindow)
+	snap := m.app.QuotaSnapshot(providerID)
+
+	var sb strings.Builder
+	sb.WriteString("=== 5-Hour Rolling Quota & Usage ===\n")
+	sb.WriteString(fmt.Sprintf("Active Provider: %s (Model: %s)\n", providerID, currentModel.ID))
+
+	// Official provider numbers come first: they count usage from every
+	// client on this login, not just this session.
+	if snap != nil && len(snap.Windows) > 0 {
+		sb.WriteString(fmt.Sprintf("\nOfficial Provider Usage (fetched %s ago):\n",
+			time.Since(snap.FetchedAt).Round(time.Second)))
+		for _, w := range snap.Windows {
+			remaining := 100 - w.UsedPercent
+			if remaining < 0 {
+				remaining = 0
+			}
+			gauge := app.VisualGauge(remaining, 16)
+			line := fmt.Sprintf("  %-14s %s %.1f%% used", w.DisplayName+":", gauge, w.UsedPercent)
+			if w.ResetsAt != nil && !w.ResetsAt.IsZero() {
+				left := time.Until(*w.ResetsAt).Round(time.Minute)
+				if left > 0 {
+					line += fmt.Sprintf(" (resets in %s)", left)
+				} else {
+					line += " (resetting...)"
+				}
+			}
+			sb.WriteString(line + "\n")
+		}
+	} else if snap != nil && snap.Unavailable != "" {
+		sb.WriteString(fmt.Sprintf("\nOfficial Provider Usage: unavailable (%s)\n", snap.Unavailable))
+		sb.WriteString("Showing local session counts below. Use /quota refresh to retry.\n")
+	} else {
+		sb.WriteString("\nOfficial Provider Usage: not fetched yet. Use /quota refresh.\n")
+	}
+
+	if stats.RateLimit != nil {
+		rl := stats.RateLimit
+		if rl.TokensLimit > 0 {
+			pct := rl.PercentTokensRemaining()
+			gauge := app.VisualGauge(pct, 16)
+			sb.WriteString(fmt.Sprintf("Token Quota:   %s (%d / %d tokens remaining)\n", gauge, rl.TokensRemaining, rl.TokensLimit))
+			if rl.TokensReset != nil {
+				remaining := time.Until(*rl.TokensReset).Round(time.Second)
+				if remaining > 0 {
+					sb.WriteString(fmt.Sprintf("Token Reset:   in %s\n", remaining))
+				}
+			}
+		}
+		if rl.RequestsLimit > 0 {
+			pct := rl.PercentRequestsRemaining()
+			gauge := app.VisualGauge(pct, 16)
+			sb.WriteString(fmt.Sprintf("Request Quota: %s (%d / %d requests remaining)\n", gauge, rl.RequestsRemaining, rl.RequestsLimit))
+			if rl.RequestsReset != nil {
+				remaining := time.Until(*rl.RequestsReset).Round(time.Second)
+				if remaining > 0 {
+					sb.WriteString(fmt.Sprintf("Request Reset: in %s\n", remaining))
+				}
+			}
+		}
+		if rl.RetryAfter > 0 {
+			sb.WriteString(fmt.Sprintf("Rate Limited:  Retry-After %s\n", rl.RetryAfter))
+		}
+	}
+
+	sb.WriteString(fmt.Sprintf("\n5-Hour Window Activity (%s):\n", providerID))
+	sb.WriteString(fmt.Sprintf("  Turns / Requests: %d\n", stats.Requests))
+	sb.WriteString(fmt.Sprintf("  Tokens Used:      %d (Prompt: %d, Completion: %d)\n", stats.TotalTokens, stats.PromptTokens, stats.CompletionTokens))
+	if stats.Requests > 0 && stats.ResetIn > 0 {
+		sb.WriteString(fmt.Sprintf("  Earliest turn in window rolls off in: %s\n", stats.ResetIn.Round(time.Second)))
+	}
+
+	allStats := tracker.AllStats(app.RollingWindow)
+	hasOther := false
+	for _, s := range allStats {
+		if s.Provider == providerID || (s.Requests == 0 && s.RateLimit == nil) {
+			continue
+		}
+		if !hasOther {
+			sb.WriteString("\nOther Provider Windows:\n")
+			hasOther = true
+		}
+		sb.WriteString(fmt.Sprintf("  %s: %d turns, %d tokens", s.Provider, s.Requests, s.TotalTokens))
+		if s.RateLimit != nil && s.RateLimit.TokensLimit > 0 {
+			sb.WriteString(fmt.Sprintf(" | %s remaining", app.VisualGauge(s.RateLimit.PercentTokensRemaining(), 10)))
+		}
+		if s.Requests > 0 && s.ResetIn > 0 {
+			sb.WriteString(fmt.Sprintf(" (rolls off in %s)", s.ResetIn.Round(time.Second)))
+		}
+		sb.WriteString("\n")
+	}
+
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: sb.String()})
 	m.refresh()
 	return m, nil
 }

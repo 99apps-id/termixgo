@@ -96,10 +96,12 @@ func TestAntigravityStreamOnboardsAndDecodes(t *testing.T) {
 // thinking tier, and a mismatch is a 404 "check the model id and base URL".
 func TestAntigravityModelsUseUpstreamIDs(t *testing.T) {
 	cases := map[string]string{
-		"antigravity-gemini-3.8-flash":  "gemini-3.8-flash-medium",
-		"antigravity-gemini-3.5-flash":  "gemini-3.5-flash-low",
-		"antigravity-gemini-pro":        "gemini-pro-agent",
-		"antigravity-claude-sonnet-4-6": "claude-sonnet-4-6",
+		"antigravity-gemini-3.8-flash":   "gemini-3.8-flash-medium",
+		"antigravity-gemini-3.5-flash":   "gemini-3.5-flash-low",
+		"antigravity-gemini-pro":         "gemini-pro-agent",
+		"antigravity-claude-opus-5-5":    "claude-opus-5-5",
+		"antigravity-claude-sonnet-5-5":  "claude-sonnet-5-5",
+		"antigravity-claude-sonnet-4-6":  "claude-sonnet-4-6",
 	}
 	for id, want := range cases {
 		model, ok := ModelByID(id)

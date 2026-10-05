@@ -18,6 +18,8 @@ type imageCaptureClient struct {
 
 func (c *imageCaptureClient) ID() string { return "capture" }
 
+func (c *imageCaptureClient) FetchQuota(context.Context) *provider.QuotaSnapshot { return nil }
+
 func (c *imageCaptureClient) Stream(_ context.Context, req provider.ChatRequest, emit func(provider.StreamEvent) error) error {
 	c.mu.Lock()
 	c.req = req

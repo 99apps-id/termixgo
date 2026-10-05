@@ -176,7 +176,7 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 			return m, m.enterChat()
 		}
 		m.app.LoadSession(session)
-		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Resumed session %s (%d turns)", shortID(session.ID()), session.Turns())})
+		m.restoreSession(session)
 		return m, m.enterChat()
 	case "setup-provider":
 		m.setup.providerID = item.ID
