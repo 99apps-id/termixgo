@@ -748,16 +748,27 @@ func (m *Model) settleEscape() (*Model, tea.Cmd) {
 
 // isEscFollowOn reports whether a rune burst arriving right after a pending
 // lone Escape is a CSI report fragment that the standalone detector cannot pin:
-// a parameter head such as "[<35" whose terminator has not arrived yet. A
-// digit is required because a real SGR report always carries coordinate numbers
-// (the "numbers leak" symptom); a lone '[' or '<' a programmer types right
-// after Escape is then still treated as typing.
+// a parameter head such as "[<35" whose terminator has not arrived yet.
+//
+// A digit is decisive because a real SGR report always carries coordinate
+// numbers. It is not sufficient on its own, though: the Windows console path
+// (readConInputs) hands back one rune per KeyMsg, so the introducer "[" reaches
+// us alone, before any digit, and a digit-gated test would settle the Escape and
+// clear the draft on every scroll. An introducer with no body yet is therefore
+// accepted too, and the noise machine absorbs the rest of the report. This is
+// the same trade the standalone detector already makes for a bare "[".
 func (m *Model) isEscFollowOn(key tea.KeyMsg) bool {
 	if key.Paste || key.Type != tea.KeyRunes || len(key.Runes) == 0 {
 		return false
 	}
 	text := string(key.Runes)
-	return isCSINoiseChunk(text) && strings.ContainsAny(text, "0123456789")
+	if !isCSINoiseChunk(text) {
+		return false
+	}
+	if strings.ContainsAny(text, "0123456789") {
+		return true
+	}
+	return strings.HasPrefix(text, "[")
 }
 
 // armEscapeNoise marks the noise state machine as inside a split report, so the
