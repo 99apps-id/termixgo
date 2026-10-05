@@ -548,15 +548,20 @@ func isStandaloneNoise(key tea.KeyMsg) (isNoise bool, isPrefix bool) {
 		return true, true
 	}
 
-	// An SGR mouse fragment carries a '<' and a parameter separator. The ';' is
-	// required because a lone '<' or '<<' has neither and is what someone
-	// coding types ("<=", "<<", "<int>"), so it must not be muted.
-	if strings.ContainsRune(text, '<') && strings.ContainsRune(text, ';') && isCSINoiseChunk(text) {
+	// An SGR mouse introducer is the one signature a keystroke cannot produce:
+	// the parser emits "[" and "<" as one rune burst only when a report was cut
+	// across reads. The head of a split report arrives before its first ';', so
+	// the separator is not required here; a report cut right after "[<" would
+	// otherwise leak its introducer and then its parameter tail into the draft.
+	if strings.HasPrefix(text, "[<") && isCSINoiseChunk(text) {
 		return true, !endsCSITerminator(text)
 	}
 
-	// A chunk starting with "[<" and a parameter separator (split SGR report).
-	if strings.HasPrefix(text, "[<") && strings.ContainsRune(text, ';') && isCSINoiseChunk(text) {
+	// A later fragment of a split report carries a '<' with a parameter
+	// separator but no introducer. The ';' is required because a lone '<' or
+	// '<<' is what someone coding types ("<=", "<<", "<int>"), so it must not
+	// be muted.
+	if strings.ContainsRune(text, '<') && strings.ContainsRune(text, ';') && isCSINoiseChunk(text) {
 		return true, !endsCSITerminator(text)
 	}
 
@@ -610,11 +615,16 @@ func isMouseNoiseText(text string) bool {
 	return hasDigit && hasSignature
 }
 
-// composerNoiseRe matches terminal escape noise that a split read can leave in
-// the composer: a whole CSI or OSC sequence (with its ESC), a stray escape, or
-// an SGR mouse report whose ESC was already stripped ("[<b;x;yM", or a bare
-// tail like "1;15M").
-var composerNoiseRe = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[^\[]|\[?<\d+(?:;\d+)+[Mm]|\[?\d+;\d+(?:;\d+)*[Mm]`)
+// composerNoiseRe matches terminal escape noise that reached the composer by
+// any path: a whole CSI or OSC sequence (with its ESC), a stray escape, an SGR
+// mouse introducer whose tail was cut away ("[<", "[<35", "[<35;106;27M"), and
+// a mouse tail with parameter separators ("1;15M").
+//
+// A bare parameter tail such as "32M" or "35;106;27" is deliberately not
+// matched: it is indistinguishable from something a coder typed, and this pass
+// must never rewrite an ordinary draft. Catching those is the job of the key
+// gateway, which sees the running report state and can require a signature.
+var composerNoiseRe = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[^\[]|\[<[0-9;:<=>?Mm]*|;?\d+;\d+(?:;\d+)*[Mm]`)
 
 // scrubComposer removes terminal escape noise that reached the composer by any
 // path, including one the key filter cannot see. It only removes escape and
