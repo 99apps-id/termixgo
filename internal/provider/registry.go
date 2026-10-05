@@ -83,7 +83,6 @@ var contextWindows = map[string]int{
 	"antigravity-gemini-pro":        1048576,
 	"antigravity-claude-opus-5-5":   1000000,
 	"antigravity-claude-sonnet-5-5": 1000000,
-	"antigravity-claude-sonnet-4-6": 1000000,
 
 	// Google: the Flash and Pro lines are all around 1M.
 	"gemini-3.1-pro-preview": 1048576,
@@ -482,8 +481,7 @@ func Models() []Model {
 		{ID: "antigravity-gemini-3.5-flash", Provider: "antigravity", Label: "Gemini 3.5 Flash (Antigravity)", APIID: "gemini-3.5-flash-low", Description: "Balanced Gemini through an Antigravity login.", Tags: []string{"fast", "tools"}},
 		{ID: "antigravity-gemini-pro", Provider: "antigravity", Label: "Gemini Pro (Antigravity)", APIID: "gemini-pro-agent", Description: "Flagship Gemini through an Antigravity login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "antigravity-claude-opus-5-5", Provider: "antigravity", Label: "Claude Opus 5.5 (Antigravity)", APIID: "claude-opus-5-5", Description: "Flagship Claude through an Antigravity login.", Tags: []string{"reasoning", "tools", "coding"}},
-	{ID: "antigravity-claude-sonnet-5-5", Provider: "antigravity", Label: "Claude Sonnet 5.5 (Antigravity)", APIID: "claude-sonnet-5-5", Description: "Balanced Claude through an Antigravity login.", Tags: []string{"reasoning", "tools", "coding"}},
-	{ID: "antigravity-claude-sonnet-4-6", Provider: "antigravity", Label: "Claude Sonnet 4.6 (Antigravity)", APIID: "claude-sonnet-4-6", Description: "Deprecated: use Sonnet 5.5; kept as fallback.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "antigravity-claude-sonnet-5-5", Provider: "antigravity", Label: "Claude Sonnet 5.5 (Antigravity)", APIID: "claude-sonnet-5-5", Description: "Balanced Claude through an Antigravity login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-opus-5", Provider: "anthropic", Label: "Claude Opus 5", Description: "Previous flagship, still available.", Tags: []string{"reasoning", "tools"}},
 		{ID: "claude-sonnet-4-6", Provider: "anthropic", Label: "Claude Sonnet 4.6", Description: "Previous Sonnet generation.", Tags: []string{"tools", "coding"}},
 
