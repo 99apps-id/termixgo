@@ -5,7 +5,27 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
+
+// TestClipMentionContentKeepsRunesWhole proves a cut that lands inside a
+// multi-byte character backs up to the rune start instead of splitting it.
+func TestClipMentionContentKeepsRunesWhole(t *testing.T) {
+	// "ab" then a 3-byte rune: a limit of 3 or 4 lands inside the rune.
+	content := "ab世界"
+	for _, limit := range []int{3, 4} {
+		got := clipMentionContent(content, limit)
+		if !utf8.ValidString(got) {
+			t.Fatalf("limit %d produced invalid UTF-8: %q", limit, got)
+		}
+		if want := "ab\n... [truncated]"; got != want {
+			t.Errorf("limit %d = %q, want %q", limit, got, want)
+		}
+	}
+	if got := clipMentionContent(content, len(content)); got != content {
+		t.Errorf("content within the limit must be unchanged, got %q", got)
+	}
+}
 
 func mentionWorkspace(t *testing.T, files map[string]string) string {
 	t.Helper()

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // mentionLimits bound the file lookup and the expansion. Completion walks
@@ -174,10 +175,7 @@ func ExpandMentions(workspace, input string) string {
 		if err != nil {
 			continue
 		}
-		content := string(data)
-		if len(content) > mentionFileCap {
-			content = content[:mentionFileCap] + "\n... [truncated]"
-		}
+		content := clipMentionContent(string(data), mentionFileCap)
 		builder.WriteString("\n\n--- @")
 		builder.WriteString(token)
 		builder.WriteString(" ---\n")
@@ -186,6 +184,20 @@ func ExpandMentions(workspace, input string) string {
 		attached++
 	}
 	return builder.String()
+}
+
+// clipMentionContent caps content at limit bytes. The cut backs up to the
+// start of a rune, so a multi-byte character is never split in half and the
+// model never receives an invalid UTF-8 sequence.
+func clipMentionContent(content string, limit int) string {
+	if len(content) <= limit {
+		return content
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(content[cut]) {
+		cut--
+	}
+	return content[:cut] + "\n... [truncated]"
 }
 
 // mentionTokens lists every @path token in the input, in order.
