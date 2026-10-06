@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // editTool replaces an exact string in one file.
@@ -23,7 +24,7 @@ func (t *editTool) DoneLabel(a map[string]any) string {
 	return "Edited " + displayName(a)
 }
 func (t *editTool) Description() string {
-	return "Replace an exact string in a file. old_string must match the file byte for byte, including indentation, and must be unique unless replace_all is true. Read the file first. Do not include line-number prefixes."
+	return "Replace an exact string in a file. old_string must match the file byte for byte, including indentation, and must be unique unless replace_all is true. Read the file first. Do not include line-number prefixes. Set fuzzy=true to match case-insensitively and ignore whitespace differences."
 }
 func (t *editTool) Schema() map[string]any {
 	return object(map[string]any{
@@ -31,6 +32,7 @@ func (t *editTool) Schema() map[string]any {
 		"old_string":  strProp("Exact existing text to replace. Copy it verbatim from the file."),
 		"new_string":  strProp("Replacement text. Use an empty string to delete."),
 		"replace_all": boolProp("Replace every occurrence instead of requiring uniqueness."),
+		"fuzzy":       boolProp("Match case-insensitively and ignore whitespace differences."),
 	}, "path", "old_string", "new_string")
 }
 
@@ -39,6 +41,7 @@ type editInstruction struct {
 	Old        string
 	New        string
 	ReplaceAll bool
+	Fuzzy      bool
 }
 
 func (t *editTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
@@ -50,6 +53,7 @@ func (t *editTool) Run(ctx context.Context, env *Env, args map[string]any) (Resu
 		Old:        argString(args, "old_string", "old"),
 		New:        argString(args, "new_string", "new"),
 		ReplaceAll: argBool(args, "replace_all", false),
+		Fuzzy:      argBool(args, "fuzzy", false),
 	}}
 	if _, present := args["old_string"]; !present && args["old"] == nil {
 		return Result{Output: "old_string is required", IsError: true}, nil
@@ -132,6 +136,7 @@ func parseEdits(value any) ([]editInstruction, error) {
 			Old:        old,
 			New:        new,
 			ReplaceAll: argBool(entry, "replace_all", false),
+			Fuzzy:      argBool(entry, "fuzzy", false),
 		})
 	}
 	return instructions, nil
@@ -165,11 +170,16 @@ func applyEdits(env *Env, path string, instructions []editInstruction) (string, 
 			return "", fmt.Errorf("edit %d: old_string and new_string are identical", index+1)
 		}
 		found := presentSpellings(text, old)
+		needle := old
+		if len(found) == 0 && instruction.Fuzzy {
+			needle = fuzzyPattern(old)
+			found = fuzzySpellings(text, needle, true)
+		}
 		if len(found) == 0 {
 			// Diagnosed against a normalised view, because the caller's needle is
 			// one: comparing it to raw CRLF bytes would blame the caller's
 			// spacing for what is a line-ending difference.
-			return "", fmt.Errorf("edit %d: old_string was not found in %s. %s", index+1, displayPath(env, path), diagnose(strings.ReplaceAll(text, "\r\n", "\n"), old))
+			return "", fmt.Errorf("edit %d: old_string was not found in %s. %s", index+1, displayPath(env, path), diagnose(strings.ReplaceAll(text, "\r\n", "\n"), needle))
 		}
 		count := 0
 		for _, spelling := range found {
@@ -305,4 +315,57 @@ func diagnose(text, needle string) string {
 		return "Whitespace inside the line differs."
 	}
 	return "Copy the text verbatim from read_file, including indentation."
+}
+
+// fuzzyPattern normalises a needle for tolerant matching: collapse runs of
+// whitespace to a single space, trim outer whitespace, and compare
+// case-insensitively.
+func fuzzyPattern(needle string) string {
+	text := strings.TrimSpace(needle)
+	text = strings.Join(strings.Fields(text), " ")
+	return strings.ToLower(text)
+}
+
+// fuzzySpellings returns the exact file regions whose whitespace-collapsed,
+// lower-cased form equals pattern. When pattern is empty or there is no
+// tolerant hit, it returns nil.
+func fuzzySpellings(text, pattern string, fuzzy bool) []string {
+	if !fuzzy || pattern == "" {
+		return nil
+	}
+	lower := strings.ToLower(text)
+	start := 0
+	var found []string
+	seen := map[string]bool{}
+	for {
+		index := strings.Index(lower[start:], pattern)
+		if index < 0 {
+			break
+		}
+		absolute := start + index
+		region := fuzzyRegion(text, pattern, absolute)
+		if region != "" && !seen[region] && fuzzyPattern(region) == pattern {
+			seen[region] = true
+			found = append(found, region)
+		}
+		start = absolute + len(pattern)
+		if len(found) >= 20 {
+			break
+		}
+	}
+	return found
+}
+
+// fuzzyRegion expands from a match start to the whitespace boundaries that
+// contain it, keeping the original case/terminators.
+func fuzzyRegion(text, pattern string, start int) string {
+	left := start
+	for left > 0 && !unicode.IsSpace(rune(text[left-1])) {
+		left--
+	}
+	right := start + len(pattern)
+	for right < len(text) && !unicode.IsSpace(rune(text[right])) {
+		right++
+	}
+	return text[left:right]
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/app"
 	customcmd "github.com/99apps-id/termixgo/internal/command"
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/provider"
 )
 
 // mcpReloadTimeout bounds a /mcp reload, so a server that hangs on its
@@ -175,8 +176,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 			tail = fmt.Sprintf("The %s is a prepaid quota: the plan's own console reports the %s used. A costBudgetUsd cap applies only to pay-as-you-go models.", plan.Name, plan.CreditUnit)
 		}
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf(
-			"Tokens: %d in, %d out, %d total.\nEstimated spend: %s (%s).\n%s%s",
-			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, spend, budget, tail, formatToolStats(m.app.ToolStats()))})
+			"Tokens: %d in, %d out, %d total.\n%sEstimated spend: %s (%s).\n%s%s",
+			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, formatCacheHit(usage), spend, budget, tail, formatToolStats(m.app.ToolStats()))})
 		m.refresh()
 		return m, nil
 	case "ps":
@@ -672,6 +673,29 @@ func formatToolStats(stats []app.ToolStat) string {
 		lines = append(lines, fmt.Sprintf("  %-16s %d call(s)", stat.Name, stat.Calls))
 	}
 	return "\nTools:\n" + strings.Join(lines, "\n")
+}
+
+// formatCacheHit renders the measured prefix-cache line for /cost from the
+// accumulated usage counters. It is the real hit rate, not an estimate: every
+// provider client reports the tokens its endpoint served from cache, and the
+// runner folds those reports into the session total the same way it folds
+// prompt and completion tokens. A session with no prompt tokens yet has
+// nothing to rate, so the line stays out rather than inventing a zero that
+// reads as "caching failed".
+func formatCacheHit(usage provider.Usage) string {
+	if usage.PromptTokens <= 0 {
+		return ""
+	}
+	if usage.CacheReadTokens <= 0 && usage.CacheWriteTokens <= 0 {
+		return "Prompt cache: no cache data reported by the provider yet.\n"
+	}
+	rate := 100.0 * float64(usage.CacheReadTokens) / float64(usage.PromptTokens)
+	line := fmt.Sprintf("Prompt cache: %d of %d input tokens served from cache (%.0f%% hit rate).\n",
+		usage.CacheReadTokens, usage.PromptTokens, rate)
+	if usage.CacheWriteTokens > 0 {
+		line += fmt.Sprintf("Cache writes: %d tokens.\n", usage.CacheWriteTokens)
+	}
+	return line
 }
 
 func (m *Model) slashProcesses(args string) (tea.Model, tea.Cmd) {

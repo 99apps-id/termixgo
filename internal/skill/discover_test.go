@@ -29,11 +29,18 @@ func TestDiscoverSurvivesAnUnresolvableHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(skills) != 1 || skills[0].Name != "local" {
-		t.Fatalf("skills = %+v, want the project skill", skills)
+	// Builtins ride along, so the project skill is found among them.
+	var found *Skill
+	for index := range skills {
+		if skills[index].Name == "local" {
+			found = &skills[index]
+		}
 	}
-	if skills[0].Scope != "project" {
-		t.Errorf("scope = %q", skills[0].Scope)
+	if found == nil {
+		t.Fatalf("skills = %+v, want the project skill among them", skills)
+	}
+	if found.Scope != "project" {
+		t.Errorf("scope = %q", found.Scope)
 	}
 }
 
@@ -62,9 +69,32 @@ func TestDiscoverSkipsEntriesWithoutADocument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(skills) != 1 || skills[0].Name != "real" {
-		t.Fatalf("skills = %+v, want only the real one", skills)
+	// Builtins ride along, so assert the junk is gone and the real one is
+	// present rather than asserting an exact count.
+	var names []string
+	for _, item := range skills {
+		names = append(names, item.Name)
 	}
+	for _, want := range []string{"real", "hallmark", "impeccable"} {
+		if !containsName(skills, want) {
+			t.Fatalf("skills = %v, want %q among them", names, want)
+		}
+	}
+	for _, junk := range []string{"empty", "no-doc"} {
+		if containsName(skills, junk) {
+			t.Fatalf("skills = %v, junk %q must be skipped", names, junk)
+		}
+	}
+}
+
+// containsName reports whether a skill list holds a name.
+func containsName(skills []Skill, name string) bool {
+	for _, item := range skills {
+		if item.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // TestDiscoverFallsBackToTheFolderName keeps a skill usable when its
@@ -85,17 +115,22 @@ func TestDiscoverFallsBackToTheFolderName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(skills) != 1 {
-		t.Fatalf("skills = %+v", skills)
+	// Builtins ride along, so find the skill by name instead of assuming the
+	// position.
+	var found *Skill
+	for index := range skills {
+		if skills[index].Name == "folder-name" {
+			found = &skills[index]
+		}
 	}
-	if skills[0].Name != "folder-name" {
-		t.Errorf("name = %q, want the folder name", skills[0].Name)
+	if found == nil {
+		t.Fatalf("skills = %+v, want the fallback name among them", skills)
 	}
-	if skills[0].Description != "" {
-		t.Errorf("description = %q, want empty", skills[0].Description)
+	if found.Description != "" {
+		t.Errorf("description = %q, want empty", found.Description)
 	}
-	if !strings.Contains(skills[0].Body, "Do the thing") {
-		t.Errorf("body = %q, want the document", skills[0].Body)
+	if !strings.Contains(found.Body, "Do the thing") {
+		t.Errorf("body = %q, want the document", found.Body)
 	}
 }
 
@@ -164,11 +199,22 @@ func TestDiscoveredSkillCarriesItsHelperFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(skills) != 1 || len(skills[0].Files) != 1 || skills[0].Files[0] != "checklist.md" {
-		t.Fatalf("skills = %+v, want the helper file listed", skills)
+	// Builtins ride along, so find the skill and its file by name instead of
+	// assuming positions.
+	var found *Skill
+	for index := range skills {
+		if skills[index].Name == "with-files" {
+			found = &skills[index]
+		}
 	}
-	if skills[0].Path != dir {
-		t.Errorf("path = %q, want %q", skills[0].Path, dir)
+	if found == nil {
+		t.Fatalf("skills = %+v, want the skill among them", skills)
+	}
+	if len(found.Files) != 1 || found.Files[0] != "checklist.md" {
+		t.Fatalf("files = %+v, want the helper file listed", found.Files)
+	}
+	if found.Path != dir {
+		t.Errorf("path = %q, want %q", found.Path, dir)
 	}
 }
 
@@ -197,13 +243,18 @@ func TestCreateSuppliesADefaultDescription(t *testing.T) {
 		t.Errorf("an empty description should be replaced, got %q", created.Description)
 	}
 	// The description is what the system prompt shows, so it has to reach the
-	// discovered skill too.
+	// discovered skill too. Builtins ride along, so search by name.
 	skills, err := Discover(workspace)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(skills) != 1 || skills[0].Description != created.Description {
-		t.Errorf("skills = %+v, want the created description", skills)
+	if !containsName(skills, "no-description") {
+		t.Errorf("skills = %+v, want the created skill among them", skills)
+	}
+	for _, item := range skills {
+		if item.Name == "no-description" && item.Description != created.Description {
+			t.Errorf("description = %q, want %q", item.Description, created.Description)
+		}
 	}
 }
 

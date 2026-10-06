@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/99apps-id/termixgo/internal/config"
 )
 
 func TestParseSplitsFrontmatter(t *testing.T) {
@@ -53,7 +55,7 @@ func TestParseHandlesCRLF(t *testing.T) {
 
 func TestDiscoverPrefersProjectScope(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("TERMIXGO_HOME", home)
+	t.Setenv(config.EnvHome, home)
 	workspace := t.TempDir()
 
 	writeSkill(t, filepath.Join(home, "skills", "shared"), "shared", "user scope")
@@ -74,8 +76,48 @@ func TestDiscoverPrefersProjectScope(t *testing.T) {
 	if got := byName["only-project"].Scope; got != "project" {
 		t.Errorf("only-project scope = %q", got)
 	}
-	if len(skills) != 2 {
-		t.Errorf("expected two skills, got %d: %+v", len(skills), skills)
+	// Builtins ride along, so they join the two authored skills.
+	if len(skills) != 4 {
+		t.Errorf("expected two authored skills plus two builtins, got %d", len(skills))
+	}
+	for _, want := range []string{"hallmark", "impeccable"} {
+		skill, ok := byName[want]
+		if !ok {
+			t.Errorf("builtin %q is missing", want)
+			continue
+		}
+		if skill.Scope != "builtin" {
+			t.Errorf("builtin %q scope = %q, want builtin", want, skill.Scope)
+		}
+		if strings.TrimSpace(skill.Body) == "" {
+			t.Errorf("builtin %q has no body", want)
+		}
+	}
+}
+
+// TestBuiltinSkillIsShadowedByProject pins the override rule: an operator
+// skill with the same name wins over the compiled default, so an explicit
+// choice is never trapped by the builtin.
+func TestBuiltinSkillIsShadowedByProject(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	workspace := t.TempDir()
+	writeSkill(t, filepath.Join(workspace, ".termixgo", "skills", "hallmark"), "hallmark", "our house style")
+
+	skills, err := Discover(workspace)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	count := 0
+	for _, item := range skills {
+		if item.Name == "hallmark" {
+			count++
+			if item.Scope != "project" || item.Description != "our house style" {
+				t.Errorf("project skill should win, got %+v", item)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("hallmark appears %d times, want exactly the project one", count)
 	}
 }
 

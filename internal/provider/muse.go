@@ -293,7 +293,12 @@ func (c *museClient) payload(req ChatRequest) map[string]any {
 	// not in the shared encoder, because the phase field is Meta-specific and
 	// the ChatGPT backend Codex uses does not accept it.
 	tagCommentaryItems(input)
+	// One instructions string, parts joined in order: the static prefix leads
+	// so a prefix cache keys on the stable part.
 	instructions := strings.TrimSpace(req.System)
+	if len(req.SystemParts) > 0 {
+		instructions = strings.TrimSpace(joinSystemParts(req.SystemParts))
+	}
 	var tools []map[string]any
 	if len(req.Tools) > 0 {
 		tools = encodeResponsesTools(req.Tools)

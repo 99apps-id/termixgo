@@ -193,7 +193,7 @@ func TestRunChecksDetection(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	command, ok := detectCheckCommand(workspace, "lint")
+	command, ok := detectCheckCommand(workspace, "lint", "")
 	if !ok {
 		t.Fatalf("lint should be detected for a Go module")
 	}
@@ -208,10 +208,10 @@ func TestRunChecksDetection(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(jsWorkspace, "pnpm-lock.yaml"), []byte("lockfileVersion: 9\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if command, ok := detectCheckCommand(jsWorkspace, "test"); !ok || command != "pnpm run test" {
+	if command, ok := detectCheckCommand(jsWorkspace, "test", ""); !ok || command != "pnpm run test" {
 		t.Errorf("test command = %q ok=%v, want pnpm run test", command, ok)
 	}
-	if command, ok := detectCheckCommand(jsWorkspace, "lint"); !ok || command != "pnpm run lint" {
+	if command, ok := detectCheckCommand(jsWorkspace, "lint", ""); !ok || command != "pnpm run lint" {
 		t.Errorf("lint command = %q ok=%v, want pnpm run lint", command, ok)
 	}
 }

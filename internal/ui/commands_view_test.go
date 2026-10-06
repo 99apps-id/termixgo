@@ -305,12 +305,12 @@ func TestSlashMemoryListsBothScopes(t *testing.T) {
 func TestSlashSkillsSaysWhenThereAreNone(t *testing.T) {
 	model := chatModel(t)
 	_, output := runSlash(t, model, "/skills")
-	if !strings.Contains(output, "No skills found") {
-		t.Errorf("output = %q", output)
-	}
-	// The message has to say where to put one, or the operator is stuck.
-	if !strings.Contains(output, "SKILL.md") {
-		t.Errorf("output = %q, want the location hint", output)
+	// Builtins always ship, so an empty folder lists the defaults instead of
+	// the empty-state message.
+	for _, want := range []string{"hallmark", "impeccable", "builtin"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output = %q, want builtin %q listed", output, want)
+		}
 	}
 }
 
@@ -318,7 +318,8 @@ func TestSlashSkillsListsWhatWasAdded(t *testing.T) {
 	model := chatModel(t)
 	writeProbeSkill(t, model)
 
-	// Reload picks up a skill added after the model was built.
+	// Reload picks up a skill added after the model was built. The probe joins
+	// the two builtins.
 	_, output := runSlash(t, model, "/skills reload")
 	if !strings.Contains(output, "probe-skill") {
 		t.Errorf("output = %q, want the skill listed after a reload", output)
@@ -326,7 +327,7 @@ func TestSlashSkillsListsWhatWasAdded(t *testing.T) {
 	if !strings.Contains(output, "project") {
 		t.Errorf("output = %q, want the scope shown", output)
 	}
-	if !strings.Contains(output, "Skills (1)") {
+	if !strings.Contains(output, "Skills (3)") {
 		t.Errorf("output = %q, want a count", output)
 	}
 }

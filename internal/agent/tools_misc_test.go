@@ -58,8 +58,16 @@ func skillFixture(t *testing.T, env *Env) []skill.Skill {
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(skills) != 2 {
-		t.Fatalf("skills = %d, want 2", len(skills))
+	// Builtins ride along with discovery, so the two fixture skills are found
+	// among the builtins rather than alone.
+	found := map[string]bool{}
+	for _, item := range skills {
+		found[item.Name] = true
+	}
+	for _, want := range []string{"release-notes", "sql-migration", "hallmark", "impeccable"} {
+		if !found[want] {
+			t.Fatalf("skills = %v, want %q among them", skills, want)
+		}
 	}
 	return skills
 }
@@ -559,5 +567,38 @@ func TestInstallSkillRejectsMissingSource(t *testing.T) {
 	}
 	if !strings.Contains(result.Output, "source is required") {
 		t.Errorf("output = %q, want missing source error", result.Output)
+	}
+}
+
+// TestInstallSkillRejectsPlainHTTP pins the transport guard: a skill cloned
+// over cleartext http could be swapped on the wire, and installed instructions
+// run with the agent's trust, so only https and ssh sources may clone.
+func TestInstallSkillRejectsPlainHTTP(t *testing.T) {
+	tool := &installSkillTool{}
+	env := testEnv(t)
+
+	for _, source := range []string{
+		"http://example.com/skills/demo.git",
+		"HTTP://EXAMPLE.COM/skills/demo",
+	} {
+		result, err := tool.Run(context.Background(), env, map[string]any{"source": source})
+		if err != nil || !result.IsError {
+			t.Fatalf("source %q must fail: err=%v result=%+v", source, err, result)
+		}
+		if !strings.Contains(result.Output, "plain http") {
+			t.Errorf("source %q: output = %q, want the http refusal", source, result.Output)
+		}
+	}
+	if isGitURL("http://example.com/skills/demo.git") {
+		t.Errorf("an http URL must not classify as a git URL")
+	}
+	for _, source := range []string{
+		"https://example.com/skills/demo.git",
+		"git@github.com:org/skills.git",
+		"ssh://git@example.com/org/skills.git",
+	} {
+		if !isGitURL(source) {
+			t.Errorf("source %q should classify as a git URL", source)
+		}
 	}
 }

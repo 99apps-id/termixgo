@@ -38,9 +38,9 @@ const (
 
 // msg types.
 type (
-	eventMsg           agent.Event
-	tickMsg            time.Time
-	runDoneMsg         struct{ err error }
+	eventMsg            agent.Event
+	tickMsg             time.Time
+	runDoneMsg          struct{ err error }
 	quotaRefreshDoneMsg struct {
 		snap *provider.QuotaSnapshot
 	}
@@ -54,7 +54,7 @@ type (
 		reply    chan string
 	}
 	telegramPairedMsg struct{ paired bool }
-	settleEscMsg       struct{}
+	settleEscMsg      struct{}
 )
 
 // escSettleDelay is how long a lone Escape waits for a CSI report whose ESC
@@ -1686,6 +1686,14 @@ func (m *Model) maybeRefresh(streaming bool) {
 	}
 }
 
+// transcriptWindowBlocks caps how many blocks one repaint renders. Every paint
+// rebuilds the whole transcript string, so a session of hundreds of turns paid
+// a growing render cost on every streamed delta: the symptom was the terminal
+// getting heavier the longer the session ran. The cap keeps a repaint O(window)
+// instead of O(session), and the marker below tells the operator the older
+// transcript still exists in the session file rather than silently vanishing.
+const transcriptWindowBlocks = 400
+
 // refresh re-renders the transcript into the viewport. When the operator is
 // scrolled up, the offset is kept so reading history is not yanked away by
 // new output; otherwise the view follows the bottom.
@@ -1693,7 +1701,14 @@ func (m *Model) refresh() {
 	m.lastPaint = time.Now()
 	m.applyComposerStyle()
 	follow := m.viewport.AtBottom()
-	content := transcript(m.blocks, m.styles, m.viewport.Width, m.showDetails)
+	blocks := m.blocks
+	if len(blocks) > transcriptWindowBlocks {
+		blocks = append([]block{{
+			kind: blockNotice,
+			text: fmt.Sprintf("... %d earlier transcript blocks are folded away; /export all writes the whole session", len(blocks)-transcriptWindowBlocks),
+		}}, blocks[len(blocks)-transcriptWindowBlocks:]...)
+	}
+	content := transcript(blocks, m.styles, m.viewport.Width, m.showDetails)
 	m.contentLines = strings.Split(content, "\n")
 	if m.selecting || m.selActive {
 		content = strings.Join(highlightSelection(m.contentLines, m.selAnchor, m.selFocus), "\n")
@@ -1705,23 +1720,23 @@ func (m *Model) refresh() {
 	logFrame(content)
 }
 
+// frameLogState counts the frames already written this process, so a paint
+// costs no disk read. The old implementation re-read the whole log file on
+// every paint to count its frames, which made the file more expensive to
+// append to the longer a session ran: the paint loop fires on every streamed
+// delta, so a long turn paid an O(file) read per frame.
+var frameLogFrames int
+
 // logFrame appends one painted transcript to the frame log when recording.
-// The counter caps the file; beyond it recording stops silently rather than
-// growing through a long session.
+// The in-process counter caps the file; beyond it recording stops silently
+// rather than growing through a long session.
 func logFrame(content string) {
 	path := frameLogPath()
-	if path == "" {
+	if path == "" || frameLogFrames >= frameLogCap {
 		return
 	}
-	data, err := os.ReadFile(path)
-	var frames int
-	if err == nil {
-		frames = strings.Count(string(data), "\n--- frame ")
-	}
-	if frames >= frameLogCap {
-		return
-	}
-	entry := fmt.Sprintf("\n--- frame %d ---\n%s\n", frames+1, stripANSI(content))
+	frameLogFrames++
+	entry := fmt.Sprintf("\n--- frame %d ---\n%s\n", frameLogFrames, stripANSI(content))
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
@@ -2237,7 +2252,7 @@ func (m *Model) viewApproval() string {
 	header := []string{
 		m.styles.BoxTitle.Render("Approval needed"),
 		m.styles.StatusValue.Render(request.Tool) + m.styles.Dim.Render(" ("+request.Risk+")"),
-		m.styles.Dim.Render(truncate(request.Detail, width)),
+		m.styles.Dim.Render(truncate(sanitizeText(request.Detail), width)),
 	}
 	// Rows the box always draws: border(2) + padding(2), the header, the blank
 	// before the options, the options and the hint. The diff gets the rest.
@@ -2290,7 +2305,11 @@ func (m *Model) dialogTextWidth() int { return max(1, m.width-10) }
 // Lines are clipped to the width so a long file cannot break the box, and the
 // count is bounded so the dialog cannot grow past the terminal.
 func renderApprovalDiff(diff string, styles Styles, width, maxLines int) string {
-	diff = strings.TrimSpace(diff)
+	// The diff is file content, which is untrusted: an escape sequence in a
+	// changed line would be obeyed by the terminal instead of shown, which is
+	// the same reason transcript text is sanitized before styling. The dialog
+	// is the one remaining surface that painted raw model and file text.
+	diff = sanitizeText(strings.TrimSpace(diff))
 	if diff == "" {
 		return ""
 	}
@@ -2329,7 +2348,7 @@ func (m *Model) viewAsk() string {
 	width := m.dialogTextWidth()
 	body := []string{
 		m.styles.BoxTitle.Render("The agent has a question"),
-		m.styles.StatusValue.Render(truncate(m.pendingAsk.question, width)),
+		m.styles.StatusValue.Render(truncate(sanitizeText(m.pendingAsk.question), width)),
 	}
 	// Border(2) + padding(2), the title and question, the blank before the
 	// options, the blank before the input, the input and the hint.
@@ -2352,7 +2371,7 @@ func (m *Model) viewAsk() string {
 		}
 		body = append(body, "")
 		for index, option := range options {
-			body = append(body, m.styles.MenuKey.Render(fmt.Sprintf("%d", index+1))+". "+truncate(option, max(1, width-4)))
+			body = append(body, m.styles.MenuKey.Render(fmt.Sprintf("%d", index+1))+". "+truncate(sanitizeText(option), max(1, width-4)))
 		}
 		if hidden > 0 {
 			body = append(body, m.styles.MenuDesc.Render(fmt.Sprintf("... %d more options", hidden)))

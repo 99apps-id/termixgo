@@ -138,6 +138,9 @@ func (t *installSkillTool) Run(ctx context.Context, env *Env, args map[string]an
 	if source == "" {
 		return Result{Output: "source is required", IsError: true}, nil
 	}
+	if strings.HasPrefix(strings.ToLower(source), "http://") {
+		return Result{Output: "refusing to clone a skill over plain http: use https or ssh so the SKILL.md you review is the one you install", IsError: true}, nil
+	}
 	scope := strings.ToLower(strings.TrimSpace(argString(args, "scope")))
 	if scope != "project" {
 		scope = "user"
@@ -260,14 +263,19 @@ func (t *proposeSkillTool) Run(_ context.Context, env *Env, args map[string]any)
 	return Result{Output: fmt.Sprintf("Staged %s proposal %s for skill %q. Review it, then apply with /skills apply %s.", proposal.Action, proposal.ID, proposal.Name, proposal.ID)}, nil
 }
 
-// isGitURL reports whether the source looks like a git URL.
+// isGitURL reports whether the source looks like a git URL. Plain http is
+// refused: cloning a skill over cleartext lets a network attacker swap the
+// SKILL.md the operator reviews, and installed instructions run with the
+// agent's trust. https, ssh and scp-like forms stay allowed.
 func isGitURL(source string) bool {
-	source = strings.ToLower(source)
-	return strings.HasPrefix(source, "https://") ||
-		strings.HasPrefix(source, "http://") ||
-		strings.HasPrefix(source, "git@") ||
-		strings.HasPrefix(source, "ssh://") ||
-		strings.HasSuffix(source, ".git")
+	lowered := strings.ToLower(source)
+	if strings.HasPrefix(lowered, "http://") {
+		return false
+	}
+	return strings.HasPrefix(lowered, "https://") ||
+		strings.HasPrefix(lowered, "git@") ||
+		strings.HasPrefix(lowered, "ssh://") ||
+		strings.HasSuffix(lowered, ".git")
 }
 
 // cloneGitRepo clones a git repository to a temporary directory and returns

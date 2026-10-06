@@ -186,3 +186,46 @@ func TestPruneCheckpointsKeepsTheNewest(t *testing.T) {
 		t.Errorf("checkpoints = %d, want 2 kept", len(checkpoints))
 	}
 }
+
+func TestFileCheckpointSavesAndRestoresWithoutGit(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeForTest(t, dir, "pkg/main.go", "package main // v1\n")
+	store, err := CreateFileCheckpoint(dir, "before risky edit")
+	if err != nil {
+		t.Fatalf("CreateFileCheckpoint: %v", err)
+	}
+	if store.ID == "" {
+		t.Fatalf("file checkpoint id is empty")
+	}
+	if len(store.Files) != 1 || store.Files[0] != "pkg/main.go" {
+		t.Fatalf("file list = %v, want pkg/main.go", store.Files)
+	}
+	writeForTest(t, dir, "pkg/main.go", "package main // broken\n")
+	restored, err := RewindFileCheckpoint(dir, store.ID)
+	if err != nil {
+		t.Fatalf("RewindFileCheckpoint: %v", err)
+	}
+	if restored.ID != store.ID {
+		t.Errorf("restored id = %q, want %q", restored.ID, store.ID)
+	}
+	if got := readForTest(t, dir, "pkg/main.go"); got != "package main // v1\n" {
+		t.Errorf("restored file = %q, want v1", got)
+	}
+	created := filepath.Join(fileCheckpointDir(dir), store.ID, "created-after.txt")
+	if err := os.WriteFile(created, []byte("new\n"), 0o644); err != nil {
+		t.Fatalf("create extra file: %v", err)
+	}
+	writeForTest(t, dir, "pkg/main.go", "package main // v2\n")
+	if _, err := RewindFileCheckpoint(dir, store.ID); err != nil {
+		t.Fatalf("second RewindFileCheckpoint: %v", err)
+	}
+	if got := readForTest(t, dir, "pkg/main.go"); got != "package main // v1\n" {
+		t.Errorf("restored file = %q, want v1 after second rewind", got)
+	}
+	if _, err := os.Stat(created); err != nil {
+		t.Errorf("created-after file must remain intact after rewind: %v", err)
+	}
+}

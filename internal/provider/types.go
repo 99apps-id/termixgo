@@ -90,6 +90,20 @@ type ChatRequest struct {
 	Effort string
 }
 
+// joinSystemParts folds the structured system blocks back into one string for
+// the wire formats that accept only one: the Responses instructions field and
+// the plain Anthropic system string. The order is preserved, so the static
+// cacheable prefix still leads and only the dynamic tail follows.
+func joinSystemParts(parts []string) string {
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			kept = append(kept, part)
+		}
+	}
+	return strings.Join(kept, "\n\n")
+}
+
 // Reasoning effort levels. They are one shared vocabulary across providers;
 // the per-provider mapping in effort.go decides which of them each endpoint
 // accepts.

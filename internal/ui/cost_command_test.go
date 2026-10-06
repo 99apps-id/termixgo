@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/secrets"
 )
 
@@ -127,5 +128,29 @@ func TestCostCommandWithoutABudgetSaysSo(t *testing.T) {
 	next, _ := model.runSlash("cost", "")
 	if view := allText(next.(*Model)); !strings.Contains(view, "no budget set") {
 		t.Errorf("/cost should report the absence of a cap:\n%s", view)
+	}
+}
+
+// TestCostCommandShowsTheMeasuredCacheHit covers the prefix-cache line: usage
+// the app accumulated with cache counters must render a hit rate, and a
+// session with no cache data must say so instead of inventing a zero.
+func TestCostCommandShowsTheMeasuredCacheHit(t *testing.T) {
+	model := chatModel(t)
+
+	model.app.AddUsage(provider.Usage{PromptTokens: 1000, CompletionTokens: 100, TotalTokens: 1100, CacheReadTokens: 800, CacheWriteTokens: 50})
+	next, _ := model.runSlash("cost", "")
+	view := allText(next.(*Model))
+	if !strings.Contains(view, "800 of 1000 input tokens served from cache (80% hit rate)") {
+		t.Errorf("/cost should show the measured hit rate:\n%s", view)
+	}
+	if !strings.Contains(view, "Cache writes: 50 tokens") {
+		t.Errorf("/cost should show cache writes:\n%s", view)
+	}
+
+	fresh := chatModel(t)
+	fresh.app.AddUsage(provider.Usage{PromptTokens: 500, CompletionTokens: 50, TotalTokens: 550})
+	next, _ = fresh.runSlash("cost", "")
+	if view := allText(next.(*Model)); !strings.Contains(view, "no cache data reported") {
+		t.Errorf("/cost with no cache data should say so:\n%s", view)
 	}
 }

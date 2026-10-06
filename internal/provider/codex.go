@@ -20,7 +20,13 @@ type codexClient struct{ *httpClient }
 
 func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(StreamEvent) error) error {
 	input := encodeResponsesInput(req)
+	// The Responses API takes one instructions string, so the parts are joined
+	// in order. The static prefix still leads, which is the part a prefix
+	// cache keys on; only the small dynamic tail changes between steps.
 	instructions := strings.TrimSpace(req.System)
+	if len(req.SystemParts) > 0 {
+		instructions = strings.TrimSpace(joinSystemParts(req.SystemParts))
+	}
 	var tools []map[string]any
 	if len(req.Tools) > 0 {
 		tools = encodeResponsesTools(req.Tools)

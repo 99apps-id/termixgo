@@ -219,8 +219,17 @@ func TestRunSubagentNeedsAClient(t *testing.T) {
 
 func TestReloadSkillsPicksUpAProjectSkill(t *testing.T) {
 	application := newTestApp(t)
-	if len(application.Skills()) != 0 {
-		t.Fatalf("a fresh workspace should have no skills, got %d", len(application.Skills()))
+	// Only the two builtins ship with a fresh workspace; a project skill
+	// joins them rather than standing alone.
+	names := func() []string {
+		var out []string
+		for _, item := range application.Skills() {
+			out = append(out, item.Name)
+		}
+		return out
+	}
+	if got := names(); len(got) != 2 {
+		t.Fatalf("a fresh workspace should have only the builtins, got %v", got)
 	}
 
 	dir := filepath.Join(skill.ProjectDir(application.Workspace()), "demo")
@@ -234,8 +243,17 @@ func TestReloadSkillsPicksUpAProjectSkill(t *testing.T) {
 
 	application.ReloadSkills()
 	skills := application.Skills()
-	if len(skills) != 1 || skills[0].Name != "demo" {
-		t.Fatalf("skills = %+v, want the demo skill", skills)
+	if len(skills) != 3 {
+		t.Fatalf("skills = %+v, want the demo skill plus the builtins", names())
+	}
+	var found *skill.Skill
+	for index := range skills {
+		if skills[index].Name == "demo" {
+			found = &skills[index]
+		}
+	}
+	if found == nil || found.Scope != "project" {
+		t.Fatalf("skills = %+v, want the demo project skill among them", names())
 	}
 	if application.Tools() == nil || application.Processes() == nil {
 		t.Errorf("the registry and the process manager should always be available")

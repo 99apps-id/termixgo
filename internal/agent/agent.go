@@ -289,6 +289,12 @@ runLoop:
 				emit(Event{Kind: EventNotice, Text: reason})
 				answerSkippedCalls(session, calls[index:], reason)
 				break
+			} else if reason != "" {
+				// A repetition nudge, not a stop: the call still runs, and the
+				// reason rides along as a user message after the batch so the next
+				// step answers the diagnosis instead of repeating blind.
+				diagnose = reason
+				emit(Event{Kind: EventNotice, Text: reason})
 			}
 			before := r.todoSnapshot()
 			result := r.execute(ctx, call)
@@ -330,6 +336,12 @@ runLoop:
 				// audit ledger.
 				emit(Event{Kind: EventUsage, Usage: result.SubagentUsage, CostUSD: sessionCost, CostKnown: costKnown, CostUnpriced: unpriced})
 			}
+			if !result.IsError {
+				// A call that moved the work forward clears the repetition state:
+				// reruns that succeed are progress, and verification legitimately
+				// repeats reads and checks.
+				guard.noteSuccess()
+			}
 			if !result.IsError && taskJustCompleted(before, r.todoSnapshot()) {
 				pendingVerify = ledger.BuildVerifyNudge(nudges, false)
 			}
@@ -337,7 +349,7 @@ runLoop:
 				// A streak of errors is not a loop: keep the run alive, tell the
 				// model to diagnose, and let it try a different approach. The
 				// remaining calls in the batch still run.
-				diagnose = reason
+				diagnose = r.withJournalHints(call.Name, reason)
 				emit(Event{Kind: EventNotice, Text: reason})
 			}
 			if ctx.Err() != nil {
@@ -410,6 +422,38 @@ func (r *Runner) injectSteering(session *Session) bool {
 		applied = true
 	}
 	return applied
+}
+
+// withJournalHints appends the learned fixes for a tool to a recovery nudge.
+//
+// The journal has collected recurring failures and their known fixes all
+// along, but nothing ever read them back in the loop, so the self-correction
+// feature was inert: the model got the generic "diagnose the error" advice
+// even when this exact tool and error had a recorded remedy. Folding the
+// hints into the same user message costs one map read and gives a weaker
+// model the correction it would otherwise have to rediscover.
+func (r *Runner) withJournalHints(tool, reason string) string {
+	if r.Journal == nil {
+		return reason
+	}
+	hints := r.Journal.SelfCorrectionHints(tool)
+	if len(hints) == 0 {
+		return reason
+	}
+	joined := make([]string, 0, len(hints))
+	seen := map[string]bool{reason: true}
+	for _, hint := range hints {
+		hint = strings.TrimSpace(hint)
+		if hint == "" || seen[hint] {
+			continue
+		}
+		seen[hint] = true
+		joined = append(joined, "- "+hint)
+	}
+	if len(joined) == 0 {
+		return reason
+	}
+	return reason + "\nKnown fixes for " + tool + " from earlier runs:\n" + strings.Join(joined, "\n")
 }
 
 // todoSnapshot reads the plan before a tool call, so the loop can tell when a

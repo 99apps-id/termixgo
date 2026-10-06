@@ -144,9 +144,23 @@ func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers ma
 
 // encodeMessages flattens the shared message shape into chat-completions
 // messages.
+//
+// SystemParts, when the caller supplied them, become separate system
+// messages: the static prefix first, the dynamic working plan after. OpenAI
+// and the compatible backends build their prefix cache over the message list
+// in order, so one system block whose tail changes on every todo update
+// invalidated the whole cached prefix each step; two blocks let the static
+// head stay warm while only the small dynamic tail is re-billed.
 func (c *openAIClient) encodeMessages(req ChatRequest) []map[string]any {
-	messages := make([]map[string]any, 0, len(req.Messages)+1)
-	if strings.TrimSpace(req.System) != "" {
+	messages := make([]map[string]any, 0, len(req.Messages)+2)
+	if len(req.SystemParts) > 0 {
+		for _, part := range req.SystemParts {
+			if strings.TrimSpace(part) == "" {
+				continue
+			}
+			messages = append(messages, map[string]any{"role": "system", "content": part})
+		}
+	} else if strings.TrimSpace(req.System) != "" {
 		messages = append(messages, map[string]any{"role": "system", "content": req.System})
 	}
 	for _, message := range req.Messages {

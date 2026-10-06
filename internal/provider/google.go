@@ -16,7 +16,22 @@ func (c *googleClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 	payload := map[string]any{
 		"contents": encodeGoogleContents(req.Messages),
 	}
-	if strings.TrimSpace(req.System) != "" {
+	// SystemParts map one part each, static prefix first. Gemini caches the
+	// implicit prompt prefix, so a single system part that ends with the live
+	// todo plan invalidated the cache on every plan change; separate parts
+	// keep the static head reusable while the dynamic tail is re-sent.
+	if len(req.SystemParts) > 0 {
+		parts := make([]map[string]any, 0, len(req.SystemParts))
+		for _, part := range req.SystemParts {
+			if strings.TrimSpace(part) == "" {
+				continue
+			}
+			parts = append(parts, map[string]any{"text": part})
+		}
+		if len(parts) > 0 {
+			payload["systemInstruction"] = map[string]any{"parts": parts}
+		}
+	} else if strings.TrimSpace(req.System) != "" {
 		payload["systemInstruction"] = map[string]any{
 			"parts": []map[string]any{{"text": req.System}},
 		}

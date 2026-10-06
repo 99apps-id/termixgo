@@ -3,10 +3,15 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -178,10 +183,14 @@ func PruneCheckpoints(ctx context.Context, workspace string, keep int) error {
 
 // AutoCheckpoint saves a best-effort snapshot before a turn and prunes the
 // backlog. It never fails: a turn must not be lost because git was slow.
+// Outside a git repository the file-level snapshot store takes over, so a
+// turn in a plain folder is still undoable with /rewind.
 func AutoCheckpoint(ctx context.Context, workspace string) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, checkpointTimeout)
 	defer cancel()
 	if !isGitWorkspace(timeoutCtx, workspace) {
+		_, _ = CreateFileCheckpoint(workspace, "auto before run")
+		_ = PruneFileCheckpoints(workspace, checkpointKeep)
 		return
 	}
 	if _, err := CreateCheckpoint(timeoutCtx, workspace, "auto before run"); err != nil {
@@ -270,6 +279,340 @@ func clearStashUntracked(ctx context.Context, workspace, ref string) {
 func isGitWorkspace(_ context.Context, workspace string) bool {
 	return isGitRepository(workspace)
 }
+
+// File-level snapshots for workspaces without git. A stash entry needs a
+// repository; a plain folder gets copies of the files a turn actually
+// touches, stored under .termixgo/snapshots/<id>/ with a manifest. Edits,
+// writes, patches and deletes register their targets before writing, so the
+// snapshot holds the pre-change bytes, and rewind restores exactly those
+// files while leaving everything created since alone.
+
+// fileCheckpointDir is the snapshot store inside the workspace state
+// directory. The search walk already skips .termixgo, and checkpoint state
+// is not content, so it belongs there rather than beside the work.
+func fileCheckpointDir(workspace string) string {
+	return filepath.Join(workspace, ".termixgo", "snapshots")
+}
+
+// snapshotFileCap bounds one stored file. A snapshot is an undo buffer, not
+// a backup: a file larger than this is skipped rather than copied, and the
+// manifest says so, so a rewind never silently restores a partial file.
+const snapshotFileCap = 4 * 1024 * 1024
+
+// snapshotKeep caps the stored snapshots. Each snapshot copies whole files,
+// so the cap is about disk rather than stash-list length.
+const snapshotKeep = 10
+
+// snapshotSkipDirs lists common generated/lock directories that are almost
+// never worth copying into a file-level undo snapshot. The list is kept
+// small on purpose; the snapshot only records files a turn actually edits.
+var snapshotSkipDirs = map[string]struct{}{
+	".git": {}, ".svn": {}, ".hg": {}, "node_modules": {}, "vendor": {},
+	"dist": {}, "build": {}, ".cache": {}, "__pycache__": {}, ".next": {},
+	".terraform": {}, ".venv": {}, "venv": {}, "target": {}, "Pods": {},
+}
+
+// FileCheckpoint is one file-level snapshot.
+type FileCheckpoint struct {
+	ID        string    `json:"id"`
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"createdAt"`
+	Files     []string  `json:"files"`
+	Skipped   []string  `json:"skipped,omitempty"`
+	Restored  bool      `json:"restored,omitempty"`
+}
+
+// fileCheckpointRef renders the stable user-facing ref for a snapshot.
+func fileCheckpointRef(id string) string { return "file:" + id }
+
+// SnapshotFile records the current bytes of path before a mutating tool
+// writes it. It is a no-op for paths outside the workspace, for missing
+// files (there is nothing to restore), and for oversized files, which are
+// named in the manifest instead of copied. Repeated calls for one path keep
+// the first bytes: the snapshot is the state before the turn, not before
+// each edit.
+func SnapshotFile(workspace, path string) {
+	if strings.TrimSpace(workspace) == "" || strings.TrimSpace(path) == "" {
+		return
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return
+	}
+	if err := checkWorkspacePath(&Env{Workspace: workspace}, absolute); err != nil {
+		return
+	}
+	info, err := os.Stat(absolute)
+	if err != nil || info.IsDir() {
+		return
+	}
+	relative, err := filepath.Rel(workspace, absolute)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return
+	}
+	// Never snapshot the snapshot store itself or the search database: the
+	// former would recurse, the latter is a live SQLite file.
+	slash := filepath.ToSlash(relative)
+	if slash == ".termixgo" || strings.HasPrefix(slash, ".termixgo/") {
+		return
+	}
+	store := currentFileSnapshot(workspace)
+	if store == nil {
+		return
+	}
+	for _, have := range store.Files {
+		if have == slash {
+			return
+		}
+	}
+	for _, have := range store.Skipped {
+		if have == slash {
+			return
+		}
+	}
+	if info.Size() > snapshotFileCap {
+		store.Skipped = append(store.Skipped, slash)
+		_ = writeFileManifest(workspace, store)
+		return
+	}
+	data, err := os.ReadFile(absolute)
+	if err != nil {
+		return
+	}
+	target := filepath.Join(fileCheckpointDir(workspace), store.ID, filepath.FromSlash(slash))
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return
+	}
+	if err := os.WriteFile(target, data, 0o600); err != nil {
+		return
+	}
+	store.Files = append(store.Files, slash)
+	_ = writeFileManifest(workspace, store)
+}
+
+// currentFileSnapshot returns the snapshot being collected for this turn,
+// creating it on first use. One snapshot per turn is what makes rewind match
+// the turn boundary: every file the turn touched returns to its pre-turn
+// bytes at once.
+func currentFileSnapshot(workspace string) *FileCheckpoint {
+	dir := fileCheckpointDir(workspace)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
+				return nil
+			}
+		} else {
+			return nil
+		}
+		entries = nil
+	}
+	// Reuse today's in-progress snapshot when the turn already started one;
+	// otherwise open a fresh id. The manifest's file list is the membership
+	// test: a snapshot that already holds restored files from a rewind is
+	// finished and must not be appended to.
+	var newest *FileCheckpoint
+	var newestTime time.Time
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		store := readFileManifest(workspace, entry.Name())
+		if store == nil {
+			continue
+		}
+		if store.CreatedAt.After(newestTime) {
+			newestTime = store.CreatedAt
+			newest = store
+		}
+	}
+	if newest != nil && time.Since(newest.CreatedAt) < time.Hour && !newest.restored() {
+		return newest
+	}
+	store := &FileCheckpoint{ID: newSnapshotID(), Message: "auto before run", CreatedAt: time.Now()}
+	if err := writeFileManifest(workspace, store); err != nil {
+		return nil
+	}
+	return store
+}
+
+// restored marks a snapshot that a rewind already consumed. Appending new
+// files to it afterwards would mix pre-turn bytes from two different turns
+// under one id.
+func (s FileCheckpoint) restored() bool { return s.Restored }
+
+func newSnapshotID() string {
+	var buffer [8]byte
+	sum := sha256.Sum256([]byte(time.Now().UTC().Format(time.RFC3339Nano)))
+	copy(buffer[:], sum[:8])
+	return hex.EncodeToString(buffer[:])
+}
+
+func snapshotManifestPath(workspace, id string) string {
+	return filepath.Join(fileCheckpointDir(workspace), id, "manifest.json")
+}
+
+func readFileManifest(workspace, id string) *FileCheckpoint {
+	data, err := os.ReadFile(snapshotManifestPath(workspace, id))
+	if err != nil {
+		return nil
+	}
+	var store FileCheckpoint
+	if err := json.Unmarshal(data, &store); err != nil {
+		return nil
+	}
+	if strings.TrimSpace(store.ID) == "" {
+		store.ID = id
+	}
+	return &store
+}
+
+func writeFileManifest(workspace string, store *FileCheckpoint) error {
+	if err := os.MkdirAll(filepath.Join(fileCheckpointDir(workspace), store.ID), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(store, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(snapshotManifestPath(workspace, store.ID), append(data, '\n'), 0o600)
+}
+
+func snapshotFiles(workspace string, store *FileCheckpoint) error {
+	root := filepath.Join(fileCheckpointDir(workspace), store.ID)
+	for _, relative := range store.Files {
+		source := filepath.Join(workspace, filepath.FromSlash(relative))
+		data, err := os.ReadFile(source)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(root, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(target, data, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CreateFileCheckpoint opens a named file-level snapshot. Outside git this is
+// what the checkpoint tool calls; inside git the stash path is used instead.
+func CreateFileCheckpoint(workspace, message string) (FileCheckpoint, error) {
+	if strings.TrimSpace(workspace) == "" {
+		return FileCheckpoint{}, fmt.Errorf("workspace is required")
+	}
+	if strings.TrimSpace(message) == "" {
+		message = "manual checkpoint"
+	}
+	var files []string
+	_ = filepath.WalkDir(workspace, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(workspace, path)
+		if err != nil || strings.HasPrefix(rel, ".termixgo"+string(filepath.Separator)) || rel == ".termixgo" {
+			return nil
+		}
+		files = append(files, filepath.ToSlash(rel))
+		return nil
+	})
+	store := &FileCheckpoint{ID: newSnapshotID(), Message: message, CreatedAt: time.Now(), Files: files}
+	if err := writeFileManifest(workspace, store); err != nil {
+		return FileCheckpoint{}, err
+	}
+	if err := snapshotFiles(workspace, store); err != nil {
+		return FileCheckpoint{}, err
+	}
+	return *store, nil
+}
+
+// ListFileCheckpoints returns the file-level snapshots, newest first.
+func ListFileCheckpoints(workspace string) ([]FileCheckpoint, error) {
+	entries, err := os.ReadDir(fileCheckpointDir(workspace))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []FileCheckpoint
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if store := readFileManifest(workspace, entry.Name()); store != nil {
+			out = append(out, *store)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+// RewindFileCheckpoint restores every file a snapshot holds to its stored
+// bytes. Files created after the snapshot are left alone; files the snapshot
+// skipped as oversized are named rather than touched.
+func RewindFileCheckpoint(workspace, id string) (FileCheckpoint, error) {
+	store := readFileManifest(workspace, strings.TrimPrefix(id, "file:"))
+	if store == nil {
+		return FileCheckpoint{}, fmt.Errorf("%s is not a file checkpoint", fileCheckpointRef(strings.TrimPrefix(id, "file:")))
+	}
+	var failed []string
+	for _, relative := range store.Files {
+		target := filepath.Join(workspace, filepath.FromSlash(relative))
+		if err := checkWorkspacePath(&Env{Workspace: workspace}, target); err != nil {
+			failed = append(failed, relative)
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(fileCheckpointDir(workspace), store.ID, filepath.FromSlash(relative)))
+		if err != nil {
+			failed = append(failed, relative)
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			failed = append(failed, relative)
+			continue
+		}
+		if err := os.WriteFile(target, data, 0o644); err != nil {
+			failed = append(failed, relative)
+			continue
+		}
+		if info, statErr := os.Lstat(target); statErr == nil && info.Mode().IsRegular() {
+			_ = os.Chmod(target, info.Mode()&os.ModePerm)
+		}
+	}
+	store.Restored = true
+	_ = writeFileManifest(workspace, store)
+	if len(failed) > 0 {
+		return *store, fmt.Errorf("could not restore %s", strings.Join(failed, ", "))
+	}
+	return *store, nil
+}
+
+// PruneFileCheckpoints drops all but the newest keep snapshots.
+func PruneFileCheckpoints(workspace string, keep int) error {
+	if keep < 1 {
+		keep = 1
+	}
+	stores, err := ListFileCheckpoints(workspace)
+	if err != nil {
+		return err
+	}
+	for index := keep; index < len(stores); index++ {
+		_ = os.RemoveAll(filepath.Join(fileCheckpointDir(workspace), stores[index].ID))
+	}
+	return nil
+}
+
+// snapshotFingerprint renders a short content hash used by tests to prove a
+// restore returned the exact pre-change bytes.
+func snapshotFingerprint(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:8])
+}
+
+var _ = bytes.MinRead
 
 func gitOutput(ctx context.Context, workspace string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, "git", args...)

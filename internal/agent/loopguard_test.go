@@ -9,13 +9,24 @@ import (
 )
 
 // TestLoopGuardTripsOnRepeatedCalls is the no-loop contract: the same tool
-// call three times in a row ends the run with an explanation, instead of
-// burning the whole step budget on one stuck idea.
+// call over and over first earns recovery nudges, and a run that ignores
+// them ends with an explanation instead of burning the whole step budget.
 func TestLoopGuardTripsOnRepeatedCalls(t *testing.T) {
-	step := []provider.StreamEvent{callChunk("c", "list_directory", `{"path":"."}`)}
-	client := &fakeClient{steps: [][]provider.StreamEvent{step, step, step, step, step}}
+	// The repeated call has to fail: a rerun that succeeds is progress and
+	// resets the repetition state, so a successful identical call never trips
+	// the guard. A call that keeps failing unchanged is the genuine loop.
+	step := []provider.StreamEvent{callChunk("c", "read_file", `{"path":"missing.txt"}`)}
+	// Enough repeats to exhaust the nudges and then loop for real: each nudge
+	// resets the repeat counter, so the trip needs MaxLoopNudges rounds of
+	// three identical calls.
+	repeats := 1 + MaxLoopNudges
+	steps := make([][]provider.StreamEvent, 0, repeats*3+1)
+	for i := 0; i < repeats*3; i++ {
+		steps = append(steps, step)
+	}
+	client := &fakeClient{steps: steps}
 	runner, _, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
-	runner.MaxSteps = 10
+	runner.MaxSteps = 40
 	session := NewSession(t.TempDir(), "test-model")
 
 	if err := runner.Run(context.Background(), session, "loop forever"); err != nil {
@@ -23,6 +34,7 @@ func TestLoopGuardTripsOnRepeatedCalls(t *testing.T) {
 	}
 	var stopReason string
 	var notice string
+	var nudged bool
 	recorder.mu.Lock()
 	for _, event := range recorder.events {
 		if event.Kind == EventTurnEnd {
@@ -31,6 +43,9 @@ func TestLoopGuardTripsOnRepeatedCalls(t *testing.T) {
 		if event.Kind == EventNotice && strings.Contains(event.Text, "repeated") {
 			notice = event.Text
 		}
+		if event.Kind == EventNotice && strings.Contains(event.Text, "recovery attempt") {
+			nudged = true
+		}
 	}
 	recorder.mu.Unlock()
 	if stopReason != "loop-guard" {
@@ -38,6 +53,41 @@ func TestLoopGuardTripsOnRepeatedCalls(t *testing.T) {
 	}
 	if notice == "" {
 		t.Errorf("the guard should explain the stop")
+	}
+	if !nudged {
+		t.Errorf("the guard should try to recover before stopping")
+	}
+}
+
+// TestLoopGuardNudgeRecovers is the complaint that drove the change: a model
+// that repeats one call is not necessarily stuck, it may be one instruction
+// away from choosing a different approach. The nudge arrives as a user
+// message, the model answers it, and the run finishes cleanly.
+func TestLoopGuardNudgeRecovers(t *testing.T) {
+	repeat := []provider.StreamEvent{callChunk("c", "list_directory", `{"path":"."}`)}
+	steps := [][]provider.StreamEvent{
+		repeat, repeat, repeat,
+		{callChunk("c2", "list_directory", `{"path":"sub"}`)},
+		{textChunk("recovered.")},
+	}
+	client := &fakeClient{steps: steps}
+	runner, _, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	runner.MaxSteps = 10
+	session := NewSession(t.TempDir(), "test-model")
+
+	if err := runner.Run(context.Background(), session, "try once"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var stopReason string
+	recorder.mu.Lock()
+	for _, event := range recorder.events {
+		if event.Kind == EventTurnEnd {
+			stopReason = event.StopReason
+		}
+	}
+	recorder.mu.Unlock()
+	if stopReason != "stop" {
+		t.Errorf("stop reason = %q, want a clean stop after the nudge", stopReason)
 	}
 }
 

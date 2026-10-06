@@ -46,7 +46,9 @@ func (c *copilotClient) Stream(ctx context.Context, req ChatRequest, emit func(S
 			"stream":     true,
 			"messages":   encodeAnthropicMessages(req.Messages),
 		}
-		if strings.TrimSpace(req.System) != "" {
+		if len(req.SystemParts) > 0 {
+			payload["system"] = joinSystemParts(req.SystemParts)
+		} else if strings.TrimSpace(req.System) != "" {
 			payload["system"] = req.System
 		}
 		if req.Temperature != nil {
@@ -64,6 +66,9 @@ func (c *copilotClient) Stream(ctx context.Context, req ChatRequest, emit func(S
 	if copilotResponsesModel(req.Model) {
 		return c.streamResponses(ctx, headers, req, emit)
 	}
+	// The Anthropic-shape branch above builds the cached system blocks itself;
+	// this branch is the OpenAI-compatible one, where encodeMessages already
+	// splits SystemParts into separate system messages for prefix caching.
 	openAICli := &openAIClient{httpClient: c.httpClient}
 	payload := map[string]any{
 		"model":    req.Model,
@@ -94,7 +99,9 @@ func (c *copilotClient) streamResponses(ctx context.Context, headers map[string]
 		"store":  false,
 		"input":  encodeResponsesInput(req),
 	}
-	if system := strings.TrimSpace(req.System); system != "" {
+	if len(req.SystemParts) > 0 {
+		payload["instructions"] = joinSystemParts(req.SystemParts)
+	} else if system := strings.TrimSpace(req.System); system != "" {
 		payload["instructions"] = system
 	}
 	if tools := encodeResponsesTools(req.Tools); len(tools) > 0 {

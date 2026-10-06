@@ -93,11 +93,12 @@ func (t *runChecksTool) DoneLabel(a map[string]any) string {
 	return "Ran checks (" + argString(a, "kind") + ")"
 }
 func (t *runChecksTool) Description() string {
-	return "Run the project's tests, linter, formatter, type checker or build, detected from go.mod, package.json, Cargo.toml or pyproject.toml. Prefer this over hand-written commands so the project's own tooling is used."
+	return "Run the project's tests, linter, formatter, type checker or build, detected from go.mod, package.json, Cargo.toml or pyproject.toml. Prefer this over hand-written commands so the project's own tooling is used. Pass path to scope a Go check to one package for a fast iteration loop."
 }
 func (t *runChecksTool) Schema() map[string]any {
 	return object(map[string]any{
 		"kind":         map[string]any{"type": "string", "enum": []string{"test", "lint", "format", "typecheck", "build"}, "description": "Which check to run. Defaults to test."},
+		"path":         strProp("Optional workspace-relative path to scope a Go check to one package (for example internal/agent). Works with kind test, lint, typecheck and build."),
 		"command":      strProp("Explicit command that overrides detection."),
 		"timeout_secs": intProp("Timeout in seconds, 1 to 900. Defaults to 300."),
 	})
@@ -113,10 +114,14 @@ func (t *runChecksTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	default:
 		return Result{Output: fmt.Sprintf("unknown check %q; use test, lint, format, typecheck or build", kind), IsError: true}, nil
 	}
+	scope := strings.TrimSpace(argString(args, "path", "package", "dir"))
 	command := strings.TrimSpace(argString(args, "command"))
 	if command == "" {
-		detected, ok := detectCheckCommand(env.Workspace, kind)
+		detected, ok := detectCheckCommand(env.Workspace, kind, scope)
 		if !ok {
+			if scope != "" {
+				return Result{Output: fmt.Sprintf("No scoped %s command could be built for %q. Pass an explicit command.", kind, scope), IsError: true}, nil
+			}
 			return Result{Output: fmt.Sprintf("No %s command could be detected for this project. Pass an explicit command.", kind), IsError: true}, nil
 		}
 		command = detected
@@ -243,10 +248,18 @@ func truncateOutput(text string, max int) string {
 	return strings.TrimRight(head, "\n") + fmt.Sprintf("\n\n... [%d characters omitted] ...\n\n", len(text)-max) + strings.TrimLeft(tail, "\n")
 }
 
-// detectCheckCommand finds the project's own command for a check.
-func detectCheckCommand(workspace, kind string) (string, bool) {
+// detectCheckCommand finds the project's own command for a check. A scope
+// narrows a Go check to one package: after editing internal/agent, "go test
+// ./internal/agent/" answers in seconds instead of running the whole tree,
+// which is the iteration loop a refactor lives in. The scope must stay inside
+// the workspace, so a scoped check cannot be turned into a read of another
+// directory.
+func detectCheckCommand(workspace, kind, scope string) (string, bool) {
 	if strings.TrimSpace(workspace) == "" {
 		return "", false
+	}
+	if scope != "" {
+		return scopedGoCommand(workspace, kind, scope)
 	}
 	if exists(filepath.Join(workspace, "go.mod")) {
 		switch kind {
@@ -296,6 +309,38 @@ func detectCheckCommand(workspace, kind string) (string, bool) {
 		case "format":
 			return "python -m ruff format --check .", true
 		}
+	}
+	return "", false
+}
+
+// scopedGoCommand builds a one-package Go command for a scope. Only Go gets a
+// scoped form: its "./path/" package syntax maps cleanly onto a directory,
+// while the other ecosystems run workspace-wide scripts by design.
+func scopedGoCommand(workspace, kind, scope string) (string, bool) {
+	if !exists(filepath.Join(workspace, "go.mod")) {
+		return "", false
+	}
+	cleaned := filepath.ToSlash(filepath.Clean("/" + strings.TrimSpace(scope)))
+	if cleaned == "/" {
+		return "", false
+	}
+	relative := strings.TrimPrefix(cleaned, "/")
+	absolute := filepath.Join(workspace, filepath.FromSlash(relative))
+	if err := checkWorkspacePath(&Env{Workspace: workspace}, absolute); err != nil {
+		return "", false
+	}
+	info, err := os.Stat(absolute)
+	if err != nil || !info.IsDir() {
+		return "", false
+	}
+	target := "./" + relative + "/"
+	switch kind {
+	case "test":
+		return "go test " + target, true
+	case "lint":
+		return "go vet " + target, true
+	case "typecheck", "build":
+		return "go build " + target, true
 	}
 	return "", false
 }

@@ -18,6 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/skill/builtin"
 )
 
 // Skill is one discovered skill.
@@ -52,8 +53,10 @@ func UserDir() string {
 	return filepath.Join(home, "skills")
 }
 
-// Discover returns project and user skills, sorted by name. Missing folders
-// are not an error; a project skill shadows a user skill of the same name.
+// Discover returns project, user and builtin skills, sorted by name. Missing
+// folders are not an error; a project skill shadows a user skill of the same
+// name, and both shadow a builtin one. Builtins are appended last so an
+// operator-authored skill always wins a name collision.
 func Discover(workspace string) ([]Skill, error) {
 	seen := map[string]int{}
 	skills := make([]Skill, 0, 16)
@@ -81,6 +84,31 @@ func Discover(workspace string) ([]Skill, error) {
 			seen[key] = len(skills)
 			skills = append(skills, item)
 		}
+	}
+	for _, name := range builtin.Names {
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		document, ok := builtin.Read(name)
+		if !ok {
+			continue
+		}
+		frontmatter, body, err := Parse([]byte(document))
+		if err != nil {
+			return nil, fmt.Errorf("builtin skill %s: %w", name, err)
+		}
+		label := strings.TrimSpace(frontmatter.Name)
+		if label == "" {
+			label = name
+		}
+		seen[key] = len(skills)
+		skills = append(skills, Skill{
+			Name:        label,
+			Description: strings.TrimSpace(frontmatter.Description),
+			Body:        body,
+			Scope:       "builtin",
+		})
 	}
 	sort.SliceStable(skills, func(i, j int) bool {
 		return strings.ToLower(skills[i].Name) < strings.ToLower(skills[j].Name)

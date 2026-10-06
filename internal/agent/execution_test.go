@@ -31,7 +31,7 @@ func TestDetectCheckCommandForGo(t *testing.T) {
 		"build":     "go build ./...",
 	}
 	for kind, want := range cases {
-		got, ok := detectCheckCommand(workspace, kind)
+		got, ok := detectCheckCommand(workspace, kind, "")
 		if !ok {
 			t.Errorf("%s: no command detected", kind)
 			continue
@@ -42,9 +42,59 @@ func TestDetectCheckCommandForGo(t *testing.T) {
 	}
 }
 
+// TestDetectCheckCommandScopedToAPackage pins the fast iteration loop: after
+// editing one package, a scoped check tests just that package. A scope that
+// escapes the workspace or names nothing real is refused rather than run.
+func TestDetectCheckCommandScopedToAPackage(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, "internal", "agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := map[string]string{
+		"test":      "go test ./internal/agent/",
+		"lint":      "go vet ./internal/agent/",
+		"typecheck": "go build ./internal/agent/",
+		"build":     "go build ./internal/agent/",
+	}
+	for kind, want := range cases {
+		got, ok := detectCheckCommand(workspace, kind, "internal/agent")
+		if !ok {
+			t.Errorf("%s: no scoped command detected", kind)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s = %q, want %q", kind, got, want)
+		}
+	}
+	for _, scope := range []string{"../escape", "..", "missing-dir", ""} {
+		if scope == "" {
+			continue
+		}
+		if got, ok := detectCheckCommand(workspace, "test", scope); ok {
+			t.Errorf("scope %q should be refused, got %q", scope, got)
+		}
+	}
+	// format has no scoped form: it stays workspace-wide by design.
+	if got, ok := detectCheckCommand(workspace, "format", "internal/agent"); ok {
+		t.Errorf("format should not scope, got %q", got)
+	}
+	// No go.mod means no scoped Go command either.
+	plain := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(plain, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := detectCheckCommand(plain, "test", "pkg"); ok {
+		t.Errorf("a non-Go workspace should refuse a scope, got %q", got)
+	}
+}
+
 func TestDetectCheckCommandForRust(t *testing.T) {
 	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "Cargo.toml"), []byte("[package]\nname = \"x\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "Cargo.toml"), []byte("[package]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -56,7 +106,7 @@ func TestDetectCheckCommandForRust(t *testing.T) {
 		"build":     "cargo build",
 	}
 	for kind, want := range cases {
-		got, ok := detectCheckCommand(workspace, kind)
+		got, ok := detectCheckCommand(workspace, kind, "")
 		if !ok || got != want {
 			t.Errorf("%s = %q ok=%v, want %q", kind, got, ok, want)
 		}
@@ -91,7 +141,7 @@ func TestDetectCheckCommandForNodeUsesTheProjectsScript(t *testing.T) {
 		"build":     "pnpm run build",
 	}
 	for kind, want := range cases {
-		got, ok := detectCheckCommand(workspace, kind)
+		got, ok := detectCheckCommand(workspace, kind, "")
 		if !ok || got != want {
 			t.Errorf("%s = %q ok=%v, want %q", kind, got, ok, want)
 		}
@@ -117,7 +167,7 @@ func TestDetectCheckCommandPicksThePackageManager(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		got, ok := detectCheckCommand(workspace, "test")
+		got, ok := detectCheckCommand(workspace, "test", "")
 		if !ok || got != want {
 			t.Errorf("with %q: test = %q ok=%v, want %q", lockfile, got, ok, want)
 		}
@@ -132,20 +182,20 @@ func TestDetectCheckCommandFallsBackToTheRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, ok := detectCheckCommand(workspace, "test")
+	got, ok := detectCheckCommand(workspace, "test", "")
 	if !ok || got != "npm test" {
 		t.Errorf("test = %q ok=%v, want npm test", got, ok)
 	}
 	// A kind with no fallback reports that nothing was detected rather than
 	// inventing a command.
-	if got, ok := detectCheckCommand(workspace, "lint"); ok {
+	if got, ok := detectCheckCommand(workspace, "lint", ""); ok {
 		t.Errorf("lint = %q, want no detection for an unknown script", got)
 	}
 }
 
 func TestDetectCheckCommandForPython(t *testing.T) {
 	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "pyproject.toml"), []byte("[project]\nname = \"x\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "pyproject.toml"), []byte("[project]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -155,25 +205,25 @@ func TestDetectCheckCommandForPython(t *testing.T) {
 		"format": "python -m ruff format --check .",
 	}
 	for kind, want := range cases {
-		got, ok := detectCheckCommand(workspace, kind)
+		got, ok := detectCheckCommand(workspace, kind, "")
 		if !ok || got != want {
 			t.Errorf("%s = %q ok=%v, want %q", kind, got, ok, want)
 		}
 	}
 	// A check the project cannot run reports as undetected rather than
 	// guessing at a tool that may not be installed.
-	if got, ok := detectCheckCommand(workspace, "build"); ok {
+	if got, ok := detectCheckCommand(workspace, "build", ""); ok {
 		t.Errorf("build = %q, want no detection for a Python project", got)
 	}
 }
 
 func TestDetectCheckCommandWithNoProject(t *testing.T) {
 	workspace := t.TempDir()
-	if got, ok := detectCheckCommand(workspace, "test"); ok {
+	if got, ok := detectCheckCommand(workspace, "test", ""); ok {
 		t.Errorf("test = %q, want no detection in an empty directory", got)
 	}
 	// An empty workspace is the one case that must not panic.
-	if got, ok := detectCheckCommand("", "test"); ok {
+	if got, ok := detectCheckCommand("", "test", ""); ok {
 		t.Errorf("test = %q, want no detection for an empty path", got)
 	}
 }
