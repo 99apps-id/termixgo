@@ -40,7 +40,9 @@ func BuildSystemParts(env *Env, model string) (staticPrompt, dynamicPlan string)
 	}
 
 	if memory := readProjectMemory(env.Workspace); memory != "" {
-		builder.WriteString("\n\n## PROJECT MEMORY - " + memoryName(env.Workspace) + "\n")
+		builder.WriteString("\n\n## PROJECT MEMORY - ")
+		builder.WriteString(memoryName(env.Workspace))
+		builder.WriteByte('\n')
 		builder.WriteString(memory)
 	}
 	if env.Memory != nil {

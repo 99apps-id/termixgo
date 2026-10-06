@@ -366,18 +366,18 @@ func TestRunnerSystemPrefersAnExplicitPrompt(t *testing.T) {
 	env := testEnv(t)
 	runner := &Runner{Env: env, Model: "test-model"}
 
-	built := runner.system(NewSession(env.Workspace, "test-model"))
+	built := runner.system()
 	if !strings.Contains(built, "Termixgo") {
 		t.Errorf("the built prompt should name the agent:\n%s", built)
 	}
 
 	runner.System = "You are a test double."
-	if got := runner.system(NewSession(env.Workspace, "")); got != "You are a test double." {
+	if got := runner.system(); got != "You are a test double." {
 		t.Errorf("an explicit prompt must win, got %q", got)
 	}
 	// A whitespace-only override is not an override.
 	runner.System = "   "
-	if got := runner.system(NewSession(env.Workspace, "")); got == "   " {
+	if got := runner.system(); got == "   " {
 		t.Errorf("a blank override must fall back to the built prompt")
 	}
 }

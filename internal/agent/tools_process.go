@@ -224,7 +224,8 @@ func (t *listProcessesTool) Run(ctx context.Context, env *Env, args map[string]a
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "%d background process(es):\n", len(processes))
 	for _, process := range processes {
-		builder.WriteString(process.Summary() + "\n")
+		builder.WriteString(process.Summary())
+		builder.WriteByte('\n')
 	}
 	return Result{Output: strings.TrimRight(builder.String(), "\n")}, nil
 }

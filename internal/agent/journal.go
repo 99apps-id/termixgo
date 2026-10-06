@@ -194,13 +194,6 @@ func (j *ErrorJournal) append(entry journalEntry) error {
 	return nil
 }
 
-// readAll returns all entries from the journal file.
-func (j *ErrorJournal) readAll() ([]journalEntry, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return j.readAllLocked()
-}
-
 // readAllLocked assumes j.mu is held.
 func (j *ErrorJournal) readAllLocked() ([]journalEntry, error) {
 	f, err := os.Open(j.path)

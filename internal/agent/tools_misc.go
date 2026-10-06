@@ -72,7 +72,8 @@ func (t *searchMemoryTool) Run(ctx context.Context, env *Env, args map[string]an
 				header += fmt.Sprintf(" under %q", subPath)
 			}
 			var b strings.Builder
-			b.WriteString(header + ":\n\n")
+			b.WriteString(header)
+			b.WriteString(":\n\n")
 			for _, r := range results {
 				b.WriteString(fmt.Sprintf("[%s] %s (%s)\n%s\n\n", r.Scope, r.Title, r.Path, r.Snippet))
 			}

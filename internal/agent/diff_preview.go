@@ -130,12 +130,8 @@ func previewWrite(env *Env, args map[string]any) string {
 	newLines := splitPreviewLines(argString(args, "content", "text"))
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "--- %s\n+++ %s\n", displayPath(env, path), displayPath(env, path))
-	for _, line := range oldLines {
-		builder.WriteString("-" + line + "\n")
-	}
-	for _, line := range newLines {
-		builder.WriteString("+" + line + "\n")
-	}
+	writePreviewLines(&builder, '-', oldLines)
+	writePreviewLines(&builder, '+', newLines)
 	return capPreview(builder.String())
 }
 
@@ -229,24 +225,25 @@ func renderPreviewHunks(path string, oldLines []string, hunks []previewHunk) str
 		if start < 0 {
 			start = 0
 		}
-		for _, line := range oldLines[start:hunk.at] {
-			builder.WriteString(" " + line + "\n")
-		}
-		for _, line := range oldText {
-			builder.WriteString("-" + line + "\n")
-		}
-		for _, line := range newText {
-			builder.WriteString("+" + line + "\n")
-		}
+		writePreviewLines(&builder, ' ', oldLines[start:hunk.at])
+		writePreviewLines(&builder, '-', oldText)
+		writePreviewLines(&builder, '+', newText)
 		end := hunk.at + len(oldText) + previewContext
 		if end > len(oldLines) {
 			end = len(oldLines)
 		}
-		for _, line := range oldLines[hunk.at+len(oldText) : end] {
-			builder.WriteString(" " + line + "\n")
-		}
+		writePreviewLines(&builder, ' ', oldLines[hunk.at+len(oldText):end])
 	}
 	return capPreview(strings.TrimRight(builder.String(), "\n"))
+}
+
+// writePreviewLines writes each line with a one-byte diff marker in front.
+func writePreviewLines(builder *strings.Builder, marker byte, lines []string) {
+	for _, line := range lines {
+		builder.WriteByte(marker)
+		builder.WriteString(line)
+		builder.WriteByte('\n')
+	}
 }
 
 func splitPreviewLines(text string) []string {

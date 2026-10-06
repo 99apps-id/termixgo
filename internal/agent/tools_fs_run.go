@@ -82,7 +82,8 @@ func (t *listDirectoryTool) Run(ctx context.Context, env *Env, args map[string]a
 	sortEntries(entries)
 	const maxEntries = 500
 	var builder strings.Builder
-	builder.WriteString(displayPath(env, path) + "/\n")
+	builder.WriteString(displayPath(env, path))
+	builder.WriteString("/\n")
 	for index, entry := range entries {
 		if index == maxEntries {
 			fmt.Fprintf(&builder, "... and %d more\n", len(entries)-maxEntries)
@@ -92,7 +93,8 @@ func (t *listDirectoryTool) Run(ctx context.Context, env *Env, args map[string]a
 		if entry.IsDir() {
 			name += "/"
 		}
-		builder.WriteString(name + "\n")
+		builder.WriteString(name)
+		builder.WriteByte('\n')
 	}
 	if len(entries) == 0 {
 		builder.WriteString("(empty)\n")

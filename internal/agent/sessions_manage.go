@@ -131,7 +131,8 @@ func exportSessionMarkdown(session *Session) (string, error) {
 		}
 		fmt.Fprintf(&builder, "## %s\n\n", role)
 		if strings.TrimSpace(message.Content) != "" {
-			builder.WriteString(strings.TrimSpace(message.Content) + "\n\n")
+			builder.WriteString(strings.TrimSpace(message.Content))
+			builder.WriteString("\n\n")
 		}
 		for _, call := range message.ToolCalls {
 			fmt.Fprintf(&builder, "- tool `%s`\n", call.Name)

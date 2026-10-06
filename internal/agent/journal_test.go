@@ -8,6 +8,13 @@ import (
 	"testing"
 )
 
+// readAll returns all entries from the journal file. Tests only.
+func (j *ErrorJournal) readAll() ([]journalEntry, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.readAllLocked()
+}
+
 func TestErrorJournalRecordsAndPatterns(t *testing.T) {
 	workspace := t.TempDir()
 	journal, err := NewErrorJournal(workspace)

@@ -178,7 +178,10 @@ func ExpandMentions(workspace, input string) string {
 		if len(content) > mentionFileCap {
 			content = content[:mentionFileCap] + "\n... [truncated]"
 		}
-		builder.WriteString("\n\n--- @" + token + " ---\n" + strings.TrimRight(content, "\n"))
+		builder.WriteString("\n\n--- @")
+		builder.WriteString(token)
+		builder.WriteString(" ---\n")
+		builder.WriteString(strings.TrimRight(content, "\n"))
 		total += len(content)
 		attached++
 	}

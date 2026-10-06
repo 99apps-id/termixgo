@@ -83,9 +83,7 @@ func (m *Memory) Remember(fact, scope string) error {
 
 	var builder strings.Builder
 	builder.WriteString("# Termixgo memory\n\n")
-	for _, line := range lines {
-		builder.WriteString("- " + line + "\n")
-	}
+	writeFactLines(&builder, lines)
 	content := builder.String()
 	if len(content) > maxMemoryBytes {
 		// clipTailBytes keeps the newest facts and lands on a rune boundary, so a
@@ -100,6 +98,15 @@ func (m *Memory) Remember(fact, scope string) error {
 		return fmt.Errorf("create memory directory: %w", err)
 	}
 	return os.WriteFile(path, []byte(content), 0o600)
+}
+
+// writeFactLines writes each fact as a markdown bullet.
+func writeFactLines(builder *strings.Builder, facts []string) {
+	for _, fact := range facts {
+		builder.WriteString("- ")
+		builder.WriteString(fact)
+		builder.WriteByte('\n')
+	}
 }
 
 // Read returns the project and global facts, newest last.
@@ -119,15 +126,11 @@ func (m *Memory) PromptBlock() string {
 	builder.WriteString("\n\n## LEARNED MEMORY\nFacts the operator taught earlier. Trust them unless the code says otherwise.\n")
 	if len(global) > 0 {
 		builder.WriteString("\n### GLOBAL CONVENTIONS ( ~/.termixgo/memory.md )\n")
-		for _, fact := range global {
-			builder.WriteString("- " + fact + "\n")
-		}
+		writeFactLines(&builder, global)
 	}
 	if len(project) > 0 {
 		builder.WriteString("\n### PROJECT CONVENTIONS & FACTS ( .termixgo/memory.md )\n")
-		for _, fact := range project {
-			builder.WriteString("- " + fact + "\n")
-		}
+		writeFactLines(&builder, project)
 	}
 	return builder.String()
 }

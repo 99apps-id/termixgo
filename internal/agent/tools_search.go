@@ -119,6 +119,7 @@ func (t *grepTool) Run(ctx context.Context, env *Env, args map[string]any) (Resu
 		// scanner.Err() is deliberately not returned here: a single file
 		// with a line longer than 512KB (common in minified bundles)
 		// should not abort the search of every other file.
+		_ = scanner.Err()
 		return nil
 	})
 	if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
@@ -267,7 +268,8 @@ func globToRegex(pattern string) string {
 		case '?':
 			builder.WriteString("[^/]")
 		case '.', '+', '(', ')', '|', '^', '$', '{', '}', '[', ']', '\\':
-			builder.WriteString("\\" + string(r))
+			builder.WriteByte('\\')
+			builder.WriteRune(r)
 		default:
 			builder.WriteRune(r)
 		}

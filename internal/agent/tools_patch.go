@@ -153,7 +153,8 @@ func applyPatchAdd(path string, op patchOp) error {
 			if line.kind == "-" {
 				return fmt.Errorf("an add hunk cannot remove lines in %s", op.path)
 			}
-			builder.WriteString(line.text + "\n")
+			builder.WriteString(line.text)
+			builder.WriteByte('\n')
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

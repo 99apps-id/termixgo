@@ -267,6 +267,11 @@ func RunPlainWithContext(ctx context.Context, application *app.App, in io.Reader
 		fmt.Fprintln(out)
 	}
 	drain()
+	// Without this check a line longer than the scanner buffer ends the REPL
+	// silently, exactly as if the operator had typed exit.
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read input: %w", err)
+	}
 	return nil
 }
 

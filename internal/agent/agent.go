@@ -156,8 +156,8 @@ runLoop:
 
 		request := provider.ChatRequest{
 			Model:       r.Model,
-			System:      r.system(session),
-			SystemParts: r.systemParts(session),
+			System:      r.system(),
+			SystemParts: r.systemParts(),
 			Messages:    compactForModel(session.Messages(), r.ContextBudget),
 			Tools:       r.stepTools(discovered).Definitions(),
 			Effort:      r.Effort,
@@ -301,7 +301,7 @@ runLoop:
 			if result.IsError && ctx.Err() != nil {
 				result.Output = "stopped: " + ctx.Err().Error()
 			}
-			r.observeToolResult(&ledger, guard, call.Name, call.Arguments, result)
+			r.observeToolResult(&ledger, call.Name, call.Arguments, result)
 			if result.IsError && r.Journal != nil {
 				r.Journal.Record(call.Name, call.Arguments, result.Output)
 			}
@@ -496,7 +496,7 @@ func answerSkippedCalls(session *Session, calls []provider.ToolCall, reason stri
 }
 
 // system assembles the system prompt for this step.
-func (r *Runner) system(session *Session) string {
+func (r *Runner) system() string {
 	if strings.TrimSpace(r.System) != "" {
 		return r.System
 	}
@@ -509,7 +509,7 @@ func (r *Runner) system(session *Session) string {
 
 // systemParts returns the static prompt and dynamic working plan separately
 // so provider implementations can mark the static prefix for prompt caching.
-func (r *Runner) systemParts(session *Session) []string {
+func (r *Runner) systemParts() []string {
 	if strings.TrimSpace(r.System) != "" {
 		return []string{r.System}
 	}
@@ -525,7 +525,7 @@ func (r *Runner) systemParts(session *Session) []string {
 }
 
 // observeToolResult folds one finished tool call into the verify ledger.
-func (r *Runner) observeToolResult(ledger *VerifyLedger, guard *loopGuard, name, rawArgs string, result Result) {
+func (r *Runner) observeToolResult(ledger *VerifyLedger, name, rawArgs string, result Result) {
 	lowered := strings.ToLower(strings.TrimSpace(name))
 	switch lowered {
 	case "apply_patch", "patch":
@@ -548,9 +548,6 @@ func (r *Runner) observeToolResult(ledger *VerifyLedger, guard *loopGuard, name,
 			return
 		}
 		path := argString(args, "path", "file", "filename")
-		if path == "" && (lowered == "multi_edit" || lowered == "multi_replace") {
-			path = argString(args, "path", "file")
-		}
 		*ledger = ledger.RecordEdit(path)
 	case "run_checks", "verify", "test", "lint":
 		if !result.IsError {

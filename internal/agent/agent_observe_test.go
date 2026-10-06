@@ -21,7 +21,7 @@ func TestObserveToolResultTracksApplyPatch(t *testing.T) {
 		"*** End Patch\n"
 	rawArgs := "{" + "\"patch\":" + quoteJSONString(t, patch) + "}"
 
-	runner.observeToolResult(&ledger, nil, "apply_patch", rawArgs, Result{Output: "Applied"})
+	runner.observeToolResult(&ledger, "apply_patch", rawArgs, Result{Output: "Applied"})
 
 	if !ledger.ShouldNudgeVerification(false) {
 		t.Fatalf("a code patch with no verification should nudge")

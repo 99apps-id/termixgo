@@ -1537,7 +1537,8 @@ func (m *Model) slashQuota(args string) (tea.Model, tea.Cmd) {
 					line += " (resetting...)"
 				}
 			}
-			sb.WriteString(line + "\n")
+			sb.WriteString(line)
+			sb.WriteByte('\n')
 		}
 	} else if snap != nil && snap.Unavailable != "" {
 		sb.WriteString(fmt.Sprintf("\nOfficial Provider Usage: unavailable (%s)\n", snap.Unavailable))

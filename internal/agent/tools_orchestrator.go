@@ -97,7 +97,8 @@ func (t *listPipelinesTool) Run(ctx context.Context, env *Env, args map[string]a
 	for _, pipeline := range pipelines {
 		fmt.Fprintf(&builder, "\n- %s: %s (%d step(s))", pipeline.ID, pipeline.Name, len(pipeline.Steps))
 		if strings.TrimSpace(pipeline.Description) != "" {
-			builder.WriteString(" - " + pipeline.Description)
+			builder.WriteString(" - ")
+			builder.WriteString(pipeline.Description)
 		}
 	}
 	return Result{Output: builder.String()}, nil
