@@ -99,8 +99,8 @@ func TestAntigravityModelsUseUpstreamIDs(t *testing.T) {
 		"antigravity-gemini-3.8-flash":  "gemini-3.8-flash-medium",
 		"antigravity-gemini-3.5-flash":  "gemini-3.5-flash-low",
 		"antigravity-gemini-pro":        "gemini-pro-agent",
-		"antigravity-claude-opus-5-5":   "claude-opus-5-5",
-		"antigravity-claude-sonnet-5-5": "claude-sonnet-5-5",
+		"antigravity-claude-opus-5-5":   "claude-opus-5-5-high",
+		"antigravity-claude-sonnet-5-5": "claude-sonnet-5-5-medium",
 	}
 	for id, want := range cases {
 		model, ok := ModelByID(id)

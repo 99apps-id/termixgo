@@ -14,6 +14,9 @@ All notable changes to Termixgo are recorded here. The format follows
   entry was then applied as if it were the new one. Status now reads through
   the same pathspec and the apply only runs when `refs/stash` actually moved.
 - `git_blame` validates its revision with the same rule as `git_diff`.
+- The Antigravity OAuth provider now sends the required Cloud Code thinking
+  tier suffix for Claude models (`claude-opus-5-5-high` and `claude-sonnet-5-5-medium`),
+  avoiding 404 model_not_found errors from Google's backend.
 
 ## 0.1.5 - 2026-10-03
 
