@@ -1091,18 +1091,22 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "pgup":
 		m.viewport.HalfPageUp()
+		m.scrollTarget = m.viewport.YOffset
 		m.refresh()
 		return m, nil
 	case "pgdown":
 		m.viewport.HalfPageDown()
+		m.scrollTarget = m.viewport.YOffset
 		m.refresh()
 		return m, nil
 	case "home":
 		m.viewport.GotoTop()
+		m.scrollTarget = m.viewport.YOffset
 		m.refresh()
 		return m, nil
 	case "end":
 		m.viewport.GotoBottom()
+		m.scrollTarget = m.viewport.YOffset
 		m.refresh()
 		return m, nil
 	}
@@ -1168,18 +1172,22 @@ func (m *Model) handleSlashMenuKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, textareaBlink()
 	case "pgup":
 		m.viewport.HalfPageUp()
+		m.scrollTarget = m.viewport.YOffset
 		m.refresh()
 		return m, nil
 	case "pgdown":
 		m.viewport.HalfPageDown()
+		m.scrollTarget = m.viewport.YOffset
 		m.refresh()
 		return m, nil
 	case "home":
 		m.viewport.GotoTop()
+		m.scrollTarget = m.viewport.YOffset
 		m.refresh()
 		return m, nil
 	case "end":
 		m.viewport.GotoBottom()
+		m.scrollTarget = m.viewport.YOffset
 		m.refresh()
 		return m, nil
 	}

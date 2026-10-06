@@ -48,8 +48,20 @@ func (m *Model) maxScroll() int {
 // scrollBy eases the transcript toward a new offset. The wheel sets a target
 // and the returned tick moves the viewport in steps until it is reached, so a
 // notch glides rather than teleports.
+//
+// When no animation is in flight, the actual viewport position is used as the
+// base rather than the stored target. This prevents a snap-to-start when the
+// first wheel event arrives after a GotoBottom or keyboard jump: those calls
+// update viewport.YOffset directly but do not update scrollTarget, so using a
+// stale scrollTarget of 0 would launch an animation from the current offset
+// all the way back to 0.
 func (m *Model) scrollBy(delta int) tea.Cmd {
-	target := m.scrollTarget + delta
+	base := m.scrollTarget
+	if !m.scrollTicking {
+		// No animation in flight: synchronise with the real position first.
+		base = m.viewport.YOffset
+	}
+	target := base + delta
 	if target < 0 {
 		target = 0
 	}

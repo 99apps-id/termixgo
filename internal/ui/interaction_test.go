@@ -2033,6 +2033,39 @@ func TestMouseWheelScrollsTheTranscript(t *testing.T) {
 	}
 }
 
+// TestWheelUpFromBottomDoesNotSnapToStart is a regression test for the
+// snap-to-start bug: when the transcript follows the bottom (scrollTarget is
+// stale at 0 while viewport.YOffset is at the max), a wheel-up notch must
+// scroll up a few lines, not launch an animation all the way back to offset 0.
+func TestWheelUpFromBottomDoesNotSnapToStart(t *testing.T) {
+	// Build a tall transcript so the bottom offset is well above 0.
+	model := scrollFixture(chatModel(t))
+	if model.viewport.YOffset == 0 {
+		t.Skip("transcript not tall enough to scroll - fixture needs more lines")
+	}
+	bottom := model.viewport.YOffset
+	// Simulate the stale-target state: scrollTarget was never updated after
+	// GotoBottom, so it still sits at 0 while the viewport is at the bottom.
+	model.scrollTarget = 0
+	model.scrollTicking = false
+
+	// A single wheel-up notch should scroll up by at most wheelStepLines lines
+	// from the current position, not animate from bottom all the way to 0.
+	cmd := model.scrollBy(-wheelStepLines)
+	if cmd == nil {
+		t.Fatal("wheel up must schedule a scroll frame")
+	}
+	// After the fix, target is based on viewport.YOffset (bottom), so the new
+	// target is bottom - wheelStepLines, which is far above 0.
+	want := bottom - wheelStepLines
+	if want < 0 {
+		want = 0
+	}
+	if model.scrollTarget != want {
+		t.Errorf("scrollTarget = %d, want %d (not 0 snap-to-start)", model.scrollTarget, want)
+	}
+}
+
 // TestWindowTitleMirrorsTheRunState pins the tab title: idle names the
 // workspace folder, working names the elapsed turn, approval asks for help.
 func TestWindowTitleMirrorsTheRunState(t *testing.T) {
