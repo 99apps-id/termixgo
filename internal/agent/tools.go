@@ -38,7 +38,7 @@ type Result struct {
 	// model had no price, so their dollars could not be folded. It is added to
 	// the parent's own unpriced counter rather than collapsing CostKnown.
 	SubagentUnpriced int
-	SubagentSpent     bool
+	SubagentSpent    bool
 }
 
 // Tool is one capability offered to the model.

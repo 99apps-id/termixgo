@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/config"
@@ -92,6 +93,7 @@ func TestQueuedInputSteersALiveTurn(t *testing.T) {
 		t.Fatalf("late steer = %q, want the queued follow-up", steer)
 	}
 	model.app.Steer(steer[0])
+	before := len(model.app.Session().Messages())
 	next, _ := send(t, queued, runDoneMsg{})
 	if len(next.queue) != 0 {
 		t.Errorf("the late steer should have started, got %d held", len(next.queue))
@@ -99,6 +101,24 @@ func TestQueuedInputSteersALiveTurn(t *testing.T) {
 	if !next.running {
 		t.Errorf("a late steer should start the next turn")
 	}
+	// That turn runs on its own goroutine and writes the workspace state
+	// directory. Ending the test under it races the temp-dir cleanup, which
+	// on Windows fails on the files the turn still has open.
+	waitForTurnToSettle(t, model, before)
+}
+
+// waitForTurnToSettle blocks until a turn started after the session held
+// before messages has run and released the single-run slot.
+func waitForTurnToSettle(t *testing.T, model *Model, before int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(model.app.Session().Messages()) > before && !model.app.Running() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("the late-steer turn did not finish in time")
 }
 
 // TestActiveTaskIsNamedInTheStatusLine keeps the plan and the work in step: the

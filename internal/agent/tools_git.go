@@ -626,7 +626,7 @@ func (t *gitBlameTool) Run(ctx context.Context, env *Env, args map[string]any) (
 		// A revision is model-supplied and must not reach git as an option. A
 		// real revision never starts with a dash, so refusing one keeps it out
 		// of the option position while the path stays behind --.
-		if strings.HasPrefix(rev, "-") {
+		if !validGitRev(rev) {
 			return Result{Output: fmt.Sprintf("invalid revision %q", rev), IsError: true}, nil
 		}
 		argv = append(argv, rev)

@@ -4,6 +4,17 @@ All notable changes to Termixgo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- A checkpoint taken while the only changes sat under `.termixgo/` no longer
+  replays an older checkpoint over the working tree. The stash pathspec
+  excludes that directory, so the push saved nothing, and the newest earlier
+  entry was then applied as if it were the new one. Status now reads through
+  the same pathspec and the apply only runs when `refs/stash` actually moved.
+- `git_blame` validates its revision with the same rule as `git_diff`.
+
 ## 0.1.5 - 2026-10-03
 
 ### Changed

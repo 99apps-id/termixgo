@@ -225,7 +225,7 @@ func quotaGET(ctx context.Context, client *http.Client, url string, headers map[
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<14))
 		response.Body.Close()
 	}()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 1 << 20))
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
 		return nil, response.StatusCode, err
 	}
@@ -252,7 +252,7 @@ func quotaPOST(ctx context.Context, client *http.Client, url string, headers map
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<14))
 		response.Body.Close()
 	}()
-	payload, err := io.ReadAll(io.LimitReader(response.Body, 1 << 20))
+	payload, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
 		return nil, response.StatusCode, err
 	}

@@ -23,9 +23,9 @@ func TestSlashQuotaCommand(t *testing.T) {
 		TotalTokens:      2000,
 	})
 	tracker.RecordRateLimit("anthropic", &provider.RateLimitInfo{
-		TokensLimit:     100000,
-		TokensRemaining: 85000,
-		RequestsLimit:   1000,
+		TokensLimit:       100000,
+		TokensRemaining:   85000,
+		RequestsLimit:     1000,
 		RequestsRemaining: 950,
 	})
 
@@ -90,9 +90,9 @@ func TestHeaderDisplaysQuotaGauge(t *testing.T) {
 
 	prov := model.app.CurrentModel().Provider
 	tracker.RecordUsage(prov, model.app.CurrentModel().ID, provider.Usage{
-		PromptTokens: 10000,
+		PromptTokens:     10000,
 		CompletionTokens: 2000,
-		TotalTokens: 12000,
+		TotalTokens:      12000,
 	})
 
 	view := model.viewHeader()

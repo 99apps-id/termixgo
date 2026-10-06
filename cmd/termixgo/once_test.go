@@ -88,9 +88,9 @@ func TestRunOnceReportsATurnFailure(t *testing.T) {
 // flag scan.
 func TestParseRunArgsHandlesYesInEveryPosition(t *testing.T) {
 	cases := []struct {
-		args []string
+		args   []string
 		prompt string
-		yes   bool
+		yes    bool
 	}{
 		{[]string{"--yes", "fix", "the", "test"}, "fix the test", true},
 		{[]string{"-y", "fix the test"}, "fix the test", true},

@@ -133,6 +133,42 @@ func TestListCheckpointsIgnoresForeignStashes(t *testing.T) {
 	}
 }
 
+// A tree whose only change is Termixgo's own state directory has nothing to
+// stash: the pathspec excludes it. The checkpoint must report no ref rather
+// than apply the previous entry, which would bring stale work back.
+func TestCreateCheckpointWithOnlyStateDirDoesNotApplyOldEntry(t *testing.T) {
+	dir := checkpointRepo(t)
+	ctx := context.Background()
+	writeForTest(t, dir, "a.txt", "base\n")
+	gitForTest(t, dir, "add", "-A")
+	gitForTest(t, dir, "commit", "-qm", "base")
+
+	writeForTest(t, dir, "a.txt", "stale\n")
+	old, err := CreateCheckpoint(ctx, dir, "old")
+	if err != nil {
+		t.Fatalf("old checkpoint: %v", err)
+	}
+	if old.Ref == "" {
+		t.Fatalf("a dirty tree should produce a stash entry")
+	}
+	gitForTest(t, dir, "checkout", "--", "a.txt")
+
+	if err := os.MkdirAll(filepath.Join(dir, ".termixgo"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeForTest(t, dir, ".termixgo/search.db", "state\n")
+	checkpoint, err := CreateCheckpoint(ctx, dir, "new")
+	if err != nil {
+		t.Fatalf("CreateCheckpoint: %v", err)
+	}
+	if checkpoint.Ref != "" {
+		t.Errorf("nothing outside .termixgo changed, got ref %q", checkpoint.Ref)
+	}
+	if got := strings.ReplaceAll(readForTest(t, dir, "a.txt"), "\r\n", "\n"); got != "base\n" {
+		t.Errorf("the old checkpoint was applied over the tree: a.txt = %q", got)
+	}
+}
+
 func TestRewindUnknownRefIsRefused(t *testing.T) {
 	dir := checkpointRepo(t)
 	ctx := context.Background()

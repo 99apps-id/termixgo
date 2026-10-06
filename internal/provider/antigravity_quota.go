@@ -55,10 +55,10 @@ func (f *antigravityQuotaFetcher) fetch(ctx context.Context) *QuotaSnapshot {
 	}
 	project := f.projectID(ctx)
 	headers := map[string]string{
-		"Authorization":   "Bearer " + key,
-		"User-Agent":      agUserAgent,
-		"Content-Type":    "application/json",
-		"X-Client-Name":   "antigravity",
+		"Authorization":    "Bearer " + key,
+		"User-Agent":       agUserAgent,
+		"Content-Type":     "application/json",
+		"X-Client-Name":    "antigravity",
 		"X-Client-Version": "2.11.0",
 	}
 	payload := "{}"
@@ -110,24 +110,24 @@ func parseAntigravityQuota(snap *QuotaSnapshot, body []byte) *QuotaSnapshot {
 		Groups []struct {
 			DisplayName string `json:"displayName"`
 			Buckets     []struct {
-				BucketID          string  `json:"bucketId"`
-				DisplayName       string  `json:"displayName"`
-				Window            string  `json:"window"`
+				BucketID          string   `json:"bucketId"`
+				DisplayName       string   `json:"displayName"`
+				Window            string   `json:"window"`
 				RemainingFraction *float64 `json:"remainingFraction"`
-				ResetTime         any     `json:"resetTime"`
-				Disabled          bool    `json:"disabled"`
+				ResetTime         any      `json:"resetTime"`
+				Disabled          bool     `json:"disabled"`
 			} `json:"buckets"`
 		} `json:"groups"`
 		QuotaSummary struct {
 			Groups []struct {
 				DisplayName string `json:"displayName"`
 				Buckets     []struct {
-					BucketID          string  `json:"bucketId"`
-					DisplayName       string  `json:"displayName"`
-					Window            string  `json:"window"`
+					BucketID          string   `json:"bucketId"`
+					DisplayName       string   `json:"displayName"`
+					Window            string   `json:"window"`
 					RemainingFraction *float64 `json:"remainingFraction"`
-					ResetTime         any     `json:"resetTime"`
-					Disabled          bool    `json:"disabled"`
+					ResetTime         any      `json:"resetTime"`
+					Disabled          bool     `json:"disabled"`
 				} `json:"buckets"`
 			} `json:"groups"`
 		} `json:"quotaSummary"`
@@ -145,12 +145,12 @@ func parseAntigravityQuota(snap *QuotaSnapshot, body []byte) *QuotaSnapshot {
 			groups = append(groups, struct {
 				DisplayName string `json:"displayName"`
 				Buckets     []struct {
-					BucketID          string  `json:"bucketId"`
-					DisplayName       string  `json:"displayName"`
-					Window            string  `json:"window"`
+					BucketID          string   `json:"bucketId"`
+					DisplayName       string   `json:"displayName"`
+					Window            string   `json:"window"`
 					RemainingFraction *float64 `json:"remainingFraction"`
-					ResetTime         any     `json:"resetTime"`
-					Disabled          bool    `json:"disabled"`
+					ResetTime         any      `json:"resetTime"`
+					Disabled          bool     `json:"disabled"`
 				} `json:"buckets"`
 			}(group))
 		}

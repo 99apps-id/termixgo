@@ -58,10 +58,10 @@ func (f *claudeQuotaFetcher) fetch(ctx context.Context) *QuotaSnapshot {
 		return snap
 	}
 	headers := map[string]string{
-		"Authorization":   "Bearer " + key,
-		"anthropic-beta":  "oauth-2025-04-20",
+		"Authorization":     "Bearer " + key,
+		"anthropic-beta":    "oauth-2025-04-20",
 		"anthropic-version": "2023-06-01",
-		"Accept":          "application/json",
+		"Accept":            "application/json",
 	}
 	body, status, err := quotaGET(ctx, f.http.http, claudeOAuthUsageURL, headers)
 	if err != nil {
@@ -90,9 +90,9 @@ func (f *claudeQuotaFetcher) fetch(ctx context.Context) *QuotaSnapshot {
 // keeps the gauge from inventing a zero.
 func parseClaudeUsage(snap *QuotaSnapshot, body []byte) *QuotaSnapshot {
 	var doc struct {
-		FiveHour  map[string]any `json:"five_hour"`
-		SevenDay  map[string]any `json:"seven_day"`
-		Limits    []struct {
+		FiveHour map[string]any `json:"five_hour"`
+		SevenDay map[string]any `json:"seven_day"`
+		Limits   []struct {
 			Kind    string         `json:"kind"`
 			Percent *float64       `json:"percent"`
 			Resets  any            `json:"resets_at"`

@@ -55,7 +55,15 @@ func CreateCheckpoint(ctx context.Context, workspace, message string) (Checkpoin
 	if err != nil {
 		return Checkpoint{}, fmt.Errorf("read HEAD: %w", err)
 	}
-	status, err := gitOutput(ctx, workspace, "status", "--porcelain=v1")
+	// Termixgo's own state directory is excluded from the snapshot. It holds the
+	// full-text index, its WAL and the error journal, which are state rather than
+	// the operator's work, and stashing them makes a stash apply collide with the
+	// live files. The pathspec covers the repository root; an excluded path that
+	// does not exist is not an error for git. Status reads through the same
+	// pathspec: a tree dirty only under .termixgo has nothing to stash, and
+	// treating it as dirty would push nothing and then apply an older entry.
+	pathspec := []string{"--", ".", ":(exclude).termixgo"}
+	status, err := gitOutput(ctx, workspace, append([]string{"status", "--porcelain=v1"}, pathspec...)...)
 	if err != nil {
 		return Checkpoint{}, fmt.Errorf("read status: %w", err)
 	}
@@ -66,13 +74,16 @@ func CreateCheckpoint(ctx context.Context, workspace, message string) (Checkpoin
 		message = "manual checkpoint"
 	}
 	entry := fmt.Sprintf("%s %s %s", checkpointPrefix, head, message)
-	// Termixgo's own state directory is excluded from the snapshot. It holds the
-	// full-text index, its WAL and the error journal, which are state rather than
-	// the operator's work, and stashing them makes a stash apply collide with the
-	// live files. The pathspec covers the repository root; an excluded path that
-	// does not exist is not an error for git.
-	if _, err := gitOutput(ctx, workspace, "stash", "push", "--include-untracked", "-m", entry, "--", ".", ":(exclude).termixgo"); err != nil {
+	before := stashTop(ctx, workspace)
+	pushArgs := append([]string{"stash", "push", "--include-untracked", "-m", entry}, pathspec...)
+	if _, err := gitOutput(ctx, workspace, pushArgs...); err != nil {
 		return Checkpoint{}, fmt.Errorf("stash the working tree: %w", err)
+	}
+	// "No local changes to save" exits 0 without creating an entry. Applying
+	// the newest checkpoint then would replay an older snapshot over the
+	// tree, so the push only counts when the stash top actually moved.
+	if after := stashTop(ctx, workspace); after == "" || after == before {
+		return Checkpoint{Head: head, Message: message}, nil
 	}
 	// The push leaves the tree clean; applying brings the work back while
 	// keeping the stash entry as the snapshot. If the apply fails the tree
@@ -85,6 +96,15 @@ func CreateCheckpoint(ctx context.Context, workspace, message string) (Checkpoin
 		return Checkpoint{}, fmt.Errorf("restore the working tree after %s: %w (the snapshot is kept)", ref, err)
 	}
 	return Checkpoint{Ref: ref, Message: message, Head: head}, nil
+}
+
+// stashTop is the commit refs/stash points at, or "" when the stash is empty.
+func stashTop(ctx context.Context, workspace string) string {
+	top, err := gitOutput(ctx, workspace, "rev-parse", "-q", "--verify", "refs/stash")
+	if err != nil {
+		return ""
+	}
+	return top
 }
 
 // ListCheckpoints returns the Termixgo-owned stash entries, newest first.
