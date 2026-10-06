@@ -16,12 +16,6 @@ import "strings"
 //
 // A wrong value here is not a degraded request: these fields are strict, and
 // the vendor answers 400, which loses the whole turn.
-const (
-	// effortContextDefault means the provider decides, which is what an empty
-	// Effort asks for.
-	effortContextDefault = "default"
-)
-
 // effortProviders are the OpenAI-compatible providers whose chat/completions
 // body accepts a top-level reasoning_effort of low, medium and high.
 //
@@ -48,15 +42,6 @@ func openAIEffortValues(effort string) string {
 		return "high"
 	}
 	return ""
-}
-
-// openAIEffort is the value for a provider whose body carries reasoning_effort
-// with the plain low/medium/high vocabulary.
-func openAIEffort(providerID, effort string) string {
-	if !effortProviders[strings.ToLower(strings.TrimSpace(providerID))] {
-		return ""
-	}
-	return openAIEffortValues(effort)
 }
 
 // anthropicEffortValues are the levels the Anthropic effort parameter takes.

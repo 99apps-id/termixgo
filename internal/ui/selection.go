@@ -127,16 +127,6 @@ func (m *Model) mousePoint(msg tea.MouseMsg) (point selPoint, inside bool) {
 	return selPoint{line: line, col: max(0, msg.X)}, inside
 }
 
-// clearSelection drops any active selection and repaints without the highlight.
-func (m *Model) clearSelection() {
-	if !m.selecting && !m.selActive {
-		return
-	}
-	m.selecting = false
-	m.selActive = false
-	m.refresh()
-}
-
 // handleMouse routes a mouse event to the selection or the smooth scroll.
 func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch msg.Button {

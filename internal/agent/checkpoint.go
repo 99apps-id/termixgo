@@ -319,19 +319,6 @@ func fileCheckpointDir(workspace string) string {
 // manifest says so, so a rewind never silently restores a partial file.
 const snapshotFileCap = 4 * 1024 * 1024
 
-// snapshotKeep caps the stored snapshots. Each snapshot copies whole files,
-// so the cap is about disk rather than stash-list length.
-const snapshotKeep = 10
-
-// snapshotSkipDirs lists common generated/lock directories that are almost
-// never worth copying into a file-level undo snapshot. The list is kept
-// small on purpose; the snapshot only records files a turn actually edits.
-var snapshotSkipDirs = map[string]struct{}{
-	".git": {}, ".svn": {}, ".hg": {}, "node_modules": {}, "vendor": {},
-	"dist": {}, "build": {}, ".cache": {}, "__pycache__": {}, ".next": {},
-	".terraform": {}, ".venv": {}, "venv": {}, "target": {}, "Pods": {},
-}
-
 // FileCheckpoint is one file-level snapshot.
 type FileCheckpoint struct {
 	ID        string    `json:"id"`
@@ -623,13 +610,6 @@ func PruneFileCheckpoints(workspace string, keep int) error {
 		_ = os.RemoveAll(filepath.Join(fileCheckpointDir(workspace), stores[index].ID))
 	}
 	return nil
-}
-
-// snapshotFingerprint renders a short content hash used by tests to prove a
-// restore returned the exact pre-change bytes.
-func snapshotFingerprint(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:8])
 }
 
 var _ = bytes.MinRead

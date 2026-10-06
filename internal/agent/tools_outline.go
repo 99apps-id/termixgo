@@ -65,11 +65,11 @@ func (t *codeOutlineTool) Run(ctx context.Context, env *Env, args map[string]any
 	case ".md", ".markdown":
 		lines = outlineMarkdown(data, depth)
 	case ".py":
-		lines = outlinePython(data, depth)
+		lines = outlinePython(data)
 	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs":
-		lines = outlineTypeScript(data, depth)
+		lines = outlineTypeScript(data)
 	case ".rs":
-		lines = outlineRust(data, depth)
+		lines = outlineRust(data)
 	default:
 		lines = outlineGeneric(data)
 	}
@@ -238,7 +238,7 @@ var (
 	pyFuncRe  = regexp.MustCompile(`^(?:async\s+)?def\s+([A-Za-z0-9_]+\(.*?\)):`)
 )
 
-func outlinePython(data []byte, maxDepth int) []string {
+func outlinePython(data []byte) []string {
 	var lines []string
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	lineNum := 1
@@ -266,7 +266,7 @@ var (
 	tsDeclRe = regexp.MustCompile(`^(?:export\s+)?(?:default\s+)?(?:async\s+)?(function\s+[A-Za-z0-9_]+|class\s+[A-Za-z0-9_]+|interface\s+[A-Za-z0-9_]+|type\s+[A-Za-z0-9_]+|(?:const|let|var)\s+[A-Za-z0-9_]+\s*=\s*(?:async\s+)?(?:\(.*?\)|[A-Za-z0-9_]+)\s*=>)`)
 )
 
-func outlineTypeScript(data []byte, maxDepth int) []string {
+func outlineTypeScript(data []byte) []string {
 	var lines []string
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	lineNum := 1
@@ -289,7 +289,7 @@ var (
 	rsDeclRe = regexp.MustCompile(`^(?:pub(?:\(.*?\))?\s+)?(?:async\s+)?(fn\s+[A-Za-z0-9_]+|struct\s+[A-Za-z0-9_]+|enum\s+[A-Za-z0-9_]+|trait\s+[A-Za-z0-9_]+|impl\s+[A-Za-z0-9_]+)`)
 )
 
-func outlineRust(data []byte, maxDepth int) []string {
+func outlineRust(data []byte) []string {
 	var lines []string
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	lineNum := 1
