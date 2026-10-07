@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/term"
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/app"
@@ -270,6 +271,9 @@ func NewWithOptions(application *app.App, options Options) *Model {
 		app:         application,
 		styles:      styles,
 		limits:      DefaultLimits(),
+		width:       80,
+		height:      24,
+		ready:       true,
 		viewport:    viewport.New(80, 20),
 		composer:    composer,
 		input:       field,
@@ -277,6 +281,18 @@ func NewWithOptions(application *app.App, options Options) *Model {
 		picker:      pickerList,
 		current:     modeChat,
 		showDetails: true,
+	}
+	// Detect initial terminal size so the first render is not stuck on
+	// "Loading Termixgo..." if Bubble Tea delays or zeroes the first
+	// WindowSizeMsg. A fallback of 80x24 keeps the UI usable on bare
+	// consoles and CI pipes alike.
+	if tw, th, err := term.GetSize(int(os.Stdout.Fd())); err == nil && tw > 0 && th > 0 {
+		model.width = tw
+		model.height = th
+		model.viewport = viewport.New(tw, th-composerHeight-6)
+		if model.viewport.Height < 5 {
+			model.viewport.Height = 5
+		}
 	}
 	application.SetInteractor(model)
 	_ = model.reloadCustomCommands()
@@ -434,10 +450,12 @@ func (m *Model) windowTitle() string {
 func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch typed := message.(type) {
 	case tea.WindowSizeMsg:
-		m.width = typed.Width
-		m.height = typed.Height
+		if typed.Width > 0 && typed.Height > 0 {
+			m.width = typed.Width
+			m.height = typed.Height
+			m.layout()
+		}
 		m.ready = true
-		m.layout()
 		return m, nil
 
 	case tea.KeyMsg:
