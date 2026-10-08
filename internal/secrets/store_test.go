@@ -215,3 +215,9 @@ func TestRedactNeverRevealsTheWholeSecret(t *testing.T) {
 		t.Errorf("an empty secret should read as not set, got %q", Redact(""))
 	}
 }
+
+func TestRedactHidesShortSecretLength(t *testing.T) {
+	if got := Redact("a"); got != Redact("abcdefgh") {
+		t.Errorf("short secrets must share one fixed mask, got %q and %q", got, Redact("abcdefgh"))
+	}
+}

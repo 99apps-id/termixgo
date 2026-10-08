@@ -64,15 +64,15 @@ func (t *applyPatchTool) Run(ctx context.Context, env *Env, args map[string]any)
 		}
 		switch op.action {
 		case "add":
-			if err := applyPatchAdd(path, op); err != nil {
+			if err := applyPatchAdd(env, path, op); err != nil {
 				return Result{Output: err.Error(), IsError: true}, nil
 			}
 		case "delete":
-			if err := applyPatchDelete(path); err != nil {
+			if err := applyPatchDelete(env, path); err != nil {
 				return Result{Output: err.Error(), IsError: true}, nil
 			}
 		default:
-			if err := applyPatchUpdate(path, op); err != nil {
+			if err := applyPatchUpdate(env, path, op); err != nil {
 				return Result{Output: err.Error(), IsError: true}, nil
 			}
 		}
@@ -97,21 +97,38 @@ func parsePatch(document string) ([]patchOp, error) {
 	}
 	for _, raw := range strings.Split(trimmed, "\n") {
 		line := strings.TrimRight(raw, "\r")
+		// Only a line that starts at column zero can be a directive: hunk
+		// content always carries its kind prefix, so a context line whose
+		// text happens to begin with stars must stay content. Matching
+		// ignores trailing whitespace, which model output often adds after
+		// a marker, so that alone never reads as a misspelled header.
+		if strings.HasPrefix(line, "***") {
+			directive := strings.TrimSpace(line)
+			switch {
+			case directive == "*** Begin Patch" || directive == "*** End Patch":
+				flush()
+			case strings.HasPrefix(directive, "*** Update File:"):
+				flush()
+				ops = append(ops, patchOp{action: "update", path: strings.TrimSpace(strings.TrimPrefix(directive, "*** Update File:"))})
+				current = &ops[len(ops)-1]
+			case strings.HasPrefix(directive, "*** Add File:"):
+				flush()
+				ops = append(ops, patchOp{action: "add", path: strings.TrimSpace(strings.TrimPrefix(directive, "*** Add File:"))})
+				current = &ops[len(ops)-1]
+			case strings.HasPrefix(directive, "*** Delete File:"):
+				flush()
+				ops = append(ops, patchOp{action: "delete", path: strings.TrimSpace(strings.TrimPrefix(directive, "*** Delete File:"))})
+				current = &ops[len(ops)-1]
+			default:
+				// A misspelled header used to fall through silently and
+				// leave its hunks attached to the previous file, or
+				// orphaned. Refuse it so the model sees the typo instead
+				// of editing the wrong file.
+				return nil, fmt.Errorf("unknown patch directive %q; use *** Update File:, *** Add File: or *** Delete File", directive)
+			}
+			continue
+		}
 		switch {
-		case line == "*** Begin Patch" || line == "*** End Patch":
-			flush()
-		case strings.HasPrefix(line, "*** Update File:"):
-			flush()
-			ops = append(ops, patchOp{action: "update", path: strings.TrimSpace(strings.TrimPrefix(line, "*** Update File:"))})
-			current = &ops[len(ops)-1]
-		case strings.HasPrefix(line, "*** Add File:"):
-			flush()
-			ops = append(ops, patchOp{action: "add", path: strings.TrimSpace(strings.TrimPrefix(line, "*** Add File:"))})
-			current = &ops[len(ops)-1]
-		case strings.HasPrefix(line, "*** Delete File:"):
-			flush()
-			ops = append(ops, patchOp{action: "delete", path: strings.TrimSpace(strings.TrimPrefix(line, "*** Delete File:"))})
-			current = &ops[len(ops)-1]
 		case strings.HasPrefix(line, "@@"):
 			flush()
 			if current == nil {
@@ -143,10 +160,13 @@ func parsePatch(document string) ([]patchOp, error) {
 	return ops, nil
 }
 
-func applyPatchAdd(path string, op patchOp) error {
+func applyPatchAdd(env *Env, path string, op patchOp) error {
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("%s already exists; update it instead of adding", op.path)
 	}
+	// A new file leaves an absent marker, so undoing its addition removes
+	// it again.
+	backupFile(env, path)
 	var builder strings.Builder
 	for _, hunk := range op.hunks {
 		for _, line := range hunk.lines {
@@ -166,21 +186,28 @@ func applyPatchAdd(path string, op patchOp) error {
 	return nil
 }
 
-func applyPatchDelete(path string) error {
+func applyPatchDelete(env *Env, path string) error {
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("cannot delete %s: file not found", filepath.Base(path))
 	}
+	// The content is kept before the removal, so undo_edit restores it.
+	backupFile(env, path)
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
 	return nil
 }
 
-func applyPatchUpdate(path string, op patchOp) error {
+func applyPatchUpdate(env *Env, path string, op patchOp) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", op.path, err)
 	}
+	// Matching runs on the LF view, but the file is written back with the
+	// ending it already favours: normalising and writing LF rewrote every
+	// line of a CRLF file, so a one-hunk patch showed up as a whole-file
+	// diff. Added lines take the same ending as the file around them.
+	ending := dominantEnding(string(data))
 	content := strings.ReplaceAll(string(data), "\r\n", "\n")
 	lines := strings.Split(content, "\n")
 	// A trailing newline splits into a final empty element; drop it so line
@@ -203,6 +230,13 @@ func applyPatchUpdate(path string, op patchOp) error {
 	if trailing {
 		output += "\n"
 	}
+	if ending == "\r\n" {
+		output = strings.ReplaceAll(output, "\n", "\r\n")
+	}
+	// Every hunk matched, so the write below will happen: keep the previous
+	// content first. A hunk that matches nowhere returns above, which is why
+	// a refused patch leaves no backup behind.
+	backupFile(env, path)
 	if err := os.WriteFile(path, []byte(output), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", op.path, err)
 	}

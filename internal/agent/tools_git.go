@@ -54,7 +54,7 @@ func runGit(ctx context.Context, env *Env, args ...string) (string, error) {
 			if strings.TrimSpace(output) == "" {
 				output = fmt.Sprintf("git exited with code %d", exitErr.ExitCode())
 			}
-			return output, fmt.Errorf("git %s failed: %s", args[0], output)
+			return output, fmt.Errorf("git %s failed: %s", strings.Join(args, " "), output)
 		}
 		return output, fmt.Errorf("could not run git: %w. Is git installed and on PATH?", err)
 	}

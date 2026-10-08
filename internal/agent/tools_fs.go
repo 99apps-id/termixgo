@@ -153,6 +153,18 @@ const (
 	maxReadBytes = 64 * 1024
 )
 
+// maxReadDirectBytes bounds the whole-file read behind read_file. A file at
+// or under this size is read at once, exactly as before. Anything larger is
+// streamed line by line so the offset and limit window still works while the
+// process never holds the whole file: reading a multi-hundred-megabyte
+// generated file into one string would break the memory budget on its own.
+const maxReadDirectBytes = 2 * 1024 * 1024
+
+// maxReadLineBytes caps one stored line while streaming. A minified bundle
+// keeps megabytes on a single line, and keeping all of it would defeat the
+// point of the window; the cut is marked so the model knows the line goes on.
+const maxReadLineBytes = 256 * 1024
+
 // listDirectoryTool lists one directory level.
 type listDirectoryTool struct{}
 

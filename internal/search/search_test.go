@@ -42,7 +42,7 @@ func TestOpenAndSearch(t *testing.T) {
 // build output: those trees hold thousands of generated files, so indexing them
 // floods the results and makes a search take minutes on a large workspace.
 func TestIndexWalkSkipsGeneratedTrees(t *testing.T) {
-	for _, name := range []string{"node_modules", "vendor", "build", "target", ".venv", "__pycache__", "dist", "coverage"} {
+	for _, name := range []string{"node_modules", "vendor", "build", "target", ".venv", "__pycache__", "dist", "coverage", ".termixgo", ".termigo"} {
 		if !IsSkippedDir(name) {
 			t.Errorf("IsSkippedDir(%q) = false, want true", name)
 		}
@@ -68,6 +68,7 @@ func TestIndexWalkSkipsGeneratedTrees(t *testing.T) {
 	write("node_modules/pkg/index.js", "// heavyproofnodeword")
 	write("vendor/lib/x.go", "package lib // heavyproofvendorword")
 	write("build/out.go", "package build // heavyproofbuildword")
+	write(".termixgo/memory.md", "# heavyproofstateword")
 
 	store, err := Open(root)
 	if err != nil {
@@ -84,7 +85,7 @@ func TestIndexWalkSkipsGeneratedTrees(t *testing.T) {
 	if len(light) == 0 || filepath.ToSlash(light[0].Path) != "src/main.go" {
 		t.Errorf("the source file should be indexed, got %+v", light)
 	}
-	for _, query := range []string{"heavyproofnodeword", "heavyproofvendorword"} {
+	for _, query := range []string{"heavyproofnodeword", "heavyproofvendorword", "heavyproofstateword"} {
 		results, err := store.Search(query, 10)
 		if err != nil {
 			t.Fatalf("Search(%q): %v", query, err)

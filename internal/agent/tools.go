@@ -133,12 +133,14 @@ func DefaultRegistry() *Registry {
 		&editTool{},
 		&multiEditTool{},
 		&applyPatchTool{},
+		&undoEditTool{},
 		&createDirectoryTool{},
 		&deleteFileTool{},
 		&moveFileTool{},
 		&grepTool{},
 		&globTool{},
 		&codeOutlineTool{},
+		&symbolSearchTool{},
 		&searchMemoryTool{},
 		&sqliteQueryTool{},
 		&runCommandTool{},
@@ -248,15 +250,33 @@ func (r *Registry) With(extra ...Tool) *Registry {
 	combined := make([]Tool, 0, len(r.tools)+len(extra))
 	combined = append(combined, r.tools...)
 	taken := make(map[string]bool, len(r.tools)+len(extra))
-	for _, tool := range r.tools {
+	claim := func(tool Tool) {
 		taken[strings.ToLower(tool.Name())] = true
+		for _, alias := range tool.Aliases() {
+			if strings.TrimSpace(alias) != "" {
+				taken[strings.ToLower(alias)] = true
+			}
+		}
+	}
+	for _, tool := range r.tools {
+		claim(tool)
 	}
 	for _, tool := range extra {
-		name := strings.ToLower(tool.Name())
-		if taken[name] {
+		// An extra whose name OR alias collides with anything already
+		// claimed is skipped whole: NewRegistry indexes aliases too, so an
+		// alias equal to a built-in name would otherwise take over that
+		// call while the name check stayed silent.
+		collides := taken[strings.ToLower(tool.Name())]
+		for _, alias := range tool.Aliases() {
+			if strings.TrimSpace(alias) != "" && taken[strings.ToLower(alias)] {
+				collides = true
+				break
+			}
+		}
+		if collides {
 			continue
 		}
-		taken[name] = true
+		claim(tool)
 		combined = append(combined, tool)
 	}
 	return NewRegistry(combined...)

@@ -28,6 +28,11 @@ func (t *readFileTool) Run(ctx context.Context, env *Env, args map[string]any) (
 		return Result{Output: fmt.Sprintf("%s looks binary or an image, which this build cannot render in the terminal", displayPath(env, path)), IsError: true}, nil
 	}
 
+	// A file larger than the direct cap is streamed below: the window is
+	// collected line by line so the process never holds the whole file.
+	if info.Size() > maxReadDirectBytes {
+		return readFileWindowed(env, path, argInt(args, "offset", 1, 1, 0), argInt(args, "limit", maxReadLines, 1, 10000))
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Result{Output: openError(err, displayPath(env, path)), IsError: true}, nil
@@ -41,6 +46,18 @@ func (t *readFileTool) Run(ctx context.Context, env *Env, args map[string]any) (
 		offset = total
 	}
 	limit := argInt(args, "limit", maxReadLines, 1, 10000)
+	return formatReadWindow(env, path, lines, total, offset, limit), nil
+}
+
+// formatReadWindow renders one window of lines with the same header the
+// direct read produces, so both paths describe the file the same way.
+func formatReadWindow(env *Env, path string, lines []string, total, offset, limit int) Result {
+	if offset > total {
+		offset = total
+	}
+	if offset < 1 {
+		offset = 1
+	}
 	end := offset - 1 + limit
 	if end > total {
 		end = total
@@ -60,7 +77,118 @@ func (t *readFileTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	if end < total && !truncatedByBytes {
 		header += fmt.Sprintf(" [more below; next offset %d]", end+1)
 	}
+	return Result{Output: header + "\n" + body}
+}
+
+// readFileWindowed serves the offset and limit window of a file too large to
+// read at once. Lines are scanned in fixed chunks and only the window is
+// kept, so memory stays flat no matter how large the file is. Line splitting
+// follows strings.Split semantics, including the trailing empty element of a
+// file that ends in a newline, so the header counts match the direct read.
+func readFileWindowed(env *Env, path string, offset, limit int) (Result, error) {
+	display := displayPath(env, path)
+	file, err := os.Open(path)
+	if err != nil {
+		return Result{Output: openError(err, display), IsError: true}, nil
+	}
+	defer file.Close()
+
+	end := offset - 1 + limit
+	var window []string
+	keptBytes := 0
+	windowFull := false
+	newlines := 0
+	lineNo := 0
+	var current []byte
+	lineCapped := false
+	flush := func() {
+		lineNo++
+		if lineNo >= offset && lineNo <= end && !windowFull {
+			text := string(current)
+			if lineCapped {
+				text += "... [line truncated]"
+			}
+			// The body is clipped to maxReadBytes later anyway; stop
+			// keeping lines once the kept window passes twice that, and
+			// keep counting so the header stays honest.
+			if keptBytes+len(text) > 2*maxReadBytes && len(window) > 0 {
+				windowFull = true
+			} else {
+				window = append(window, text)
+				keptBytes += len(text)
+			}
+		}
+		current = current[:0]
+		lineCapped = false
+	}
+	buffer := make([]byte, 64*1024)
+	for {
+		count, readErr := file.Read(buffer)
+		for _, b := range buffer[:count] {
+			if b == '\n' {
+				newlines++
+				// Drop the \r of a CRLF pair while scanning, which is
+				// what the direct read's global replace does.
+				current = trimCR(current)
+				flush()
+				continue
+			}
+			if len(current) < maxReadLineBytes {
+				current = append(current, b)
+			} else {
+				lineCapped = true
+			}
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	// The tail after the last newline is a line of its own, and a file that
+	// ends in a newline still holds the trailing empty element Split
+	// reports. An empty file holds exactly that one empty element.
+	if len(current) > 0 || lineCapped {
+		// No trim here: the direct read only drops a \r that sits before
+		// a \n, so a bare carriage return at the end of file is kept.
+		flush()
+	} else {
+		lineNo++
+		if lineNo >= offset && lineNo <= end && !windowFull {
+			window = append(window, "")
+		}
+	}
+	total := newlines + 1
+	// An offset past the end reads the last line, the same clamp the direct
+	// read applies. Only then is a second scan needed, and it terminates:
+	// the clamped offset can no longer overshoot.
+	if offset > total {
+		return readFileWindowed(env, path, total, limit)
+	}
+	if end > total {
+		end = total
+	}
+	body := strings.Join(window, "\n")
+	truncatedByBytes := windowFull
+	if len(body) > maxReadBytes {
+		body = clipBytes(body, maxReadBytes)
+		truncatedByBytes = true
+	}
+
+	header := fmt.Sprintf("%s (lines %d-%d of %d)", display, offset, end, total)
+	if truncatedByBytes {
+		header += " [clipped at 64 KB]"
+	}
+	if end < total && !truncatedByBytes {
+		header += fmt.Sprintf(" [more below; next offset %d]", end+1)
+	}
 	return Result{Output: header + "\n" + body}, nil
+}
+
+// trimCR drops one trailing carriage return in place.
+func trimCR(line []byte) []byte {
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		return line[:len(line)-1]
+	}
+	return line
 }
 
 func (t *listDirectoryTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
@@ -116,6 +244,10 @@ func (t *writeFileTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	if err := checkWorkspacePath(env, path); err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
+	// The previous content is kept before it is replaced, so undo_edit can
+	// bring it back. A file that does not exist yet leaves an absent marker
+	// instead, so undoing its creation removes it again.
+	backupFile(env, path)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return Result{Output: fmt.Sprintf("create parent directory: %v", err), IsError: true}, nil
 	}
@@ -160,7 +292,14 @@ func isWorkspaceRoot(env *Env, path string) bool {
 	if strings.TrimSpace(env.Workspace) == "" || strings.TrimSpace(path) == "" {
 		return false
 	}
-	return filepath.Clean(path) == filepath.Clean(env.Workspace)
+	if filepath.Clean(path) == filepath.Clean(env.Workspace) {
+		return true
+	}
+	// Compare the resolved forms too: a symlinked spelling of the root must
+	// not slip past the plain-string comparison above.
+	resolvedPath, pathErr := filepath.EvalSymlinks(path)
+	resolvedRoot, rootErr := filepath.EvalSymlinks(env.Workspace)
+	return pathErr == nil && rootErr == nil && filepath.Clean(resolvedPath) == filepath.Clean(resolvedRoot)
 }
 
 func (t *deleteFileTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {

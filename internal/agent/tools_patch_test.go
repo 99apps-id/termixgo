@@ -103,3 +103,70 @@ func TestApplyPatchRefusesAddOverExisting(t *testing.T) {
 		t.Errorf("adding over a file must fail")
 	}
 }
+
+func TestApplyPatchRejectsUnknownDirective(t *testing.T) {
+	env, workspace := patchEnv(t)
+	if err := os.WriteFile(filepath.Join(workspace, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A misspelled header must fail loudly, not attach its hunks to the
+	// previous file or vanish into the void.
+	document := "*** Begin Patch\n*** Update File: a.go\n@@\n package a\n+// one\n*** Updat File: a.go\n@@\n+// two\n*** End Patch\n"
+	tool := &applyPatchTool{}
+	result, _ := tool.Run(context.Background(), env, map[string]any{"patch": document})
+	if !result.IsError {
+		t.Fatalf("an unknown directive must fail")
+	}
+	if !strings.Contains(result.Output, "unknown patch directive") {
+		t.Errorf("the refusal should name the directive, got %q", result.Output)
+	}
+	data, _ := os.ReadFile(filepath.Join(workspace, "a.go"))
+	if strings.Contains(string(data), "// one") || strings.Contains(string(data), "// two") {
+		t.Errorf("a refused patch must not write anything, got:\n%s", data)
+	}
+}
+
+func TestApplyPatchKeepsStarContentAndTrailingSpace(t *testing.T) {
+	env, workspace := patchEnv(t)
+	before := "# title\n*** bold and italic ***\n"
+	if err := os.WriteFile(filepath.Join(workspace, "doc.md"), []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A content line that begins with stars carries its kind prefix, so it
+	// stays content; a trailing space after a marker stays a marker.
+	document := "*** Begin Patch \n*** Update File: doc.md\n@@\n # title\n *** bold and italic ***\n+appended\n*** End Patch \n"
+	tool := &applyPatchTool{}
+	if result, _ := tool.Run(context.Background(), env, map[string]any{"patch": document}); result.IsError {
+		t.Fatalf("result is an error: %q", result.Output)
+	}
+	data, _ := os.ReadFile(filepath.Join(workspace, "doc.md"))
+	if !strings.Contains(string(data), "*** bold and italic ***") || !strings.Contains(string(data), "appended") {
+		t.Errorf("content or marker handling broke the patch:\n%s", data)
+	}
+}
+
+func TestApplyPatchPreservesCRLF(t *testing.T) {
+	env, workspace := patchEnv(t)
+	before := "package a\r\n\r\nfunc A() {}\r\n"
+	if err := os.WriteFile(filepath.Join(workspace, "a.go"), []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	document := "*** Begin Patch\n*** Update File: a.go\n@@\n package a\n \n-func A() {}\n+func A() int {\n+return 1\n+}\n*** End Patch\n"
+	tool := &applyPatchTool{}
+	if result, _ := tool.Run(context.Background(), env, map[string]any{"patch": document}); result.IsError {
+		t.Fatalf("result is an error: %q", result.Output)
+	}
+	data, _ := os.ReadFile(filepath.Join(workspace, "a.go"))
+	text := string(data)
+	if strings.Contains(text, "\n") && !strings.Contains(text, "\r\n") {
+		t.Errorf("a CRLF file was rewritten with LF endings:\n%q", text)
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		if strings.HasSuffix(line, "\r") {
+			t.Errorf("a mixed ending slipped through: %q", line)
+		}
+	}
+	if !strings.Contains(text, "func A() int") {
+		t.Errorf("the hunk did not apply:\n%q", text)
+	}
+}

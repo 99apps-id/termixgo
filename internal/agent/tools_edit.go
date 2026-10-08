@@ -203,6 +203,9 @@ func applyEdits(env *Env, path string, instructions []editInstruction) (string, 
 		}
 	}
 
+	// Every instruction applied in memory, so the backup is taken once for
+	// the whole batch: undo_edit reverts the batch, not one line of it.
+	backupFile(env, path)
 	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
 		return "", fmt.Errorf("write %s: %v", displayPath(env, path), err)
 	}

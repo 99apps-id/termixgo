@@ -16,9 +16,9 @@ const findToolsName = "find_tools"
 // memory, web) are loaded on demand by find_tools.
 var toolSearchAlwaysOn = map[string]bool{
 	"read_file": true, "list_directory": true, "write_file": true,
-	"edit": true, "multi_edit": true, "apply_patch": true,
+	"edit": true, "multi_edit": true, "apply_patch": true, "undo_edit": true,
 	"create_directory": true, "delete_file": true, "move_file": true,
-	"grep": true, "glob": true, "code_outline": true,
+	"grep": true, "glob": true, "code_outline": true, "symbol_search": true,
 	"run_command": true, "run_checks": true,
 	"background": true, "logs": true, "wait": true, "list_processes": true, "kill": true,
 	"todo_write": true, "todo_read": true,

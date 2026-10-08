@@ -510,8 +510,8 @@ func TestRunGitReportsAFailingCommandAsOutput(t *testing.T) {
 	if err == nil {
 		t.Fatalf("an unknown ref must fail")
 	}
-	if !strings.Contains(err.Error(), "git show failed") {
-		t.Errorf("err = %v, want it to name the command", err)
+	if !strings.Contains(err.Error(), "git show does-not-exist-ref failed") {
+		t.Errorf("err = %v, want it to name the command with its arguments", err)
 	}
 	if !strings.Contains(output, "does-not-exist-ref") {
 		t.Errorf("output = %q, want git's own message", output)

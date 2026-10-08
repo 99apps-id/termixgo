@@ -245,7 +245,7 @@ func truncateOutput(text string, max int) string {
 	half := max / 2
 	head := clipBytes(text, half)
 	tail := clipTailBytes(text, half)
-	return strings.TrimRight(head, "\n") + fmt.Sprintf("\n\n... [%d characters omitted] ...\n\n", len(text)-max) + strings.TrimLeft(tail, "\n")
+	return strings.TrimRight(head, "\n") + fmt.Sprintf("\n\n... [%d bytes omitted] ...\n\n", len(text)-max) + strings.TrimLeft(tail, "\n")
 }
 
 // detectCheckCommand finds the project's own command for a check. A scope

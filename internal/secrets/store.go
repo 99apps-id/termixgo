@@ -287,14 +287,15 @@ func rejectPrototypePollution(data map[string]string) {
 }
 
 // Redact renders a secret for display: prefix, dots, suffix. It never reveals
-// more than four characters of the value.
+// more than four characters of the value, and the mask is a fixed width so
+// even the length of a short secret stays hidden.
 func Redact(value string) string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return "(not set)"
 	}
 	if len(trimmed) <= 8 {
-		return strings.Repeat("*", len(trimmed))
+		return "********"
 	}
 	return trimmed[:4] + strings.Repeat("*", 6) + trimmed[len(trimmed)-2:]
 }

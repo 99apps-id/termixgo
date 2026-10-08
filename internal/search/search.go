@@ -37,6 +37,11 @@ var skippedDirs = map[string]bool{
 	".git": true, "node_modules": true, "vendor": true, "dist": true, "build": true,
 	".next": true, ".turbo": true, ".venv": true, "venv": true, "__pycache__": true,
 	"target": true, ".pnpm-store": true, ".cache": true, "coverage": true,
+	// Termixgo's own state directory holds the FTS5 database, its WAL, the
+	// error journal and learned memory: state, not content. Walking it makes
+	// grep scan a live SQLite file as text and feeds the index its own
+	// database, so it stays out of every walk that reads this list.
+	".termixgo": true, ".termigo": true,
 }
 
 // IsSkippedDir reports whether a directory name is one a search never enters.
