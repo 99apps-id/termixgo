@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -59,7 +60,7 @@ func terminate(err error, stderr io.Writer) int {
 // request. Cancelling lets the run loop stop between steps and save state,
 // which a hard exit mid-turn would skip.
 func signalContext() (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(context.Background(), os.Interrupt)
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -686,7 +687,7 @@ func runServe(stdout io.Writer) error {
 	}
 
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		<-sigChan

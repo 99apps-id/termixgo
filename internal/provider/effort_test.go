@@ -18,6 +18,8 @@ func TestEffortMappingPerProvider(t *testing.T) {
 		// OpenAI has no level above high, so the deepest request becomes the
 		// highest value it does accept rather than an invalid field.
 		{"openai max folds to high", "openai", EffortMax, "high"},
+		{"codex non-lite carries effort", "openai-codex", EffortHigh, "high"},
+		{"copilot chat carries effort", "github-copilot", EffortMedium, "medium"},
 		{"deepseek max", "deepseek", EffortMax, "high"},
 		{"xai high", "xai", EffortHigh, "high"},
 		{"kimi has no medium", "moonshot", EffortMedium, "high"},

@@ -111,8 +111,8 @@ func Shorten(text string, max int) string {
 	if max <= 0 || len(collapsed) <= max {
 		return collapsed
 	}
-	if max <= 1 {
+	if max <= 4 {
 		return clipBytes(collapsed, max)
 	}
-	return clipBytes(collapsed, max-1) + "..."
+	return clipBytes(collapsed, max-3) + "..."
 }

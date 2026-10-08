@@ -401,6 +401,10 @@ func (s *Session) LastAssistantTextSince(mark int) string {
 func (s *Session) snapshot() sessionJSON {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	messages := make([]provider.Message, len(s.messages))
+	copy(messages, s.messages)
+	todos := make([]Todo, len(s.todos))
+	copy(todos, s.todos)
 	return sessionJSON{
 		ID:        s.id,
 		Title:     s.title,
@@ -408,8 +412,8 @@ func (s *Session) snapshot() sessionJSON {
 		Model:     s.model,
 		CreatedAt: s.createdAt,
 		UpdatedAt: s.updatedAt,
-		Messages:  s.messages,
-		Todos:     s.todos,
+		Messages:  messages,
+		Todos:     todos,
 		Usage:     s.usage,
 		CostUSD:   s.costUSD,
 	}

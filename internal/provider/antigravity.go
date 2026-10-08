@@ -242,7 +242,11 @@ func (c *antigravityClient) ensureProject(ctx context.Context) (string, error) {
 			if parsed.Done && project != "" {
 				break
 			}
-			time.Sleep(2 * time.Second)
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
 		}
 	}
 	if project == "" {
@@ -276,7 +280,9 @@ func (c *antigravityClient) doJSONWithKey(ctx context.Context, endpoint string, 
 	if err != nil {
 		return nil, 0, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	request, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(encoded))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -288,7 +294,15 @@ func (c *antigravityClient) doJSONWithKey(ctx context.Context, endpoint string, 
 		return nil, 0, err
 	}
 	defer response.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	// The onboarding calls are one-shot JSON, but a hung connection after the
+	// headers must still fail instead of holding the turn open.
+	body, err := io.ReadAll(newStallGuard(response.Body, streamStallDelay, cancel))
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(body) > 1<<20 {
+		body = body[:1<<20]
+	}
 	return body, response.StatusCode, nil
 }
 
@@ -666,12 +680,24 @@ func isAuthOrSessionError(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "401") ||
+	if strings.Contains(msg, "401") ||
 		strings.Contains(msg, "unauthenticated") ||
 		strings.Contains(msg, "unauthorized") ||
-		strings.Contains(msg, "session") ||
-		strings.Contains(msg, "token") ||
-		strings.Contains(msg, "expired")
+		strings.Contains(msg, "expired") {
+		return true
+	}
+	// A bare "token" match misfires on quota wording such as "token limit",
+	// so a token mention only counts beside an auth qualifier.
+	if strings.Contains(msg, "token") {
+		for _, qualifier := range []string{"invalid", "expired", "refresh", "unauthorized", "unauthenticated", "revoked"} {
+			if strings.Contains(msg, qualifier) {
+				return true
+			}
+		}
+	}
+	return strings.Contains(msg, "session expired") ||
+		strings.Contains(msg, "invalid session") ||
+		strings.Contains(msg, "session invalid")
 }
 
 func isEndpointError(err error) bool {

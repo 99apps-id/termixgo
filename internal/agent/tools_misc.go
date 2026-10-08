@@ -674,10 +674,10 @@ func (t *subagentTool) Schema() map[string]any {
 func (t *subagentTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	prompt := argString(args, "prompt")
 	if prompt == "" {
-		return Result{Output: "prompt is required", IsError: true}, nil
+		return Result{Output: "prompt is required; describe the task to delegate", IsError: true}, nil
 	}
 	if env.RunSubagent == nil {
-		return Result{Output: "Subagents are not available in this session.", IsError: true}, nil
+		return Result{Output: "Subagents are not available in this session; run inside a normal turn with subagents enabled.", IsError: true}, nil
 	}
 	if env.Depth >= MaxSubagentDepth {
 		return Result{Output: "Subagents cannot nest more than three deep.", IsError: true}, nil

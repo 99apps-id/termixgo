@@ -329,12 +329,22 @@ func isMuseAuthOrSessionError(err error) bool {
 		return true
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "401") ||
+	if strings.Contains(msg, "401") ||
 		strings.Contains(msg, "unauthenticated") ||
 		strings.Contains(msg, "unauthorized") ||
-		strings.Contains(msg, "session") ||
-		strings.Contains(msg, "token") ||
-		strings.Contains(msg, "expired")
+		strings.Contains(msg, "expired") {
+		return true
+	}
+	if strings.Contains(msg, "token") {
+		for _, qualifier := range []string{"invalid", "expired", "refresh", "unauthorized", "unauthenticated", "revoked"} {
+			if strings.Contains(msg, qualifier) {
+				return true
+			}
+		}
+	}
+	return strings.Contains(msg, "session expired") ||
+		strings.Contains(msg, "invalid session") ||
+		strings.Contains(msg, "session invalid")
 }
 
 // stampFunctionCallItems adds the id and status Meta's Responses API expects on

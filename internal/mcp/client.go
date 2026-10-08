@@ -73,7 +73,7 @@ type Client struct {
 // Start launches the server and completes the handshake.
 func Start(ctx context.Context, options Options) (*Client, error) {
 	if strings.TrimSpace(options.Command) == "" {
-		return nil, errors.New("an MCP server needs a command to run")
+		return nil, errors.New("an MCP server needs a command to run; set command in the MCP config")
 	}
 	command := exec.Command(options.Command, options.Args...)
 	command.Dir = options.Dir

@@ -61,7 +61,7 @@ func Propose(workspace, name, description, body, summary string) (Proposal, erro
 	}
 	trimmedBody := strings.TrimSpace(body)
 	if trimmedBody == "" {
-		return Proposal{}, errors.New("the proposed skill body is empty")
+		return Proposal{}, errors.New("the proposed skill body is empty; write the SKILL.md content first")
 	}
 	if len(trimmedBody) > maxProposalBytes {
 		return Proposal{}, fmt.Errorf("the proposed skill is %d bytes, over the %d limit", len(trimmedBody), maxProposalBytes)

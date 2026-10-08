@@ -118,6 +118,7 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		m.current = modeHelp
 		return m, nil
 	case "exit", "quit":
+		m.app.Stop()
 		return m, tea.Quit
 	case "new":
 		m.app.NewSession()

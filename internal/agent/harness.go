@@ -218,7 +218,7 @@ func ApplyHarnessToBudget(base int, profile HarnessProfile) int {
 	if budget <= 0 {
 		budget = DefaultStepBudget
 	}
-	if profile.StepBudgetDelta < 0 {
+	if profile.StepBudgetDelta != 0 {
 		budget += profile.StepBudgetDelta
 	}
 	if budget < 1 {

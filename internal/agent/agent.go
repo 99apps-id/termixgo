@@ -139,9 +139,11 @@ runLoop:
 		if overBudget(r.CostBudgetUSD, sessionCost) {
 			stopReason = "cost-cap"
 			emit(Event{
-				Kind:    EventError,
-				Err:     fmt.Errorf("stopped: estimated spend reached $%.4f of the $%.2f budget (config costBudgetUsd)", sessionCost, r.CostBudgetUSD),
-				CostUSD: sessionCost,
+				Kind:         EventError,
+				Err:          fmt.Errorf("stopped: estimated spend reached $%.4f of the $%.2f budget (config costBudgetUsd)", sessionCost, r.CostBudgetUSD),
+				CostUSD:      sessionCost,
+				CostKnown:    costKnown,
+				CostUnpriced: unpriced,
 			},
 			)
 			break runLoop
@@ -368,6 +370,7 @@ runLoop:
 			break runLoop
 		}
 		if ctx.Err() != nil {
+			stopReason = "aborted"
 			break runLoop
 		}
 		if diagnose != "" {
@@ -611,7 +614,7 @@ func (r *Runner) needsApprovalFor(tool Tool) bool {
 func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 	args, err := decodeToolArguments(call.Arguments)
 	if err != nil {
-		return Result{Output: fmt.Sprintf("Could not read the arguments for %s: %v", call.Name, err), IsError: true}
+		return Result{Output: fmt.Sprintf("Could not read the arguments for %s: %v. Fix the JSON arguments and call it again", call.Name, err), IsError: true}
 	}
 
 	tool, ok := r.Tools.Lookup(call.Name)
@@ -664,7 +667,23 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 			}
 		}
 		if decision == DecisionAllowSession {
-			r.Policy.AllowSession(tool.Name())
+			if r.Policy != nil {
+				r.Policy.AllowSession(tool.Name())
+			}
+			if r.Env != nil {
+				if r.Env.SessionAllowed == nil {
+					r.Env.SessionAllowed = map[string]bool{}
+				}
+				r.Env.SessionAllowed[tool.Name()] = true
+			}
+		}
+		if decision == DecisionAllowAlways {
+			if r.Env != nil {
+				if r.Env.SessionAllowed == nil {
+					r.Env.SessionAllowed = map[string]bool{}
+				}
+				r.Env.SessionAllowed[tool.Name()] = true
+			}
 		}
 		if r.Policy != nil && r.Policy.Memory != nil {
 			r.Policy.Memory.RecordApprovalDecision(tool.Name(), decision)

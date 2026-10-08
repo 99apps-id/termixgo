@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -108,14 +109,14 @@ func (s *Store) List() []Job {
 // the past, which would otherwise be due immediately and never again.
 func (s *Store) Add(name, prompt string, schedule Schedule, now time.Time) (Job, error) {
 	if !schedule.Valid() {
-		return Job{}, fmt.Errorf("the schedule is not valid")
+		return Job{}, fmt.Errorf("the schedule is not valid; use a cron expression or an @every/@at form")
 	}
 	if strings.TrimSpace(prompt) == "" {
-		return Job{}, fmt.Errorf("the prompt is empty")
+		return Job{}, fmt.Errorf("the prompt is empty; pass the text the scheduled turn should run")
 	}
 	next, ok := schedule.Next(now)
 	if !ok {
-		return Job{}, fmt.Errorf("the schedule has no future run")
+		return Job{}, fmt.Errorf("the schedule has no future run; pick a later time or a recurring expression")
 	}
 	id, err := newID()
 	if err != nil {
@@ -225,6 +226,8 @@ func (s *Store) Due(now time.Time) []Job {
 	if changed {
 		_ = s.saveLocked()
 	}
+	// Fire the earliest next run first so a burst of due jobs keeps its order.
+	sort.Slice(due, func(i, j int) bool { return due[i].NextRun.Before(due[j].NextRun) })
 	return due
 }
 

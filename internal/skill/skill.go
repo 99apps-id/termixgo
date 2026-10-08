@@ -127,7 +127,7 @@ func Load(workspace, name string) (Skill, error) {
 			return candidate, nil
 		}
 	}
-	return Skill{}, fmt.Errorf("skill %q not found", name)
+	return Skill{}, fmt.Errorf("skill %q not found; check /skills list for the available names", name)
 }
 
 // Create scaffolds a project skill.

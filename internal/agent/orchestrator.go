@@ -329,7 +329,7 @@ func runPipeline(ctx context.Context, env *Env, pipeline OrchestrationPipeline, 
 // runPipelineStep runs one step as a subagent.
 func runPipelineStep(ctx context.Context, env *Env, step OrchestrationStep, context map[string]any) (string, SubagentSpend, error) {
 	if env == nil || env.RunSubagent == nil {
-		return "", SubagentSpend{}, fmt.Errorf("subagents are not available in this session")
+		return "", SubagentSpend{}, fmt.Errorf("subagents are not available in this session; run inside a normal turn with subagents enabled")
 	}
 	prompt := interpolatePrompt(step.Prompt, context)
 	subType := strings.TrimSpace(step.Type)

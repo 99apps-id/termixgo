@@ -78,8 +78,6 @@ func NewPool() *Pool {
 // tool listing; the servers themselves outlive it.
 func (p *Pool) Connect(ctx context.Context, disabled []Options, enabled []Options) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	for _, options := range disabled {
 		p.disabled = append(p.disabled, ServerStatus{
 			Name:     options.Name,
@@ -87,6 +85,7 @@ func (p *Pool) Connect(ctx context.Context, disabled []Options, enabled []Option
 			Disabled: true,
 		})
 	}
+	p.mu.Unlock()
 
 	sem := make(chan struct{}, defaultStartConcurrency)
 	var wg sync.WaitGroup
@@ -117,6 +116,10 @@ func (p *Pool) Connect(ctx context.Context, disabled []Options, enabled []Option
 		allResults = append(allResults, r)
 	}
 
+	// The handshake ran without the lock so Tools and Status stay readable
+	// while servers start. The merge below is the only part that needs it.
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	for _, r := range allResults {
 		if r.failure.Err != nil {
 			p.failures = append(p.failures, r.failure)

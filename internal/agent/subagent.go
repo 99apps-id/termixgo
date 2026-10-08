@@ -225,10 +225,10 @@ func subagentRegistry(subType string, depth int) *Registry {
 func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model provider.Model, subType, prompt string, maxSteps int) (string, SubagentSpend, error) {
 	def := LookupSubagent(subType)
 	if client == nil {
-		return "", SubagentSpend{}, fmt.Errorf("no provider client is available for a subagent")
+		return "", SubagentSpend{}, fmt.Errorf("no provider client is available for a subagent; configure a provider key first")
 	}
 	if strings.TrimSpace(prompt) == "" {
-		return "", SubagentSpend{}, fmt.Errorf("a subagent prompt is required")
+		return "", SubagentSpend{}, fmt.Errorf("a subagent prompt is required; pass the task text to delegate")
 	}
 	if maxSteps <= 0 {
 		maxSteps = def.MaxSteps
@@ -247,6 +247,7 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	// must NOT fold a grandchild's spend again: it would land here a second
 	// time in that same turn-end total.
 	var spend SubagentSpend
+	turns := 0
 	// The child counts as one unpriced delegated component when its own model
 	// has no price, separate from any nested unpriced runs it spawns. Zero for
 	// a priced child.
@@ -268,9 +269,16 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 				spend.Usage = spend.Usage.Add(event.Usage)
 				spend.Cost += event.CostUSD
 				// The turn-end event carries the subtree's nested unpriced
-				// count; add this child's own unpricedness on top, once.
-				spend.CostKnown = event.CostKnown && costKnown
-				spend.Unpriced = event.CostUnpriced + ownUnpriced
+				// count. Accumulate across passes so a read-only retry keeps
+				// the first pass; the child's own unpricedness lands once.
+				if turns == 0 {
+					spend.CostKnown = event.CostKnown && costKnown
+					spend.Unpriced = event.CostUnpriced + ownUnpriced
+				} else {
+					spend.CostKnown = spend.CostKnown && event.CostKnown
+					spend.Unpriced += event.CostUnpriced
+				}
+				turns++
 			}
 		},
 		Processes: parent.Processes,

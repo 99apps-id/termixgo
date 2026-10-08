@@ -220,9 +220,7 @@ type Options struct {
 
 // composerHeight is the composer rows. Five fits a two-line prompt plus a
 // line of @file context without stealing the transcript, which owns the
-// rest of the window.
-// composerHeight is the composer rows. Five fits a two-line prompt plus a
-// hint without the box jumping as the text grows.
+// rest of the window, and it keeps the box from jumping as the text grows.
 const composerHeight = 5
 
 // composerPromptWidth is the columns the composer marker occupies. The

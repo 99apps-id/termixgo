@@ -128,7 +128,7 @@ func MintMetaKey(ctx context.Context, mintURL, dcaToken string) (Token, error) {
 // pure function so the rejection is testable without a network server.
 func checkMintSubscription(minted metaMintedKey) error {
 	if minted.IsSubsActive != nil && !*minted.IsSubsActive {
-		return fmt.Errorf("muse: the Muse Code subscription is inactive — activate it on muse.ai first")
+		return fmt.Errorf("muse: the Muse Code subscription is inactive; activate it on muse.ai first")
 	}
 	if minted.key() == "" {
 		action := strings.TrimSpace(minted.ActionURL)

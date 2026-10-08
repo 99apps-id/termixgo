@@ -23,10 +23,12 @@ import "strings"
 // endpoint": a self-hosted or proxied endpoint that does not know the field
 // rejects the request, and there is no way to discover that before sending it.
 var effortProviders = map[string]bool{
-	"openai":    true,
-	"xai":       true,
-	"xai-oauth": true,
-	"deepseek":  true,
+	"openai":         true,
+	"openai-codex":   true,
+	"github-copilot": true,
+	"xai":            true,
+	"xai-oauth":      true,
+	"deepseek":       true,
 }
 
 // openAIEffortValues maps the shared level onto the three values OpenAI and

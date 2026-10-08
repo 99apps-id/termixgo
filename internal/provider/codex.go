@@ -215,8 +215,8 @@ func encodeResponsesInput(req ChatRequest) []map[string]any {
 // item. The model sometimes emits a half-built or plain-text argument string,
 // which the stream decoder keeps verbatim in the history; Meta replays are
 // validated and answered with 400 "`arguments` must be valid JSON". Blank or
-// broken arguments degrade to an empty object — the tool error already
-// recorded in the history explains why — instead of failing every later turn.
+// broken arguments degrade to an empty object (the tool error already
+// recorded in the history explains why) instead of failing every later turn.
 func responsesArguments(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" || !json.Valid([]byte(trimmed)) {

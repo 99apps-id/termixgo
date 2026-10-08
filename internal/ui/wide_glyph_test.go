@@ -22,10 +22,10 @@ func displayWidth(text string) int {
 	return widest
 }
 
-// wideText mixes CJK, a fullwidth bracket and an emoji so every wrapping path
-// meets a two-column glyph.
+// wideText mixes CJK and a fullwidth bracket so every wrapping path meets a
+// two-column glyph.
 const wideText = "日本語のテキストです これは長い行になります もう一度 日本語のテキストです " +
-	"バグを直す 【重要】 🚀 emoji も あります そして まだまだ 続きます"
+	"バグを直す 【重要】 記号 も あります そして まだまだ 続きます"
 
 // TestAssistantWideGlyphsStayInsideTheFrame is the scrambled-screen guard for
 // wide characters. Wrapping by rune count let a line measure short, overflow

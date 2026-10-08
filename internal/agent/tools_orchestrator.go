@@ -33,10 +33,10 @@ func (t *orchestrateTool) Schema() map[string]any {
 func (t *orchestrateTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	id := strings.TrimSpace(argString(args, "pipeline_id"))
 	if id == "" {
-		return Result{Output: "pipeline_id is required", IsError: true}, nil
+		return Result{Output: "pipeline_id is required; pass the pipeline file name without .json", IsError: true}, nil
 	}
 	if env == nil || env.RunSubagent == nil {
-		return Result{Output: "Subagents are not available in this session.", IsError: true}, nil
+		return Result{Output: "Subagents are not available in this session; run inside a normal turn with subagents enabled.", IsError: true}, nil
 	}
 	pipeline, err := loadPipeline(env.Workspace, id)
 	if err != nil {

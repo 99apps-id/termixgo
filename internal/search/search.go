@@ -111,7 +111,7 @@ func Open(root string) (*Store, error) {
 // walk so the database, its WAL and the journal are never indexed as content.
 func OpenIn(root, dataDir string) (*Store, error) {
 	if strings.TrimSpace(root) == "" {
-		return nil, fmt.Errorf("search: root is required")
+		return nil, fmt.Errorf("search: root is required; pass the workspace directory to index")
 	}
 	if strings.TrimSpace(dataDir) == "" {
 		dataDir = root
@@ -426,8 +426,12 @@ func (s *Store) waitForIndexing() {
 // owns the indexing flag, so this does not take the lock itself.
 func (s *Store) indexWorkspace() {
 	var files []string
+	cap := s.workspaceFileCap
+	if cap <= 0 {
+		cap = defaultWorkspaceFileCap
+	}
 	_ = filepath.WalkDir(s.root, func(path string, d os.DirEntry, err error) error {
-		if len(files) >= defaultWorkspaceFileCap {
+		if len(files) >= cap {
 			return filepath.SkipDir
 		}
 		if err != nil {

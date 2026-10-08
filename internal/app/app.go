@@ -1793,11 +1793,20 @@ func (a *App) RunVoicePrompt(ctx context.Context, prompt string, progress func(s
 	session.AddAssistant(report, "", nil)
 	// The fallback run happens outside the normal emit path, so its usage and
 	// cost must be folded into the live session by hand rather than lost.
-	if spend.Usage.TotalTokens > 0 {
-		session.AddUsage(spend.Usage)
-	}
+	// Usage goes through AddUsage so the app total and the session stay in
+	// sync; the delegated unpriced count rides along so one unpriced fallback
+	// does not vanish from the ledger.
+	a.AddUsage(spend.Usage)
 	if spend.Cost > 0 {
 		session.AddCost(spend.Cost)
+		a.mu.Lock()
+		a.costUSD += spend.Cost
+		a.costUnpriced += spend.Unpriced
+		a.mu.Unlock()
+	} else if spend.Unpriced > 0 {
+		a.mu.Lock()
+		a.costUnpriced += spend.Unpriced
+		a.mu.Unlock()
 	}
 	_ = session.Save()
 

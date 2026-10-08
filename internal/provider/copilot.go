@@ -40,11 +40,13 @@ func (c *copilotClient) Stream(ctx context.Context, req ChatRequest, emit func(S
 		if maxTokens <= 0 {
 			maxTokens = 8192
 		}
+		messages := encodeAnthropicMessages(req.Messages)
+		applyPromptCacheToMessages(messages)
 		payload := map[string]any{
 			"model":      req.Model,
 			"max_tokens": maxTokens,
 			"stream":     true,
-			"messages":   encodeAnthropicMessages(req.Messages),
+			"messages":   messages,
 		}
 		if len(req.SystemParts) > 0 {
 			payload["system"] = joinSystemParts(req.SystemParts)
@@ -56,6 +58,9 @@ func (c *copilotClient) Stream(ctx context.Context, req ChatRequest, emit func(S
 		}
 		if len(req.Tools) > 0 {
 			payload["tools"] = encodeAnthropicTools(req.Tools)
+		}
+		if effort := anthropicEffortValues(req.Effort); effort != "" {
+			payload["output_config"] = map[string]any{"effort": effort}
 		}
 		return anthropicCli.streamWithURL(ctx, url, headers, payload, emit, nil)
 	}
@@ -81,6 +86,9 @@ func (c *copilotClient) Stream(ctx context.Context, req ChatRequest, emit func(S
 	if len(req.Tools) > 0 {
 		payload["tools"] = encodeOpenAITools(req.Tools)
 		payload["tool_choice"] = "auto"
+	}
+	if effort := compatibleEffort(c.info.ID, req.Effort); effort != "" {
+		payload["reasoning_effort"] = effort
 	}
 	err := openAICli.streamWithURL(ctx, c.baseURL+"/chat/completions", headers, payload, emit)
 	if err != nil && copilotEscalate(err) && copilotSupportsResponses(req.Model) {
