@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/search"
 )
 
 // checkpointPrefix marks stash entries owned by Termixgo. Anything else in
@@ -209,7 +211,7 @@ func AutoCheckpoint(ctx context.Context, workspace string) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, checkpointTimeout)
 	defer cancel()
 	if !isGitWorkspace(timeoutCtx, workspace) {
-		_, _ = CreateFileCheckpoint(workspace, "auto before run")
+		_, _ = CreateFileCheckpoint(timeoutCtx, workspace, "auto before run")
 		_ = PruneFileCheckpoints(workspace, checkpointKeep)
 		return
 	}
@@ -504,28 +506,80 @@ func snapshotFiles(workspace string, store *FileCheckpoint) error {
 	return nil
 }
 
+// fileCheckpointMaxFiles and fileCheckpointMaxBytes bound one file-level
+// snapshot. A plain folder is snapshotted by walking it, so a filesystem root
+// or a huge generated tree would otherwise be walked and copied on every turn,
+// which stalls the turn before the model is even called. The scan stops at a
+// cap, names an oversized file instead of copying it, and records the
+// truncation, so the snapshot stays a bounded undo buffer rather than an
+// archive of the whole tree.
+const (
+	fileCheckpointMaxFiles = 2000
+	fileCheckpointMaxBytes = 64 * 1024 * 1024
+)
+
 // CreateFileCheckpoint opens a named file-level snapshot. Outside git this is
-// what the checkpoint tool calls; inside git the stash path is used instead.
-func CreateFileCheckpoint(workspace, message string) (FileCheckpoint, error) {
+// what the auto checkpoint and the checkpoint tool use; inside git the stash
+// path is used instead. The walk honours ctx and skips generated and state
+// trees, so a checkpoint never scans a whole filesystem root.
+func CreateFileCheckpoint(ctx context.Context, workspace, message string) (FileCheckpoint, error) {
 	if strings.TrimSpace(workspace) == "" {
 		return FileCheckpoint{}, fmt.Errorf("workspace is required")
 	}
 	if strings.TrimSpace(message) == "" {
 		message = "manual checkpoint"
 	}
-	var files []string
+	var files, skipped []string
+	stored := 0
+	truncated := false
+	statePrefixes := []string{".termixgo" + string(filepath.Separator), ".termigo" + string(filepath.Separator)}
 	_ = filepath.WalkDir(workspace, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			truncated = true
+			return fs.SkipAll
+		}
+		if d.IsDir() {
+			if path == workspace {
+				return nil
+			}
+			name := d.Name()
+			if name == ".termixgo" || name == ".termigo" || search.IsSkippedDir(name) {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		rel, err := filepath.Rel(workspace, path)
-		if err != nil || strings.HasPrefix(rel, ".termixgo"+string(filepath.Separator)) || rel == ".termixgo" {
+		if err != nil {
 			return nil
 		}
+		for _, prefix := range statePrefixes {
+			if strings.HasPrefix(rel, prefix) {
+				return nil
+			}
+		}
+		info, statErr := d.Info()
+		if statErr != nil {
+			return nil
+		}
+		if info.Size() > snapshotFileCap {
+			skipped = append(skipped, filepath.ToSlash(rel))
+			return nil
+		}
+		if len(files) >= fileCheckpointMaxFiles || stored+int(info.Size()) > fileCheckpointMaxBytes {
+			truncated = true
+			return fs.SkipAll
+		}
+		stored += int(info.Size())
 		files = append(files, filepath.ToSlash(rel))
 		return nil
 	})
-	store := &FileCheckpoint{ID: newSnapshotID(), Message: message, CreatedAt: time.Now(), Files: files}
+	store := &FileCheckpoint{ID: newSnapshotID(), Message: message, CreatedAt: time.Now(), Files: files, Skipped: skipped}
+	if truncated {
+		store.Message += " [snapshot truncated: workspace too large]"
+	}
 	if err := writeFileManifest(workspace, store); err != nil {
 		return FileCheckpoint{}, err
 	}

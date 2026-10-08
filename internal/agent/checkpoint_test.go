@@ -229,7 +229,7 @@ func TestFileCheckpointSavesAndRestoresWithoutGit(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	writeForTest(t, dir, "pkg/main.go", "package main // v1\n")
-	store, err := CreateFileCheckpoint(dir, "before risky edit")
+	store, err := CreateFileCheckpoint(context.Background(), dir, "before risky edit")
 	if err != nil {
 		t.Fatalf("CreateFileCheckpoint: %v", err)
 	}
@@ -263,5 +263,44 @@ func TestFileCheckpointSavesAndRestoresWithoutGit(t *testing.T) {
 	}
 	if _, err := os.Stat(created); err != nil {
 		t.Errorf("created-after file must remain intact after rewind: %v", err)
+	}
+}
+
+// TestFileCheckpointSkipsGeneratedTrees keeps a snapshot from wandering into
+// node_modules and other generated trees. On a large workspace that walk is
+// what stalled the turn before the model was even called.
+func TestFileCheckpointSkipsGeneratedTrees(t *testing.T) {
+	dir := t.TempDir()
+	writeForTest(t, dir, "main.go", "package main\n")
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules", "dep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "vendor", "lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForTest(t, dir, "node_modules/dep/index.js", "module.exports = 1\n")
+	writeForTest(t, dir, "vendor/lib/x.go", "package lib\n")
+	store, err := CreateFileCheckpoint(context.Background(), dir, "before risky edit")
+	if err != nil {
+		t.Fatalf("CreateFileCheckpoint: %v", err)
+	}
+	if len(store.Files) != 1 || store.Files[0] != "main.go" {
+		t.Fatalf("files = %v, want only main.go", store.Files)
+	}
+}
+
+// TestFileCheckpointHonoursCancelledContext proves the bounded walk stops when
+// the caller's deadline is already past instead of scanning a whole root.
+func TestFileCheckpointHonoursCancelledContext(t *testing.T) {
+	dir := t.TempDir()
+	writeForTest(t, dir, "main.go", "package main\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	store, err := CreateFileCheckpoint(ctx, dir, "before risky edit")
+	if err != nil {
+		t.Fatalf("CreateFileCheckpoint: %v", err)
+	}
+	if len(store.Files) != 0 {
+		t.Errorf("a cancelled snapshot must copy nothing, got %v", store.Files)
 	}
 }
