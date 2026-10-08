@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -317,6 +318,26 @@ func NewWithOptions(application *app.App, options Options) *Model {
 	return model
 }
 
+// lockedWriter serializes writes to an operator-supplied output.
+//
+// Bubble Tea writes to the program's output from two goroutines: the renderer
+// flushes a finished frame from one, and the event loop writes an escape
+// sequence (the window title) from another. os.Stdout tolerates that because the
+// writes end in a syscall, but any in-process writer does not, and the writer
+// this program is handed is documented as a plain io.Writer. Handing tea a
+// bytes.Buffer without this wrapper is a data race on the buffer's own fields,
+// which the race detector reports and which can corrupt a frame.
+type lockedWriter struct {
+	mu     sync.Mutex
+	writer io.Writer
+}
+
+func (l *lockedWriter) Write(data []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.writer.Write(data)
+}
+
 // RunWithOptions starts the program with explicit options.
 func RunWithOptions(application *app.App, options Options) error {
 	model := NewWithOptions(application, options)
@@ -329,7 +350,7 @@ func RunWithOptions(application *app.App, options Options) error {
 		programOptions = append(programOptions, tea.WithInput(options.Input))
 	}
 	if options.Output != nil {
-		programOptions = append(programOptions, tea.WithOutput(options.Output))
+		programOptions = append(programOptions, tea.WithOutput(&lockedWriter{writer: options.Output}))
 	}
 
 	program := tea.NewProgram(model, programOptions...)
