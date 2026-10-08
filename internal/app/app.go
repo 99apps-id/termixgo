@@ -982,6 +982,16 @@ func (a *App) taskClient(kind string) (provider.Client, string, string, error) {
 	return activeClient, wire, cfg.EffortFor(activeModel.ID), nil
 }
 
+// historyBudget is the token budget a request's history is trimmed to, from the
+// active model's window. The stored transcript is bounded by the same number so
+// that what is kept on disk matches what the model was reading.
+func (a *App) historyBudget() int {
+	a.mu.Lock()
+	window := a.model.Window()
+	a.mu.Unlock()
+	return agent.HistoryBudget(window)
+}
+
 // PendingWindow returns the model's context window when the history has grown
 // past the point where a brief of the older turns would pay for itself, and 0
 // when it is still small enough to keep whole.
@@ -1081,6 +1091,7 @@ func (a *App) env() *agent.Env {
 		Emit:           a.emit,
 		Approve:        a.approve,
 		SessionAllowed: a.folderGrants(),
+		AlwaysAllowed:  stringSet(a.Config().AlwaysAllowedTools),
 		Ask:            a.ask,
 		RunSubagent:    a.runSubagent,
 	}
@@ -1645,6 +1656,16 @@ func (a *App) runOn(ctx context.Context, input string, images []provider.Image, 
 	// Naming happens after the turn, off the critical path, and is best effort:
 	// a session keeps its derived title rather than losing it to a failed call.
 	a.maybeNameSession(ctx, session)
+	// The stored transcript is bounded by the same budget the request uses, and
+	// this runs whatever the compaction setting is: bounding a session that has
+	// no dedicated model is the point, since the plain trim only ever reached
+	// the request while the file and the in-memory history kept growing.
+	if !session.Condensed() && session.CompactStoredHistory(a.historyBudget()) {
+		a.emit(agent.Event{
+			Kind: agent.EventNotice,
+			Text: "Condensed the stored transcript to the context budget so the session file and memory stay bounded. Older turns read as they already did for the model.",
+		})
+	}
 	return session.Save()
 }
 

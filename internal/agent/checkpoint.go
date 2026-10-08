@@ -31,6 +31,50 @@ const checkpointKeep = 10
 // before a turn, so a hung git must not cost the operator the turn itself.
 const checkpointTimeout = 60 * time.Second
 
+// checkpointUntrackedFileCap and checkpointUntrackedByteCap bound the untracked
+// side of a snapshot. They are variables so a test can lower them.
+//
+// A stash that carries untracked files copies them into git's object store,
+// where they stay until the last ref that reaches them is gone: `git stash
+// drop` does not give the space back, and only a history rewrite does. One
+// auto-checkpoint of a workspace whose node_modules was not ignored yet put
+// 387 MB of it into this repository for good. Gitignored junk costs nothing
+// here, because `--include-untracked` skips ignored files, so what is measured
+// is the untracked set that is not ignored, which is exactly what would be
+// copied.
+var (
+	checkpointUntrackedFileCap = 5000
+	checkpointUntrackedByteCap = int64(64 << 20)
+)
+
+// untrackedVolume measures the untracked, non-ignored files a stash would copy.
+// Counting stops as soon as a cap is passed: the answer is already known, and a
+// dependency tree can hold millions of files.
+func untrackedVolume(ctx context.Context, workspace string) (files int, bytes int64, tooBig bool) {
+	out, err := gitOutput(ctx, workspace, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		// A listing that cannot be read is a reason to keep the snapshot small.
+		return 0, 0, true
+	}
+	for _, name := range strings.Split(out, "\x00") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		files++
+		if files > checkpointUntrackedFileCap {
+			return files, bytes, true
+		}
+		if info, statErr := os.Lstat(filepath.Join(workspace, filepath.FromSlash(name))); statErr == nil && !info.IsDir() {
+			bytes += info.Size()
+			if bytes > checkpointUntrackedByteCap {
+				return files, bytes, true
+			}
+		}
+	}
+	return files, bytes, false
+}
+
 // Checkpoint is one saved working-tree snapshot, backed by a git stash entry.
 type Checkpoint struct {
 	// Ref is the stash ref, for example "stash@{0}".
@@ -75,9 +119,23 @@ func CreateCheckpoint(ctx context.Context, workspace, message string) (Checkpoin
 	if strings.TrimSpace(message) == "" {
 		message = "manual checkpoint"
 	}
+	// Untracked files are a different question from the pathspec above. Git
+	// honors a pathspec exclusion for the tracked side but not for the
+	// untracked one: `git stash push -u -- . ':(exclude)node_modules'` still
+	// copies node_modules. The volume is therefore measured and the whole
+	// untracked side is left out when it is a dependency or build tree.
+	includeUntracked := true
+	if files, bytes, tooBig := untrackedVolume(ctx, workspace); tooBig {
+		includeUntracked = false
+		message += fmt.Sprintf(" (untracked files left out: %d files, %d MB; ignore generated trees such as node_modules to keep them out for good)", files, bytes>>20)
+	}
 	entry := fmt.Sprintf("%s %s %s", checkpointPrefix, head, message)
 	before := stashTop(ctx, workspace)
-	pushArgs := append([]string{"stash", "push", "--include-untracked", "-m", entry}, pathspec...)
+	pushArgs := []string{"stash", "push", "-m", entry}
+	if includeUntracked {
+		pushArgs = append(pushArgs, "--include-untracked")
+	}
+	pushArgs = append(pushArgs, pathspec...)
 	if _, err := gitOutput(ctx, workspace, pushArgs...); err != nil {
 		return Checkpoint{}, fmt.Errorf("stash the working tree: %w", err)
 	}

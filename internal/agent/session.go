@@ -38,6 +38,10 @@ type Session struct {
 	todos    []Todo
 	usage    provider.Usage
 	costUSD  float64
+	// condensed records that the stored transcript was trimmed to the history
+	// budget at least once, so the operator is told about it once instead of
+	// every turn. It is persisted with the session for the same reason.
+	condensed bool
 }
 
 // sessionJSON is the persisted shape. It mirrors the fields so the on-disk
@@ -53,6 +57,7 @@ type sessionJSON struct {
 	Todos     []Todo             `json:"todos,omitempty"`
 	Usage     provider.Usage     `json:"usage,omitempty"`
 	CostUSD   float64            `json:"costUsd,omitempty"`
+	Condensed bool               `json:"condensed,omitempty"`
 }
 
 // NewSession starts an empty conversation with a random id.
@@ -309,6 +314,7 @@ func (s *Session) Reset() {
 	s.usage = provider.Usage{}
 	s.costUSD = 0
 	s.title = ""
+	s.condensed = false
 	s.updatedAt = time.Now()
 	s.mu.Unlock()
 }
@@ -382,11 +388,19 @@ func (s *Session) LastAssistantText() string {
 // after mark. With a mark taken before a turn, it reports the answer this turn
 // produced: an empty result means the turn said nothing, which is not the same
 // as the previous turn's answer.
+//
+// The mark is a message count taken before the turn, so trimming the head of
+// the transcript between the mark and this call would leave it past the end and
+// the answer would be missed. The search therefore never starts after the
+// current turn: the messages from there on are what this turn produced.
 func (s *Session) LastAssistantTextSince(mark int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if mark < 0 {
 		mark = 0
+	}
+	if turnStart := currentTurnStart(s.messages); mark > turnStart {
+		mark = turnStart
 	}
 	for index := len(s.messages) - 1; index >= mark; index-- {
 		message := s.messages[index]
@@ -395,6 +409,57 @@ func (s *Session) LastAssistantTextSince(mark int) string {
 		}
 	}
 	return ""
+}
+
+// CompactStoredHistory trims the stored transcript to the same budget the
+// request uses, and reports whether it changed anything.
+//
+// Without this the transcript grew for the life of a session: every turn
+// appended its tool outputs up to the per-call cap, Save rewrote the whole file
+// at the end of every turn, and nothing ever dropped a message. Compaction only
+// ever bounded the request, so a delivered transcript that the model could not
+// read in full was still kept on disk and in memory forever.
+//
+// It deliberately uses the same rule as the request, so the stored history
+// holds exactly what the model was working from: older turns are elided and the
+// oldest may be dropped, never opening with a tool result. A session with one
+// turn only is left alone, because there is no earlier turn to condense and
+// naming a fresh session reads its turn count.
+func (s *Session) CompactStoredHistory(budgetTokens int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if budgetTokens <= 0 || len(s.messages) <= keepMinMessages {
+		return false
+	}
+	userTurns := 0
+	for _, message := range s.messages {
+		if message.Role == provider.RoleUser {
+			userTurns++
+		}
+	}
+	if userTurns < 2 {
+		return false
+	}
+	before := EstimateMessages(s.messages)
+	if before <= budgetTokens {
+		return false
+	}
+	trimmed := Compact(s.messages, budgetTokens)
+	if after := EstimateMessages(trimmed); after >= before {
+		return false
+	}
+	s.messages = trimmed
+	s.condensed = true
+	s.updatedAt = time.Now()
+	return true
+}
+
+// Condensed reports whether the stored transcript has been trimmed to the
+// history budget, which is what the one-time notice to the operator is for.
+func (s *Session) Condensed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.condensed
 }
 
 // snapshot copies the state for persistence, taken under the lock.
@@ -416,6 +481,7 @@ func (s *Session) snapshot() sessionJSON {
 		Todos:     todos,
 		Usage:     s.usage,
 		CostUSD:   s.costUSD,
+		Condensed: s.condensed,
 	}
 }
 
@@ -560,6 +626,7 @@ func fromJSON(state sessionJSON) *Session {
 		todos:     state.Todos,
 		usage:     state.Usage,
 		costUSD:   state.CostUSD,
+		condensed: state.Condensed,
 	}
 }
 

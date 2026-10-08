@@ -214,6 +214,25 @@ func subagentRegistry(subType string, depth int) *Registry {
 	return NewRegistry(tools...)
 }
 
+// subagentPolicy is the approval policy a nested run gets.
+//
+// It inherits the operator's answers, not just the mode. A policy built from the
+// mode alone made "allow always" a promise the subagent broke on every single
+// call: the operator answered once for the parent and then saw the same prompt
+// again inside every delegated task. The folder gate keeps its own rule, so
+// AlwaysAllowed silences the approval mode but never the folder gate, which is
+// what the parent does too.
+func subagentPolicy(parent *Env) *ApprovalPolicy {
+	if parent == nil {
+		return &ApprovalPolicy{Mode: ApprovalAsk}
+	}
+	return &ApprovalPolicy{
+		Mode:           ApprovalModeOrDefault(parent.Config),
+		AlwaysAllowed:  parent.AlwaysAllowed,
+		SessionAllowed: parent.SessionAllowed,
+	}
+}
+
 // RunSubagent runs a nested investigation of one typed role and returns its
 // final answer. The nested run gets its own session and todo list, so a
 // large search cannot flood the parent context.
@@ -255,15 +274,23 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	if !costKnown {
 		ownUnpriced = 1
 	}
+	// The child inherits the operator's answers, not just the mode. A policy
+	// built from the mode alone re-asked for every tool the operator had
+	// already allowed "always" or "session", so an "always" answer was a
+	// promise the subagent broke on every call. The folder gate keeps its own
+	// rule: SessionAllowed silences it for this folder, AlwaysAllowed never
+	// does, which is what the parent does too.
 	child := &Env{
-		Workspace: parent.Workspace,
-		Config:    parent.Config,
-		Secrets:   parent.Secrets,
-		Skills:    parent.Skills,
-		Memory:    parent.Memory,
-		Todos:     NewTodoStore(),
-		Trusted:   parent.Trusted,
-		Depth:     parent.Depth + 1,
+		Workspace:      parent.Workspace,
+		Config:         parent.Config,
+		Secrets:        parent.Secrets,
+		Skills:         parent.Skills,
+		Memory:         parent.Memory,
+		Todos:          NewTodoStore(),
+		Trusted:        parent.Trusted,
+		SessionAllowed: parent.SessionAllowed,
+		AlwaysAllowed:  parent.AlwaysAllowed,
+		Depth:          parent.Depth + 1,
 		Emit: func(event Event) {
 			if event.Kind == EventTurnEnd {
 				spend.Usage = spend.Usage.Add(event.Usage)
@@ -296,7 +323,7 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		Config:        parent.Config,
 		Env:           child,
 		Tools:         subagentRegistry(string(def.Type), parent.Depth),
-		Policy:        &ApprovalPolicy{Mode: ApprovalModeOrDefault(parent.Config)},
+		Policy:        subagentPolicy(parent),
 		MaxSteps:      maxSteps,
 		Harness:       string(parent.Config.HarnessProfile),
 		ContextBudget: HistoryBudget(model.Window()),

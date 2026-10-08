@@ -73,7 +73,13 @@ type Env struct {
 	// The app re-seeds a fresh snapshot every turn, and needsApprovalFor
 	// reads it - an answer that silences nothing is a dead promise.
 	SessionAllowed map[string]bool
-	Depth          int
+	// AlwaysAllowed carries the tool-level "allow always" answers. A policy
+	// reads it; the folder gate deliberately does not, so an always-allowed
+	// tool in an untrusted folder still asks. It lives here as well as on the
+	// policy because a subagent builds its own policy and has nothing else to
+	// inherit the answers from.
+	AlwaysAllowed map[string]bool
+	Depth         int
 
 	// Processes owns the background processes. It is shared across turns
 	// because a background process must outlive the turn that started it.
