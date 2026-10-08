@@ -10,6 +10,10 @@ coverage
 coverage.out
 coverage.html
 
+# Audit and scratch reports stay on disk, out of history
+AUDIT-*.md
+SCRATCH-*.md
+
 # Go
 vendor/
 
