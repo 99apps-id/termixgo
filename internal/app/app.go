@@ -6,6 +6,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1766,6 +1767,15 @@ func (a *App) RunPromptWithImage(ctx context.Context, prompt, mediaType, data st
 			}
 		})
 		defer a.ClearObserver(claim)
+	}
+	// A photo can be larger than a provider accepts. Scale it down before the
+	// turn so it is not rejected, and so the oversized bytes never enter the
+	// session, where every later turn would resend and fail on them.
+	if raw, err := base64.StdEncoding.DecodeString(data); err == nil {
+		if shrunk, changed := agent.ShrinkImage(raw); changed {
+			data = base64.StdEncoding.EncodeToString(shrunk)
+			mediaType = "image/png"
+		}
 	}
 	images := []provider.Image{{MediaType: mediaType, Data: data}}
 	session := a.currentSession()

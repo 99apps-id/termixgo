@@ -73,9 +73,18 @@ func (t *readImageTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	if err != nil {
 		return Result{Output: openError(err, displayPath(env, path)), IsError: true}, nil
 	}
+	// A screenshot can be taller than a provider accepts. Scale it down at
+	// attach time so the oversized bytes never enter the session, where they
+	// would be resent and rejected on every later turn.
+	note := ""
+	if shrunk, changed := ShrinkImage(data); changed {
+		data = shrunk
+		mediaType = "image/png"
+		note = " (scaled down to fit the image size limit)"
+	}
 	encoded := base64.StdEncoding.EncodeToString(data)
 	return Result{
-		Output: fmt.Sprintf("Attached image %s (%s, %d bytes). Describe what you see.", displayPath(env, path), mediaType, len(data)),
+		Output: fmt.Sprintf("Attached image %s (%s, %d bytes)%s. Describe what you see.", displayPath(env, path), mediaType, len(data), note),
 		Images: []provider.Image{{MediaType: mediaType, Data: encoded}},
 	}, nil
 }
