@@ -65,7 +65,7 @@ func (t *symbolSearchTool) Schema() map[string]any {
 func (t *symbolSearchTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	query := strings.TrimSpace(argString(args, "query"))
 	if query == "" {
-		return Result{Output: "query is required", IsError: true}, nil
+		return Result{Output: "query is required; pass the symbol name to find", IsError: true}, nil
 	}
 	root := resolvePath(env, argString(args, "path", "root"))
 	if root == "" {

@@ -34,7 +34,7 @@ func (t *undoEditTool) Schema() map[string]any {
 func (t *undoEditTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	raw := argString(args, "path", "file")
 	if raw == "" {
-		return Result{Output: "path is required", IsError: true}, nil
+		return Result{Output: "path is required; pass the file to restore", IsError: true}, nil
 	}
 	path := resolvePath(env, raw)
 	if err := checkWorkspacePath(env, path); err != nil {

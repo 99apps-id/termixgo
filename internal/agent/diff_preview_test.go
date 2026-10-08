@@ -75,3 +75,21 @@ func TestPreviewRefusesOutsidePaths(t *testing.T) {
 		t.Errorf("outside paths should yield no preview, got %q", got)
 	}
 }
+
+func TestPreviewUndoShowsRestore(t *testing.T) {
+	env := previewEnv(t, map[string]string{"a.txt": "one\n"})
+	path := filepath.Join(env.Workspace, "a.txt")
+	// The backup holds the pre-write bytes, so previewing the undo must show
+	// the live text going out and the backed-up text coming back.
+	backupFile(env, path)
+	if err := os.WriteFile(path, []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := PreviewToolDiff(env, "undo_edit", map[string]any{"path": "a.txt"})
+	if !strings.Contains(got, "-two") || !strings.Contains(got, "+one") {
+		t.Errorf("an undo should diff live against backup:\n%s", got)
+	}
+	if got := PreviewToolDiff(env, "undo", map[string]any{"path": "missing.txt"}); got != "" {
+		t.Errorf("an undo with no backup should yield no preview, got %q", got)
+	}
+}

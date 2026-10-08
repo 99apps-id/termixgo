@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -27,6 +28,8 @@ func PreviewToolDiff(env *Env, toolName string, args map[string]any) string {
 		return previewWrite(env, args)
 	case "apply_patch", "patch":
 		return previewPatch(env, args)
+	case "undo_edit", "undo":
+		return previewUndo(env, args)
 	}
 	return ""
 }
@@ -191,6 +194,41 @@ func previewPatch(env *Env, args map[string]any) string {
 		shown++
 	}
 	return capPreview(strings.TrimRight(builder.String(), "\n"))
+}
+
+// previewUndo renders what an undo_edit call would restore: the live file
+// against the backup entry the call would consume. A revert is still a write,
+// so without a preview the approval dialog would ask about a change it cannot
+// show. A file with no backup, or a step count beyond the kept entries,
+// yields nothing, and the dialog falls back to the one-line detail.
+func previewUndo(env *Env, args map[string]any) string {
+	path := resolvePath(env, argString(args, "path", "file"))
+	if err := checkWorkspacePath(env, path); err != nil {
+		return ""
+	}
+	steps := argInt(args, "steps", 1, 1, maxBackupsPerFile)
+	names, root, err := backupEntries(env, path)
+	if err != nil || len(names) < steps {
+		return ""
+	}
+	target := names[steps-1]
+	var restored []string
+	if !strings.HasSuffix(target, absentMarkerExt) {
+		data, err := os.ReadFile(filepath.Join(root, target))
+		if err != nil {
+			return ""
+		}
+		restored = splitPreviewLines(string(data))
+	}
+	var current []string
+	if data, err := os.ReadFile(path); err == nil {
+		current = splitPreviewLines(string(data))
+	}
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "--- %s\n+++ %s\n", displayPath(env, path), displayPath(env, path))
+	writePreviewLines(&builder, '-', current)
+	writePreviewLines(&builder, '+', restored)
+	return capPreview(builder.String())
 }
 
 func locateForward(oldLines []string, cursor int, want []string) (int, bool) {
