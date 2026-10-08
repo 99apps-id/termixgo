@@ -1073,9 +1073,10 @@ func (a *App) TakeSteer() []string {
 
 // env builds the per-run tool environment.
 func (a *App) env() *agent.Env {
+	cfg := a.Config()
 	return &agent.Env{
 		Workspace: a.workspace,
-		Config:    a.Config(),
+		Config:    cfg,
 		Secrets:   a.store,
 		Skills:    a.Skills(),
 		Memory:    a.memory,
@@ -1091,7 +1092,7 @@ func (a *App) env() *agent.Env {
 		Emit:           a.emit,
 		Approve:        a.approve,
 		SessionAllowed: a.folderGrants(),
-		AlwaysAllowed:  stringSet(a.Config().AlwaysAllowedTools),
+		AlwaysAllowed:  stringSet(cfg.AlwaysAllowedTools),
 		Ask:            a.ask,
 		RunSubagent:    a.runSubagent,
 	}
