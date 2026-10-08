@@ -4,10 +4,59 @@ All notable changes to Termixgo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.1.6 - 2026-10-09
+
+### Added
+
+- `symbol_search` finds where a function, method, type, class or other named
+  symbol is defined across the workspace. Go files are parsed precisely, and a
+  method matches through its receiver type; Python, TypeScript, JavaScript,
+  Rust and Java are matched structurally.
+- `undo_edit` restores a file to what it held before the last writes. Every
+  `write_file`, `edit`, `multi_edit` and `apply_patch` keeps a bounded per-file
+  backup, so one call reverts one write and `steps` reverts several. The
+  approval dialog previews the revert like any other write.
+
+### Changed
+
+- `read_file` streams a file larger than 2 MB line by line, so an offset and
+  limit window over a huge generated file no longer loads the whole thing into
+  memory.
+- `apply_patch` plans every file before writing any, so a patch whose later
+  operation cannot apply leaves the tree unchanged. It chains two updates of
+  one file, rejects an unknown `***` directive instead of misattaching its
+  hunks, keeps star-prefixed content and trailing spaces, and preserves CRLF
+  endings.
+- A dev server, file watcher or any long-running command belongs in
+  `run_background`: the system prompt and `run_command` say so, a timeout whose
+  output reads as a starting server suggests the retry, and the real background
+  tool names (`run_background`, `run_logs`, `run_wait`, `run_list`, `run_kill`)
+  are advertised under tool search and the terminal-first harness.
+- The stored session transcript is bounded to the same context budget the
+  request uses, so the session file and memory stop growing for the life of a
+  session; a one-time notice tells the operator when it first trims.
+- A subagent inherits the operator's allow-always and allow-session answers
+  instead of re-asking inside every delegated task.
+- An attached image whose longest side exceeds 8192 pixels is scaled down
+  before it is sent, so a full-page screenshot is no longer rejected with a
+  generic unsupported-image error and no longer poisons the session.
+- An extra tool whose alias collides with a builtin is skipped whole rather
+  than silently taking over the builtin's calls.
+- `Redact` shows one fixed mask for a short secret, so its length stays hidden.
+- The workspace search and the file index skip the `.termixgo` and `.termigo`
+  state trees.
+- A failing git command is named with its full arguments.
 
 ### Fixed
 
+- The auto file checkpoint bounds its walk: it stops at a file and byte cap,
+  honours the checkpoint timeout, and skips generated and state trees, so a
+  turn in a huge workspace (a filesystem root) no longer stalls before the
+  model is called.
+- The git stash checkpoint measures the untracked, non-ignored volume before it
+  copies it, and leaves the whole untracked side out when it is a dependency or
+  build tree, so an unignored `node_modules` cannot put hundreds of megabytes
+  into the repository's object store for good.
 - A checkpoint taken while the only changes sat under `.termixgo/` no longer
   replays an older checkpoint over the working tree. The stash pathspec
   excludes that directory, so the push saved nothing, and the newest earlier
