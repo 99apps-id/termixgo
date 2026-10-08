@@ -52,7 +52,7 @@ var BuiltinHarnessProfiles = map[string]HarnessProfile{
 		ID:              "terminal_first",
 		Label:           "Terminal-first",
 		Description:     "Prefer shell and process tools earlier in the tool list for command-heavy work.",
-		PrioritizeTools: []string{"run_command", "run_checks", "background", "logs", "wait", "list_processes", "kill"},
+		PrioritizeTools: []string{"run_command", "run_checks", "run_background", "run_logs", "run_wait", "run_list", "run_kill"},
 	},
 	"shorter_loop": {
 		ID:              "shorter_loop",

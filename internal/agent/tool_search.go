@@ -20,7 +20,7 @@ var toolSearchAlwaysOn = map[string]bool{
 	"create_directory": true, "delete_file": true, "move_file": true,
 	"grep": true, "glob": true, "code_outline": true, "symbol_search": true,
 	"run_command": true, "run_checks": true,
-	"background": true, "logs": true, "wait": true, "list_processes": true, "kill": true,
+	"run_background": true, "run_logs": true, "run_wait": true, "run_list": true, "run_kill": true,
 	"todo_write": true, "todo_read": true,
 	"think": true, "subagent": true,
 	"ask_user":   true,

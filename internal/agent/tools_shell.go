@@ -28,7 +28,7 @@ func (t *runCommandTool) DoneLabel(a map[string]any) string {
 	return "Ran " + Shorten(argString(a, "command"), 60)
 }
 func (t *runCommandTool) Description() string {
-	return "Run a shell command in the workspace and return its combined output and exit code. On Windows it runs through PowerShell; on macOS and Linux through sh. Use it for builds, tests, formatters and linters such as biome, vitest, go test or cargo."
+	return "Run a shell command in the workspace and return its combined output and exit code. On Windows it runs through PowerShell; on macOS and Linux through sh. Use it for builds, tests, formatters and linters such as biome, vitest, go test or cargo. For a dev server, a watcher, or anything that keeps running, use run_background instead: run_command always stops the command at its timeout."
 }
 func (t *runCommandTool) Schema() map[string]any {
 	return object(map[string]any{
@@ -66,6 +66,20 @@ func (t *runCommandTool) Run(ctx context.Context, env *Env, args map[string]any)
 		return Result{Output: fmt.Sprintf("working directory %s is not available", dir), IsError: true}, nil
 	}
 	return execute(ctx, env, command, dir, time.Duration(timeout)*time.Second)
+}
+
+// looksLikeServer reports whether timed-out output reads as a server that was
+// still starting: a listener announcement, a loopback URL, or a watcher
+// notice. It only gates a hint, so the needles stay narrow rather than
+// guessing from the command line.
+func looksLikeServer(output string) bool {
+	lower := strings.ToLower(output)
+	for _, needle := range []string{"listening", "localhost", "127.0.0.1", "ready in", "watching for", "started dev server", "local:"} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // looksLikeInstall raises the floor for commands that are expected to be slow.
@@ -191,8 +205,16 @@ func execute(ctx context.Context, env *Env, command, dir string, timeout time.Du
 	label := displayPath(env, dir)
 
 	if runCtx.Err() == context.DeadlineExceeded {
+		message := fmt.Sprintf("Command timed out after %s in %s\n%s", timeout, label, output)
+		if looksLikeServer(output) {
+			// The timeout killed a process that was still starting up, which
+			// is the shape of a dev server run under the wrong tool. Name
+			// the right one so the retry keeps the server instead of timing
+			// it out again.
+			message += "\nThe output looks like a server that was still starting. Rerun it with run_background so it keeps running, then read run_logs."
+		}
 		return Result{
-			Output:  fmt.Sprintf("Command timed out after %s in %s\n%s", timeout, label, output),
+			Output:  message,
 			IsError: true,
 		}, nil
 	}
