@@ -246,10 +246,28 @@ func (q *QuotaTracker) ActiveQuotaGauge(providerName string, width int) string {
 			return VisualGauge(pct, width)
 		}
 	}
-	if stats.Requests > 0 {
+	// For OAuth providers or providers with an official snapshot history,
+	// the local 5-hour window estimate acts as a fallback.
+	// For standard API key / local models, showing "[5h: ...]" is misleading
+	// because they do not have a 5-hour subscription quota window.
+	if (isOAuthProvider(providerName) || q.Snapshot(providerName) != nil) && stats.Requests > 0 {
 		return fmt.Sprintf("[5h: %dr/%dk]", stats.Requests, (stats.TotalTokens+500)/1000)
 	}
 	return ""
+}
+
+func isOAuthProvider(providerName string) bool {
+	norm := strings.ToLower(strings.TrimSpace(providerName))
+	if norm == "codex" || norm == "openai-codex" || norm == "antigravity" || norm == "muse" || norm == "github-copilot" {
+		return true
+	}
+	if strings.Contains(norm, "oauth") {
+		return true
+	}
+	if p, ok := provider.ByID(norm); ok && p.OAuth {
+		return true
+	}
+	return false
 }
 
 // VisualGauge renders an ASCII progress bar of given width for 0-100 percentage.

@@ -260,3 +260,45 @@ func TestNewClientRejectsMissingConfiguration(t *testing.T) {
 		t.Errorf("a key-based provider without a key must be rejected")
 	}
 }
+
+func TestOpenAIStreamParsesReasoningTokensAndThinkTags(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		chunks := []string{
+			`{"choices":[{"delta":{"content":"<think>I need to solve"}}]}`,
+			`{"choices":[{"delta":{"content":" this step-by-step.</think>The solution is 42."}}]}`,
+			`{"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":15,"total_tokens":35,"completion_tokens_details":{"reasoning_tokens":10}}}`,
+			`[DONE]`,
+		}
+		for _, chunk := range chunks {
+			fmt.Fprintf(writer, "data: %s\n\n", chunk)
+		}
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "deepseek", Label: "DeepSeek", Kind: KindOpenAI}, server.URL, "test-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	events := collect(t, client, ChatRequest{
+		Model:    "deepseek-reasoner",
+		Messages: []Message{{Role: RoleUser, Content: "problem"}},
+	})
+
+	if got := joinText(events, EventReasoningDelta); got != "I need to solve this step-by-step." {
+		t.Errorf("reasoning delta = %q, want %q", got, "I need to solve this step-by-step.")
+	}
+	if got := joinText(events, EventTextDelta); got != "The solution is 42." {
+		t.Errorf("text delta = %q, want %q", got, "The solution is 42.")
+	}
+
+	foundReasoningTokens := 0
+	for _, event := range events {
+		if event.Type == EventUsage && event.Usage != nil {
+			foundReasoningTokens = event.Usage.ReasoningTokens
+		}
+	}
+	if foundReasoningTokens != 10 {
+		t.Errorf("expected 10 reasoning tokens in usage, got %d", foundReasoningTokens)
+	}
+}

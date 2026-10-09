@@ -88,6 +88,7 @@ func TestHeaderDisplaysQuotaGauge(t *testing.T) {
 	model.width = 300
 	tracker := model.app.QuotaTracker()
 
+	// Non-OAuth providers (standard API keys or local models) must NOT display 5h quota
 	prov := model.app.CurrentModel().Provider
 	tracker.RecordUsage(prov, model.app.CurrentModel().ID, provider.Usage{
 		PromptTokens:     10000,
@@ -96,7 +97,20 @@ func TestHeaderDisplaysQuotaGauge(t *testing.T) {
 	})
 
 	view := model.viewHeader()
-	if !strings.Contains(view, "5h:") {
-		t.Fatalf("header should display 5h quota when space permits, got:\n%s", view)
+	if strings.Contains(view, "5h:") || strings.Contains(view, "[5h:") {
+		t.Fatalf("header must not display 5h quota for non-OAuth provider %q, got:\n%s", prov, view)
+	}
+
+	// OAuth providers (e.g. Antigravity, Codex) must display the 5h quota window
+	oauthModel := chatModel(t)
+	oauthModel.width = 300
+	oauthTracker := oauthModel.app.QuotaTracker()
+	oauthTracker.RecordUsage("antigravity", "gemini-2.5-pro", provider.Usage{
+		PromptTokens:     10000,
+		CompletionTokens: 2000,
+		TotalTokens:      12000,
+	})
+	if gauge := oauthTracker.ActiveQuotaGauge("antigravity", 8); !strings.Contains(gauge, "5h:") {
+		t.Fatalf("expected 5h gauge for OAuth provider, got %q", gauge)
 	}
 }

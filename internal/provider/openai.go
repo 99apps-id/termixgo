@@ -66,6 +66,7 @@ func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers ma
 
 	reader := newSSEReader(response.Body)
 	accumulator := newToolCallAccumulator()
+	thinkFilter := &thinkTagFilter{}
 	// A server may repeat the request-wide usage on every chunk, so the increase
 	// is emitted rather than each raw report: the agent sums what it is handed,
 	// and forwarding repeats charged the same tokens once per chunk.
@@ -105,11 +106,16 @@ func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers ma
 			if chunk.Usage.PromptCacheHitTokens > cached {
 				cached = chunk.Usage.PromptCacheHitTokens
 			}
+			reasoningTokens := 0
+			if chunk.Usage.CompletionTokensDetails != nil {
+				reasoningTokens = chunk.Usage.CompletionTokensDetails.ReasoningTokens
+			}
 			if step, ok := usage.step(Usage{
 				PromptTokens:     chunk.Usage.PromptTokens,
 				CompletionTokens: chunk.Usage.CompletionTokens,
 				TotalTokens:      chunk.Usage.TotalTokens,
 				CacheReadTokens:  cached,
+				ReasoningTokens:  reasoningTokens,
 			}); ok {
 				if err := emit(StreamEvent{Type: EventUsage, Usage: &step}); err != nil {
 					return err
@@ -118,13 +124,17 @@ func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers ma
 		}
 		for _, choice := range chunk.Choices {
 			delta := choice.Delta
-			if delta.Content != "" {
-				if err := emit(StreamEvent{Type: EventTextDelta, Text: delta.Content}); err != nil {
-					return err
-				}
-			}
 			if thinking := delta.thinking(); thinking != "" {
 				if err := emit(StreamEvent{Type: EventReasoningDelta, Text: thinking}); err != nil {
+					return err
+				}
+				if delta.Content != "" {
+					if err := emit(StreamEvent{Type: EventTextDelta, Text: delta.Content}); err != nil {
+						return err
+					}
+				}
+			} else if delta.Content != "" {
+				if err := thinkFilter.process(delta.Content, emit); err != nil {
 					return err
 				}
 			}
@@ -253,6 +263,48 @@ func extraHeaders(headers map[string]string, providerID string) {
 	}
 }
 
+// thinkTagFilter parses inline <think>...</think> tags emitted inside content
+// deltas by open-source reasoning models (e.g. DeepSeek-R1, Qwen via Ollama)
+// and emits thinking tokens as EventReasoningDelta.
+type thinkTagFilter struct {
+	inThink bool
+}
+
+func (f *thinkTagFilter) process(text string, emit func(StreamEvent) error) error {
+	if text == "" {
+		return nil
+	}
+	remaining := text
+	for len(remaining) > 0 {
+		if !f.inThink {
+			idx := strings.Index(remaining, "<think>")
+			if idx == -1 {
+				return emit(StreamEvent{Type: EventTextDelta, Text: remaining})
+			}
+			if idx > 0 {
+				if err := emit(StreamEvent{Type: EventTextDelta, Text: remaining[:idx]}); err != nil {
+					return err
+				}
+			}
+			f.inThink = true
+			remaining = remaining[idx+len("<think>"):]
+		} else {
+			idx := strings.Index(remaining, "</think>")
+			if idx == -1 {
+				return emit(StreamEvent{Type: EventReasoningDelta, Text: remaining})
+			}
+			if idx > 0 {
+				if err := emit(StreamEvent{Type: EventReasoningDelta, Text: remaining[:idx]}); err != nil {
+					return err
+				}
+			}
+			f.inThink = false
+			remaining = remaining[idx+len("</think>"):]
+		}
+	}
+	return nil
+}
+
 // openAIDelta is one streamed delta. reasoning_content is DeepSeek's field,
 // reasoning is OpenRouter's; both mean "thinking".
 type openAIDelta struct {
@@ -298,6 +350,9 @@ type openAIChunk struct {
 		PromptTokensDetails *struct {
 			CachedTokens int `json:"cached_tokens"`
 		} `json:"prompt_tokens_details"`
+		CompletionTokensDetails *struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details"`
 		// DeepSeek reports its disk cache through these two fields instead of
 		// prompt_tokens_details: prompt_cache_hit_tokens is the part served from
 		// the cache at a tenth of the full input rate, prompt_cache_miss_tokens

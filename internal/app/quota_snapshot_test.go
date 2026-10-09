@@ -71,6 +71,31 @@ func TestQuotaGaugeSnapshotFallbackChain(t *testing.T) {
 	}
 }
 
+// Non-OAuth providers without official snapshots or rate limits must NOT
+// show the 5h local estimate gauge.
+func TestQuotaGaugeNonOAuthSuppresses5h(t *testing.T) {
+	tracker := NewQuotaTracker()
+	// Record usage for standard API key providers (OpenAI, DeepSeek)
+	tracker.RecordUsage("openai", "gpt-4o", provider.Usage{TotalTokens: 25000})
+	tracker.RecordUsage("deepseek", "deepseek-chat", provider.Usage{TotalTokens: 18000})
+
+	if got := tracker.ActiveQuotaGauge("openai", 8); got != "" {
+		t.Errorf("expected empty gauge for openai without rate limit, got %q", got)
+	}
+	if got := tracker.ActiveQuotaGauge("deepseek", 8); got != "" {
+		t.Errorf("expected empty gauge for deepseek without rate limit, got %q", got)
+	}
+
+	// But if live rate limit headers arrive, VisualGauge should be shown
+	tracker.RecordRateLimit("openai", &provider.RateLimitInfo{
+		TokensLimit:     100000,
+		TokensRemaining: 75000,
+	})
+	if got := tracker.ActiveQuotaGauge("openai", 8); !containsStr(got, "75%") {
+		t.Errorf("expected rate limit percentage gauge for openai, got %q", got)
+	}
+}
+
 // Providers that appear only via an official snapshot must show up in the
 // tracked list so /quota renders them.
 func TestQuotaTrackedProvidersIncludeSnapshots(t *testing.T) {

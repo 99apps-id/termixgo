@@ -60,6 +60,7 @@ type Usage struct {
 	TotalTokens      int
 	CacheReadTokens  int
 	CacheWriteTokens int
+	ReasoningTokens  int
 }
 
 // Add sums two usage reports.
@@ -70,6 +71,7 @@ func (u Usage) Add(other Usage) Usage {
 		TotalTokens:      u.TotalTokens + other.TotalTokens,
 		CacheReadTokens:  u.CacheReadTokens + other.CacheReadTokens,
 		CacheWriteTokens: u.CacheWriteTokens + other.CacheWriteTokens,
+		ReasoningTokens:  u.ReasoningTokens + other.ReasoningTokens,
 	}
 }
 
