@@ -412,3 +412,13 @@ func TestServiceCommandRejectsUnknownSubcommand(t *testing.T) {
 		t.Errorf("error = %q, want unknown command error", err.Error())
 	}
 }
+
+func TestUnknownFlagIsRejected(t *testing.T) {
+	_, _, err := runCLI(t, "--unknown-flag")
+	if err == nil {
+		t.Fatalf("unknown flag must fail")
+	}
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Errorf("error = %q, want unknown command message", err.Error())
+	}
+}

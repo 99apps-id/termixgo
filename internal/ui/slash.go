@@ -46,6 +46,10 @@ var slashCommands = []SlashCommand{
 	{Trigger: "/export", Args: "[path] [--jsonl]", Summary: "Export the current session to a file and clipboard", Options: []SlashOption{
 		{Value: "--jsonl", Detail: "export as JSONL instead of Markdown"},
 	}},
+	{Trigger: "/compact", Args: "", Summary: "Manually condense session context into a brief"},
+	{Trigger: "/doctor", Args: "", Summary: "Diagnose configuration, API keys, and environment"},
+	{Trigger: "/clear", Args: "", Summary: "Clear the visual transcript on screen"},
+	{Trigger: "/cls", Args: "", Summary: "Clear the visual transcript on screen"},
 	{Trigger: "/new", Args: "", Summary: "Start a new session"},
 	{Trigger: "/sessions", Args: "[list|search|rename|delete|export]", Summary: "List, find, rename, delete or export sessions", Options: []SlashOption{
 		{Value: "list", Detail: "print every saved session with its id"},

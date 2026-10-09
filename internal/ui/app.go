@@ -57,6 +57,7 @@ type (
 	}
 	telegramPairedMsg struct{ paired bool }
 	settleEscMsg      struct{}
+	initialPromptMsg  string
 )
 
 // escSettleDelay is how long a lone Escape waits for a CSI report whose ESC
@@ -130,6 +131,8 @@ type Model struct {
 	current mode
 	picker  picker
 	setup   setupState
+
+	initialPrompt string
 
 	notice string
 
@@ -217,6 +220,9 @@ type Options struct {
 	// ResumeSessionID loads the given session (or the most recent if "last"
 	// or "latest") and restores its transcript upon startup.
 	ResumeSessionID string
+
+	// InitialPrompt starts the first turn immediately upon launch with this input.
+	InitialPrompt string
 }
 
 // composerHeight is the composer rows. Five fits a two-line prompt plus a
@@ -309,6 +315,9 @@ func NewWithOptions(application *app.App, options Options) *Model {
 			application.LoadSession(session)
 			model.restoreSession(session)
 		}
+	}
+	if strings.TrimSpace(options.InitialPrompt) != "" {
+		model.initialPrompt = strings.TrimSpace(options.InitialPrompt)
 	}
 	if options.StartSetup || application.NeedsSetup() {
 		model.startSetup()
@@ -443,7 +452,13 @@ func (m *Model) Init() tea.Cmd {
 	// eventMsg re-arms it, and startRun does not start another: two readers on
 	// one channel race, and the deltas of a turn are then applied out of order,
 	// which is what made the tail of an answer look scrambled.
-	return tea.Batch(textarea.Blink, m.spin.Tick, tea.SetWindowTitle(m.windowTitle()), waitForEvent(m.app.Events()))
+	cmds := []tea.Cmd{textarea.Blink, m.spin.Tick, tea.SetWindowTitle(m.windowTitle()), waitForEvent(m.app.Events())}
+	if m.initialPrompt != "" {
+		prompt := m.initialPrompt
+		m.initialPrompt = ""
+		cmds = append(cmds, func() tea.Msg { return initialPromptMsg(prompt) })
+	}
+	return tea.Batch(cmds...)
 }
 
 // windowTitle is the terminal tab title. It mirrors the run state so the
@@ -517,6 +532,12 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		// once so tool boundaries never lag behind the text.
 		m.maybeRefresh(event.Kind == agent.EventText || event.Kind == agent.EventThinking)
 		return m, waitForEvent(m.app.Events())
+
+	case initialPromptMsg:
+		if strings.TrimSpace(string(typed)) != "" {
+			return m.submit(string(typed))
+		}
+		return m, nil
 
 	case settleEscMsg:
 		// The settle window ended without a CSI body arriving, so the lone
@@ -2017,9 +2038,14 @@ func (m *Model) viewStatus() string {
 		vitals = append(vitals, costStyle.Render("cost n/a"))
 	}
 	if tracker := m.app.QuotaTracker(); tracker != nil {
-		stats := tracker.Stats(m.app.CurrentModel().Provider, app.RollingWindow)
-		if stats.Requests > 0 {
-			vitals = append(vitals, m.styles.Dim.Render(fmt.Sprintf("5h:%dr/%dk", stats.Requests, (stats.TotalTokens+500)/1000)))
+		provName := m.app.CurrentModel().Provider
+		p, ok := provider.ByID(provName)
+		isOAuth := (ok && p.OAuth) || strings.Contains(provName, "oauth") || provName == "codex" || provName == "antigravity" || provName == "muse" || provName == "github-copilot"
+		if isOAuth || tracker.Snapshot(provName) != nil {
+			stats := tracker.Stats(provName, app.RollingWindow)
+			if stats.Requests > 0 {
+				vitals = append(vitals, m.styles.Dim.Render(fmt.Sprintf("5h:%dr/%dk", stats.Requests, (stats.TotalTokens+500)/1000)))
+			}
 		}
 	}
 	if m.running && !m.hintsVisible() {

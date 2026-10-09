@@ -520,3 +520,60 @@ func TestBackgroundToolsAreRegistered(t *testing.T) {
 		}
 	}
 }
+
+func TestGitStashLifecycle(t *testing.T) {
+	env := gitEnv(t)
+	writeTestFile(t, env, "file.txt", "initial\n")
+	git(t, env, "add", "file.txt")
+	git(t, env, "commit", "-m", "initial commit")
+
+	// Modify file
+	writeTestFile(t, env, "file.txt", "modified\n")
+
+	// Stash changes
+	stashRes, err := (&gitStashTool{}).Run(context.Background(), env, map[string]any{"message": "work in progress"})
+	if err != nil || stashRes.IsError {
+		t.Fatalf("git_stash failed: %v, out: %s", err, stashRes.Output)
+	}
+
+	// Verify working tree is clean
+	data, err := os.ReadFile(filepath.Join(env.Workspace, "file.txt"))
+	if err != nil || string(data) != "initial\n" {
+		t.Fatalf("file should be restored to initial state after stash, got %q", string(data))
+	}
+
+	// List stash
+	listRes, err := (&gitStashListTool{}).Run(context.Background(), env, map[string]any{})
+	if err != nil || listRes.IsError || !strings.Contains(listRes.Output, "work in progress") {
+		t.Fatalf("git_stash_list should show our stash, got: %s", listRes.Output)
+	}
+
+	// Pop stash
+	popRes, err := (&gitStashPopTool{}).Run(context.Background(), env, map[string]any{})
+	if err != nil || popRes.IsError {
+		t.Fatalf("git_stash_pop failed: %v, out: %s", err, popRes.Output)
+	}
+
+	// Verify modified content restored
+	data, err = os.ReadFile(filepath.Join(env.Workspace, "file.txt"))
+	if err != nil || string(data) != "modified\n" {
+		t.Fatalf("file should have modified content after stash pop, got %q", string(data))
+	}
+}
+
+func TestGitConflictsDetection(t *testing.T) {
+	env := gitEnv(t)
+	conflictContent := "header\n<<<<<<< HEAD\ncode from main\n=======\ncode from feature\n>>>>>>> feature\nfooter\n"
+	writeTestFile(t, env, "conflict.go", conflictContent)
+
+	res, err := (&gitConflictsTool{}).Run(context.Background(), env, map[string]any{"path": "conflict.go"})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !strings.Contains(res.Output, "Merge Conflicts Detected") {
+		t.Fatalf("expected conflicts detected, got: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "code from main") || !strings.Contains(res.Output, "code from feature") {
+		t.Fatalf("expected conflicted code hunks, got: %s", res.Output)
+	}
+}

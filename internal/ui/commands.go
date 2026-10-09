@@ -17,6 +17,9 @@ import (
 	customcmd "github.com/99apps-id/termixgo/internal/command"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/provider"
+	"github.com/99apps-id/termixgo/internal/secrets"
+	"github.com/99apps-id/termixgo/internal/version"
+	"runtime"
 )
 
 // mcpReloadTimeout bounds a /mcp reload, so a server that hangs on its
@@ -227,6 +230,12 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashWorkers()
 	case "batch":
 		return m.slashBatch(args)
+	case "compact":
+		return m.slashCompact()
+	case "doctor":
+		return m.slashDoctor()
+	case "clear", "cls":
+		return m.slashClear()
 	case "init":
 		if !m.app.HasModel() {
 			m.blocks = append(m.blocks, block{kind: blockError, text: "Pick a model first with /setup."})
@@ -684,11 +693,15 @@ func formatToolStats(stats []app.ToolStat) string {
 // nothing to rate, so the line stays out rather than inventing a zero that
 // reads as "caching failed".
 func formatCacheHit(usage provider.Usage) string {
+	var extra strings.Builder
+	if usage.ReasoningTokens > 0 {
+		extra.WriteString(fmt.Sprintf("Reasoning tokens: %d tokens.\n", usage.ReasoningTokens))
+	}
 	if usage.PromptTokens <= 0 {
-		return ""
+		return extra.String()
 	}
 	if usage.CacheReadTokens <= 0 && usage.CacheWriteTokens <= 0 {
-		return "Prompt cache: no cache data reported by the provider yet.\n"
+		return extra.String() + "Prompt cache: no cache data reported by the provider yet.\n"
 	}
 	rate := 100.0 * float64(usage.CacheReadTokens) / float64(usage.PromptTokens)
 	line := fmt.Sprintf("Prompt cache: %d of %d input tokens served from cache (%.0f%% hit rate).\n",
@@ -696,7 +709,7 @@ func formatCacheHit(usage provider.Usage) string {
 	if usage.CacheWriteTokens > 0 {
 		line += fmt.Sprintf("Cache writes: %d tokens.\n", usage.CacheWriteTokens)
 	}
-	return line
+	return extra.String() + line
 }
 
 func (m *Model) slashProcesses(args string) (tea.Model, tea.Cmd) {
@@ -1681,6 +1694,55 @@ func (m *Model) slashWorker(args string) (tea.Model, tea.Cmd) {
 	} else {
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: output})
 	}
+	m.refresh()
+	return m, nil
+}
+
+func (m *Model) slashClear() (tea.Model, tea.Cmd) {
+	m.blocks = nil
+	m.viewport.SetContent("")
+	m.viewport.GotoTop()
+	m.refresh()
+	return m, nil
+}
+
+func (m *Model) slashCompact() (tea.Model, tea.Cmd) {
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: "Compacting session context..."})
+	m.refresh()
+	go func() {
+		_, err := m.app.ForceCompact(context.Background())
+		if err != nil {
+			m.app.Emit(agent.Event{Kind: agent.EventNotice, Text: fmt.Sprintf("Compaction failed: %v", err)})
+		}
+	}()
+	return m, nil
+}
+
+func (m *Model) slashDoctor() (tea.Model, tea.Cmd) {
+	var sb strings.Builder
+	sb.WriteString("=== Termixgo Doctor Diagnostics ===\n")
+	sb.WriteString(fmt.Sprintf("Version:          %s (%s/%s)\n", version.Full(), runtime.GOOS, runtime.GOARCH))
+	cfg := m.appConfig()
+	sb.WriteString(fmt.Sprintf("Default Model:    %s\n", cfg.DefaultModel))
+	sb.WriteString(fmt.Sprintf("Approval Mode:    %s\n", cfg.ApprovalMode))
+	sb.WriteString(fmt.Sprintf("Trusted Folders:  %d configured\n", len(cfg.TrustedFolders)))
+	if cfg.CostBudgetUSD > 0 {
+		sb.WriteString(fmt.Sprintf("Cost Budget:      $%.2f per session\n", cfg.CostBudgetUSD))
+	} else {
+		sb.WriteString("Cost Budget:      none\n")
+	}
+	sb.WriteString("\nConfigured Providers:\n")
+	store, err := secrets.Load()
+	for _, p := range provider.Providers() {
+		state := "no key configured"
+		if !p.NeedsKey {
+			state = "no key needed (local/free)"
+		} else if err == nil && provider.KeySource(store, p.ID) != "" {
+			state = "ready (source: " + provider.KeySource(store, p.ID) + ")"
+		}
+		sb.WriteString(fmt.Sprintf("  %-16s %s\n", p.ID, state))
+	}
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: sb.String()})
 	m.refresh()
 	return m, nil
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -651,4 +652,256 @@ func firstLine(text string) string {
 		return strings.TrimSpace(text[:index])
 	}
 	return strings.TrimSpace(text)
+}
+
+type gitStashTool struct{}
+
+func (t *gitStashTool) Name() string      { return "git_stash" }
+func (t *gitStashTool) Aliases() []string { return []string{"stash", "git_stash_push"} }
+func (t *gitStashTool) Mutating() bool    { return true }
+func (t *gitStashTool) Risk() Risk        { return RiskEdit }
+func (t *gitStashTool) Label(a map[string]any) string {
+	msg := argString(a, "message")
+	if msg != "" {
+		return "Stash " + Shorten(msg, 40)
+	}
+	return "Stash working tree"
+}
+func (t *gitStashTool) DoneLabel(a map[string]any) string {
+	return "Stashed changes"
+}
+func (t *gitStashTool) Description() string {
+	return "Park current uncommitted changes in a stash (git stash push), keeping the working tree clean. Use before a risky operation or branch switch."
+}
+func (t *gitStashTool) Schema() map[string]any {
+	return object(map[string]any{
+		"message":           strProp("Optional short label describing the stash."),
+		"include_untracked": boolProp("Include untracked files in the stash (-u)."),
+	})
+}
+func (t *gitStashTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	argv := []string{"stash", "push"}
+	if argBool(args, "include_untracked", false) {
+		argv = append(argv, "-u")
+	}
+	msg := strings.TrimSpace(argString(args, "message"))
+	if msg != "" {
+		argv = append(argv, "-m", msg)
+	}
+	output, err := runGit(ctx, env, argv...)
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	if strings.TrimSpace(output) == "" {
+		output = "Saved working directory state to stash."
+	}
+	return Result{Output: output}, nil
+}
+
+type gitStashPopTool struct{}
+
+func (t *gitStashPopTool) Name() string      { return "git_stash_pop" }
+func (t *gitStashPopTool) Aliases() []string { return []string{"stash_pop"} }
+func (t *gitStashPopTool) Mutating() bool    { return true }
+func (t *gitStashPopTool) Risk() Risk        { return RiskEdit }
+func (t *gitStashPopTool) Label(a map[string]any) string {
+	idx := argString(a, "index")
+	if idx != "" {
+		return "Stash pop " + idx
+	}
+	return "Stash pop newest"
+}
+func (t *gitStashPopTool) DoneLabel(a map[string]any) string {
+	return "Popped stash"
+}
+func (t *gitStashPopTool) Description() string {
+	return "Restore the most recently stashed changes (or a specified stash index) and drop it from the stash list."
+}
+func (t *gitStashPopTool) Schema() map[string]any {
+	return object(map[string]any{
+		"index": strProp("Stash index to restore (defaults to newest, e.g. stash@{0})."),
+	})
+}
+func (t *gitStashPopTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	argv := []string{"stash", "pop"}
+	idx := strings.TrimSpace(argString(args, "index"))
+	if idx != "" {
+		if !validGitRev(idx) {
+			return Result{Output: "invalid stash index: " + idx, IsError: true}, nil
+		}
+		argv = append(argv, "--end-of-options", idx)
+	}
+	output, err := runGit(ctx, env, argv...)
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	return Result{Output: output}, nil
+}
+
+type gitStashListTool struct{}
+
+func (t *gitStashListTool) Name() string      { return "git_stash_list" }
+func (t *gitStashListTool) Aliases() []string { return []string{"stash_list"} }
+func (t *gitStashListTool) Mutating() bool    { return false }
+func (t *gitStashListTool) Risk() Risk        { return RiskEdit }
+func (t *gitStashListTool) Label(a map[string]any) string {
+	return "Listing stashes"
+}
+func (t *gitStashListTool) DoneLabel(a map[string]any) string {
+	return "Listed stashes"
+}
+func (t *gitStashListTool) Description() string {
+	return "List all saved stashes in the git repository."
+}
+func (t *gitStashListTool) Schema() map[string]any {
+	return object(map[string]any{})
+}
+func (t *gitStashListTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	output, err := runGit(ctx, env, "stash", "list")
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	if strings.TrimSpace(output) == "" {
+		return Result{Output: "No stashes found."}, nil
+	}
+	return Result{Output: output}, nil
+}
+
+type gitConflictsTool struct{}
+
+func (t *gitConflictsTool) Name() string      { return "git_conflicts" }
+func (t *gitConflictsTool) Aliases() []string { return []string{"merge_conflicts", "check_conflicts"} }
+func (t *gitConflictsTool) Mutating() bool    { return false }
+func (t *gitConflictsTool) Risk() Risk        { return RiskEdit }
+func (t *gitConflictsTool) Label(a map[string]any) string {
+	p := argString(a, "path")
+	if p != "" {
+		return "Checking conflicts in " + Shorten(p, 40)
+	}
+	return "Checking git merge conflicts"
+}
+func (t *gitConflictsTool) DoneLabel(a map[string]any) string {
+	return "Checked git merge conflicts"
+}
+func (t *gitConflictsTool) Description() string {
+	return "Inspect and parse unresolved git merge conflicts (<<<<<<<, =======, >>>>>>>). Pass path to scan a specific file, or omit it to automatically detect and scan all unmerged files in the repository."
+}
+func (t *gitConflictsTool) Schema() map[string]any {
+	return object(map[string]any{
+		"path": strProp("Optional file path to inspect. If omitted, all unmerged files in the repository are scanned."),
+	})
+}
+func (t *gitConflictsTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	specificPath := strings.TrimSpace(argString(args, "path"))
+	var filesToScan []string
+
+	if specificPath != "" {
+		filesToScan = append(filesToScan, specificPath)
+	} else {
+		// Detect unmerged files from git diff
+		unmerged, err := runGit(ctx, env, "diff", "--name-only", "--diff-filter=U")
+		if err == nil && strings.TrimSpace(unmerged) != "" {
+			for _, line := range strings.Split(unmerged, "\n") {
+				if trimmed := strings.TrimSpace(line); trimmed != "" {
+					filesToScan = append(filesToScan, trimmed)
+				}
+			}
+		}
+	}
+
+	if len(filesToScan) == 0 {
+		return Result{Output: "No unmerged files or merge conflicts detected in the repository."}, nil
+	}
+
+	type conflictHunk struct {
+		StartLine  int
+		MidLine    int
+		EndLine    int
+		OurLabel   string
+		OurCode    string
+		TheirCode  string
+		TheirLabel string
+	}
+
+	type fileConflict struct {
+		Path  string
+		Hunks []conflictHunk
+	}
+
+	var reports []fileConflict
+	for _, rel := range filesToScan {
+		resolved := resolvePath(env, rel)
+		data, err := os.ReadFile(resolved)
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		var hunks []conflictHunk
+		inConflict := false
+		var current conflictHunk
+		var ourBuf strings.Builder
+		var theirBuf strings.Builder
+		inTheir := false
+
+		for i, line := range lines {
+			lineNum := i + 1
+			trimmed := strings.TrimRight(line, "\r")
+			if strings.HasPrefix(trimmed, "<<<<<<<") {
+				inConflict = true
+				inTheir = false
+				current = conflictHunk{
+					StartLine: lineNum,
+					OurLabel:  strings.TrimSpace(strings.TrimPrefix(trimmed, "<<<<<<<")),
+				}
+				ourBuf.Reset()
+				theirBuf.Reset()
+			} else if inConflict && strings.HasPrefix(trimmed, "=======") {
+				inTheir = true
+				current.MidLine = lineNum
+			} else if inConflict && strings.HasPrefix(trimmed, ">>>>>>>") {
+				current.EndLine = lineNum
+				current.TheirLabel = strings.TrimSpace(strings.TrimPrefix(trimmed, ">>>>>>>"))
+				current.OurCode = ourBuf.String()
+				current.TheirCode = theirBuf.String()
+				hunks = append(hunks, current)
+				inConflict = false
+				inTheir = false
+			} else if inConflict {
+				if inTheir {
+					theirBuf.WriteString(trimmed)
+					theirBuf.WriteByte('\n')
+				} else {
+					ourBuf.WriteString(trimmed)
+					ourBuf.WriteByte('\n')
+				}
+			}
+		}
+
+		if len(hunks) > 0 {
+			reports = append(reports, fileConflict{Path: displayPath(env, resolved), Hunks: hunks})
+		}
+	}
+
+	if len(reports) == 0 {
+		return Result{Output: fmt.Sprintf("Scanned %d file(s); no conflict markers (<<<<<<<) found.", len(filesToScan))}, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Merge Conflicts Detected in %d file(s):\n", len(reports)))
+	for _, f := range reports {
+		sb.WriteString(fmt.Sprintf("\n--- %s (%d conflict hunk(s)) ---\n", f.Path, len(f.Hunks)))
+		for idx, h := range f.Hunks {
+			sb.WriteString(fmt.Sprintf("  [Conflict #%d: lines %d..%d]\n", idx+1, h.StartLine, h.EndLine))
+			sb.WriteString(fmt.Sprintf("  <<<<<<< %s\n", h.OurLabel))
+			for _, l := range strings.Split(strings.TrimRight(h.OurCode, "\n"), "\n") {
+				sb.WriteString("  " + l + "\n")
+			}
+			sb.WriteString("  =======\n")
+			for _, l := range strings.Split(strings.TrimRight(h.TheirCode, "\n"), "\n") {
+				sb.WriteString("  " + l + "\n")
+			}
+			sb.WriteString(fmt.Sprintf("  >>>>>>> %s\n", h.TheirLabel))
+		}
+	}
+	return Result{Output: strings.TrimRight(sb.String(), "\n")}, nil
 }

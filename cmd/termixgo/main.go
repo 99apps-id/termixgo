@@ -76,7 +76,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return err
 	case "setup":
 		return runInteractive(stdin, stdout, ui.Options{StartSetup: true})
-	case "resume", "-r", "--resume":
+	case "resume", "-r", "--resume", "-c", "--continue":
 		sessionID := "last"
 		if len(args) > 1 && !strings.HasPrefix(args[1], "-") {
 			sessionID = args[1]
@@ -129,6 +129,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	case "doctor":
 		return runDoctor(stdout)
 	default:
+		// When multiple words or a prompt string containing spaces are passed,
+		// treat it as an initial prompt (matching Claude Code / OpenCode behavior:
+		// `termixgo "my prompt"` or `termixgo check this file`). Single words
+		// are treated as subcommands so a typo like `termixgo staus` fails with
+		// a helpful message.
+		if !strings.HasPrefix(args[0], "-") && (len(args) > 1 || strings.Contains(args[0], " ")) {
+			prompt := strings.Join(args, " ")
+			if !ui.IsInteractive(stdin, stdout) {
+				return runOnce(prompt, false, stdout, stderr)
+			}
+			return runInteractive(stdin, stdout, ui.Options{InitialPrompt: prompt})
+		}
 		return fmt.Errorf("unknown command %q; run 'termixgo help'", args[0])
 	}
 }
@@ -1354,11 +1366,13 @@ func writeUsage(stdout io.Writer) {
 
 Usage:
   termixgo                        Start the terminal UI (setup runs on first use)
+  termixgo "<prompt>"             Start with an initial prompt
   termixgo resume [id]            Resume the last (or specified) session
   termixgo -r, --resume [id]      Resume the last (or specified) session
+  termixgo -c, --continue         Continue the most recent session
   termixgo setup                  Start the UI in the onboarding wizard
   termixgo run [--yes] "<prompt>" Run one prompt and stream the answer
-                                  --yes auto-approves tool prompts for this run
+  termixgo -p, --print "<prompt>" Print answer directly to stdout (non-interactive)
   termixgo models [--provider id] List the model catalogue
   termixgo model [id]             Show or set the default model
   termixgo endpoint [provider url]

@@ -305,6 +305,49 @@ func TestRunChecksDefaultsToTest(t *testing.T) {
 	}
 }
 
+func TestRunChecksScopedFilePathAndFormat(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go is not installed")
+	}
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/checks\n\ngo 1.26\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkgDir := filepath.Join(workspace, "pkg")
+	if err := os.Mkdir(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	filePath := filepath.Join(pkgDir, "lib.go")
+	if err := os.WriteFile(filePath, []byte("package pkg\n\nfunc Hello() string { return \"hi\" }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := &Env{Workspace: workspace, Todos: NewTodoStore(), Memory: NewMemory(workspace), Trusted: true}
+
+	// Passing a file path should scope the command to its package directory
+	result, err := (&runChecksTool{}).Run(context.Background(), env, map[string]any{
+		"kind": "build",
+		"file": "pkg/lib.go",
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("run_checks with file path failed: %v, out: %s", err, result.Output)
+	}
+	if !strings.Contains(result.Output, "go build ./pkg/") {
+		t.Errorf("expected scoped package build command, got: %q", result.Output)
+	}
+
+	// Scoped format
+	result, err = (&runChecksTool{}).Run(context.Background(), env, map[string]any{
+		"kind": "format",
+		"path": "pkg",
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("run_checks format failed: %v, out: %s", err, result.Output)
+	}
+	if !strings.Contains(result.Output, "gofmt -l ./pkg/") {
+		t.Errorf("expected scoped gofmt command, got: %q", result.Output)
+	}
+}
+
 // ------------------------------------------------------------------ subagent
 
 // TestRunSubagentReturnsItsAnswer drives a nested run against a fake

@@ -1058,6 +1058,44 @@ func (a *App) maybeCompactHistory(ctx context.Context, session *agent.Session) {
 	}
 }
 
+// ForceCompact manually condenses earlier session turns into a brief, reducing context size.
+func (a *App) ForceCompact(ctx context.Context) (bool, error) {
+	a.mu.Lock()
+	session := a.session
+	a.mu.Unlock()
+	if session == nil {
+		return false, fmt.Errorf("no active session")
+	}
+	messages := session.Messages()
+	start := agent.CurrentTurnStart(messages)
+	if start < 1 {
+		start = len(messages)
+		if start < 2 {
+			return false, fmt.Errorf("not enough history to compact")
+		}
+	}
+	transcript := agent.RenderTranscript(messages[:start])
+	if strings.TrimSpace(transcript) == "" {
+		return false, fmt.Errorf("history transcript is empty")
+	}
+	client, model, effort, err := a.taskClient(agent.TaskCompaction)
+	if err != nil {
+		return false, fmt.Errorf("task client error: %w", err)
+	}
+	brief, err := agent.SummarizeHistory(ctx, client, model, effort, transcript)
+	if err != nil {
+		return false, fmt.Errorf("compaction failed: %w", err)
+	}
+	if brief == "" {
+		return false, fmt.Errorf("compaction returned empty brief")
+	}
+	if session.InsertSummary(brief) {
+		a.emit(agent.Event{Kind: agent.EventNotice, Text: "Manually condensed earlier turns into a brief."})
+		return true, nil
+	}
+	return false, fmt.Errorf("could not insert summary into session")
+}
+
 // TakeSteer drains the steering queue and returns what was in it. Both the
 // runner and the UI call this, so whichever gets there first owns the message
 // and it is never run twice.
@@ -1211,6 +1249,11 @@ func (a *App) Shutdown() {
 
 func (a *App) emit(event agent.Event) {
 	a.emitInto(event, true)
+}
+
+// Emit broadcasts an agent event to the event stream.
+func (a *App) Emit(event agent.Event) {
+	a.emit(event)
 }
 
 // emitInto is the shared emit path. A scheduled run calls it with foldUsage

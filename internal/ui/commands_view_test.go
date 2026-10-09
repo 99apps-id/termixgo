@@ -1212,3 +1212,37 @@ func TestCustomCommandHelpListsTheFile(t *testing.T) {
 		t.Errorf("the help view should list the custom command:\n%s", view)
 	}
 }
+
+func TestSlashClearClearsBlocks(t *testing.T) {
+	model := chatModel(t)
+	model.blocks = append(model.blocks, block{kind: blockUser, text: "hello"}, block{kind: blockNotice, text: "world"})
+	if len(model.blocks) == 0 {
+		t.Fatalf("model should have blocks")
+	}
+	next, _ := model.runSlash("clear", "")
+	updated := next.(*Model)
+	if len(updated.blocks) != 0 {
+		t.Errorf("blocks should be empty after /clear, got %d", len(updated.blocks))
+	}
+}
+
+func TestSlashDoctorReportsDiagnostics(t *testing.T) {
+	model := chatModel(t)
+	updated, added := runSlash(t, model, "/doctor")
+	_ = updated
+	if !strings.Contains(added, "Termixgo Doctor Diagnostics") {
+		t.Fatalf("expected doctor diagnostics header, got:\n%s", added)
+	}
+	if !strings.Contains(added, "Default Model") || !strings.Contains(added, "Configured Providers") {
+		t.Fatalf("expected model and provider info in doctor output, got:\n%s", added)
+	}
+}
+
+func TestSlashCompactTriggersCompactionNotice(t *testing.T) {
+	model := chatModel(t)
+	updated, added := runSlash(t, model, "/compact")
+	_ = updated
+	if !strings.Contains(added, "Compacting session context") {
+		t.Fatalf("expected compaction notice, got:\n%s", added)
+	}
+}

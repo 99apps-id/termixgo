@@ -96,10 +96,12 @@ func looksLikeInstall(command string) bool {
 // runChecksTool runs the project's own test, lint or build command.
 type runChecksTool struct{}
 
-func (t *runChecksTool) Name() string      { return "run_checks" }
-func (t *runChecksTool) Aliases() []string { return []string{"verify", "test", "lint"} }
-func (t *runChecksTool) Mutating() bool    { return true }
-func (t *runChecksTool) Risk() Risk        { return RiskCommand }
+func (t *runChecksTool) Name() string { return "run_checks" }
+func (t *runChecksTool) Aliases() []string {
+	return []string{"verify", "test", "lint", "test_file", "format_code", "format_file"}
+}
+func (t *runChecksTool) Mutating() bool { return true }
+func (t *runChecksTool) Risk() Risk     { return RiskCommand }
 func (t *runChecksTool) Label(a map[string]any) string {
 	return "Running checks (" + argString(a, "kind") + ")"
 }
@@ -120,6 +122,14 @@ func (t *runChecksTool) Schema() map[string]any {
 
 func (t *runChecksTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	kind := strings.ToLower(strings.TrimSpace(argString(args, "kind")))
+	scope := strings.TrimSpace(argString(args, "path", "package", "dir", "file"))
+	if scope == "" {
+		if rawPaths, ok := args["paths"].([]any); ok && len(rawPaths) > 0 {
+			if first, ok := rawPaths[0].(string); ok {
+				scope = first
+			}
+		}
+	}
 	if kind == "" {
 		kind = "test"
 	}
@@ -128,7 +138,6 @@ func (t *runChecksTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	default:
 		return Result{Output: fmt.Sprintf("unknown check %q; use test, lint, format, typecheck or build", kind), IsError: true}, nil
 	}
-	scope := strings.TrimSpace(argString(args, "path", "package", "dir"))
 	command := strings.TrimSpace(argString(args, "command"))
 	if command == "" {
 		detected, ok := detectCheckCommand(env.Workspace, kind, scope)
@@ -352,15 +361,23 @@ func scopedGoCommand(workspace, kind, scope string) (string, bool) {
 		return "", false
 	}
 	info, err := os.Stat(absolute)
-	if err != nil || !info.IsDir() {
+	if err != nil {
 		return "", false
 	}
+	if !info.IsDir() {
+		relative = filepath.ToSlash(filepath.Dir(relative))
+	}
 	target := "./" + relative + "/"
+	if target == "././" || target == ".//." || target == ".//" {
+		target = "./"
+	}
 	switch kind {
 	case "test":
 		return "go test " + target, true
 	case "lint":
 		return "go vet " + target, true
+	case "format":
+		return "gofmt -l " + target, true
 	case "typecheck", "build":
 		return "go build " + target, true
 	}
