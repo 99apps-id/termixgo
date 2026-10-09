@@ -1182,6 +1182,16 @@ func (a *App) Processes() *agent.ProcessManager { return a.processes }
 func (a *App) Shutdown() {
 	a.StopScheduler()
 	a.StopTelegram()
+	// Cancel a turn in flight, then hold the single-run slot while the stores
+	// it writes are closed. runOn takes the same slot for the whole turn, so a
+	// turn that starts after this point is refused and one already running is
+	// waited out. Without it a late write (a file snapshot, an edit backup,
+	// the search index) landed after Close and raced a caller tearing the
+	// workspace state directory down.
+	a.Stop()
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+
 	if a.processes != nil {
 		a.processes.Shutdown()
 	}
