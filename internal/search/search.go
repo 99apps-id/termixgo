@@ -74,6 +74,9 @@ type Store struct {
 	// workspaceFileCap limits how many workspace files are indexed in one
 	// refresh, which keeps a search from spending minutes walking a huge tree.
 	workspaceFileCap int
+	// closed stops a late refresh from starting and lets Close wait out a
+	// walk already in flight before it closes the database under it.
+	closed bool
 }
 
 func (s *Store) cachedQuery(key string) ([]Result, bool) {
@@ -147,6 +150,13 @@ func OpenIn(root, dataDir string) (*Store, error) {
 
 // Close releases the database.
 func (s *Store) Close() error {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	// Wait out a walk already in flight before closing the database under it.
+	// The walk writes, and a write that lands after Close leaves a WAL file in
+	// the state directory that races a caller tearing that directory down.
+	s.waitForIndexing()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.db != nil {
@@ -377,7 +387,7 @@ const workspaceIndexTTL = 5 * time.Minute
 // A burst of searches therefore walks once, not once per call.
 func (s *Store) refreshWorkspace() {
 	s.mu.Lock()
-	if s.indexing || time.Since(s.indexedAt) < workspaceIndexTTL {
+	if s.closed || s.indexing || time.Since(s.indexedAt) < workspaceIndexTTL {
 		s.mu.Unlock()
 		return
 	}
@@ -399,6 +409,10 @@ func (s *Store) refreshWorkspace() {
 // up to date before continuing.
 func (s *Store) SyncRefreshWorkspace() {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	if s.indexing {
 		s.mu.Unlock()
 		s.waitForIndexing()
