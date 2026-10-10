@@ -240,6 +240,26 @@ func TestCleanAntigravitySchemaDropsPropertyNames(t *testing.T) {
 	}
 }
 
+// TestCleanAntigravitySchemaStringifiesNumericEnums covers the live 400
+// "Invalid value ... (TYPE_STRING), 90": the pdf-tool-mcp pdf_rotate schema
+// declared a numeric enum, which the Gemini function schema rejects because
+// its enum field is repeated string.
+func TestCleanAntigravitySchemaStringifiesNumericEnums(t *testing.T) {
+	cleaned := cleanAntigravitySchema(map[string]any{
+		"type": "object",
+		"properties": map[string]any{"angle": map[string]any{
+			"type": "number", "enum": []any{90.0, 180.0, 270.0},
+		}},
+	})
+	angle := cleaned["properties"].(map[string]any)["angle"].(map[string]any)
+	if angle["type"] != "string" {
+		t.Errorf("angle type = %#v, want string", angle["type"])
+	}
+	if got := angle["enum"]; !reflect.DeepEqual(got, []string{"90", "180", "270"}) {
+		t.Errorf("angle enum = %#v, want [90 180 270]", got)
+	}
+}
+
 func TestAntigravitySessionIDIsNonNegative(t *testing.T) {
 	client := &antigravityClient{httpClient: &httpClient{}}
 	for i := 0; i < 50; i++ {

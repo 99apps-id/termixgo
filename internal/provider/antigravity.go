@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -445,7 +446,10 @@ func cleanAntigravitySchema(schema map[string]any) map[string]any {
 	}
 	// A required name without a matching property is rejected with
 	// "property is not defined", which MCP servers emit.
-	return pruneUndefinedRequired(cleaned).(map[string]any)
+	// normalizeAntigravityEnums runs first so a numeric enum never reaches
+	// the wire: the Gemini function schema declares enum as repeated string
+	// and answers a numeric entry with a 400 "Invalid value (TYPE_STRING)".
+	return pruneUndefinedRequired(normalizeAntigravityEnums(cleaned)).(map[string]any)
 }
 
 // geminiUnsupportedKeys are JSON Schema keywords the Gemini function-declaration
@@ -512,6 +516,79 @@ func stripSchemaKeys(value any) any {
 		return out
 	default:
 		return value
+	}
+}
+
+// normalizeAntigravityEnums stringifies every non-string enum entry, because
+// the Gemini function schema declares enum as repeated string: a numeric enum
+// such as [90, 180, 270] is rejected with a 400 "Invalid value (TYPE_STRING)".
+// A node whose type was number or integer becomes string so the enum still
+// matches its type. One bad MCP tool must not fail the whole turn.
+func normalizeAntigravityEnums(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, entry := range typed {
+			out[key] = normalizeAntigravityEnums(entry)
+		}
+		raw, ok := out["enum"]
+		if !ok {
+			return out
+		}
+		var entries []any
+		switch list := raw.(type) {
+		case []any:
+			entries = list
+		case []string:
+			return out
+		default:
+			return out
+		}
+		stringified := make([]string, 0, len(entries))
+		for _, item := range entries {
+			if text, ok := antigravityEnumText(item); ok {
+				stringified = append(stringified, text)
+			}
+		}
+		if len(stringified) == 0 {
+			delete(out, "enum")
+			return out
+		}
+		out["enum"] = stringified
+		if kind, _ := out["type"].(string); kind == "number" || kind == "integer" {
+			out["type"] = "string"
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, entry := range typed {
+			out = append(out, normalizeAntigravityEnums(entry))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+// antigravityEnumText renders one enum entry as the string the Gemini schema
+// accepts. ok is false for entries with no scalar form, which are dropped.
+func antigravityEnumText(item any) (text string, ok bool) {
+	switch value := item.(type) {
+	case string:
+		return value, true
+	case bool:
+		if value {
+			return "true", true
+		}
+		return "false", true
+	case float64:
+		return strconv.FormatFloat(value, 'f', -1, 64), true
+	case float32:
+		return strconv.FormatFloat(float64(value), 'f', -1, 32), true
+	case int:
+		return strconv.Itoa(value), true
+	default:
+		return "", false
 	}
 }
 
