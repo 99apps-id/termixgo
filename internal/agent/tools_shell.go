@@ -131,7 +131,11 @@ func (t *runChecksTool) Run(ctx context.Context, env *Env, args map[string]any) 
 		}
 	}
 	if kind == "" {
-		kind = "test"
+		if _, hasPaths := args["paths"]; hasPaths {
+			kind = "format"
+		} else {
+			kind = "test"
+		}
 	}
 	switch kind {
 	case "test", "lint", "format", "typecheck", "build":
@@ -376,8 +380,6 @@ func scopedGoCommand(workspace, kind, scope string) (string, bool) {
 		return "go test " + target, true
 	case "lint":
 		return "go vet " + target, true
-	case "format":
-		return "gofmt -l " + target, true
 	case "typecheck", "build":
 		return "go build " + target, true
 	}

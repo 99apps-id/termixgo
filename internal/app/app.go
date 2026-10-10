@@ -1060,6 +1060,11 @@ func (a *App) maybeCompactHistory(ctx context.Context, session *agent.Session) {
 
 // ForceCompact manually condenses earlier session turns into a brief, reducing context size.
 func (a *App) ForceCompact(ctx context.Context) (bool, error) {
+	if !a.runMu.TryLock() {
+		return false, fmt.Errorf("cannot compact while a turn is in flight")
+	}
+	defer a.runMu.Unlock()
+
 	a.mu.Lock()
 	session := a.session
 	a.mu.Unlock()

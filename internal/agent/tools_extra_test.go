@@ -228,3 +228,44 @@ func TestEncodingTool(t *testing.T) {
 		t.Errorf("expected URL escaped string, got: %s", urlRes.Output)
 	}
 }
+
+func TestArchiveToolWorkspaceEscapeRefused(t *testing.T) {
+	env := testEnv(t)
+	tool := &archiveTool{}
+
+	// Refuse archive creation outside workspace
+	res, _ := tool.Run(context.Background(), env, map[string]any{
+		"action":       "zip",
+		"archive_path": "../outside.zip",
+		"source_paths": []any{"source"},
+	})
+	if !res.IsError {
+		t.Fatalf("expected error for archive_path outside workspace")
+	}
+
+	// Refuse extracting outside workspace
+	res, _ = tool.Run(context.Background(), env, map[string]any{
+		"action":           "unzip",
+		"archive_path":     "test.zip",
+		"destination_path": "../outside_dir",
+	})
+	if !res.IsError {
+		t.Fatalf("expected error for destination_path outside workspace")
+	}
+}
+
+func TestSecretScanAndHashCalcWorkspaceEscapeRefused(t *testing.T) {
+	env := testEnv(t)
+
+	secTool := &secretScanTool{}
+	res, _ := secTool.Run(context.Background(), env, map[string]any{"path": "../outside_dir"})
+	if !res.IsError {
+		t.Fatalf("expected secret_scan to refuse path outside workspace")
+	}
+
+	hashTool := &hashCalcTool{}
+	res, _ = hashTool.Run(context.Background(), env, map[string]any{"path": "../outside.txt"})
+	if !res.IsError {
+		t.Fatalf("expected hash_calc to refuse file outside workspace")
+	}
+}

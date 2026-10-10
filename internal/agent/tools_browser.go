@@ -47,8 +47,16 @@ func (t *browserOpenTool) Run(ctx context.Context, env *Env, args map[string]any
 	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") && !strings.HasPrefix(raw, "file://") {
 		// Treat as local file path
 		resolved := resolvePath(env, raw)
+		if err := checkWorkspacePath(env, resolved); err != nil {
+			return Result{Output: fmt.Sprintf("cannot open file outside workspace: %v", err), IsError: true}, nil
+		}
 		if _, err := os.Stat(resolved); err != nil {
 			return Result{Output: fmt.Sprintf("target is neither a valid URL nor an existing local file: %s", raw), IsError: true}, nil
+		}
+		ext := strings.ToLower(filepath.Ext(resolved))
+		switch ext {
+		case ".exe", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".msi", ".com", ".scr", ".sh", ".bash":
+			return Result{Output: fmt.Sprintf("cannot open executable script or program %q in browser", ext), IsError: true}, nil
 		}
 		target = resolved
 	}
@@ -110,6 +118,9 @@ func (t *renderMermaidTool) Run(ctx context.Context, env *Env, args map[string]a
 	var outPath string
 	if outPathRaw != "" {
 		outPath = resolvePath(env, outPathRaw)
+		if err := checkWorkspacePath(env, outPath); err != nil {
+			return Result{Output: fmt.Sprintf("cannot write diagram outside workspace: %v", err), IsError: true}, nil
+		}
 	} else {
 		dir := filepath.Join(env.Workspace, ".termixgo", "diagrams")
 		_ = os.MkdirAll(dir, 0o755)
@@ -176,6 +187,16 @@ func (t *browserScreenshotTool) Run(ctx context.Context, env *Env, args map[stri
 		return Result{Output: "url is required.", IsError: true}, nil
 	}
 
+	if strings.HasPrefix(strings.ToLower(targetURL), "file://") {
+		filePath := strings.TrimPrefix(targetURL, "file://")
+		if runtime.GOOS == "windows" {
+			filePath = strings.TrimPrefix(filePath, "/")
+		}
+		if err := checkWorkspacePath(env, filePath); err != nil {
+			return Result{Output: fmt.Sprintf("cannot access local file outside workspace: %v", err), IsError: true}, nil
+		}
+	}
+
 	browserBin, err := findBrowserExecutable()
 	if err != nil {
 		return Result{Output: fmt.Sprintf("Browser screenshot failed: %v", err), IsError: true}, nil
@@ -189,6 +210,9 @@ func (t *browserScreenshotTool) Run(ctx context.Context, env *Env, args map[stri
 	var outPath string
 	if outPathRaw != "" {
 		outPath = resolvePath(env, outPathRaw)
+		if err := checkWorkspacePath(env, outPath); err != nil {
+			return Result{Output: fmt.Sprintf("cannot write screenshot outside workspace: %v", err), IsError: true}, nil
+		}
 	} else {
 		dir := filepath.Join(env.Workspace, ".termixgo", "screenshots")
 		_ = os.MkdirAll(dir, 0o755)
@@ -263,6 +287,16 @@ func (t *browserDumpDOMTool) Run(ctx context.Context, env *Env, args map[string]
 	targetURL := strings.TrimSpace(argString(args, "url"))
 	if targetURL == "" {
 		return Result{Output: "url is required.", IsError: true}, nil
+	}
+
+	if strings.HasPrefix(strings.ToLower(targetURL), "file://") {
+		filePath := strings.TrimPrefix(targetURL, "file://")
+		if runtime.GOOS == "windows" {
+			filePath = strings.TrimPrefix(filePath, "/")
+		}
+		if err := checkWorkspacePath(env, filePath); err != nil {
+			return Result{Output: fmt.Sprintf("cannot access local file outside workspace: %v", err), IsError: true}, nil
+		}
 	}
 
 	browserBin, err := findBrowserExecutable()

@@ -376,6 +376,9 @@ func (t *gitShowTool) Run(ctx context.Context, env *Env, args map[string]any) (R
 	if ref == "" {
 		ref = "HEAD"
 	}
+	if !validGitRev(ref) {
+		return Result{Output: fmt.Sprintf("invalid revision %q: a revision cannot start with a dash or contain whitespace/control characters", ref), IsError: true}, nil
+	}
 	argv := []string{"show"}
 	if argBool(args, "stat", false) {
 		argv = append(argv, "--stat")
@@ -831,6 +834,9 @@ func (t *gitConflictsTool) Run(ctx context.Context, env *Env, args map[string]an
 	var reports []fileConflict
 	for _, rel := range filesToScan {
 		resolved := resolvePath(env, rel)
+		if err := checkWorkspacePath(env, resolved); err != nil {
+			continue
+		}
 		data, err := os.ReadFile(resolved)
 		if err != nil {
 			continue

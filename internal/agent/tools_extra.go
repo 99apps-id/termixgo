@@ -336,6 +336,9 @@ func (t *secretScanTool) Run(ctx context.Context, env *Env, args map[string]any)
 	targetPath := env.Workspace
 	if scanPathRaw != "" {
 		targetPath = resolvePath(env, scanPathRaw)
+		if err := checkWorkspacePath(env, targetPath); err != nil {
+			return Result{Output: fmt.Sprintf("cannot scan outside workspace: %v", err), IsError: true}, nil
+		}
 	}
 
 	maxResults := argInt(args, "max_results", 50, 1, 100)
@@ -477,6 +480,9 @@ func (t *hashCalcTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	var targetLabel string
 	if filePath != "" {
 		resolved := resolvePath(env, filePath)
+		if err := checkWorkspacePath(env, resolved); err != nil {
+			return Result{Output: fmt.Sprintf("cannot read file outside workspace: %v", err), IsError: true}, nil
+		}
 		f, err := os.Open(resolved)
 		if err != nil {
 			return Result{Output: fmt.Sprintf("failed to open file %q: %v", filePath, err), IsError: true}, nil
@@ -533,6 +539,9 @@ func (t *archiveTool) Run(ctx context.Context, env *Env, args map[string]any) (R
 		return Result{Output: "archive_path is required.", IsError: true}, nil
 	}
 	archivePath := resolvePath(env, archivePathRaw)
+	if err := checkWorkspacePath(env, archivePath); err != nil {
+		return Result{Output: fmt.Sprintf("cannot access archive outside workspace: %v", err), IsError: true}, nil
+	}
 
 	switch action {
 	case "zip":
@@ -546,6 +555,13 @@ func (t *archiveTool) Run(ctx context.Context, env *Env, args map[string]any) (R
 		}
 		if len(sources) == 0 {
 			return Result{Output: "source_paths must contain at least one file or folder to compress.", IsError: true}, nil
+		}
+
+		for _, src := range sources {
+			resolvedSrc := resolvePath(env, src)
+			if err := checkWorkspacePath(env, resolvedSrc); err != nil {
+				return Result{Output: fmt.Sprintf("cannot archive source outside workspace: %v", err), IsError: true}, nil
+			}
 		}
 
 		if err := os.MkdirAll(filepath.Dir(archivePath), 0o755); err != nil {
@@ -612,6 +628,9 @@ func (t *archiveTool) Run(ctx context.Context, env *Env, args map[string]any) (R
 		if destPathRaw != "" {
 			destPath = resolvePath(env, destPathRaw)
 		}
+		if err := checkWorkspacePath(env, destPath); err != nil {
+			return Result{Output: fmt.Sprintf("cannot extract outside workspace: %v", err), IsError: true}, nil
+		}
 
 		r, err := zip.OpenReader(archivePath)
 		if err != nil {
@@ -624,9 +643,13 @@ func (t *archiveTool) Run(ctx context.Context, env *Env, args map[string]any) (R
 
 		for _, f := range r.File {
 			fPath := filepath.Join(cleanDest, f.Name)
-			// Guard against ZipSlip path traversal
-			if !strings.HasPrefix(filepath.Clean(fPath), cleanDest) {
+			cleanFPath := filepath.Clean(fPath)
+			rel, relErr := filepath.Rel(cleanDest, cleanFPath)
+			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 				return Result{Output: fmt.Sprintf("security error: zip path traversal detected in %s", f.Name), IsError: true}, nil
+			}
+			if err := checkWorkspacePath(env, cleanFPath); err != nil {
+				return Result{Output: fmt.Sprintf("security error: extracted path escapes workspace: %s", f.Name), IsError: true}, nil
 			}
 
 			if f.FileInfo().IsDir() {
@@ -675,10 +698,10 @@ func (t *encodingTool) Aliases() []string { return []string{"encode_decode", "co
 func (t *encodingTool) Mutating() bool    { return false }
 func (t *encodingTool) Risk() Risk        { return RiskEdit }
 func (t *encodingTool) Label(a map[string]any) string {
-	return fmt.Sprintf("%s %s", strings.Title(argString(a, "action")), argString(a, "format"))
+	return fmt.Sprintf("%s %s", strings.ToUpper(argString(a, "action")), argString(a, "format"))
 }
 func (t *encodingTool) DoneLabel(a map[string]any) string {
-	return fmt.Sprintf("%s %s completed", strings.Title(argString(a, "action")), argString(a, "format"))
+	return fmt.Sprintf("%s %s completed", strings.ToUpper(argString(a, "action")), argString(a, "format"))
 }
 func (t *encodingTool) Description() string {
 	return "Encode or decode strings between plaintext, base64, base64url, hex, and url encoding."

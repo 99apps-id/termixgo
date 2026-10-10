@@ -62,6 +62,35 @@ func TestBrowserOpenValidation(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected error for non-existent local file")
 	}
+
+	// Local file outside workspace refused
+	res, _ = tool.Run(context.Background(), env, map[string]any{"url": "../outside.html"})
+	if !res.IsError {
+		t.Fatalf("expected error for file outside workspace")
+	}
+
+	// Refuse dangerous executable file extension
+	dummyExe := filepath.Join(env.Workspace, "test.exe")
+	if err := os.WriteFile(dummyExe, []byte("MZ"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res, _ = tool.Run(context.Background(), env, map[string]any{"url": "test.exe"})
+	if !res.IsError {
+		t.Fatalf("expected error for executable file")
+	}
+}
+
+func TestRenderMermaidWorkspaceEscapeRefused(t *testing.T) {
+	env := testEnv(t)
+	tool := &renderMermaidTool{}
+
+	res, _ := tool.Run(context.Background(), env, map[string]any{
+		"diagram":     "graph TD\n  A --> B",
+		"output_path": "../outside.html",
+	})
+	if !res.IsError {
+		t.Fatalf("expected error for output_path outside workspace")
+	}
 }
 
 func TestFindBrowserExecutable(t *testing.T) {
