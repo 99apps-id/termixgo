@@ -517,6 +517,9 @@ func (t *gitBranchTool) Run(ctx context.Context, env *Env, args map[string]any) 
 		}
 		return Result{Output: output}, nil
 	}
+	if !validGitRev(name) {
+		return Result{Output: fmt.Sprintf("invalid branch name %q: a branch name cannot start with a dash or contain whitespace/control characters", name), IsError: true}, nil
+	}
 	argv := []string{"checkout"}
 	if argBool(args, "create", false) {
 		// `-b <name>` consumes the name as its argument, which git validates,

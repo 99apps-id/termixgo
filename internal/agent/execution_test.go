@@ -57,6 +57,7 @@ func TestDetectCheckCommandScopedToAPackage(t *testing.T) {
 	cases := map[string]string{
 		"test":      "go test ./internal/agent/",
 		"lint":      "go vet ./internal/agent/",
+		"format":    "gofmt -l ./internal/agent/",
 		"typecheck": "go build ./internal/agent/",
 		"build":     "go build ./internal/agent/",
 	}
@@ -77,10 +78,6 @@ func TestDetectCheckCommandScopedToAPackage(t *testing.T) {
 		if got, ok := detectCheckCommand(workspace, "test", scope); ok {
 			t.Errorf("scope %q should be refused, got %q", scope, got)
 		}
-	}
-	// format has no scoped form: it stays workspace-wide by design.
-	if got, ok := detectCheckCommand(workspace, "format", "internal/agent"); ok {
-		t.Errorf("format should not scope, got %q", got)
 	}
 	// No go.mod means no scoped Go command either.
 	plain := t.TempDir()

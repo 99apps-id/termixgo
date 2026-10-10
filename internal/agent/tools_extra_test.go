@@ -269,3 +269,22 @@ func TestSecretScanAndHashCalcWorkspaceEscapeRefused(t *testing.T) {
 		t.Fatalf("expected hash_calc to refuse file outside workspace")
 	}
 }
+
+func TestIsBlockedHostCloudMetadata(t *testing.T) {
+	cases := []string{
+		"169.254.169.254",
+		"metadata.google.internal",
+		"metadata.goog",
+		"fd00:ec2::254",
+		"100.100.100.200",
+		"::ffff:169.254.169.254",
+	}
+	for _, host := range cases {
+		if !isBlockedHost(host) {
+			t.Errorf("host %q should be blocked as cloud metadata/link-local", host)
+		}
+	}
+	if isBlockedHost("example.com") || isBlockedHost("127.0.0.1") || isBlockedHost("localhost") {
+		t.Errorf("legitimate host should not be blocked")
+	}
+}

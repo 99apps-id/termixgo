@@ -467,3 +467,21 @@ func TestWindowSizeAndQuitAreHandled(t *testing.T) {
 		t.Errorf("ctrl+x should return the quit command")
 	}
 }
+
+func TestRenderMarkdownCheckboxes(t *testing.T) {
+	styles := NewStyles(DefaultPalette())
+	markdown := "- [x] Finished item\n- [>] Active item\n- [ ] Pending item"
+	rendered := stripANSI(renderMarkdown(markdown, styles, 80))
+	if !strings.Contains(rendered, "[x] Finished item") {
+		t.Errorf("expected [x] finished item without bullet, got: %q", rendered)
+	}
+	if !strings.Contains(rendered, "[>] Active item") {
+		t.Errorf("expected [>] active item without bullet, got: %q", rendered)
+	}
+	if !strings.Contains(rendered, "[ ] Pending item") {
+		t.Errorf("expected [ ] pending item without bullet, got: %q", rendered)
+	}
+	if strings.Contains(rendered, "* [x]") {
+		t.Errorf("did not want redundant * before [x], got: %q", rendered)
+	}
+}

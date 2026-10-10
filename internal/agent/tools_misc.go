@@ -858,21 +858,29 @@ func fetchOnce(ctx context.Context, raw string, reader bool) (Result, int, error
 	return Result{Output: text}, response.StatusCode, nil
 }
 
-// isBlockedHost refuses the cloud metadata addresses and the link-local range,
-// which are never the documentation the model meant to read.
+// isBlockedHost refuses cloud metadata addresses and the link-local range,
+// which are never documentation the model meant to read.
 //
-// Loopback and the private ranges are deliberately allowed: a documentation
+// Loopback and private ranges are deliberately allowed: a documentation
 // server running on the operator's own machine is a legitimate target, and the
-// project's own tests fetch from one. That does leave the tool able to reach a
-// service on the local network, which is recorded in the audit rather than
-// enforced here.
+// project's own tests fetch from one.
 func isBlockedHost(host string) bool {
 	trimmed := strings.ToLower(strings.TrimSpace(host))
-	if trimmed == "169.254.169.254" || trimmed == "metadata.google.internal" {
+	if trimmed == "169.254.169.254" || trimmed == "metadata.google.internal" ||
+		trimmed == "metadata.goog" || trimmed == "fd00:ec2::254" || trimmed == "100.100.100.200" {
 		return true
 	}
-	if ip := net.ParseIP(trimmed); ip != nil && ip.IsLinkLocalUnicast() {
-		return true
+	if ip := net.ParseIP(trimmed); ip != nil {
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return true
+		}
+		if ip4 := ip.To4(); ip4 != nil {
+			if (ip4[0] == 169 && ip4[1] == 254) || (ip4[0] == 100 && ip4[1] == 100 && ip4[2] == 100 && ip4[3] == 200) {
+				return true
+			}
+		} else if trimmed == "fd00:ec2::254" {
+			return true
+		}
 	}
 	return false
 }

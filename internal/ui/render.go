@@ -450,6 +450,27 @@ func renderMarkdown(text string, styles Styles, width int) string {
 			continue
 		}
 		if bullet, rest, ok := splitBullet(trimmed); ok {
+			if boxMark, boxRest, hasBox := splitCheckbox(rest); hasBox {
+				boxStyle := styles.Dim
+				switch boxMark {
+				case "[x]", "[X]":
+					boxStyle = styles.ToolDone
+				case "[>]":
+					boxStyle = styles.Plan
+				case "[-]":
+					boxStyle = styles.ToolError
+				}
+				wrapped := wrapInline(boxRest, max(1, width-6))
+				lines := strings.Split(wrapped, "\n")
+				for index, line := range lines {
+					if index == 0 {
+						out = append(out, boxStyle.Render(boxMark)+" "+styleInline(line, styles))
+						continue
+					}
+					out = append(out, "    "+styleInline(line, styles))
+				}
+				continue
+			}
 			wrapped := wrapInline(rest, max(1, width-4))
 			lines := strings.Split(wrapped, "\n")
 			for index, line := range lines {
@@ -482,6 +503,16 @@ func splitBullet(line string) (string, string, bool) {
 	}
 	if digits > 0 && digits+1 < len(line) && line[digits] == '.' && line[digits+1] == ' ' {
 		return line[:digits+1], strings.TrimSpace(line[digits+2:]), true
+	}
+	return "", "", false
+}
+
+// splitCheckbox recognises markdown task list items: [x], [X], [ ], [>], [-].
+func splitCheckbox(text string) (string, string, bool) {
+	for _, prefix := range []string{"[x] ", "[X] ", "[ ] ", "[>] ", "[-] "} {
+		if strings.HasPrefix(text, prefix) {
+			return strings.TrimSpace(prefix), strings.TrimSpace(text[len(prefix):]), true
+		}
 	}
 	return "", "", false
 }

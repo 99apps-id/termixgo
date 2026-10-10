@@ -128,3 +128,49 @@ func TestSymbolSearchSkipsStateAndGeneratedDirs(t *testing.T) {
 		t.Errorf("state and generated trees must be skipped:\n%s", output)
 	}
 }
+
+func TestSymbolReferencesFindsUsages(t *testing.T) {
+	env := symbolEnv(t)
+	writeSymbolFile(t, env.Workspace, "api.go", `package api
+
+type Client struct{}
+
+func NewClient() *Client {
+	return &Client{}
+}
+`)
+	writeSymbolFile(t, env.Workspace, "main.go", `package main
+
+import "example.com/api"
+
+func main() {
+	c := api.NewClient()
+	_ = c
+}
+`)
+
+	tool := &symbolReferencesTool{}
+	res, err := tool.Run(context.Background(), env, map[string]any{"symbol": "NewClient"})
+	if err != nil || res.IsError {
+		t.Fatalf("symbol_references failed: %v, out: %s", err, res.Output)
+	}
+	if !strings.Contains(res.Output, "main.go:6 [use]:") {
+		t.Errorf("expected usage in main.go, got:\n%s", res.Output)
+	}
+	// By default definitions are excluded
+	if strings.Contains(res.Output, "[def]:") {
+		t.Errorf("definitions should be excluded by default, got:\n%s", res.Output)
+	}
+
+	// When include_declarations is true, def should appear
+	resWithDecl, err := tool.Run(context.Background(), env, map[string]any{
+		"symbol":               "NewClient",
+		"include_declarations": true,
+	})
+	if err != nil || resWithDecl.IsError {
+		t.Fatalf("symbol_references with decls failed: %v, out: %s", err, resWithDecl.Output)
+	}
+	if !strings.Contains(resWithDecl.Output, "api.go:5 [def]:") {
+		t.Errorf("expected def in api.go, got:\n%s", resWithDecl.Output)
+	}
+}

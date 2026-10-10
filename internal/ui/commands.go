@@ -1148,7 +1148,11 @@ func (m *Model) slashCheckpoint(args string) (tea.Model, tea.Cmd) {
 	} else if checkpoint.Ref == "" {
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Nothing to save: the working tree is clean."})
 	} else {
-		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Checkpoint %s saved. Restore it with /rewind.", checkpoint.Ref)})
+		if strings.TrimSpace(checkpoint.Message) != "" {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Checkpoint %s (%s) saved. Restore it with /rewind.", checkpoint.Ref, checkpoint.Message)})
+		} else {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Checkpoint %s saved. Restore it with /rewind.", checkpoint.Ref)})
+		}
 	}
 	m.refresh()
 	return m, nil
@@ -1723,16 +1727,31 @@ func (m *Model) slashDoctor() (tea.Model, tea.Cmd) {
 	sb.WriteString("=== Termixgo Doctor Diagnostics ===\n")
 	sb.WriteString(fmt.Sprintf("Version:          %s (%s/%s)\n", version.Full(), runtime.GOOS, runtime.GOARCH))
 	cfg := m.appConfig()
+	trust := "untrusted"
+	if m.app.Trusted() {
+		trust = "trusted"
+	}
+	sb.WriteString(fmt.Sprintf("Workspace:        %s (%s)\n", m.app.Workspace(), trust))
 	sb.WriteString(fmt.Sprintf("Default Model:    %s\n", cfg.DefaultModel))
+	sb.WriteString(fmt.Sprintf("Active Model:     %s (%s)\n", m.app.ModelLabel(), m.app.CurrentModel().Provider))
 	sb.WriteString(fmt.Sprintf("Approval Mode:    %s\n", cfg.ApprovalMode))
 	sb.WriteString(fmt.Sprintf("Trusted Folders:  %d configured\n", len(cfg.TrustedFolders)))
 	if cfg.CostBudgetUSD > 0 {
 		sb.WriteString(fmt.Sprintf("Cost Budget:      $%.2f per session\n", cfg.CostBudgetUSD))
+		if _, known := provider.PricedByID(cfg, cfg.DefaultModel); !known {
+			sb.WriteString("                  WARNING: no price known for default model; cap cannot fire\n")
+		}
 	} else {
-		sb.WriteString("Cost Budget:      none\n")
+		sb.WriteString("Cost Budget:      none (set costBudgetUsd to cap a session)\n")
+	}
+	if m.app.TelegramStatus() != "" {
+		sb.WriteString(fmt.Sprintf("Telegram:         %s\n", m.app.TelegramStatus()))
 	}
 	sb.WriteString("\nConfigured Providers:\n")
 	store, err := secrets.Load()
+	if err != nil {
+		sb.WriteString(fmt.Sprintf("  (error reading secrets store: %v)\n", err))
+	}
 	for _, p := range provider.Providers() {
 		state := "no key configured"
 		if !p.NeedsKey {

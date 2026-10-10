@@ -114,7 +114,7 @@ func (t *runChecksTool) Description() string {
 func (t *runChecksTool) Schema() map[string]any {
 	return object(map[string]any{
 		"kind":         map[string]any{"type": "string", "enum": []string{"test", "lint", "format", "typecheck", "build"}, "description": "Which check to run. Defaults to test."},
-		"path":         strProp("Optional workspace-relative path to scope a Go check to one package (for example internal/agent). Works with kind test, lint, typecheck and build."),
+		"path":         strProp("Optional workspace-relative path to scope a Go check to one package (for example internal/agent). Works with kind test, lint, format, typecheck and build."),
 		"command":      strProp("Explicit command that overrides detection."),
 		"timeout_secs": intProp("Timeout in seconds, 1 to 900. Defaults to 300."),
 	})
@@ -380,6 +380,8 @@ func scopedGoCommand(workspace, kind, scope string) (string, bool) {
 		return "go test " + target, true
 	case "lint":
 		return "go vet " + target, true
+	case "format":
+		return "gofmt -l " + target, true
 	case "typecheck", "build":
 		return "go build " + target, true
 	}

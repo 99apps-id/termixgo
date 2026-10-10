@@ -272,6 +272,14 @@ func suggestFix(tool, err string) string {
 		return "check file permissions or run with elevated rights"
 	case strings.Contains(lower, "no model is configured"):
 		return "run /setup to choose a default model"
+	case strings.Contains(lower, "old_string") && (strings.Contains(lower, "not found") || strings.Contains(lower, "match")):
+		return "read the file fresh before editing; old_string must match byte-for-byte including exact whitespace"
+	case strings.Contains(lower, "ambiguous") || strings.Contains(lower, "multiple matches"):
+		return "provide more surrounding context lines in old_string or set replace_all=true"
+	case strings.Contains(lower, "command timed out") || strings.Contains(lower, "timed out"):
+		return "increase timeout_secs or check if the process is waiting for interactive input"
+	case strings.Contains(lower, "bad revision"):
+		return "use a valid git commit sha, branch name, or HEAD without option flags"
 	case strings.Contains(lower, "rate limited"):
 		return "back off and retry after the suggested delay"
 	case strings.Contains(lower, "connection refused"), strings.Contains(lower, "no such host"):

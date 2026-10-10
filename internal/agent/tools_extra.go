@@ -182,7 +182,9 @@ func (t *jwtInspectTool) Schema() map[string]any {
 }
 
 func decodeBase64URLPart(part string) ([]byte, error) {
-	// Add padding if needed
+	if data, err := base64.RawURLEncoding.DecodeString(part); err == nil {
+		return data, nil
+	}
 	switch len(part) % 4 {
 	case 2:
 		part += "=="
@@ -640,8 +642,21 @@ func (t *archiveTool) Run(ctx context.Context, env *Env, args map[string]any) (R
 
 		extractedCount := 0
 		cleanDest := filepath.Clean(destPath)
+		var totalUncompressed uint64
+		const (
+			maxUncompressedBytes = 500 * 1024 * 1024 // 500 MB zip bomb ceiling
+			maxExtractedFiles    = 5000
+		)
 
 		for _, f := range r.File {
+			if extractedCount >= maxExtractedFiles {
+				return Result{Output: fmt.Sprintf("security error: zip archive exceeds maximum file count (%d)", maxExtractedFiles), IsError: true}, nil
+			}
+			// Skip symlinks to prevent symlink traversal attacks (CWE-59)
+			if f.FileInfo().Mode()&os.ModeSymlink != 0 {
+				continue
+			}
+
 			fPath := filepath.Join(cleanDest, f.Name)
 			cleanFPath := filepath.Clean(fPath)
 			rel, relErr := filepath.Rel(cleanDest, cleanFPath)
@@ -672,12 +687,24 @@ func (t *archiveTool) Run(ctx context.Context, env *Env, args map[string]any) (R
 				return Result{Output: fmt.Sprintf("failed to read zip member %s: %v", f.Name, err), IsError: true}, nil
 			}
 
-			_, err = io.Copy(outFile, rc)
+			// Bound extraction to prevent decompression bombs (CWE-409)
+			remainingBudget := int64(maxUncompressedBytes - totalUncompressed)
+			if remainingBudget <= 0 {
+				rc.Close()
+				outFile.Close()
+				return Result{Output: "security error: zip archive exceeded max uncompressed size (500 MB)", IsError: true}, nil
+			}
+
+			written, err := io.Copy(outFile, io.LimitReader(rc, remainingBudget+1))
 			rc.Close()
 			outFile.Close()
 			if err != nil {
 				return Result{Output: fmt.Sprintf("failed to extract %s: %v", f.Name, err), IsError: true}, nil
 			}
+			if written > remainingBudget {
+				return Result{Output: "security error: zip archive exceeded max uncompressed size (500 MB)", IsError: true}, nil
+			}
+			totalUncompressed += uint64(written)
 			extractedCount++
 		}
 

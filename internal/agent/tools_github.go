@@ -116,6 +116,9 @@ func (t *githubCreatePRTool) Run(ctx context.Context, env *Env, args map[string]
 		argv = append(argv, "--body", "")
 	}
 	if base := strings.TrimSpace(argString(args, "base")); base != "" {
+		if strings.HasPrefix(base, "-") || !validGitRev(base) {
+			return Result{Output: fmt.Sprintf("invalid base branch %q: a branch name cannot start with a dash or contain control characters", base), IsError: true}, nil
+		}
 		argv = append(argv, "--base", base)
 	}
 	return githubResult(ctx, env, argv...), nil

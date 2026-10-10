@@ -321,3 +321,177 @@ func matchSymbolLine(ext, line string, indented bool) (string, string, bool) {
 	}
 	return "", "", false
 }
+
+// symbolReferenceHit represents a single usage or reference to a symbol.
+type symbolReferenceHit struct {
+	path   string
+	line   int
+	code   string
+	isDecl bool
+}
+
+// symbolReferencesTool finds usages and call sites of a symbol across the workspace.
+type symbolReferencesTool struct{}
+
+func (t *symbolReferencesTool) Name() string { return "symbol_references" }
+func (t *symbolReferencesTool) Aliases() []string {
+	return []string{"find_references", "symbol_usages", "find_usages"}
+}
+func (t *symbolReferencesTool) Mutating() bool { return false }
+func (t *symbolReferencesTool) Risk() Risk     { return RiskEdit }
+func (t *symbolReferencesTool) Label(a map[string]any) string {
+	return "Finding references to " + Shorten(argString(a, "symbol", "query"), 40)
+}
+func (t *symbolReferencesTool) DoneLabel(a map[string]any) string {
+	return "Found references to " + Shorten(argString(a, "symbol", "query"), 40)
+}
+func (t *symbolReferencesTool) Description() string {
+	return "Find all usages, call sites, and references to a symbol across the workspace. Scans source files with word-boundary matching to evaluate impact before refactoring."
+}
+func (t *symbolReferencesTool) Schema() map[string]any {
+	return object(map[string]any{
+		"symbol":               strProp("Exact identifier or symbol name to search references for."),
+		"path":                 strProp("Directory or file to limit search to. Defaults to the workspace."),
+		"max_results":          intProp("Maximum references to return, 1 to 500. Defaults to 50."),
+		"include_declarations": boolProp("Whether to include definition lines or only call sites/usages (defaults to false)."),
+	}, "symbol")
+}
+
+func (t *symbolReferencesTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	symbol := strings.TrimSpace(argString(args, "symbol", "query"))
+	if symbol == "" {
+		return Result{Output: "symbol is required; pass the identifier to find references for", IsError: true}, nil
+	}
+	root := resolvePath(env, argString(args, "path", "root"))
+	if root == "" {
+		root = env.Workspace
+	}
+	if err := checkWorkspacePath(env, root); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	maxResults := argInt(args, "max_results", defaultMaxSymbols, 1, maxSymbolResults)
+	includeDecls := argBool(args, "include_declarations", false)
+
+	// Build word-boundary regex for exact identifier match
+	wordRegex, err := regexp.Compile(`\b` + regexp.QuoteMeta(symbol) + `\b`)
+	if err != nil {
+		return Result{Output: fmt.Sprintf("invalid symbol pattern: %v", err), IsError: true}, nil
+	}
+
+	var hits []symbolReferenceHit
+	truncated := false
+	scanned := 0
+
+	walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, wErr error) error {
+		if wErr != nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if entry.IsDir() {
+			if path != root && search.IsSkippedDir(entry.Name()) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !isSymbolFile(path) {
+			return nil
+		}
+		info, statErr := entry.Info()
+		if statErr != nil || info.Size() > maxSymbolBytes {
+			return nil
+		}
+		scanned++
+		if scanned > maxSymbolFiles {
+			truncated = true
+			return fs.SkipAll
+		}
+
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		lines := strings.Split(string(data), "\n")
+		ext := filepath.Ext(path)
+
+		for idx, rawLine := range lines {
+			if !wordRegex.MatchString(rawLine) {
+				continue
+			}
+			trimmed := strings.TrimSpace(rawLine)
+			// Skip comment-only lines
+			if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "*") {
+				continue
+			}
+
+			isDecl := isSymbolDeclarationLine(ext, trimmed, symbol)
+			if isDecl && !includeDecls {
+				continue
+			}
+
+			hits = append(hits, symbolReferenceHit{
+				path:   relativeSlash(env, path),
+				line:   idx + 1,
+				code:   trimmed,
+				isDecl: isDecl,
+			})
+
+			if len(hits) >= maxResults {
+				truncated = true
+				return fs.SkipAll
+			}
+		}
+		return nil
+	})
+
+	if walkErr != nil && walkErr != context.Canceled && walkErr != context.DeadlineExceeded {
+		return Result{Output: fmt.Sprintf("symbol reference search failed: %v", walkErr), IsError: true}, nil
+	}
+
+	if len(hits) == 0 {
+		return Result{Output: fmt.Sprintf("No references found for symbol %q.", symbol)}, nil
+	}
+
+	var sb strings.Builder
+	header := fmt.Sprintf("%d reference(s) found for %q", len(hits), symbol)
+	if truncated {
+		header += " (limit reached)"
+	}
+	sb.WriteString(header + "\n")
+	for _, hit := range hits {
+		marker := "use"
+		if hit.isDecl {
+			marker = "def"
+		}
+		fmt.Fprintf(&sb, "%s:%d [%s]: %s\n", hit.path, hit.line, marker, Shorten(hit.code, 120))
+	}
+
+	return Result{Output: strings.TrimRight(sb.String(), "\n")}, nil
+}
+
+func isSymbolDeclarationLine(ext, line, symbol string) bool {
+	escaped := regexp.QuoteMeta(symbol)
+	switch strings.ToLower(ext) {
+	case ".go":
+		re := regexp.MustCompile(`^(?:func\s+(?:\([^)]+\)\s+)?|type\s+|var\s+|const\s+)` + escaped + `\b`)
+		return re.MatchString(line)
+	case ".py":
+		re := regexp.MustCompile(`^(?:def|class)\s+` + escaped + `\b`)
+		return re.MatchString(line)
+	case ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs":
+		re := regexp.MustCompile(`^(?:export\s+)?(?:async\s+)?(?:function|class|interface|type|const|let|var)\s+` + escaped + `\b`)
+		if re.MatchString(line) {
+			return true
+		}
+		reMethod := regexp.MustCompile(`^(?:public\s+|private\s+|protected\s+|static\s+|async\s+)*` + escaped + `\s*\(`)
+		return reMethod.MatchString(line)
+	case ".rs":
+		re := regexp.MustCompile(`^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:fn|struct|enum|trait|type)\s+` + escaped + `\b`)
+		return re.MatchString(line)
+	default:
+		indented := strings.TrimLeft(line, " \t") != line
+		declName, _, ok := matchSymbolLine(ext, line, indented)
+		return ok && strings.EqualFold(declName, symbol)
+	}
+}

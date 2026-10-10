@@ -147,6 +147,8 @@ func DefaultRegistry() *Registry {
 		&globTool{},
 		&codeOutlineTool{},
 		&symbolSearchTool{},
+		&symbolReferencesTool{},
+		&hypothesisVerifyTool{},
 		&searchMemoryTool{},
 		&sqliteQueryTool{},
 		&runCommandTool{},

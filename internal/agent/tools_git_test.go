@@ -225,6 +225,14 @@ func TestGitBranchTreatsAnOptionLikeNameAsABranch(t *testing.T) {
 	if !result.IsError {
 		t.Fatalf("an option-like branch name should be refused, got %q", result.Output)
 	}
+
+	resultCreate, err := (&gitBranchTool{}).Run(context.Background(), env, map[string]any{"name": "-f", "create": true})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !resultCreate.IsError {
+		t.Fatalf("an option-like branch create should be refused, got %q", resultCreate.Output)
+	}
 }
 
 // TestGitBlameRefusesAnOptionLikeRevision keeps a model-supplied revision out
