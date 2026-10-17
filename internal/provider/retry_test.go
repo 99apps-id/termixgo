@@ -214,6 +214,34 @@ func TestStallGuardAbortsASilentStream(t *testing.T) {
 	}
 }
 
+// TestQuotaReadAbortsASilentBody pins the quota path to the same watchdog
+// the chat path has: a usage endpoint that holds the body open must fail as a
+// stall instead of holding the gauge past its timeout.
+func TestQuotaReadAbortsASilentBody(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusOK)
+		writer.(http.Flusher).Flush()
+		<-release
+	}))
+	defer func() {
+		close(release)
+		server.Close()
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _, err := quotaGET(ctx, server.Client(), server.URL, nil)
+	if err == nil {
+		t.Fatalf("a stalled quota body must fail instead of blocking")
+	}
+	// wrapStreamErrorWith renders the stall into the message (it does not
+	// wrap the sentinel), so the assertion is on the operator-facing text.
+	if !strings.Contains(err.Error(), "quota stopped sending data for 5s") {
+		t.Errorf("the error should be reported as a quota stall, got %v", err)
+	}
+}
+
 func TestStallGuardCloseReleasesTheRequest(t *testing.T) {
 	body := &countingBody{}
 	stopCalled := false

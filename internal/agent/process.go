@@ -62,6 +62,71 @@ type Process struct {
 	exitErr error
 }
 
+// scrubbedEnvPrefixes names the credential families that never reach a
+// child process. A background command is started on model-authored input, so
+// it must not inherit API keys, tokens or private keys from the operator's
+// shell: PATH and HOME travel, secrets do not. The list is prefix-based
+// rather than an exact registry so a vendor's alternate key name is covered
+// without tracking every provider's EnvKeys here, which would couple the
+// agent package to the provider registry.
+var scrubbedEnvPrefixes = []string{
+	"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+	"XAI_API_KEY", "DEEPSEEK_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
+	"GITHUB_TOKEN", "GITHUB_MODELS_TOKEN", "HF_TOKEN", "HUGGINGFACE_API_KEY",
+	"TELEGRAM_BOT_TOKEN",
+}
+
+// scrubbedEnvKey reports whether a variable carries a credential a child
+// process must not see. Suffixes cover the _TOKEN and _SECRET variants; the
+// bare words TOKEN and SECRET stay allowed so PATH-like names keep working.
+func scrubbedEnvKey(name string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(name))
+	if upper == "" {
+		return false
+	}
+	for _, prefix := range scrubbedEnvPrefixes {
+		if strings.HasPrefix(upper, prefix) {
+			return true
+		}
+	}
+	if strings.HasSuffix(upper, "_API_KEY") || strings.HasSuffix(upper, "_API_TOKEN") ||
+		strings.HasSuffix(upper, "_AUTH_TOKEN") || strings.HasSuffix(upper, "_SECRET") ||
+		strings.HasSuffix(upper, "_PRIVATE_KEY") {
+		return true
+	}
+	return false
+}
+
+// mergeProcessEnv builds the child environment: the inherited one minus
+// credentials, with explicit extras layered on top. Extras win over the
+// inherited entry so a worker marker cannot duplicate a key.
+func mergeProcessEnv(inherited []string, extra []string) []string {
+	overrides := map[string]string{}
+	for _, entry := range extra {
+		if key, value, found := strings.Cut(entry, "="); found {
+			overrides[key] = value
+		}
+	}
+	merged := make([]string, 0, len(inherited)+len(overrides))
+	for _, entry := range inherited {
+		key, _, found := strings.Cut(entry, "=")
+		if !found {
+			continue
+		}
+		if _, replaced := overrides[key]; replaced {
+			continue
+		}
+		if scrubbedEnvKey(key) {
+			continue
+		}
+		merged = append(merged, entry)
+	}
+	for key, value := range overrides {
+		merged = append(merged, key+"="+value)
+	}
+	return merged
+}
+
 // stop kills the process and everything it started.
 func (p *Process) stop() {
 	if p.tree != nil && p.cmd != nil {
@@ -260,9 +325,11 @@ func (m *ProcessManager) start(ctx context.Context, dir, shell string, args []st
 	// manager, which kills it on shutdown.
 	cmd := exec.CommandContext(processCtx, shell, args...)
 	cmd.Dir = dir
-	if len(env) > 0 {
-		cmd.Env = append(os.Environ(), env...)
-	}
+	// A background command inherits the operator's shell environment the way
+	// any terminal child would, minus the provider credentials: a dev server
+	// the model starts must not receive API keys it can exfiltrate or leak
+	// into its own logs. Explicit extras still apply on top.
+	cmd.Env = mergeProcessEnv(os.Environ(), env)
 	cmd.Stdout = process.buffer
 	cmd.Stderr = process.buffer
 	cmd.Stdin = strings.NewReader("")

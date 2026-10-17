@@ -20,6 +20,25 @@ func echoArgv(text string) []string {
 	return []string{"sh", "-c", "echo " + text}
 }
 
+// TestChildEnvScrub pins the inheritance boundary: provider credentials
+// never travel to a child process, while PATH-like variables and explicit
+// extras do.
+func TestChildEnvScrub(t *testing.T) {
+	inherited := []string{"PATH=/bin", "HOME=/root", "OPENAI_API_KEY=sk-secret", "MYAPP_SECRET=s", "GITHUB_TOKEN=t"}
+	merged := mergeProcessEnv(inherited, []string{"TERMIXGO_WORKER=1"})
+	joined := "\n" + strings.Join(merged, "\n") + "\n"
+	for _, keep := range []string{"PATH=/bin", "HOME=/root", "TERMIXGO_WORKER=1"} {
+		if !strings.Contains(joined, keep) {
+			t.Errorf("child env should keep %q, got %q", keep, joined)
+		}
+	}
+	for _, drop := range []string{"OPENAI_API_KEY=sk-secret", "MYAPP_SECRET=s", "GITHUB_TOKEN=t"} {
+		if strings.Contains(joined, drop) {
+			t.Errorf("child env must not carry %q", drop)
+		}
+	}
+}
+
 func TestBuildWorkerArgv(t *testing.T) {
 	cases := map[string]string{
 		"":         "claude",

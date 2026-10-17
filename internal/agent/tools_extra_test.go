@@ -11,6 +11,9 @@ import (
 )
 
 func TestHTTPRequestTool(t *testing.T) {
+	// The test server listens on loopback, which the SSRF default refuses;
+	// the opt-in below plays the operator allowing their own machine.
+	t.Setenv("TERMIXGO_ALLOW_PRIVATE_FETCH", "1")
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" && r.Header.Get("X-Custom") == "TermixgoTest" {
 			w.Header().Set("Content-Type", "application/json")
@@ -286,5 +289,99 @@ func TestIsBlockedHostCloudMetadata(t *testing.T) {
 	}
 	if isBlockedHost("example.com") || isBlockedHost("127.0.0.1") || isBlockedHost("localhost") {
 		t.Errorf("legitimate host should not be blocked")
+	}
+}
+
+// TestPrivateHostBoundary pins the SSRF default: private and loopback ranges
+// are refused unless the operator opted in, so a model-authored URL cannot
+// reach the operator's LAN on its own.
+func TestPrivateHostBoundary(t *testing.T) {
+	for _, host := range []string{"127.0.0.1", "localhost", "10.0.0.5", "192.168.1.1", "172.16.0.2", "::1"} {
+		if !isPrivateHost(host) {
+			t.Errorf("host %q should be private", host)
+		}
+	}
+	for _, host := range []string{"example.com", "8.8.8.8", "1.1.1.1"} {
+		if isPrivateHost(host) {
+			t.Errorf("host %q should not be private", host)
+		}
+	}
+	t.Setenv("TERMIXGO_ALLOW_PRIVATE_FETCH", "1")
+	if !allowPrivateFetch() {
+		t.Errorf("the operator opt-in should be honoured")
+	}
+}
+
+// TestArchiveSkipsSymlinks pins the zip boundary: a link to a file outside
+// the workspace must not pull outside bytes into the archive.
+func TestArchiveSkipsSymlinks(t *testing.T) {
+	env := testEnv(t)
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(env.Workspace, "link.txt")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+	tool := &archiveTool{}
+	// A top-level link argument is refused outright: it names a file outside
+	// the workspace, so there is nothing to archive.
+	res, _ := tool.Run(context.Background(), env, map[string]any{
+		"action":       "zip",
+		"archive_path": "sym.zip",
+		"source_paths": []any{"link.txt"},
+	})
+	if !res.IsError {
+		t.Fatalf("zip must refuse a link that points outside the workspace, got %q", res.Output)
+	}
+	// A link nested inside an archived directory is skipped instead: the
+	// directory itself is legitimate, only the link must not pull outside
+	// bytes into the archive.
+	real := filepath.Join(env.Workspace, "real.txt")
+	if err := os.WriteFile(real, []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(env.Workspace, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(sub, "link.txt")); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+	res, _ = tool.Run(context.Background(), env, map[string]any{
+		"action":       "zip",
+		"archive_path": "sub.zip",
+		"source_paths": []any{"sub", "real.txt"},
+	})
+	if res.IsError {
+		t.Fatalf("zip should skip the nested link, not fail: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "2 file(s)") {
+		t.Errorf("only the two real files should be archived, got %q", res.Output)
+	}
+}
+
+// TestFetchToolsRefusePrivateByDefault keeps the SSRF default wired through
+// the fetch tools, while probe_url stays loopback-only by design.
+func TestFetchToolsRefusePrivateByDefault(t *testing.T) {
+	env := testEnv(t)
+	fetch := &webFetchTool{}
+	if res, _ := fetch.Run(context.Background(), env, map[string]any{"url": "http://127.0.0.1:9/nope"}); !res.IsError {
+		t.Fatalf("web_fetch must refuse a loopback URL by default, got %q", res.Output)
+	}
+	httpTool := &httpRequestTool{}
+	if res, _ := httpTool.Run(context.Background(), env, map[string]any{"url": "http://192.168.1.1/api"}); !res.IsError {
+		t.Fatalf("http_request must refuse a private URL by default, got %q", res.Output)
+	}
+	t.Setenv("TERMIXGO_ALLOW_PRIVATE_FETCH", "1")
+	// The opt-in only lifts the guard; the connection itself still fails on
+	// an unroutable TEST-NET address, so the refused message must be gone
+	// even though the attempt cannot succeed here.
+	if res, _ := httpTool.Run(context.Background(), env, map[string]any{"url": "http://192.0.2.1:9/api", "timeout_seconds": 1}); strings.Contains(res.Output, "private or loopback") {
+		t.Fatalf("with the opt-in a private fetch should attempt the connection, got %q", res.Output)
 	}
 }

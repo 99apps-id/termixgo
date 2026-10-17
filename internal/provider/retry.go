@@ -26,6 +26,11 @@ const (
 	baseRetryDelay   = 700 * time.Millisecond
 	maxRetryDelay    = 20 * time.Second
 	streamStallDelay = 90 * time.Second
+	// quotaStallDelay bounds one usage read: the quota fetchers share the
+	// stall guard through quotaRoundTrip. It sits below the 10s round-trip
+	// deadline on purpose, so a silent body fails as a named stall instead of
+	// racing the deadline and reporting a plain timeout.
+	quotaStallDelay = 5 * time.Second
 )
 
 // errStreamStalled reports that the provider accepted the request and then
@@ -46,13 +51,13 @@ func (e *retryError) Unwrap() error { return e.err }
 //
 // Retrying is only safe before the body is consumed: once a caller starts
 // reading streamed chunks the request has already produced output, so this is
-// the only place a retry can happen.
+// the only place a retry can happen. The stall window is a parameter so tests
+// can shorten it and exercise the watchdog without waiting out the real
+// timeout.
 func (c *httpClient) post(ctx context.Context, url string, headers map[string]string, body any) (*http.Response, error) {
 	return c.postWithStall(ctx, url, headers, body, streamStallDelay)
 }
 
-// postWithStall is post with an explicit stall window, which tests shorten so
-// the watchdog can be exercised without waiting out the real timeout.
 func (c *httpClient) postWithStall(ctx context.Context, url string, headers map[string]string, body any, stall time.Duration) (*http.Response, error) {
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -288,9 +293,14 @@ func StallError(err error, timeout time.Duration) (string, bool) {
 
 // wrapStreamError turns a stream read failure into an actionable error. A
 // stall is named separately because its fix differs from an API error: the
-// connection dropped, not the request being wrong.
+// connection dropped, not the request being wrong. The timeout names the
+// window that actually fired, so a quota stall says 5s and a chat stall 90s.
 func wrapStreamError(label string, err error) error {
-	if message, stalled := StallError(err, streamStallDelay); stalled {
+	return wrapStreamErrorWith(label, err, streamStallDelay)
+}
+
+func wrapStreamErrorWith(label string, err error, timeout time.Duration) error {
+	if message, stalled := StallError(err, timeout); stalled {
 		return fmt.Errorf("%s %s", label, message)
 	}
 	return fmt.Errorf("%s stream interrupted: %w", label, err)

@@ -211,53 +211,48 @@ func quotaTimeFromEpoch(epoch float64) *time.Time {
 // read must not cost the operator a turn's worth of waiting, and a failed
 // read degrades to the local gauge rather than an error.
 func quotaGET(ctx context.Context, client *http.Client, url string, headers map[string]string) ([]byte, int, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	request, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, 0, err
 	}
-	for key, value := range headers {
-		request.Header.Set(key, value)
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<14))
-		response.Body.Close()
-	}()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if err != nil {
-		return nil, response.StatusCode, err
-	}
-	return body, response.StatusCode, nil
+	return quotaRoundTrip(ctx, client, request, headers)
 }
 
 // quotaPOST is quotaGET with a JSON body, for the Antigravity quota summary
 // endpoint which takes its project in the body.
 func quotaPOST(ctx context.Context, client *http.Client, url string, headers map[string]string, body string) ([]byte, int, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
+	request, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
 	if err != nil {
 		return nil, 0, err
 	}
+	return quotaRoundTrip(ctx, client, request, headers)
+}
+
+// quotaRoundTrip performs one bounded usage read. The body is small, but a
+// stalled one would still hold the gauge past its timeout, so the stall guard
+// turns provider silence into a clear failure the same way the chat path
+// does.
+func quotaRoundTrip(ctx context.Context, client *http.Client, request *http.Request, headers map[string]string) ([]byte, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	for key, value := range headers {
 		request.Header.Set(key, value)
 	}
-	response, err := client.Do(request)
+	response, err := client.Do(request.WithContext(ctx))
 	if err != nil {
 		return nil, 0, err
 	}
+	// The guard stops the stalled read through the request context, which the
+	// deferred cancel above still bounds: whichever fires first, the pending
+	// read unblocks instead of holding the gauge past its timeout.
+	response.Body = newStallGuard(response.Body, quotaStallDelay, cancel)
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<14))
 		response.Body.Close()
 	}()
 	payload, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return nil, response.StatusCode, err
+		return nil, response.StatusCode, wrapStreamErrorWith("quota", err, quotaStallDelay)
 	}
 	return payload, response.StatusCode, nil
 }

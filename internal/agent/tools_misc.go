@@ -750,6 +750,34 @@ var (
 // errBlockedRedirect reports a redirect to a host the tool refuses to fetch.
 var errBlockedRedirect = errors.New("redirect target is a link-local or cloud metadata address")
 
+// allowPrivateFetch is an operator opt-in, not a model flag: private and
+// loopback ranges are reachable from the machine by definition, so reaching
+// them on the model's say-so is a request the operator must make. The
+// default keeps fetch tools pointed at public documentation, which is what
+// they are for, while a local docs server stays one env var away.
+//
+// The probe_url tool is the exception: it only ever talks to loopback, so it
+// does not consult this flag.
+func allowPrivateFetch() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("TERMIXGO_ALLOW_PRIVATE_FETCH")), "1")
+}
+
+// isPrivateHost reports loopback, private and other non-public ranges. It is
+// the SSRF boundary the fetch tools enforce unless the operator opted in.
+func isPrivateHost(host string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(host))
+	if trimmed == "" {
+		return false
+	}
+	if strings.EqualFold(trimmed, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(strings.Trim(trimmed, "[]")); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || !ip.IsGlobalUnicast()
+	}
+	return false
+}
+
 // fetchClient is the client web_fetch uses.
 //
 // The direct URL is checked before the request in Run; the redirect is checked
@@ -769,6 +797,13 @@ var fetchClient = &http.Client{
 		if isBlockedHost(request.URL.Hostname()) {
 			return fmt.Errorf("%w: %s", errBlockedRedirect, request.URL.Hostname())
 		}
+		// A redirect is a second URL the model did not choose, so without the
+		// operator opt-in a public page must not bounce the fetch into the
+		// operator's LAN. With the opt-in the operator already allowed
+		// private reads, and a local docs server that redirects is ordinary.
+		if !allowPrivateFetch() && isPrivateHost(request.URL.Hostname()) {
+			return fmt.Errorf("%w: %s", errBlockedRedirect, request.URL.Hostname())
+		}
 		return nil
 	},
 	Timeout: 60 * time.Second,
@@ -782,6 +817,9 @@ func (t *webFetchTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	}
 	if isBlockedHost(parsed.Hostname()) {
 		return Result{Output: "That host is a link-local or cloud metadata address, which the agent does not fetch.", IsError: true}, nil
+	}
+	if !allowPrivateFetch() && isPrivateHost(parsed.Hostname()) {
+		return Result{Output: "That host is a private or loopback address. The agent fetches public URLs; set TERMIXGO_ALLOW_PRIVATE_FETCH=1 to let it read a private host you run.", IsError: true}, nil
 	}
 	forcedReader := argBool(args, "reader", false)
 

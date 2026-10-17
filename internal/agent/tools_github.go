@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -28,6 +29,9 @@ func runGH(ctx context.Context, env *Env, args ...string) (string, error) {
 
 	command := exec.CommandContext(runCtx, "gh", args...)
 	command.Dir = env.Workspace
+	// gh authenticates with its own stored login, so it needs no inherited
+	// provider keys; scrub them the same way shell children are scrubbed.
+	command.Env = mergeProcessEnv(os.Environ(), nil)
 	var buffer bytes.Buffer
 	command.Stdout = &buffer
 	command.Stderr = &buffer

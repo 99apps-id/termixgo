@@ -77,7 +77,10 @@ func Start(ctx context.Context, options Options) (*Client, error) {
 	}
 	command := exec.Command(options.Command, options.Args...)
 	command.Dir = options.Dir
-	command.Env = mergeEnv(os.Environ(), options.Env)
+	// An MCP server is a third-party binary on model-reachable input, so it
+	// inherits a scrubbed environment: PATH to find its interpreter, never
+	// the operator's provider keys. Explicit per-server Env still applies.
+	command.Env = mergeProcessEnvShim(os.Environ(), options.Env)
 	// The server speaks a protocol on stdout, so anything it prints there for
 	// people would corrupt the stream. stderr is where its diagnostics belong,
 	// and that is what gets kept for a failure message.
@@ -467,6 +470,28 @@ func mergeEnv(inherited []string, extra map[string]string) []string {
 		merged = append(merged, key+"="+value)
 	}
 	return merged
+}
+
+// mergeProcessEnvShim is the MCP side of the agent's scrubbed inheritance: a
+// server is a third-party binary, so provider credentials never travel with
+// the inherited environment. It mirrors the agent's scrub rather than
+// importing it, because the agent already depends on this package.
+func mergeProcessEnvShim(inherited []string, extra map[string]string) []string {
+	scrubbed := make([]string, 0, len(inherited))
+	for _, entry := range inherited {
+		key, _, found := strings.Cut(entry, "=")
+		if !found {
+			continue
+		}
+		upper := strings.ToUpper(strings.TrimSpace(key))
+		if strings.HasSuffix(upper, "_API_KEY") || strings.HasSuffix(upper, "_API_TOKEN") ||
+			strings.HasSuffix(upper, "_AUTH_TOKEN") || strings.HasSuffix(upper, "_SECRET") ||
+			strings.HasSuffix(upper, "_PRIVATE_KEY") || strings.HasSuffix(upper, "_BOT_TOKEN") {
+			continue
+		}
+		scrubbed = append(scrubbed, entry)
+	}
+	return mergeEnv(scrubbed, extra)
 }
 
 // ringBuffer keeps the last n bytes written to it. A server's stderr is

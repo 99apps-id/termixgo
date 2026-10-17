@@ -45,6 +45,9 @@ func TestTLSInspectLocalServer(t *testing.T) {
 }
 
 func TestHTTPHeadersAudit(t *testing.T) {
+	// The test server listens on loopback, which the SSRF default refuses;
+	// the opt-in below plays the operator allowing their own machine.
+	t.Setenv("TERMIXGO_ALLOW_PRIVATE_FETCH", "1")
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'")

@@ -16,6 +16,10 @@ import (
 // the cloud metadata address the guard exists to keep out, and the fetch
 // succeeded because only the first URL was ever inspected.
 func TestWebFetchRefusesARedirectToALinkLocalAddress(t *testing.T) {
+	// The test server listens on loopback, which the SSRF default refuses;
+	// the opt-in below plays the operator allowing their own machine, so the
+	// test exercises the redirect target rather than the server address.
+	t.Setenv("TERMIXGO_ALLOW_PRIVATE_FETCH", "1")
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		http.Redirect(writer, request, "http://[fe80::1]/latest/meta-data/", http.StatusFound)
 	}))
@@ -37,6 +41,7 @@ func TestWebFetchRefusesARedirectToALinkLocalAddress(t *testing.T) {
 // TestWebFetchStillFollowsAnAllowedRedirect keeps the guard from becoming a
 // blanket that breaks ordinary pages, which redirect all the time.
 func TestWebFetchStillFollowsAnAllowedRedirect(t *testing.T) {
+	t.Setenv("TERMIXGO_ALLOW_PRIVATE_FETCH", "1")
 	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "text/plain")
 		_, _ = writer.Write([]byte("moved here"))

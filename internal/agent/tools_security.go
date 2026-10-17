@@ -213,6 +213,9 @@ func (t *httpHeadersAuditTool) Run(ctx context.Context, env *Env, args map[strin
 	if isBlockedHost(parsed.Hostname()) {
 		return Result{Output: fmt.Sprintf("host %q is a blocked address", parsed.Hostname()), IsError: true}, nil
 	}
+	if !allowPrivateFetch() && isPrivateHost(parsed.Hostname()) {
+		return Result{Output: fmt.Sprintf("host %q is a private or loopback address; set TERMIXGO_ALLOW_PRIVATE_FETCH=1 to audit a private host you run", parsed.Hostname()), IsError: true}, nil
+	}
 
 	timeoutSec := argInt(args, "timeout_seconds", 10, 1, 30)
 
@@ -232,6 +235,9 @@ func (t *httpHeadersAuditTool) Run(ctx context.Context, env *Env, args map[strin
 			}
 			if isBlockedHost(req.URL.Hostname()) {
 				return fmt.Errorf("redirect to blocked host %q", req.URL.Hostname())
+			}
+			if !allowPrivateFetch() && isPrivateHost(req.URL.Hostname()) {
+				return fmt.Errorf("redirect to private host %q blocked", req.URL.Hostname())
 			}
 			return nil
 		},
@@ -432,6 +438,12 @@ func (t *dnsReconTool) Run(ctx context.Context, env *Env, args map[string]any) (
 
 	if isBlockedHost(domain) {
 		return Result{Output: fmt.Sprintf("domain %q is a blocked address", domain), IsError: true}, nil
+	}
+	// DNS is a lookup, not a connection, but an answer that resolves into
+	// the operator's LAN is the reconnaissance half of the same SSRF, so it
+	// stays behind the same operator opt-in.
+	if !allowPrivateFetch() && isPrivateHost(domain) {
+		return Result{Output: fmt.Sprintf("domain %q is a private or loopback address; set TERMIXGO_ALLOW_PRIVATE_FETCH=1 to recon a private host you run", domain), IsError: true}, nil
 	}
 
 	timeoutSec := argInt(args, "timeout_seconds", 5, 1, 15)

@@ -75,6 +75,9 @@ func (t *httpRequestTool) Run(ctx context.Context, env *Env, args map[string]any
 	if isBlockedHost(parsed.Hostname()) {
 		return Result{Output: fmt.Sprintf("host %q is a blocked address", parsed.Hostname()), IsError: true}, nil
 	}
+	if !allowPrivateFetch() && isPrivateHost(parsed.Hostname()) {
+		return Result{Output: fmt.Sprintf("host %q is a private or loopback address; set TERMIXGO_ALLOW_PRIVATE_FETCH=1 to probe a private host you run", parsed.Hostname()), IsError: true}, nil
+	}
 
 	method := strings.ToUpper(strings.TrimSpace(argString(args, "method")))
 	if method == "" {
@@ -98,6 +101,9 @@ func (t *httpRequestTool) Run(ctx context.Context, env *Env, args map[string]any
 			}
 			if isBlockedHost(req.URL.Hostname()) {
 				return fmt.Errorf("redirect to blocked host %q", req.URL.Hostname())
+			}
+			if !allowPrivateFetch() && isPrivateHost(req.URL.Hostname()) {
+				return fmt.Errorf("redirect to private host %q blocked", req.URL.Hostname())
 			}
 			return nil
 		},
@@ -585,10 +591,28 @@ func (t *archiveTool) Run(ctx context.Context, env *Env, args map[string]any) (R
 				if err != nil {
 					return err
 				}
+				// A symlink inside the sources is not archived: Walk follows
+				// directory links, so a link to /etc or a parent would pull
+				// files from outside the workspace into the archive, and a
+				// link to an absolute target would extract elsewhere on
+				// unzip. Skip both, the same way the unzip side does.
+				if info.Mode()&os.ModeSymlink != 0 {
+					return nil
+				}
 				if info.IsDir() {
 					return nil
 				}
-				relToEnv, _ := filepath.Rel(env.Workspace, path)
+				// A file reached through a symlinked directory would still
+				// carry bytes from outside the workspace: resolve it and keep
+				// only what really lives under the workspace root.
+				resolved, resolveErr := filepath.EvalSymlinks(path)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				if err := checkWorkspacePath(env, resolved); err != nil {
+					return err
+				}
+				relToEnv, _ := filepath.Rel(env.Workspace, resolved)
 				header, err := zip.FileInfoHeader(info)
 				if err != nil {
 					return err

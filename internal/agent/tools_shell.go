@@ -175,6 +175,10 @@ func execute(ctx context.Context, env *Env, command, dir string, timeout time.Du
 	shell, shellArgs := shellForTool(command)
 	process := exec.CommandContext(runCtx, shell, shellArgs...)
 	process.Dir = dir
+	// A foreground command runs on model-authored input, so it gets the same
+	// scrubbed inheritance as a background one: builds and tests need PATH
+	// and HOME, never the operator's provider keys.
+	process.Env = mergeProcessEnv(os.Environ(), nil)
 	var buffer bytes.Buffer
 	process.Stdout = &buffer
 	process.Stderr = &buffer

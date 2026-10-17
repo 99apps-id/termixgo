@@ -346,6 +346,7 @@ func TestWebFetchRefusesMetadataAddresses(t *testing.T) {
 }
 
 func TestWebFetchStripsHTMLAndReportsStatus(t *testing.T) {
+	t.Setenv("TERMIXGO_ALLOW_PRIVATE_FETCH", "1")
 	tool := &webFetchTool{}
 	env := testEnv(t)
 
@@ -429,15 +430,18 @@ func TestHTMLToTextKeepsBlockBoundaries(t *testing.T) {
 }
 
 func TestWebFetchReportsAnUnreachableHost(t *testing.T) {
+	t.Setenv("TERMIXGO_ALLOW_PRIVATE_FETCH", "1")
 	tool := &webFetchTool{}
 	env := testEnv(t)
 	// The reader is pointed at a dead address too, so both the direct fetch and
 	// the automatic reader retry fail deterministically without the network.
+	// A closed loopback port refuses instantly, and the opt-in above lifts
+	// the private-range guard for both URLs.
 	t.Cleanup(func() { webReaderBase = "https://r.jina.ai/" })
 	webReaderBase = "http://127.0.0.1:9/"
 
-	// A port nothing is listening on. 127.0.0.1 is not a blocked host, so the
-	// failure comes from the connection rather than the guard.
+	// A port nothing is listening on, so the failure comes from the
+	// connection rather than the guard.
 	result, err := tool.Run(context.Background(), env, map[string]any{"url": "http://127.0.0.1:9/x"})
 	if err != nil {
 		t.Fatalf("a transport failure must be a tool result, not a Go error: %v", err)
@@ -503,6 +507,7 @@ func TestWebFetchReaderUsesTheReaderHost(t *testing.T) {
 // TestWebFetchTruncatesALargePage keeps one page from filling the context
 // window, which would be reported later as an unexplained trim.
 func TestWebFetchTruncatesALargePage(t *testing.T) {
+	t.Setenv("TERMIXGO_ALLOW_PRIVATE_FETCH", "1")
 	tool := &webFetchTool{}
 	env := testEnv(t)
 

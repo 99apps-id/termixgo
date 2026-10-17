@@ -42,8 +42,29 @@ func TestRenderMermaidGeneratesHTML(t *testing.T) {
 	if !strings.Contains(content, "Client --&gt; Server") && !strings.Contains(content, "Client --> Server") {
 		t.Errorf("expected diagram in HTML, got:\n%s", content)
 	}
-	if !strings.Contains(content, "mermaid.esm.min.mjs") {
+	if !strings.Contains(content, "mermaid.min.js") {
 		t.Errorf("expected mermaid loader in HTML, got:\n%s", content)
+	}
+	if !strings.Contains(content, "integrity=\"sha384-") || !strings.Contains(content, `crossorigin="anonymous"`) {
+		t.Errorf("expected subresource integrity on the mermaid script, got:\n%s", content)
+	}
+}
+
+// TestBrowserTargetValidation pins the launcher boundary: pages and existing
+// files pass, executables-by-string and bare commands do not reach rundll32.
+func TestBrowserTargetValidation(t *testing.T) {
+	for _, ok := range []string{"https://example.com/docs", "http://localhost:3000/"} {
+		if _, err := validateBrowserTarget(ok); err != nil {
+			t.Errorf("validateBrowserTarget(%q): %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "calc.exe", "not-a-file-or-url", "ftp://example.com/x"} {
+		if _, err := validateBrowserTarget(bad); err == nil {
+			t.Errorf("validateBrowserTarget(%q) should be refused", bad)
+		}
+	}
+	if _, err := defaultBrowserHandler(); err != nil {
+		t.Skipf("no system browser handler here: %v", err)
 	}
 }
 

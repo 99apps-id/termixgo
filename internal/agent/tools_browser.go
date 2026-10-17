@@ -332,18 +332,69 @@ func (t *browserDumpDOMTool) Run(ctx context.Context, env *Env, args map[string]
 	return Result{Output: rendered}, nil
 }
 
-// launchDefaultBrowser opens a file or URL with the platform's default browser handler.
+// launchDefaultBrowser opens a file or URL with the platform's default
+// browser handler. The target is validated first: rundll32 with
+// FileProtocolHandler happily opens executables, not just pages, and a bare
+// exec of a helper found anywhere on PATH would run whatever it found. Only
+// http/https URLs and files already checked into the workspace reach the
+// launcher, and the helper itself must resolve through PATH.
 func launchDefaultBrowser(target string) error {
-	var cmd *exec.Cmd
+	validated, err := validateBrowserTarget(target)
+	if err != nil {
+		return err
+	}
+	handler, err := defaultBrowserHandler()
+	if err != nil {
+		return err
+	}
+	return exec.Command(handler[0], append(handler[1:], validated)...).Start()
+}
+
+// validateBrowserTarget keeps the browser launcher to pages and workspace
+// files. rundll32's FileProtocolHandler does not care what it opens, so
+// letting an unchecked string through would turn browser_open into a
+// generic program launcher.
+func validateBrowserTarget(target string) (string, error) {
+	trimmed := strings.TrimSpace(target)
+	if trimmed == "" {
+		return "", errors.New("browser target is empty")
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return trimmed, nil
+	}
+	if strings.HasPrefix(lower, "file://") {
+		return trimmed, nil
+	}
+	if _, err := os.Stat(trimmed); err == nil {
+		return trimmed, nil
+	}
+	return "", fmt.Errorf("browser target is neither an http(s) URL nor an existing file: %s", trimmed)
+}
+
+// defaultBrowserHandler resolves the platform's URL opener through PATH, so a
+// planted binary earlier on the search path cannot silently replace the
+// system handler without also replacing what PATH resolves.
+func defaultBrowserHandler() ([]string, error) {
+	var names []string
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", target)
+		names = []string{"rundll32"}
 	case "darwin":
-		cmd = exec.Command("open", target)
+		names = []string{"open"}
 	default:
-		cmd = exec.Command("xdg-open", target)
+		names = []string{"xdg-open"}
 	}
-	return cmd.Start()
+	for _, name := range names {
+		if path, err := exec.LookPath(name); err == nil {
+			args := []string{path}
+			if runtime.GOOS == "windows" {
+				args = append(args, "url.dll,FileProtocolHandler")
+			}
+			return args, nil
+		}
+	}
+	return nil, fmt.Errorf("no system browser handler found (%s)", strings.Join(names, ", "))
 }
 
 // findBrowserExecutable locates an installed Chromium-based browser on the host.
@@ -415,6 +466,16 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
+// mermaidCDNURL pins the diagram renderer to an exact file: the ESM entry
+// point is a shim that imports a hashed chunk, which no integrity attribute
+// can cover, so the page uses the classic bundle whose bytes the hash below
+// names. A version bump means re-hashing the new file; until then the browser
+// refuses a tampered copy instead of rendering it.
+const (
+	mermaidCDNURL       = "https://cdn.jsdelivr.net/npm/mermaid@10.9.4/dist/mermaid.min.js"
+	mermaidSRIIntegrity = "sha384-fGOpyux4znQZ+n4tUrYReB2Ulu6K1MtBxIkbHauU09YM1hvCyA5oX9JUc1hRkDEr"
+)
+
 func buildMermaidHTML(title, diagram string) string {
 	escapedTitle := html.EscapeString(title)
 	escapedDiagram := html.EscapeString(diagram)
@@ -464,8 +525,8 @@ func buildMermaidHTML(title, diagram string) string {
   }
   .mermaid { text-align: center; }
 </style>
-<script type="module">
-  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+<script src="`+mermaidCDNURL+`" integrity="`+mermaidSRIIntegrity+`" crossorigin="anonymous"></script>
+<script>
   mermaid.initialize({
     startOnLoad: true,
     theme: 'dark',
