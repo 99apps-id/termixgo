@@ -638,10 +638,14 @@ func CreateFileCheckpoint(ctx context.Context, workspace, message string) (FileC
 	if truncated {
 		store.Message += " [snapshot truncated: workspace too large]"
 	}
-	if err := writeFileManifest(workspace, store); err != nil {
+	// The snapshot files land first: a crash between the two writes must not
+	// leave a manifest that names files with no bytes behind them.
+	if err := snapshotFiles(workspace, store); err != nil {
+		_ = os.RemoveAll(filepath.Join(fileCheckpointDir(workspace), store.ID))
 		return FileCheckpoint{}, err
 	}
-	if err := snapshotFiles(workspace, store); err != nil {
+	if err := writeFileManifest(workspace, store); err != nil {
+		_ = os.RemoveAll(filepath.Join(fileCheckpointDir(workspace), store.ID))
 		return FileCheckpoint{}, err
 	}
 	return *store, nil

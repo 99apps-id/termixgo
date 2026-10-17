@@ -325,7 +325,7 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		Model:         provider.WireModel(parent.Config, model),
 		Config:        parent.Config,
 		Env:           child,
-		Tools:         subagentRegistry(string(def.Type), parent.Depth),
+		Tools:         subagentRegistry(string(def.Type), parent.Depth+1),
 		Policy:        subagentPolicy(parent),
 		MaxSteps:      maxSteps,
 		Harness:       string(parent.Config.HarnessProfile),

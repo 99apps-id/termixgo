@@ -97,16 +97,19 @@ var quotaCaches = &quotaCache{
 func (q *quotaCache) fetch(providerID string, force bool, fetch func() *QuotaSnapshot) *QuotaSnapshot {
 	q.mu.Lock()
 	if !force {
+		// An in-flight refresh wins over a stale snapshot: joining it keeps
+		// concurrent readers on one fresh value instead of serving minutes-old
+		// data while the fetch is already running.
+		if call, ok := q.inflight[providerID]; ok {
+			q.mu.Unlock()
+			<-call.done
+			return call.snap
+		}
 		if snap, ok := q.snapshots[providerID]; ok && snap != nil {
 			if time.Since(snap.FetchedAt) < quotaCacheTTL {
 				q.mu.Unlock()
 				return snap
 			}
-		}
-		if call, ok := q.inflight[providerID]; ok {
-			q.mu.Unlock()
-			<-call.done
-			return call.snap
 		}
 	}
 	call := &quotaCall{done: make(chan struct{})}

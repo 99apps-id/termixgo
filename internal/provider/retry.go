@@ -159,7 +159,7 @@ func retryDelay(attempt int, lastErr error) time.Duration {
 		return hinted.after
 	}
 	delay := baseRetryDelay
-	for index := 1; index < attempt-1; index++ {
+	for index := 1; index < attempt; index++ {
 		delay *= 2
 		if delay >= maxRetryDelay {
 			return maxRetryDelay

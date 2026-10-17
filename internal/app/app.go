@@ -748,10 +748,16 @@ func (a *App) Policy() *agent.ApprovalPolicy {
 	return a.policy
 }
 
-// AllowTool permanently allows a tool across sessions.
+// AllowTool permanently allows a tool across sessions. Both maps on the live
+// policy are updated, so subagents inheriting AlwaysAllowed and turns reading
+// SessionAllowed see the answer without waiting for a restart.
 func (a *App) AllowTool(name string) {
 	a.mu.Lock()
 	a.policy.AllowSession(name)
+	if a.policy.AlwaysAllowed == nil {
+		a.policy.AlwaysAllowed = map[string]bool{}
+	}
+	a.policy.AlwaysAllowed[name] = true
 	if !containsString(a.cfg.AlwaysAllowedTools, name) {
 		a.cfg.AlwaysAllowedTools = append(append([]string{}, a.cfg.AlwaysAllowedTools...), name)
 	}
