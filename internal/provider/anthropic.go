@@ -260,15 +260,15 @@ func encodeAnthropicTools(tools []ToolDef) []map[string]any {
 }
 
 // encodeAnthropicMessages builds Messages content. Two rules are load-bearing:
-// tool results must be user-role blocks, and consecutive results must be
-// merged into one user message or the API rejects the sequence.
+// tool results must be user-role blocks, and consecutive results and user turns
+// must be merged into one user message or the API rejects the sequence.
 func encodeAnthropicMessages(messages []Message) []map[string]any {
 	out := make([]map[string]any, 0, len(messages))
 	for index := 0; index < len(messages); index++ {
 		message := messages[index]
 		switch message.Role {
 		case RoleUser:
-			out = append(out, map[string]any{"role": "user", "content": anthropicUserContent(message)})
+			out = appendAnthropicUserTurn(out, anthropicUserContent(message))
 		case RoleAssistant:
 			blocks := make([]map[string]any, 0, len(message.ToolCalls)+1)
 			if strings.TrimSpace(message.Content) != "" {
@@ -292,10 +292,39 @@ func encodeAnthropicMessages(messages []Message) []map[string]any {
 				index++
 				results = append(results, anthropicToolResult(messages[index]))
 			}
-			out = append(out, map[string]any{"role": "user", "content": results})
+			out = appendAnthropicUserTurn(out, results)
 		}
 	}
 	return out
+}
+
+func appendAnthropicUserTurn(out []map[string]any, content any) []map[string]any {
+	if len(out) > 0 && out[len(out)-1]["role"] == "user" {
+		last := out[len(out)-1]
+		var blocks []map[string]any
+		switch c := last["content"].(type) {
+		case string:
+			if strings.TrimSpace(c) != "" {
+				blocks = []map[string]any{{"type": "text", "text": c}}
+			}
+		case []map[string]any:
+			blocks = c
+		}
+		switch n := content.(type) {
+		case string:
+			if strings.TrimSpace(n) != "" {
+				blocks = append(blocks, map[string]any{"type": "text", "text": n})
+			}
+		case []map[string]any:
+			blocks = append(blocks, n...)
+		}
+		if len(blocks) == 0 {
+			blocks = []map[string]any{{"type": "text", "text": ""}}
+		}
+		last["content"] = blocks
+		return out
+	}
+	return append(out, map[string]any{"role": "user", "content": content})
 }
 
 func anthropicUserContent(message Message) any {

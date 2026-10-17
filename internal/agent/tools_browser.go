@@ -44,7 +44,8 @@ func (t *browserOpenTool) Run(ctx context.Context, env *Env, args map[string]any
 	}
 
 	target := raw
-	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") && !strings.HasPrefix(raw, "file://") {
+	lower := strings.ToLower(raw)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") && !strings.HasPrefix(lower, "file://") {
 		// Treat as local file path
 		resolved := resolvePath(env, raw)
 		if err := checkWorkspacePath(env, resolved); err != nil {
@@ -188,7 +189,7 @@ func (t *browserScreenshotTool) Run(ctx context.Context, env *Env, args map[stri
 	}
 
 	if strings.HasPrefix(strings.ToLower(targetURL), "file://") {
-		filePath := strings.TrimPrefix(targetURL, "file://")
+		filePath := targetURL[len("file://"):]
 		if runtime.GOOS == "windows" {
 			filePath = strings.TrimPrefix(filePath, "/")
 		}
@@ -290,7 +291,7 @@ func (t *browserDumpDOMTool) Run(ctx context.Context, env *Env, args map[string]
 	}
 
 	if strings.HasPrefix(strings.ToLower(targetURL), "file://") {
-		filePath := strings.TrimPrefix(targetURL, "file://")
+		filePath := targetURL[len("file://"):]
 		if runtime.GOOS == "windows" {
 			filePath = strings.TrimPrefix(filePath, "/")
 		}

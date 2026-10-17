@@ -177,18 +177,24 @@ func sanitizeGoogleSchema(schema map[string]any) map[string]any {
 	if _, ok := out["type"]; !ok {
 		out["type"] = "object"
 	}
-	return pruneUndefinedRequired(out).(map[string]any)
+	return pruneUndefinedRequired(normalizeAntigravityEnums(out)).(map[string]any)
 }
 
 // encodeGoogleContents builds the contents array, matching tool results by
-// function name and merging consecutive results into one user turn.
+// function name and merging consecutive results and user turns into one user turn.
 func encodeGoogleContents(messages []Message) []map[string]any {
 	out := make([]map[string]any, 0, len(messages))
 	for index := 0; index < len(messages); index++ {
 		message := messages[index]
 		switch message.Role {
 		case RoleUser:
-			out = append(out, map[string]any{"role": "user", "parts": googleUserParts(message)})
+			parts := googleUserParts(message)
+			if len(out) > 0 && out[len(out)-1]["role"] == "user" {
+				prevParts := out[len(out)-1]["parts"].([]map[string]any)
+				out[len(out)-1]["parts"] = append(prevParts, parts...)
+				continue
+			}
+			out = append(out, map[string]any{"role": "user", "parts": parts})
 		case RoleAssistant:
 			parts := make([]map[string]any, 0, len(message.ToolCalls)+1)
 			if strings.TrimSpace(message.Content) != "" {
@@ -210,6 +216,11 @@ func encodeGoogleContents(messages []Message) []map[string]any {
 			for index+1 < len(messages) && messages[index+1].Role == RoleTool {
 				index++
 				parts = append(parts, googleFunctionResponse(messages[index]))
+			}
+			if len(out) > 0 && out[len(out)-1]["role"] == "user" {
+				prevParts := out[len(out)-1]["parts"].([]map[string]any)
+				out[len(out)-1]["parts"] = append(prevParts, parts...)
+				continue
 			}
 			out = append(out, map[string]any{"role": "user", "parts": parts})
 		}

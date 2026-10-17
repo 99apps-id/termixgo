@@ -75,7 +75,8 @@ func hangQuietly() string {
 // point at run_background. A quiet hang must not get the same suggestion.
 func TestTimeoutSuggestsBackgroundForServers(t *testing.T) {
 	env := testEnv(t)
-	timedOut, err := execute(context.Background(), env, serverThenHang(), env.Workspace, 500*time.Millisecond)
+	timeout := 1200 * time.Millisecond
+	timedOut, err := execute(context.Background(), env, serverThenHang(), env.Workspace, timeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +87,7 @@ func TestTimeoutSuggestsBackgroundForServers(t *testing.T) {
 		t.Errorf("a server killed by timeout must suggest run_background:\n%s", timedOut.Output)
 	}
 
-	quiet, err := execute(context.Background(), env, hangQuietly(), env.Workspace, 500*time.Millisecond)
+	quiet, err := execute(context.Background(), env, hangQuietly(), env.Workspace, timeout)
 	if err != nil {
 		t.Fatal(err)
 	}

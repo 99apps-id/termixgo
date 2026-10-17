@@ -625,3 +625,64 @@ func TestClaudeOAuthCloaksToolsAndDecloaksTheStream(t *testing.T) {
 		t.Errorf("the decoy tools should be present: %#v", gotTools)
 	}
 }
+
+func TestEncodeAnthropicMessagesMergesConsecutiveUserTurnsAndImages(t *testing.T) {
+	messages := []Message{
+		{Role: RoleUser, Content: "look at this"},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "t1", Name: "read_image", Arguments: "{}"}}},
+		{Role: RoleTool, ToolID: "t1", Content: "read ok"},
+		{Role: RoleUser, Content: "attached", Images: []Image{{MediaType: "image/png", Data: "AQID"}}},
+		{Role: RoleUser, Content: "diagnose please"},
+	}
+
+	encoded := encodeAnthropicMessages(messages)
+	if len(encoded) != 3 {
+		t.Fatalf("expected 3 alternating turns (user, assistant, user), got %d turns: %#v", len(encoded), encoded)
+	}
+	if encoded[0]["role"] != "user" || encoded[1]["role"] != "assistant" || encoded[2]["role"] != "user" {
+		t.Fatalf("roles must strictly alternate: got %v, %v, %v", encoded[0]["role"], encoded[1]["role"], encoded[2]["role"])
+	}
+
+	blocks, ok := encoded[2]["content"].([]map[string]any)
+	if !ok || len(blocks) < 3 {
+		t.Fatalf("merged user turn should contain tool_result, text, and image blocks, got %#v", encoded[2]["content"])
+	}
+}
+
+func TestEncodeGoogleContentsMergesConsecutiveUserTurnsAndImages(t *testing.T) {
+	messages := []Message{
+		{Role: RoleUser, Content: "run probe"},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "t1", Name: "probe", Arguments: "{}"}}},
+		{Role: RoleTool, Name: "probe", Content: "output"},
+		{Role: RoleUser, Content: "nudge after tool"},
+	}
+
+	encoded := encodeGoogleContents(messages)
+	if len(encoded) != 3 {
+		t.Fatalf("expected 3 alternating turns (user, model, user), got %d turns", len(encoded))
+	}
+	if encoded[0]["role"] != "user" || encoded[1]["role"] != "model" || encoded[2]["role"] != "user" {
+		t.Fatalf("roles must alternate between user and model: got %v, %v, %v", encoded[0]["role"], encoded[1]["role"], encoded[2]["role"])
+	}
+	parts := encoded[2]["parts"].([]map[string]any)
+	if len(parts) != 2 {
+		t.Fatalf("expected merged parts (functionResponse + text), got %d parts: %#v", len(parts), parts)
+	}
+}
+
+func TestSanitizeGoogleSchemaStringifiesNumericEnums(t *testing.T) {
+	cleaned := sanitizeGoogleSchema(map[string]any{
+		"type": "object",
+		"properties": map[string]any{"resolution": map[string]any{
+			"type": "integer", "enum": []any{720, 1080, 1440},
+		}},
+	})
+	res := cleaned["properties"].(map[string]any)["resolution"].(map[string]any)
+	if res["type"] != "string" {
+		t.Errorf("resolution type = %#v, want string", res["type"])
+	}
+	enumSlice, ok := res["enum"].([]string)
+	if !ok || len(enumSlice) != 3 || enumSlice[0] != "720" || enumSlice[1] != "1080" || enumSlice[2] != "1440" {
+		t.Errorf("enum = %#v, want [720 1080 1440]", res["enum"])
+	}
+}
