@@ -1,0 +1,10 @@
+Termixgo
+Copyright 2026 99apps-id
+
+Licensed under the Apache License, Version 2.0. A copy of the licence is in the
+LICENSE file at the root of this repository.
+
+Third-party Go modules retain their own licences; see go.sum for the exact
+versions in use. The direct dependencies are the Bubble Tea stack for the
+terminal interface, golang.org/x/term and golang.org/x/sys for terminal and
+process handling, and gopkg.in/yaml.v3 for skill frontmatter.

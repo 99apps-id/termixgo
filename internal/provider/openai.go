@@ -1,0 +1,398 @@
+package provider
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
+)
+
+// openAIClient speaks the chat-completions streaming protocol, which also
+// covers xAI, Groq, Cerebras, DeepSeek, Mistral, Qwen, Zhipu, OpenRouter,
+// LM Studio, MLX, Ollama's compatible endpoint and any custom endpoint.
+type openAIClient struct{ *httpClient }
+
+// streamOptionsProviders are the servers known to accept the OpenAI
+// stream_options field. Sending it to a server that rejects unknown fields
+// would fail the whole request, so the rest go without.
+var streamOptionsProviders = map[string]bool{
+	"openai": true, "groq": true, "cerebras": true, "deepseek": true,
+	"xai": true, "mistral": true, "openrouter": true, "qwen": true, "zhipu": true,
+}
+
+func (c *openAIClient) Stream(ctx context.Context, req ChatRequest, emit func(StreamEvent) error) error {
+	payload := map[string]any{
+		"model":    req.Model,
+		"stream":   true,
+		"messages": c.encodeMessages(req),
+	}
+	if req.Temperature != nil {
+		payload["temperature"] = *req.Temperature
+	}
+	if len(req.Tools) > 0 {
+		payload["tools"] = encodeOpenAITools(req.Tools)
+		payload["tool_choice"] = "auto"
+	}
+	// Kimi and GLM spell the same field with their own value sets, so one
+	// mapping function decides the value rather than the caller.
+	if value := compatibleEffort(c.info.ID, req.Effort); value != "" {
+		payload["reasoning_effort"] = value
+	}
+	if streamOptionsProviders[c.info.ID] {
+		payload["stream_options"] = map[string]any{"include_usage": true}
+	}
+
+	headers := map[string]string{}
+	key := c.currentKey()
+	if key != "" {
+		headers["Authorization"] = "Bearer " + key
+	}
+	extraHeaders(headers, c.info.ID)
+
+	return c.streamWithURL(ctx, c.baseURL+"/chat/completions", headers, payload, emit)
+}
+
+func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers map[string]string, payload map[string]any, emit func(StreamEvent) error) error {
+	response, err := c.post(ctx, url, headers, payload)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+
+	if rl := ParseOpenAIRateLimit(response.Header); rl != nil {
+		_ = emit(StreamEvent{Type: EventRateLimit, RateLimit: rl})
+	}
+
+	reader := newSSEReader(response.Body)
+	accumulator := newToolCallAccumulator()
+	thinkFilter := &thinkTagFilter{}
+	// A server may repeat the request-wide usage on every chunk, so the increase
+	// is emitted rather than each raw report: the agent sums what it is handed,
+	// and forwarding repeats charged the same tokens once per chunk.
+	usage := &cumulativeUsage{}
+	for {
+		payload, err := reader.next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return wrapStreamError(c.info.Label, err)
+		}
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var chunk openAIChunk
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue
+		}
+		if message, reported := inBandError(chunk.Error); reported {
+			// A frame the server meant as a failure has to end the stream as a
+			// failure. It carries no choices, so ignoring it handed the agent a
+			// half-finished answer and a nil error, and the operator read a
+			// rejected request as the model choosing to stop early.
+			return fmt.Errorf("%s stream reported an error: %s", c.info.Label, message)
+		}
+		if chunk.Usage != nil {
+			cached := 0
+			if chunk.Usage.PromptTokensDetails != nil {
+				cached = chunk.Usage.PromptTokensDetails.CachedTokens
+			}
+			// DeepSeek's disk cache is reported through prompt_cache_hit_tokens
+			// rather than prompt_tokens_details.cached_tokens. Its hit part sits
+			// inside prompt_tokens, exactly like the OpenAI cached_tokens field,
+			// so the same "subtract the cached part before applying the full
+			// input rate" rule prices it once.
+			if chunk.Usage.PromptCacheHitTokens > cached {
+				cached = chunk.Usage.PromptCacheHitTokens
+			}
+			reasoningTokens := 0
+			if chunk.Usage.CompletionTokensDetails != nil {
+				reasoningTokens = chunk.Usage.CompletionTokensDetails.ReasoningTokens
+			}
+			if step, ok := usage.step(Usage{
+				PromptTokens:     chunk.Usage.PromptTokens,
+				CompletionTokens: chunk.Usage.CompletionTokens,
+				TotalTokens:      chunk.Usage.TotalTokens,
+				CacheReadTokens:  cached,
+				ReasoningTokens:  reasoningTokens,
+			}); ok {
+				if err := emit(StreamEvent{Type: EventUsage, Usage: &step}); err != nil {
+					return err
+				}
+			}
+		}
+		for _, choice := range chunk.Choices {
+			delta := choice.Delta
+			if thinking := delta.thinking(); thinking != "" {
+				if err := emit(StreamEvent{Type: EventReasoningDelta, Text: thinking}); err != nil {
+					return err
+				}
+				if delta.Content != "" {
+					if err := emit(StreamEvent{Type: EventTextDelta, Text: delta.Content}); err != nil {
+						return err
+					}
+				}
+			} else if delta.Content != "" {
+				if err := thinkFilter.process(delta.Content, emit); err != nil {
+					return err
+				}
+			}
+			for _, call := range delta.ToolCalls {
+				accumulator.add(call)
+			}
+		}
+	}
+
+	for _, call := range accumulator.finish() {
+		if err := emit(StreamEvent{Type: EventToolCall, ToolCall: &call}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// encodeMessages flattens the shared message shape into chat-completions
+// messages.
+//
+// SystemParts, when the caller supplied them, become separate system
+// messages: the static prefix first, the dynamic working plan after. OpenAI
+// and the compatible backends build their prefix cache over the message list
+// in order, so one system block whose tail changes on every todo update
+// invalidated the whole cached prefix each step; two blocks let the static
+// head stay warm while only the small dynamic tail is re-billed.
+func (c *openAIClient) encodeMessages(req ChatRequest) []map[string]any {
+	messages := make([]map[string]any, 0, len(req.Messages)+2)
+	if len(req.SystemParts) > 0 {
+		for _, part := range req.SystemParts {
+			if strings.TrimSpace(part) == "" {
+				continue
+			}
+			messages = append(messages, map[string]any{"role": "system", "content": part})
+		}
+	} else if strings.TrimSpace(req.System) != "" {
+		messages = append(messages, map[string]any{"role": "system", "content": req.System})
+	}
+	for _, message := range req.Messages {
+		switch message.Role {
+		case RoleAssistant:
+			entry := map[string]any{"role": "assistant", "content": nullable(message.Content)}
+			if len(message.ToolCalls) > 0 {
+				calls := make([]map[string]any, 0, len(message.ToolCalls))
+				for _, call := range message.ToolCalls {
+					arguments := call.Arguments
+					if strings.TrimSpace(arguments) == "" {
+						arguments = "{}"
+					}
+					calls = append(calls, map[string]any{
+						"id":   call.ID,
+						"type": "function",
+						"function": map[string]any{
+							"name":      call.Name,
+							"arguments": arguments,
+						},
+					})
+				}
+				entry["tool_calls"] = calls
+			}
+			messages = append(messages, entry)
+		case RoleTool:
+			messages = append(messages, map[string]any{
+				"role":         "tool",
+				"tool_call_id": message.ToolID,
+				"content":      message.Content,
+			})
+		case RoleUser:
+			if len(message.Images) > 0 {
+				messages = append(messages, map[string]any{"role": "user", "content": encodeVisionContent(message)})
+				continue
+			}
+			messages = append(messages, map[string]any{"role": "user", "content": message.Content})
+		}
+	}
+	return messages
+}
+
+func encodeVisionContent(message Message) []map[string]any {
+	parts := make([]map[string]any, 0, len(message.Images)+1)
+	if strings.TrimSpace(message.Content) != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": message.Content})
+	}
+	for _, image := range message.Images {
+		parts = append(parts, map[string]any{
+			"type": "image_url",
+			"image_url": map[string]any{
+				"url": "data:" + image.MediaType + ";base64," + image.Data,
+			},
+		})
+	}
+	return parts
+}
+
+func encodeOpenAITools(tools []ToolDef) []map[string]any {
+	out := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		schema := tool.Schema
+		if schema == nil {
+			schema = map[string]any{"type": "object", "properties": map[string]any{}}
+		}
+		out = append(out, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        tool.Name,
+				"description": tool.Description,
+				"parameters":  schema,
+			},
+		})
+	}
+	return out
+}
+
+func nullable(text string) any {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return text
+}
+
+// extraHeaders adds provider-specific headers that change routing or billing.
+func extraHeaders(headers map[string]string, providerID string) {
+	if providerID == "openrouter" {
+		headers["HTTP-Referer"] = "https://github.com/99apps-id/termixgo"
+		headers["X-Title"] = "Termixgo"
+	}
+}
+
+// thinkTagFilter parses inline <think>...</think> tags emitted inside content
+// deltas by open-source reasoning models (e.g. DeepSeek-R1, Qwen via Ollama)
+// and emits thinking tokens as EventReasoningDelta.
+type thinkTagFilter struct {
+	inThink bool
+}
+
+func (f *thinkTagFilter) process(text string, emit func(StreamEvent) error) error {
+	if text == "" {
+		return nil
+	}
+	remaining := text
+	for len(remaining) > 0 {
+		if !f.inThink {
+			idx := strings.Index(remaining, "<think>")
+			if idx == -1 {
+				return emit(StreamEvent{Type: EventTextDelta, Text: remaining})
+			}
+			if idx > 0 {
+				if err := emit(StreamEvent{Type: EventTextDelta, Text: remaining[:idx]}); err != nil {
+					return err
+				}
+			}
+			f.inThink = true
+			remaining = remaining[idx+len("<think>"):]
+		} else {
+			idx := strings.Index(remaining, "</think>")
+			if idx == -1 {
+				return emit(StreamEvent{Type: EventReasoningDelta, Text: remaining})
+			}
+			if idx > 0 {
+				if err := emit(StreamEvent{Type: EventReasoningDelta, Text: remaining[:idx]}); err != nil {
+					return err
+				}
+			}
+			f.inThink = false
+			remaining = remaining[idx+len("</think>"):]
+		}
+	}
+	return nil
+}
+
+// openAIDelta is one streamed delta. reasoning_content is DeepSeek's field,
+// reasoning is OpenRouter's; both mean "thinking".
+type openAIDelta struct {
+	Content          string            `json:"content"`
+	ReasoningContent string            `json:"reasoning_content"`
+	Reasoning        string            `json:"reasoning"`
+	ToolCalls        []openAIToolDelta `json:"tool_calls"`
+}
+
+func (d openAIDelta) thinking() string {
+	if d.ReasoningContent != "" {
+		return d.ReasoningContent
+	}
+	return d.Reasoning
+}
+
+type openAIToolDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+type openAIChunk struct {
+	Choices []struct {
+		Delta        openAIDelta `json:"delta"`
+		FinishReason string      `json:"finish_reason"`
+	} `json:"choices"`
+	// Error is kept raw on purpose. A gateway reports a failure inside a 200
+	// response as a stream frame, and it does not agree on the shape: OpenRouter
+	// and most inference hosts send an object, some send a bare string, and a
+	// server that adds no error member sends nothing at all. Decoding it into a
+	// struct would make the string form a parse failure, which is then skipped
+	// exactly like the frame this is meant to catch.
+	Error json.RawMessage `json:"error"`
+	Usage *struct {
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		TotalTokens         int `json:"total_tokens"`
+		PromptTokensDetails *struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+		CompletionTokensDetails *struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details"`
+		// DeepSeek reports its disk cache through these two fields instead of
+		// prompt_tokens_details: prompt_cache_hit_tokens is the part served from
+		// the cache at a tenth of the full input rate, prompt_cache_miss_tokens
+		// the part that was not. The hit count is the cache read; the miss count
+		// is already inside prompt_tokens, so recording only the hit keeps the
+		// cached part priced once.
+		PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+		PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
+	} `json:"usage"`
+}
+
+// inBandError reads the error member of a stream frame, if the frame carried
+// one.
+func inBandError(raw json.RawMessage) (string, bool) {
+	text := strings.TrimSpace(string(raw))
+	if text == "" || text == "null" {
+		return "", false
+	}
+	var message struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		// Code is raw because a host may send it as a string or as a number, and
+		// failing the whole decode over that would drop the message with it.
+		Code json.RawMessage `json:"code"`
+	}
+	if json.Unmarshal([]byte(text), &message) == nil {
+		joined := strings.TrimSpace(message.Message)
+		if joined == "" {
+			joined = text
+		}
+		for _, detail := range []string{message.Type, strings.Trim(string(message.Code), `"`)} {
+			if trimmed := strings.TrimSpace(detail); trimmed != "" && trimmed != "null" {
+				joined += " (" + trimmed + ")"
+			}
+		}
+		return clipRunes(joined, 500), true
+	}
+	var plain string
+	if json.Unmarshal([]byte(text), &plain) == nil && strings.TrimSpace(plain) != "" {
+		return clipRunes(strings.TrimSpace(plain), 500), true
+	}
+	return clipRunes(text, 500), true
+}

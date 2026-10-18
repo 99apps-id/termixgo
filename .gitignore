@@ -1,0 +1,50 @@
+# Build output
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Coverage
+coverage
+coverage.out
+coverage.html
+
+# Audit and scratch reports stay on disk, out of history
+AUDIT-*.md
+SCRATCH-*.md
+
+# Go
+vendor/
+
+# Build-time credentials (public installed-app pairs) live here, never in the
+# tree. package.ps1 and the Makefile read it to stamp a release binary.
+.env.local
+
+# Local state that must never be committed
+.termixgo/
+# A lock file an agent test leaves in its package directory.
+internal/agent/.lock
+# The pre-rename state directory. The code stopped writing here when the
+# project became Termixgo, but a tree that still has one must not commit it.
+.termigo/
+secrets.json
+
+# Local tool caches
+.gocache/
+
+# A stray Node dependency tree is never part of this Go module.
+node_modules/
+
+# A downloaded Go toolchain, its tarball and a manual root-level cross-build
+# are never part of this module. The project builds from the installed Go.
+/go/
+go.tar.gz
+/termixgo-linux
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

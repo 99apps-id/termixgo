@@ -1,0 +1,676 @@
+package agent
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/provider"
+	"github.com/99apps-id/termixgo/internal/secrets"
+)
+
+// Session is one conversation, persisted so /sessions and resume work.
+//
+// The fields are unexported and reached through methods because a session is
+// written by the goroutine running a turn while the terminal keeps reading it:
+// the status bar asks for token usage, the transcript for the message list.
+// The race detector caught exactly that, and unexported fields are what stop it
+// recurring, since an unlocked read no longer compiles.
+type Session struct {
+	mu sync.Mutex
+
+	id        string
+	title     string
+	workspace string
+	model     string
+	createdAt time.Time
+	updatedAt time.Time
+
+	messages []provider.Message
+	todos    []Todo
+	usage    provider.Usage
+	costUSD  float64
+	// condensed records that the stored transcript was trimmed to the history
+	// budget at least once, so the operator is told about it once instead of
+	// every turn. It is persisted with the session for the same reason.
+	condensed bool
+}
+
+// sessionJSON is the persisted shape. It mirrors the fields so the on-disk
+// format stays stable across refactors.
+type sessionJSON struct {
+	ID        string             `json:"id"`
+	Title     string             `json:"title"`
+	Workspace string             `json:"workspace"`
+	Model     string             `json:"model"`
+	CreatedAt time.Time          `json:"createdAt"`
+	UpdatedAt time.Time          `json:"updatedAt"`
+	Messages  []provider.Message `json:"messages"`
+	Todos     []Todo             `json:"todos,omitempty"`
+	Usage     provider.Usage     `json:"usage,omitempty"`
+	CostUSD   float64            `json:"costUsd,omitempty"`
+	Condensed bool               `json:"condensed,omitempty"`
+}
+
+// NewSession starts an empty conversation with a random id.
+func NewSession(workspace, model string) *Session {
+	now := time.Now()
+	return &Session{
+		id:        newID(),
+		workspace: workspace,
+		model:     model,
+		createdAt: now,
+		updatedAt: now,
+	}
+}
+
+func newID() string {
+	buffer := make([]byte, 8)
+	if _, err := rand.Read(buffer); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(buffer)
+}
+
+// ID is the session identifier.
+func (s *Session) ID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.id
+}
+
+// adoptID replaces the id with one the caller has already validated.
+//
+// A loaded session takes its id from the file, so without this the stored text
+// decides where the next save writes. LoadSession confines the id it was asked
+// for; this carries that decision into the live object.
+func (s *Session) adoptID(id string) {
+	s.mu.Lock()
+	s.id = id
+	s.mu.Unlock()
+}
+
+// Workspace is the folder the session was started in.
+func (s *Session) Workspace() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.workspace
+}
+
+// Title is the short summary shown in a listing.
+func (s *Session) Title() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.title
+}
+
+// Model is the model id the session runs on.
+func (s *Session) Model() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.model
+}
+
+// SetModel records the model a session is running on.
+//
+// It moves the timestamp like the other setters: a session whose model changed
+// has changed, and the listing sorts by last activity.
+func (s *Session) SetModel(model string) {
+	s.mu.Lock()
+	s.model = model
+	s.updatedAt = time.Now()
+	s.mu.Unlock()
+}
+
+// CreatedAt is when the session began.
+func (s *Session) CreatedAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.createdAt
+}
+
+// UpdatedAt is when the session last changed.
+func (s *Session) UpdatedAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.updatedAt
+}
+
+// Messages returns a snapshot of the conversation.
+//
+// The slice header is copied so a reader can range over it while a turn
+// appends. The messages themselves are never mutated after being added, so
+// sharing the elements is safe and avoids copying every tool result.
+func (s *Session) Messages() []provider.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.messages) == 0 {
+		return nil
+	}
+	snapshot := make([]provider.Message, len(s.messages))
+	copy(snapshot, s.messages)
+	return snapshot
+}
+
+// MessageCount reports how many messages the conversation holds.
+func (s *Session) MessageCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.messages)
+}
+
+// Todos returns a snapshot of the plan stored with the session.
+func (s *Session) Todos() []Todo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.todos) == 0 {
+		return nil
+	}
+	snapshot := make([]Todo, len(s.todos))
+	copy(snapshot, s.todos)
+	return snapshot
+}
+
+// SetTodos records the plan alongside the conversation.
+func (s *Session) SetTodos(todos []Todo) {
+	s.mu.Lock()
+	if len(todos) == 0 {
+		s.todos = nil
+	} else {
+		s.todos = append([]Todo(nil), todos...)
+	}
+	s.updatedAt = time.Now()
+	s.mu.Unlock()
+}
+
+// Usage is the token accounting for the session.
+func (s *Session) Usage() provider.Usage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.usage
+}
+
+// AddUsage folds more token usage into the session.
+func (s *Session) AddUsage(usage provider.Usage) {
+	s.mu.Lock()
+	s.usage = s.usage.Add(usage)
+	s.mu.Unlock()
+}
+
+// ReplaceUsage overwrites the token accounting. A load uses it to repair a
+// total no real run could have produced.
+func (s *Session) ReplaceUsage(usage provider.Usage) {
+	s.mu.Lock()
+	s.usage = usage
+	s.mu.Unlock()
+}
+
+// Cost is the estimated spend across the session.
+func (s *Session) Cost() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.costUSD
+}
+
+// SetCost records the estimated spend, which a resumed session keeps counting
+// against its budget.
+func (s *Session) SetCost(cost float64) {
+	s.mu.Lock()
+	s.costUSD = cost
+	s.updatedAt = time.Now()
+	s.mu.Unlock()
+}
+
+func (s *Session) AddCost(cost float64) {
+	s.mu.Lock()
+	s.costUSD += cost
+	s.updatedAt = time.Now()
+	s.mu.Unlock()
+}
+
+// AddUser appends a user turn.
+func (s *Session) AddUser(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.messages = append(s.messages, provider.Message{Role: provider.RoleUser, Content: text})
+	if strings.TrimSpace(s.title) == "" {
+		s.title = Shorten(text, 60)
+	}
+	s.updatedAt = time.Now()
+}
+
+// AddUserWithImages appends a user turn that carries image attachments, which
+// is how an uploaded image reaches a vision model with its prompt.
+func (s *Session) AddUserWithImages(text string, images []provider.Image) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.messages = append(s.messages, provider.Message{
+		Role:    provider.RoleUser,
+		Content: text,
+		Images:  images,
+	})
+	if strings.TrimSpace(s.title) == "" {
+		s.title = Shorten(text, 60)
+	}
+	s.updatedAt = time.Now()
+}
+
+// AddAssistant appends a completed assistant turn.
+func (s *Session) AddAssistant(text, reasoning string, calls []provider.ToolCall) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.messages = append(s.messages, provider.Message{
+		Role:      provider.RoleAssistant,
+		Content:   text,
+		Reasoning: reasoning,
+		ToolCalls: calls,
+	})
+	s.updatedAt = time.Now()
+}
+
+// AddToolResult appends a tool result.
+func (s *Session) AddToolResult(id, name, output string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.messages = append(s.messages, provider.Message{
+		Role:    provider.RoleTool,
+		Content: output,
+		ToolID:  id,
+		Name:    name,
+	})
+	s.updatedAt = time.Now()
+}
+
+// AddImages appends a user turn carrying image attachments. Providers accept
+// images on a user message but not on a tool message, so a tool that produced an
+// image (read_image) follows its tool result with this call.
+func (s *Session) AddImages(text string, images []provider.Image) {
+	if len(images) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.messages = append(s.messages, provider.Message{
+		Role:    provider.RoleUser,
+		Content: text,
+		Images:  images,
+	})
+	s.updatedAt = time.Now()
+}
+
+// Reset clears the conversation but keeps the identity.
+func (s *Session) Reset() {
+	s.mu.Lock()
+	s.messages = nil
+	s.todos = nil
+	s.usage = provider.Usage{}
+	s.costUSD = 0
+	s.title = ""
+	s.condensed = false
+	s.updatedAt = time.Now()
+	s.mu.Unlock()
+}
+
+// summaryPrefix marks a brief that stands in for turns which are no longer in
+// the history. The model has to know the text is a record, not a fresh
+// instruction, or a summary of an old request reads as a new one.
+const summaryPrefix = "Earlier in this session, condensed:\n"
+
+// InsertSummary replaces the messages before the current turn with one brief of
+// them, keeping the brief's role as user so the sequence stays valid.
+//
+// This is the one place a summary rewrites stored history. It exists because
+// the brief is read on every later step: keeping it only in the request would
+// mean paying for the same summarisation call again at every step, and the
+// point of the call is to stop re-reading the turns it replaced.
+//
+// It refuses to change anything when there is nothing before the current turn
+// to replace, or when an inserted brief would not begin the list, which is the
+// same rule Compact obeys: a request may not open with a tool result.
+func (s *Session) InsertSummary(brief string) bool {
+	trimmed := strings.TrimSpace(brief)
+	if trimmed == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	start := currentTurnStart(s.messages)
+	if start < 1 {
+		return false
+	}
+	replacement := make([]provider.Message, 0, len(s.messages)-start+1)
+	replacement = append(replacement, provider.Message{
+		Role:    provider.RoleUser,
+		Content: summaryPrefix + trimmed,
+	})
+	replacement = append(replacement, s.messages[start:]...)
+	s.messages = replacement
+	s.updatedAt = time.Now()
+	return true
+}
+
+// Turns counts user messages.
+func (s *Session) Turns() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, message := range s.messages {
+		if message.Role == provider.RoleUser {
+			count++
+		}
+	}
+	return count
+}
+
+// LastAssistantText returns the newest non-empty assistant message, which is
+// the answer a caller reports after a turn.
+func (s *Session) LastAssistantText() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := len(s.messages) - 1; index >= 0; index-- {
+		message := s.messages[index]
+		if message.Role == provider.RoleAssistant && strings.TrimSpace(message.Content) != "" {
+			return message.Content
+		}
+	}
+	return ""
+}
+
+// LastAssistantTextSince returns the newest non-empty assistant message at or
+// after mark. With a mark taken before a turn, it reports the answer this turn
+// produced: an empty result means the turn said nothing, which is not the same
+// as the previous turn's answer.
+//
+// The mark is a message count taken before the turn, so trimming the head of
+// the transcript between the mark and this call would leave it past the end and
+// the answer would be missed. The search therefore never starts after the
+// current turn: the messages from there on are what this turn produced.
+func (s *Session) LastAssistantTextSince(mark int) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if mark < 0 {
+		mark = 0
+	}
+	if turnStart := currentTurnStart(s.messages); mark > turnStart {
+		mark = turnStart
+	}
+	for index := len(s.messages) - 1; index >= mark; index-- {
+		message := s.messages[index]
+		if message.Role == provider.RoleAssistant && strings.TrimSpace(message.Content) != "" {
+			return message.Content
+		}
+	}
+	return ""
+}
+
+// CompactStoredHistory trims the stored transcript to the same budget the
+// request uses, and reports whether it changed anything.
+//
+// Without this the transcript grew for the life of a session: every turn
+// appended its tool outputs up to the per-call cap, Save rewrote the whole file
+// at the end of every turn, and nothing ever dropped a message. Compaction only
+// ever bounded the request, so a delivered transcript that the model could not
+// read in full was still kept on disk and in memory forever.
+//
+// It deliberately uses the same rule as the request, so the stored history
+// holds exactly what the model was working from: older turns are elided and the
+// oldest may be dropped, never opening with a tool result. A session with one
+// turn only is left alone, because there is no earlier turn to condense and
+// naming a fresh session reads its turn count.
+func (s *Session) CompactStoredHistory(budgetTokens int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if budgetTokens <= 0 || len(s.messages) <= keepMinMessages {
+		return false
+	}
+	userTurns := 0
+	for _, message := range s.messages {
+		if message.Role == provider.RoleUser {
+			userTurns++
+		}
+	}
+	if userTurns < 2 {
+		return false
+	}
+	before := EstimateMessages(s.messages)
+	if before <= budgetTokens {
+		return false
+	}
+	trimmed := Compact(s.messages, budgetTokens)
+	if after := EstimateMessages(trimmed); after >= before {
+		return false
+	}
+	s.messages = trimmed
+	s.condensed = true
+	s.updatedAt = time.Now()
+	return true
+}
+
+// Condensed reports whether the stored transcript has been trimmed to the
+// history budget, which is what the one-time notice to the operator is for.
+func (s *Session) Condensed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.condensed
+}
+
+// snapshot copies the state for persistence, taken under the lock.
+func (s *Session) snapshot() sessionJSON {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	messages := make([]provider.Message, len(s.messages))
+	copy(messages, s.messages)
+	todos := make([]Todo, len(s.todos))
+	copy(todos, s.todos)
+	return sessionJSON{
+		ID:        s.id,
+		Title:     s.title,
+		Workspace: s.workspace,
+		Model:     s.model,
+		CreatedAt: s.createdAt,
+		UpdatedAt: s.updatedAt,
+		Messages:  messages,
+		Todos:     todos,
+		Usage:     s.usage,
+		CostUSD:   s.costUSD,
+		Condensed: s.condensed,
+	}
+}
+
+// Save writes the session to the state directory.
+func (s *Session) Save() error {
+	dir, err := config.SessionsDir()
+	if err != nil {
+		return err
+	}
+	// The snapshot is taken under the lock and marshalled outside it: holding
+	// the lock through a disk write would block the run for no reason.
+	state := s.snapshot()
+	// The id names the file, so it is checked the same way a read is. Without
+	// this a session whose stored id was "../../pwned" wrote its transcript one
+	// level above the sessions directory, on the first turn after it loaded.
+	if err := checkSessionID(state.ID); err != nil {
+		return fmt.Errorf("cannot save session: %w", err)
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode session: %w", err)
+	}
+	path := filepath.Join(dir, state.ID+".json")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+		return fmt.Errorf("write session: %w", err)
+	}
+	// The mode above only counts on POSIX. On Windows a plain write inherits
+	// the parent directory's grants, and a conversation can contain a key the
+	// operator pasted into it, so the file is restricted explicitly.
+	if err := secrets.RestrictFile(tmp); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("protect session: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("replace session: %w", err)
+	}
+	// A rename can drop a freshly applied ACL on some filesystems.
+	return secrets.RestrictFile(path)
+}
+
+// LoadSession reads one session by id.
+//
+// The id is confined to the sessions directory, the same guard DeleteSession
+// applies. Joining an unchecked id let "../name" read a file one level above the
+// directory, and the id is operator input from /sessions, which is exactly where
+// a separator has to be refused rather than joined.
+func LoadSession(id string) (*Session, error) {
+	if err := checkSessionID(id); err != nil {
+		return nil, err
+	}
+	dir, err := config.SessionsDir()
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(filepath.Join(dir, id+".json"))
+	if err != nil {
+		return nil, fmt.Errorf("read session %s: %w", id, err)
+	}
+	var state sessionJSON
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("parse session %s: %w", id, err)
+	}
+	session := fromJSON(state)
+	session.adoptID(id)
+	repairImpossibleUsage(session)
+	return session, nil
+}
+
+// repairImpossibleUsage resets a stored usage total that no real run could have
+// produced. The old per-chunk accounting counted a step's tokens once for every
+// streamed chunk, so some sessions recorded hundreds of millions of prompt
+// tokens. A request can never exceed the model's context window, so the total
+// across steps cannot exceed the number of steps times the window; a figure
+// past twice that is treated as corrupt and rebuilt from the messages. The cost
+// derived from it is scaled by the same factor.
+func repairImpossibleUsage(session *Session) {
+	messages := session.Messages()
+	steps := 0
+	for _, message := range messages {
+		if message.Role == provider.RoleAssistant {
+			steps++
+		}
+	}
+	if steps == 0 {
+		return
+	}
+	stored := session.Usage()
+	if stored.PromptTokens <= 0 {
+		return
+	}
+	window := provider.DefaultContextWindow
+	if model, ok := provider.ModelByID(session.Model()); ok {
+		window = model.Window()
+	}
+	if int64(stored.PromptTokens) <= int64(steps)*int64(window)*2 {
+		return
+	}
+	recomputed := recomputeUsage(messages)
+	if stored.TotalTokens > 0 {
+		session.SetCost(session.Cost() * float64(recomputed.TotalTokens) / float64(stored.TotalTokens))
+	}
+	session.ReplaceUsage(recomputed)
+}
+
+// recomputeUsage estimates the usage a conversation corresponds to by summing
+// the prompt the model received at each assistant step. It is the honest
+// fallback when a stored total is corrupt, not a replacement for the provider's
+// own number.
+func recomputeUsage(messages []provider.Message) provider.Usage {
+	var usage provider.Usage
+	for index, message := range messages {
+		if message.Role != provider.RoleAssistant {
+			continue
+		}
+		usage.PromptTokens += EstimateMessages(messages[:index])
+		usage.CompletionTokens += estimateMessageTokens(message)
+	}
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	return usage
+}
+
+// fromJSON builds a live session from persisted state.
+func fromJSON(state sessionJSON) *Session {
+	created := state.CreatedAt
+	if created.IsZero() {
+		created = time.Now()
+	}
+	updated := state.UpdatedAt
+	if updated.IsZero() {
+		updated = created
+	}
+	return &Session{
+		id:        state.ID,
+		title:     state.Title,
+		workspace: state.Workspace,
+		model:     state.Model,
+		createdAt: created,
+		updatedAt: updated,
+		messages:  state.Messages,
+		todos:     state.Todos,
+		usage:     state.Usage,
+		costUSD:   state.CostUSD,
+		condensed: state.Condensed,
+	}
+}
+
+// SessionSummary is the listing shown by /sessions.
+type SessionSummary struct {
+	ID        string
+	Title     string
+	Model     string
+	UpdatedAt time.Time
+	Turns     int
+}
+
+// ListSessions returns saved sessions, newest first.
+func ListSessions() ([]SessionSummary, error) {
+	dir, err := config.SessionsDir()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	summaries := make([]SessionSummary, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var state sessionJSON
+		if json.Unmarshal(data, &state) != nil {
+			continue
+		}
+		session := fromJSON(state)
+		summaries = append(summaries, SessionSummary{
+			ID:        session.ID(),
+			Title:     session.Title(),
+			Model:     session.Model(),
+			UpdatedAt: session.UpdatedAt(),
+			Turns:     session.Turns(),
+		})
+	}
+	sort.Slice(summaries, func(i, j int) bool { return summaries[i].UpdatedAt.After(summaries[j].UpdatedAt) })
+	return summaries, nil
+}

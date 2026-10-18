@@ -1,0 +1,925 @@
+package agent
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// gitCommandTimeout bounds one git invocation.
+const gitCommandTimeout = 120 * time.Second
+
+// maxGitOutputChars caps what a git command may return.
+const maxGitOutputChars = 24000
+
+// runGit executes git with explicit arguments, never through a shell.
+//
+// Arguments come from the model, so a shell would turn a file name or a commit
+// message into a command. Passing them as separate argv entries is what keeps a
+// message such as "fix; rm -rf /" literal text.
+func runGit(ctx context.Context, env *Env, args ...string) (string, error) {
+	if !isGitRepository(env.Workspace) {
+		return "", errors.New("this workspace is not a git repository")
+	}
+	runCtx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
+	defer cancel()
+
+	argv := append([]string{"--no-pager"}, args...)
+	command := exec.CommandContext(runCtx, "git", argv...)
+	command.Dir = env.Workspace
+	var buffer bytes.Buffer
+	command.Stdout = &buffer
+	command.Stderr = &buffer
+	command.Stdin = strings.NewReader("")
+	// A hook or credential helper that inherits the output pipe would keep
+	// Wait blocked after a cancel; bound that wait the same way run_command does.
+	command.WaitDelay = processWaitDelay
+
+	err := command.Run()
+	output := strings.TrimRight(buffer.String(), "\n")
+	if len(output) > maxGitOutputChars {
+		output = clipBytes(output, maxGitOutputChars) + "\n... [output truncated]"
+	}
+	if runCtx.Err() == context.DeadlineExceeded {
+		return output, fmt.Errorf("git %s timed out after %s", strings.Join(args, " "), gitCommandTimeout)
+	}
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			if strings.TrimSpace(output) == "" {
+				output = fmt.Sprintf("git exited with code %d", exitErr.ExitCode())
+			}
+			return output, fmt.Errorf("git %s failed: %s", strings.Join(args, " "), output)
+		}
+		return output, fmt.Errorf("could not run git: %w. Is git installed and on PATH?", err)
+	}
+	return output, nil
+}
+
+// maxGitAncestorDepth bounds how many levels above the workspace a .git
+// directory may be found. A monorepo workspace three levels deep is normal;
+// a .git accidentally left in the user's home directory five levels above a
+// temp folder is not.
+const maxGitAncestorDepth = 3
+
+// isGitRepository reports whether the workspace is inside a git work tree
+// whose root is close to the workspace. A .git far up the directory tree
+// (such as an accidental repository in the user's home directory) is rejected
+// because it would make every subfolder look like a repository and give the
+// operator git output from the wrong project.
+func isGitRepository(workspace string) bool {
+	if strings.TrimSpace(workspace) == "" {
+		return false
+	}
+	command := exec.Command("git", "rev-parse", "--show-toplevel")
+	command.Dir = workspace
+	output, err := command.Output()
+	if err != nil {
+		return false
+	}
+	toplevel := canonicalGitPath(strings.TrimSpace(string(output)))
+	absWorkspace := canonicalGitPath(workspace)
+
+	if strings.EqualFold(absWorkspace, toplevel) {
+		return true
+	}
+	// The workspace may be a subdirectory of the toplevel (normal for a
+	// monorepo). Reject if the depth is too large, which catches an
+	// accidental .git at the home-directory or drive-root level.
+	rel, relErr := filepath.Rel(toplevel, absWorkspace)
+	if relErr != nil {
+		return false
+	}
+	// filepath.Rel uses ".." when toplevel is not an ancestor, so reject.
+	if strings.HasPrefix(rel, "..") {
+		return false
+	}
+	depth := 0
+	for _, ch := range filepath.ToSlash(rel) {
+		if ch == '/' {
+			depth++
+		}
+	}
+	return depth <= maxGitAncestorDepth
+}
+
+// canonicalGitPath resolves a path the way git reports its toplevel: absolute,
+// separator-normalised, symlink-free and with any 8.3 short name expanded.
+//
+// A temp directory is a short name on a Windows runner (RUNNER~1) and /var on
+// macOS; git prints the resolved long form. Without resolving the workspace the
+// same way, a real repository would compare unequal and be rejected as "not a
+// git repository".
+func canonicalGitPath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	return filepath.Clean(filepath.FromSlash(path))
+}
+
+// validGitRev keeps a model-supplied revision out of the option position.
+// Real revisions (shas, branch names, ranges) never start with a dash, and
+// whitespace or control bytes would split one argument into several; git
+// itself validates the rest.
+func validGitRev(rev string) bool {
+	if rev == "" || len(rev) > 255 || rev[0] == '-' {
+		return false
+	}
+	for _, r := range rev {
+		if r <= ' ' || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// gitDiffArgv orders one `git diff` call: flags, then an optional base
+// revision behind --end-of-options, then pathspecs. It is pure so the argv
+// shape is assertable without git. An empty base keeps the old behavior.
+func gitDiffArgv(staged, stat bool, base string, paths []string) ([]string, error) {
+	argv := []string{"diff"}
+	if staged {
+		argv = append(argv, "--staged")
+	}
+	if stat {
+		argv = append(argv, "--stat")
+	}
+	if base != "" {
+		if !validGitRev(base) {
+			return nil, fmt.Errorf("invalid base revision %q: a revision cannot start with a dash or contain spaces", base)
+		}
+		argv = append(argv, "--end-of-options", base)
+	}
+	if len(paths) > 0 {
+		argv = append(argv, "--")
+		argv = append(argv, cleanGitPaths(paths)...)
+	}
+	return argv, nil
+}
+
+// cleanGitPaths normalises paths to forward slashes for cross-platform git commands.
+func cleanGitPaths(paths []string) []string {
+	cleaned := make([]string, len(paths))
+	for i, p := range paths {
+		cleaned[i] = filepath.ToSlash(filepath.Clean(p))
+	}
+	return cleaned
+}
+
+type gitStatusTool struct{}
+
+func (t *gitStatusTool) Name() string                      { return "git_status" }
+func (t *gitStatusTool) Aliases() []string                 { return []string{"git_st"} }
+func (t *gitStatusTool) Mutating() bool                    { return false }
+func (t *gitStatusTool) Risk() Risk                        { return RiskEdit }
+func (t *gitStatusTool) Label(a map[string]any) string     { return "Reading git status" }
+func (t *gitStatusTool) DoneLabel(a map[string]any) string { return "Read git status" }
+func (t *gitStatusTool) Description() string {
+	return "Show the working tree status: branch, staged changes, unstaged changes and untracked files. Start here before committing or reverting anything."
+}
+func (t *gitStatusTool) Schema() map[string]any { return object(map[string]any{}) }
+
+func (t *gitStatusTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	output, err := runGit(ctx, env, "status", "--porcelain=v1", "--branch")
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+
+	// Porcelain prints "## main" even when the tree is clean, so the branch
+	// header is separated from the changes rather than being reported as one.
+	branch := ""
+	changes := make([]string, 0, 16)
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimRight(line, "\r")
+		switch {
+		case strings.HasPrefix(trimmed, "## "):
+			branch = strings.TrimPrefix(trimmed, "## ")
+		case strings.TrimSpace(trimmed) != "":
+			changes = append(changes, trimmed)
+		}
+	}
+	if len(changes) == 0 {
+		if branch == "" {
+			return Result{Output: "Clean working tree."}, nil
+		}
+		return Result{Output: "On " + branch + ": clean working tree."}, nil
+	}
+
+	var builder strings.Builder
+	if branch != "" {
+		fmt.Fprintf(&builder, "On %s\n", branch)
+	}
+	builder.WriteString(strings.Join(changes, "\n"))
+	return Result{Output: builder.String()}, nil
+}
+
+type gitDiffTool struct{}
+
+func (t *gitDiffTool) Name() string                      { return "git_diff" }
+func (t *gitDiffTool) Aliases() []string                 { return []string{"git_difference"} }
+func (t *gitDiffTool) Mutating() bool                    { return false }
+func (t *gitDiffTool) Risk() Risk                        { return RiskEdit }
+func (t *gitDiffTool) Label(a map[string]any) string     { return "Reading git diff" }
+func (t *gitDiffTool) DoneLabel(a map[string]any) string { return "Read git diff" }
+func (t *gitDiffTool) Description() string {
+	return "Show the changes in the working tree, staged changes with staged=true, or the change set since a commit with base (e.g. a sha or branch). Pass a path to limit it to one file."
+}
+func (t *gitDiffTool) Schema() map[string]any {
+	return object(map[string]any{
+		"staged": boolProp("Show staged changes instead of unstaged ones."),
+		"path":   strProp("Limit the diff to one file or directory."),
+		"stat":   boolProp("Show only the summary of added and removed lines."),
+		"base":   strProp("Diff against this commit, branch or range instead of HEAD."),
+	})
+}
+
+func (t *gitDiffTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	base := strings.TrimSpace(argString(args, "base", "ref", "since"))
+	paths := argList(args, "path", "paths", "files")
+	argv, argvErr := gitDiffArgv(argBool(args, "staged", false), argBool(args, "stat", false), base, paths)
+	if argvErr != nil {
+		return Result{Output: argvErr.Error(), IsError: true}, nil
+	}
+	output, err := runGit(ctx, env, argv...)
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	if strings.TrimSpace(output) == "" {
+		return Result{Output: "No changes."}, nil
+	}
+	return Result{Output: output}, nil
+}
+
+// gitPushTool publishes the current branch. It takes no arguments at all:
+// a force push or a remote override must go through run_command, where the
+// operator reads it in the approval dialog, not through a model-chosen flag.
+type gitPushTool struct{}
+
+func (t *gitPushTool) Name() string      { return "git_push" }
+func (t *gitPushTool) Aliases() []string { return []string{"git_publish"} }
+func (t *gitPushTool) Mutating() bool    { return true }
+func (t *gitPushTool) Risk() Risk        { return RiskNetwork }
+func (t *gitPushTool) Label(a map[string]any) string {
+	return "Publishing the current branch"
+}
+func (t *gitPushTool) DoneLabel(a map[string]any) string {
+	return "Published the current branch"
+}
+func (t *gitPushTool) Description() string {
+	return "Push the current branch to its upstream remote. No arguments: it never force-pushes and never touches another branch. Commit first; review_changes before this is the convention."
+}
+func (t *gitPushTool) Schema() map[string]any { return object(map[string]any{}) }
+
+func (t *gitPushTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	output, err := runGit(ctx, env, "push")
+	if err != nil {
+		return Result{Output: output, IsError: true}, nil
+	}
+	summary := strings.TrimSpace(output)
+	if summary == "" {
+		summary = "Pushed the current branch."
+	}
+	return Result{Output: summary}, nil
+}
+
+// gitPullTool updates the working branch. --ff-only is the deliberate
+// default: a model that meets divergence should report it, not resolve it
+// with a merge commit nobody asked for.
+type gitPullTool struct{}
+
+func (t *gitPullTool) Name() string      { return "git_pull" }
+func (t *gitPullTool) Aliases() []string { return []string{"git_update", "git_fetch_merge"} }
+func (t *gitPullTool) Mutating() bool    { return true }
+func (t *gitPullTool) Risk() Risk        { return RiskNetwork }
+func (t *gitPullTool) Label(a map[string]any) string {
+	return "Fetching upstream changes"
+}
+func (t *gitPullTool) DoneLabel(a map[string]any) string {
+	return "Fetched upstream changes"
+}
+func (t *gitPullTool) Description() string {
+	return "Pull the latest commits for the current branch, fast-forward only. A refused pull means local work diverged: report it to the operator rather than merging or rebasing behind their back."
+}
+func (t *gitPullTool) Schema() map[string]any { return object(map[string]any{}) }
+
+func (t *gitPullTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	output, err := runGit(ctx, env, "pull", "--ff-only")
+	if err != nil {
+		return Result{Output: output, IsError: true}, nil
+	}
+	summary := strings.TrimSpace(output)
+	if summary == "" {
+		summary = "Already up to date."
+	}
+	return Result{Output: summary}, nil
+}
+
+type gitLogTool struct{}
+
+func (t *gitLogTool) Name() string                      { return "git_log" }
+func (t *gitLogTool) Aliases() []string                 { return []string{"git_history"} }
+func (t *gitLogTool) Mutating() bool                    { return false }
+func (t *gitLogTool) Risk() Risk                        { return RiskEdit }
+func (t *gitLogTool) Label(a map[string]any) string     { return "Reading git log" }
+func (t *gitLogTool) DoneLabel(a map[string]any) string { return "Read git log" }
+func (t *gitLogTool) Description() string {
+	return "Show recent commits, newest first. Use it to match the style of the project's existing commit messages before writing one."
+}
+func (t *gitLogTool) Schema() map[string]any {
+	return object(map[string]any{
+		"limit": intProp("How many commits to show, 1 to 200. Defaults to 20."),
+		"path":  strProp("Limit to commits touching this path."),
+	})
+}
+
+func (t *gitLogTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	limit := argInt(args, "limit", 20, 1, 200)
+	argv := []string{"log", fmt.Sprintf("-%d", limit), "--date=short", "--pretty=format:%h %ad %an: %s"}
+	if paths := argList(args, "path", "paths"); len(paths) > 0 {
+		argv = append(argv, "--")
+		argv = append(argv, paths...)
+	}
+	output, err := runGit(ctx, env, argv...)
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	if strings.TrimSpace(output) == "" {
+		return Result{Output: "No commits yet."}, nil
+	}
+	return Result{Output: output}, nil
+}
+
+type gitShowTool struct{}
+
+func (t *gitShowTool) Name() string      { return "git_show" }
+func (t *gitShowTool) Aliases() []string { return []string{"git_commit_show"} }
+func (t *gitShowTool) Mutating() bool    { return false }
+func (t *gitShowTool) Risk() Risk        { return RiskEdit }
+func (t *gitShowTool) Label(a map[string]any) string {
+	return "Reading commit " + argString(a, "ref")
+}
+func (t *gitShowTool) DoneLabel(a map[string]any) string {
+	return "Read commit " + argString(a, "ref")
+}
+func (t *gitShowTool) Description() string {
+	return "Show one commit, defaulting to HEAD. Use stat=true for the summary instead of the full patch."
+}
+func (t *gitShowTool) Schema() map[string]any {
+	return object(map[string]any{
+		"ref":  strProp("Commit, tag or branch. Defaults to HEAD."),
+		"stat": boolProp("Show the summary instead of the full diff."),
+	})
+}
+
+func (t *gitShowTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	ref := strings.TrimSpace(argString(args, "ref", "commit"))
+	if ref == "" {
+		ref = "HEAD"
+	}
+	if !validGitRev(ref) {
+		return Result{Output: fmt.Sprintf("invalid revision %q: a revision cannot start with a dash or contain whitespace/control characters", ref), IsError: true}, nil
+	}
+	argv := []string{"show"}
+	if argBool(args, "stat", false) {
+		argv = append(argv, "--stat")
+	}
+	argv = append(argv, "--end-of-options", ref)
+	output, err := runGit(ctx, env, argv...)
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	return Result{Output: output}, nil
+}
+
+type gitAddTool struct{}
+
+func (t *gitAddTool) Name() string      { return "git_add" }
+func (t *gitAddTool) Aliases() []string { return []string{"git_stage"} }
+func (t *gitAddTool) Mutating() bool    { return true }
+func (t *gitAddTool) Risk() Risk        { return RiskEdit }
+func (t *gitAddTool) Label(a map[string]any) string {
+	return "Staging " + Shorten(strings.Join(argList(a, "paths", "path", "files"), " "), 50)
+}
+func (t *gitAddTool) DoneLabel(a map[string]any) string {
+	return "Staged " + Shorten(strings.Join(argList(a, "paths", "path", "files"), " "), 50)
+}
+func (t *gitAddTool) Description() string {
+	return "Stage files for the next commit. Pass all_changes=true to stage every change including deletions, which is what a commit of the current work usually wants."
+}
+func (t *gitAddTool) Schema() map[string]any {
+	return object(map[string]any{
+		"paths":       arrayProp("Files to stage. Ignored when all_changes is true.", strProp("A path.")),
+		"all_changes": boolProp("Stage every change in the repository."),
+	})
+}
+
+func (t *gitAddTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	if argBool(args, "all_changes", false) {
+		output, err := runGit(ctx, env, "add", "--all")
+		if err != nil {
+			return Result{Output: err.Error(), IsError: true}, nil
+		}
+		summary := strings.TrimSpace(output)
+		if summary == "" {
+			summary = "Staged every change."
+		}
+		return Result{Output: summary}, nil
+	}
+	paths := cleanGitPaths(argList(args, "paths", "path", "files"))
+	if len(paths) == 0 {
+		return Result{Output: "Give at least one path, or set all_changes=true.", IsError: true}, nil
+	}
+	argv := append([]string{"add", "--"}, paths...)
+	if _, err := runGit(ctx, env, argv...); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	return Result{Output: "Staged: " + strings.Join(paths, ", ")}, nil
+}
+
+type gitCommitTool struct{}
+
+func (t *gitCommitTool) Name() string      { return "git_commit" }
+func (t *gitCommitTool) Aliases() []string { return []string{"git_ci"} }
+func (t *gitCommitTool) Mutating() bool    { return true }
+func (t *gitCommitTool) Risk() Risk        { return RiskEdit }
+func (t *gitCommitTool) Label(a map[string]any) string {
+	return "Committing: " + Shorten(firstLine(argString(a, "message")), 50)
+}
+func (t *gitCommitTool) DoneLabel(a map[string]any) string {
+	return "Committed: " + Shorten(firstLine(argString(a, "message")), 50)
+}
+func (t *gitCommitTool) Description() string {
+	return "Commit staged changes. Stage first with git_add, or set all_changes=true to stage the whole working tree including new files. Use a message that matches the project's existing style, seen in git_log. This does not push."
+}
+func (t *gitCommitTool) Schema() map[string]any {
+	return object(map[string]any{
+		"message":     strProp("Commit message. Meaningful and specific, not 'update'."),
+		"all_changes": boolProp("Stage every change in the working tree, including new files, before committing."),
+		"paths":       arrayProp("Commit only these paths, leaving other staged work alone.", strProp("A path.")),
+	}, "message")
+}
+
+func (t *gitCommitTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	message := strings.TrimSpace(argString(args, "message"))
+	if message == "" {
+		return Result{Output: "message is required", IsError: true}, nil
+	}
+	// `git commit --all` stages tracked modifications only. A file the agent
+	// just wrote is untracked, so a commit that claims to include everything
+	// would silently omit the very change that mattered. Staging explicitly is
+	// what makes the flag mean what it says.
+	if argBool(args, "all_changes", false) {
+		if _, err := runGit(ctx, env, "add", "--all"); err != nil {
+			return Result{Output: err.Error(), IsError: true}, nil
+		}
+	}
+
+	argv := []string{"commit", "-m", message}
+	if paths := cleanGitPaths(argList(args, "paths", "path", "files")); len(paths) > 0 {
+		argv = append(argv, "--")
+		argv = append(argv, paths...)
+	}
+	output, err := runGit(ctx, env, argv...)
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	return Result{Output: output}, nil
+}
+
+type gitBranchTool struct{}
+
+func (t *gitBranchTool) Name() string      { return "git_branch" }
+func (t *gitBranchTool) Aliases() []string { return []string{"git_checkout"} }
+func (t *gitBranchTool) Mutating() bool    { return true }
+func (t *gitBranchTool) Risk() Risk        { return RiskEdit }
+func (t *gitBranchTool) Label(a map[string]any) string {
+	return "Branch " + argString(a, "name")
+}
+func (t *gitBranchTool) DoneLabel(a map[string]any) string {
+	return "Branched " + argString(a, "name")
+}
+func (t *gitBranchTool) Description() string {
+	return "List branches, switch to one, or create one. Uncommitted changes can block a switch, so commit or stash first."
+}
+func (t *gitBranchTool) Schema() map[string]any {
+	return object(map[string]any{
+		"name":   strProp("Branch to switch to. Omit to list branches."),
+		"create": boolProp("Create the branch before switching, as if -b were passed."),
+	})
+}
+
+func (t *gitBranchTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	name := strings.TrimSpace(argString(args, "name", "branch"))
+	if name == "" {
+		output, err := runGit(ctx, env, "branch", "--list", "--format=%(refname:short) %(objectname:short)")
+		if err != nil {
+			return Result{Output: err.Error(), IsError: true}, nil
+		}
+		return Result{Output: output}, nil
+	}
+	if !validGitRev(name) {
+		return Result{Output: fmt.Sprintf("invalid branch name %q: a branch name cannot start with a dash or contain whitespace/control characters", name), IsError: true}, nil
+	}
+	argv := []string{"checkout"}
+	if argBool(args, "create", false) {
+		// `-b <name>` consumes the name as its argument, which git validates,
+		// so a name that looks like an option is rejected rather than obeyed.
+		argv = append(argv, "-b", name)
+	} else {
+		// A switch target the model supplied must not reach git as an option:
+		// a name such as -f would force-switch and discard local changes.
+		argv = append(argv, "--end-of-options", name)
+	}
+	output, err := runGit(ctx, env, argv...)
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	return Result{Output: output}, nil
+}
+
+type gitRestoreTool struct{}
+
+func (t *gitRestoreTool) Name() string      { return "git_restore" }
+func (t *gitRestoreTool) Aliases() []string { return []string{"git_revert", "git_undo"} }
+func (t *gitRestoreTool) Mutating() bool    { return true }
+func (t *gitRestoreTool) Risk() Risk        { return RiskEdit }
+func (t *gitRestoreTool) Label(a map[string]any) string {
+	return "Restoring " + Shorten(strings.Join(argList(a, "paths", "path", "files"), " "), 50)
+}
+func (t *gitRestoreTool) DoneLabel(a map[string]any) string {
+	return "Restored " + Shorten(strings.Join(argList(a, "paths", "path", "files"), " "), 50)
+}
+func (t *gitRestoreTool) Description() string {
+	return "Discard changes to tracked files, returning them to the last commit. Use staged=true to unstage instead of discarding. This loses work, so say what you are reverting before you do it."
+}
+func (t *gitRestoreTool) Schema() map[string]any {
+	return object(map[string]any{
+		"paths":  arrayProp("Files to restore.", strProp("A path.")),
+		"staged": boolProp("Unstage instead of discarding the working tree change."),
+	})
+}
+
+func (t *gitRestoreTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	paths := cleanGitPaths(argList(args, "paths", "path", "files"))
+	if len(paths) == 0 {
+		return Result{Output: "Give at least one path; refusing to discard every change at once.", IsError: true}, nil
+	}
+	argv := []string{"restore"}
+	if argBool(args, "staged", false) {
+		argv = append(argv, "--staged")
+	}
+	argv = append(argv, "--")
+	argv = append(argv, paths...)
+	output, err := runGit(ctx, env, argv...)
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	summary := "Restored: " + strings.Join(paths, ", ")
+	if strings.TrimSpace(output) != "" {
+		summary += "\n" + output
+	}
+	return Result{Output: summary}, nil
+}
+
+type gitBlameTool struct{}
+
+func (t *gitBlameTool) Name() string      { return "git_blame" }
+func (t *gitBlameTool) Aliases() []string { return []string{"blame"} }
+func (t *gitBlameTool) Mutating() bool    { return false }
+func (t *gitBlameTool) Risk() Risk        { return RiskEdit }
+func (t *gitBlameTool) Label(a map[string]any) string {
+	return "Reading git blame " + Shorten(argString(a, "path"), 50)
+}
+func (t *gitBlameTool) DoneLabel(a map[string]any) string {
+	return "Read git blame " + Shorten(argString(a, "path"), 50)
+}
+func (t *gitBlameTool) Description() string {
+	return "Show what revision and author last modified each line of a file. Supports line ranges (start_line, end_line) and revision."
+}
+func (t *gitBlameTool) Schema() map[string]any {
+	return object(map[string]any{
+		"path":       strProp("File path to blame."),
+		"start_line": intProp("First line of the range to blame (1-based)."),
+		"end_line":   intProp("Last line of the range to blame (1-based)."),
+		"revision":   strProp("Commit or revision to blame."),
+	}, "path")
+}
+
+func (t *gitBlameTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	path := argString(args, "path", "file")
+	if strings.TrimSpace(path) == "" {
+		return Result{Output: "Path is required.", IsError: true}, nil
+	}
+	resolved := resolvePath(env, path)
+	if err := checkWorkspacePath(env, resolved); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+
+	argv := []string{"blame"}
+	startLine := argInt(args, "start_line", 0, 1, 1000000)
+	endLine := argInt(args, "end_line", 0, 1, 1000000)
+	if startLine > 0 && endLine > 0 {
+		if startLine > endLine {
+			return Result{Output: "start_line must be less than or equal to end_line.", IsError: true}, nil
+		}
+		argv = append(argv, fmt.Sprintf("-L%d,%d", startLine, endLine))
+	} else if startLine > 0 {
+		argv = append(argv, fmt.Sprintf("-L%d,", startLine))
+	} else if endLine > 0 {
+		argv = append(argv, fmt.Sprintf("-L1,%d", endLine))
+	}
+
+	if rev := strings.TrimSpace(argString(args, "revision", "rev", "commit")); rev != "" {
+		// A revision is model-supplied and must not reach git as an option. A
+		// real revision never starts with a dash, so refusing one keeps it out
+		// of the option position while the path stays behind --.
+		if !validGitRev(rev) {
+			return Result{Output: fmt.Sprintf("invalid revision %q", rev), IsError: true}, nil
+		}
+		argv = append(argv, rev)
+	}
+
+	relPath := displayPath(env, resolved)
+	argv = append(argv, "--", relPath)
+
+	output, err := runGit(ctx, env, argv...)
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	if strings.TrimSpace(output) == "" {
+		return Result{Output: "No blame output."}, nil
+	}
+	return Result{Output: output}, nil
+}
+
+// firstLine is the subject line of a commit message, for compact labels.
+func firstLine(text string) string {
+	if index := strings.IndexByte(text, '\n'); index >= 0 {
+		return strings.TrimSpace(text[:index])
+	}
+	return strings.TrimSpace(text)
+}
+
+type gitStashTool struct{}
+
+func (t *gitStashTool) Name() string      { return "git_stash" }
+func (t *gitStashTool) Aliases() []string { return []string{"stash", "git_stash_push"} }
+func (t *gitStashTool) Mutating() bool    { return true }
+func (t *gitStashTool) Risk() Risk        { return RiskEdit }
+func (t *gitStashTool) Label(a map[string]any) string {
+	msg := argString(a, "message")
+	if msg != "" {
+		return "Stash " + Shorten(msg, 40)
+	}
+	return "Stash working tree"
+}
+func (t *gitStashTool) DoneLabel(a map[string]any) string {
+	return "Stashed changes"
+}
+func (t *gitStashTool) Description() string {
+	return "Park current uncommitted changes in a stash (git stash push), keeping the working tree clean. Use before a risky operation or branch switch."
+}
+func (t *gitStashTool) Schema() map[string]any {
+	return object(map[string]any{
+		"message":           strProp("Optional short label describing the stash."),
+		"include_untracked": boolProp("Include untracked files in the stash (-u)."),
+	})
+}
+func (t *gitStashTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	argv := []string{"stash", "push"}
+	if argBool(args, "include_untracked", false) {
+		argv = append(argv, "-u")
+	}
+	msg := strings.TrimSpace(argString(args, "message"))
+	if msg != "" {
+		argv = append(argv, "-m", msg)
+	}
+	output, err := runGit(ctx, env, argv...)
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	if strings.TrimSpace(output) == "" {
+		output = "Saved working directory state to stash."
+	}
+	return Result{Output: output}, nil
+}
+
+type gitStashPopTool struct{}
+
+func (t *gitStashPopTool) Name() string      { return "git_stash_pop" }
+func (t *gitStashPopTool) Aliases() []string { return []string{"stash_pop"} }
+func (t *gitStashPopTool) Mutating() bool    { return true }
+func (t *gitStashPopTool) Risk() Risk        { return RiskEdit }
+func (t *gitStashPopTool) Label(a map[string]any) string {
+	idx := argString(a, "index")
+	if idx != "" {
+		return "Stash pop " + idx
+	}
+	return "Stash pop newest"
+}
+func (t *gitStashPopTool) DoneLabel(a map[string]any) string {
+	return "Popped stash"
+}
+func (t *gitStashPopTool) Description() string {
+	return "Restore the most recently stashed changes (or a specified stash index) and drop it from the stash list."
+}
+func (t *gitStashPopTool) Schema() map[string]any {
+	return object(map[string]any{
+		"index": strProp("Stash index to restore (defaults to newest, e.g. stash@{0})."),
+	})
+}
+func (t *gitStashPopTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	argv := []string{"stash", "pop"}
+	idx := strings.TrimSpace(argString(args, "index"))
+	if idx != "" {
+		if !validGitRev(idx) {
+			return Result{Output: "invalid stash index: " + idx, IsError: true}, nil
+		}
+		argv = append(argv, "--end-of-options", idx)
+	}
+	output, err := runGit(ctx, env, argv...)
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	return Result{Output: output}, nil
+}
+
+type gitStashListTool struct{}
+
+func (t *gitStashListTool) Name() string      { return "git_stash_list" }
+func (t *gitStashListTool) Aliases() []string { return []string{"stash_list"} }
+func (t *gitStashListTool) Mutating() bool    { return false }
+func (t *gitStashListTool) Risk() Risk        { return RiskEdit }
+func (t *gitStashListTool) Label(a map[string]any) string {
+	return "Listing stashes"
+}
+func (t *gitStashListTool) DoneLabel(a map[string]any) string {
+	return "Listed stashes"
+}
+func (t *gitStashListTool) Description() string {
+	return "List all saved stashes in the git repository."
+}
+func (t *gitStashListTool) Schema() map[string]any {
+	return object(map[string]any{})
+}
+func (t *gitStashListTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	output, err := runGit(ctx, env, "stash", "list")
+	if err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	if strings.TrimSpace(output) == "" {
+		return Result{Output: "No stashes found."}, nil
+	}
+	return Result{Output: output}, nil
+}
+
+type gitConflictsTool struct{}
+
+func (t *gitConflictsTool) Name() string      { return "git_conflicts" }
+func (t *gitConflictsTool) Aliases() []string { return []string{"merge_conflicts", "check_conflicts"} }
+func (t *gitConflictsTool) Mutating() bool    { return false }
+func (t *gitConflictsTool) Risk() Risk        { return RiskEdit }
+func (t *gitConflictsTool) Label(a map[string]any) string {
+	p := argString(a, "path")
+	if p != "" {
+		return "Checking conflicts in " + Shorten(p, 40)
+	}
+	return "Checking git merge conflicts"
+}
+func (t *gitConflictsTool) DoneLabel(a map[string]any) string {
+	return "Checked git merge conflicts"
+}
+func (t *gitConflictsTool) Description() string {
+	return "Inspect and parse unresolved git merge conflicts (<<<<<<<, =======, >>>>>>>). Pass path to scan a specific file, or omit it to automatically detect and scan all unmerged files in the repository."
+}
+func (t *gitConflictsTool) Schema() map[string]any {
+	return object(map[string]any{
+		"path": strProp("Optional file path to inspect. If omitted, all unmerged files in the repository are scanned."),
+	})
+}
+func (t *gitConflictsTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	specificPath := strings.TrimSpace(argString(args, "path"))
+	var filesToScan []string
+
+	if specificPath != "" {
+		filesToScan = append(filesToScan, specificPath)
+	} else {
+		// Detect unmerged files from git diff
+		unmerged, err := runGit(ctx, env, "diff", "--name-only", "--diff-filter=U")
+		if err == nil && strings.TrimSpace(unmerged) != "" {
+			for _, line := range strings.Split(unmerged, "\n") {
+				if trimmed := strings.TrimSpace(line); trimmed != "" {
+					filesToScan = append(filesToScan, trimmed)
+				}
+			}
+		}
+	}
+
+	if len(filesToScan) == 0 {
+		return Result{Output: "No unmerged files or merge conflicts detected in the repository."}, nil
+	}
+
+	type conflictHunk struct {
+		StartLine  int
+		MidLine    int
+		EndLine    int
+		OurLabel   string
+		OurCode    string
+		TheirCode  string
+		TheirLabel string
+	}
+
+	type fileConflict struct {
+		Path  string
+		Hunks []conflictHunk
+	}
+
+	var reports []fileConflict
+	for _, rel := range filesToScan {
+		resolved := resolvePath(env, rel)
+		if err := checkWorkspacePath(env, resolved); err != nil {
+			continue
+		}
+		data, err := os.ReadFile(resolved)
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		var hunks []conflictHunk
+		inConflict := false
+		var current conflictHunk
+		var ourBuf strings.Builder
+		var theirBuf strings.Builder
+		inTheir := false
+
+		for i, line := range lines {
+			lineNum := i + 1
+			trimmed := strings.TrimRight(line, "\r")
+			if strings.HasPrefix(trimmed, "<<<<<<<") {
+				inConflict = true
+				inTheir = false
+				current = conflictHunk{
+					StartLine: lineNum,
+					OurLabel:  strings.TrimSpace(strings.TrimPrefix(trimmed, "<<<<<<<")),
+				}
+				ourBuf.Reset()
+				theirBuf.Reset()
+			} else if inConflict && strings.HasPrefix(trimmed, "=======") {
+				inTheir = true
+				current.MidLine = lineNum
+			} else if inConflict && strings.HasPrefix(trimmed, ">>>>>>>") {
+				current.EndLine = lineNum
+				current.TheirLabel = strings.TrimSpace(strings.TrimPrefix(trimmed, ">>>>>>>"))
+				current.OurCode = ourBuf.String()
+				current.TheirCode = theirBuf.String()
+				hunks = append(hunks, current)
+				inConflict = false
+				inTheir = false
+			} else if inConflict {
+				if inTheir {
+					theirBuf.WriteString(trimmed)
+					theirBuf.WriteByte('\n')
+				} else {
+					ourBuf.WriteString(trimmed)
+					ourBuf.WriteByte('\n')
+				}
+			}
+		}
+
+		if len(hunks) > 0 {
+			reports = append(reports, fileConflict{Path: displayPath(env, resolved), Hunks: hunks})
+		}
+	}
+
+	if len(reports) == 0 {
+		return Result{Output: fmt.Sprintf("Scanned %d file(s); no conflict markers (<<<<<<<) found.", len(filesToScan))}, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Merge Conflicts Detected in %d file(s):\n", len(reports)))
+	for _, f := range reports {
+		sb.WriteString(fmt.Sprintf("\n--- %s (%d conflict hunk(s)) ---\n", f.Path, len(f.Hunks)))
+		for idx, h := range f.Hunks {
+			sb.WriteString(fmt.Sprintf("  [Conflict #%d: lines %d..%d]\n", idx+1, h.StartLine, h.EndLine))
+			sb.WriteString(fmt.Sprintf("  <<<<<<< %s\n", h.OurLabel))
+			for _, l := range strings.Split(strings.TrimRight(h.OurCode, "\n"), "\n") {
+				sb.WriteString("  " + l + "\n")
+			}
+			sb.WriteString("  =======\n")
+			for _, l := range strings.Split(strings.TrimRight(h.TheirCode, "\n"), "\n") {
+				sb.WriteString("  " + l + "\n")
+			}
+			sb.WriteString(fmt.Sprintf("  >>>>>>> %s\n", h.TheirLabel))
+		}
+	}
+	return Result{Output: strings.TrimRight(sb.String(), "\n")}, nil
+}
