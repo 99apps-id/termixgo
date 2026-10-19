@@ -184,7 +184,7 @@ func writeProposal(workspace string, proposal Proposal) error {
 	}
 	path := filepath.Join(dir, proposal.ID+".json")
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(tmp, appendNewline(data), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
@@ -213,4 +213,13 @@ func proposalID() (string, error) {
 		return "", fmt.Errorf("generate a proposal id: %w", err)
 	}
 	return hex.EncodeToString(buffer), nil
+}
+
+// appendNewline returns a copy of data with a trailing newline, allocated on a
+// fresh buffer so json.Marshal output is never overwritten past its length.
+func appendNewline(data []byte) []byte {
+	out := make([]byte, len(data)+1)
+	copy(out, data)
+	out[len(data)] = '\n'
+	return out
 }

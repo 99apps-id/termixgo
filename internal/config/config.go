@@ -269,7 +269,7 @@ func Save(cfg Config) error {
 		return fmt.Errorf("encode config: %w", err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(tmp, appendNewline(data), 0o600); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -439,4 +439,14 @@ func (c Config) SetMCPServerDisabled(name string, disabled bool) (Config, bool) 
 		}
 	}
 	return c, false
+}
+
+// appendNewline returns a copy of data with a trailing newline, allocated on a
+// fresh buffer so json.Marshal output (which may share its backing array) is
+// never overwritten past its length.
+func appendNewline(data []byte) []byte {
+	out := make([]byte, len(data)+1)
+	copy(out, data)
+	out[len(data)] = '\n'
+	return out
 }

@@ -380,12 +380,13 @@ func numOrEmpty(num int) string {
 	return itoa(num)
 }
 
-// padLeft right-aligns text in a field.
+// padLeft right-aligns text in a field, measured in display columns so CJK
+// and other wide glyphs do not misalign the diff columns.
 func padLeft(text string, width int) string {
-	if len(text) >= width {
+	if ansi.StringWidth(text) >= width {
 		return text
 	}
-	return strings.Repeat(" ", width-len(text)) + text
+	return strings.Repeat(" ", width-ansi.StringWidth(text)) + text
 }
 
 // itoa without importing strconv into the render path.

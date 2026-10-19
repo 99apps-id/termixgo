@@ -148,7 +148,7 @@ func (j *ErrorJournal) append(entry journalEntry) error {
 		return err
 	}
 	data, _ := json.Marshal(entry)
-	if _, err := f.Write(append(data, '\n')); err != nil {
+	if _, err := f.Write(appendNewline(data)); err != nil {
 		_ = f.Close()
 		return err
 	}
@@ -172,7 +172,7 @@ func (j *ErrorJournal) append(entry journalEntry) error {
 		var writeErr error
 		for _, e := range trim {
 			data, _ := json.Marshal(e)
-			if _, writeErr = w.Write(append(data, '\n')); writeErr != nil {
+			if _, writeErr = w.Write(appendNewline(data)); writeErr != nil {
 				break
 			}
 		}
@@ -294,4 +294,13 @@ func (p journalPattern) Compare(o journalPattern) int {
 		return cmp.Compare(o.Count, p.Count)
 	}
 	return cmp.Compare(p.Tool, o.Tool)
+}
+
+// appendNewline returns a copy of data with a trailing newline, allocated on a
+// fresh buffer so json.Marshal output is never overwritten past its length.
+func appendNewline(data []byte) []byte {
+	out := make([]byte, len(data)+1)
+	copy(out, data)
+	out[len(data)] = '\n'
+	return out
 }
