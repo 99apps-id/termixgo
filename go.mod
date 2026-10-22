@@ -1,6 +1,6 @@
 module github.com/99apps-id/termixgo
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/charmbracelet/bubbles v1.0.0
