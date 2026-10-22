@@ -245,6 +245,9 @@ func (t *writeFileTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	if err := checkWorkspacePath(env, path); err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
+	if err := checkProtectedPath(env, path); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	// The previous content is kept before it is replaced, so undo_edit can
 	// bring it back. A file that does not exist yet leaves an absent marker
 	// instead, so undoing its creation removes it again.
@@ -327,7 +330,10 @@ func (t *deleteFileTool) Run(ctx context.Context, env *Env, args map[string]any)
 			IsError: true,
 		}, nil
 	}
-	if _, err := os.Stat(path); err != nil {
+	if err := checkProtectedPath(env, path); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	if _, err := os.Lstat(path); err != nil {
 		return Result{Output: openError(err, displayPath(env, path)), IsError: true}, nil
 	}
 	if err := os.RemoveAll(path); err != nil {
@@ -346,6 +352,12 @@ func (t *moveFileTool) Run(ctx context.Context, env *Env, args map[string]any) (
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
 	if err := checkWorkspacePath(env, to); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	if err := checkProtectedPath(env, from); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	if err := checkProtectedPath(env, to); err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
 	// Moving the workspace root would take the session's working directory with

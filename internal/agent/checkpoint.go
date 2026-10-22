@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -560,6 +561,9 @@ func snapshotFiles(workspace string, store *FileCheckpoint) error {
 		source := filepath.Join(workspace, filepath.FromSlash(relative))
 		data, err := os.ReadFile(source)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return err
 		}
 		target := filepath.Join(root, filepath.FromSlash(relative))

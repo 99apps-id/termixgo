@@ -343,6 +343,11 @@ func TestWebFetchRefusesMetadataAddresses(t *testing.T) {
 	if isBlockedHost("example.com") || isBlockedHost("127.0.0.1") {
 		t.Errorf("ordinary hosts must not be blocked")
 	}
+
+	// Suffixes and loopback aliases must be blocked by isPrivateHost
+	if !isPrivateHost("test.localhost") || !isPrivateHost("app.local") || !isPrivateHost("internal.internal") {
+		t.Errorf("private domain suffixes must be identified as private")
+	}
 }
 
 func TestWebFetchStripsHTMLAndReportsStatus(t *testing.T) {

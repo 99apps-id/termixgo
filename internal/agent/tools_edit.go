@@ -62,6 +62,9 @@ func (t *editTool) Run(ctx context.Context, env *Env, args map[string]any) (Resu
 	if err := checkWorkspacePath(env, path); err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
+	if err := checkProtectedPath(env, path); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	result, err := applyEdits(env, path, instructions)
 	if err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
@@ -110,6 +113,9 @@ func (t *multiEditTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	}
 	path := resolvePath(env, raw)
 	if err := checkWorkspacePath(env, path); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
+	if err := checkProtectedPath(env, path); err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
 	result, applyErr := applyEdits(env, path, instructions)

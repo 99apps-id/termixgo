@@ -445,10 +445,13 @@ func (b *Bot) RequestApproval(ctx context.Context, tool, detail, risk string) (s
 	}
 	approval.MsgID = msg.MessageID
 
+	timer := time.NewTimer(3 * time.Minute)
+	defer timer.Stop()
+
 	select {
 	case decision := <-ch:
 		return decision, nil
-	case <-time.After(3 * time.Minute):
+	case <-timer.C:
 		_ = b.client.EditMessageText(ctx, chatID, msg.MessageID, fmt.Sprintf("Approval for %s timed out (denied).", tool))
 		return "deny", nil
 	case <-ctx.Done():

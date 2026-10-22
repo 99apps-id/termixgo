@@ -45,7 +45,26 @@ func (t *browserOpenTool) Run(ctx context.Context, env *Env, args map[string]any
 
 	target := raw
 	lower := strings.ToLower(raw)
-	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") && !strings.HasPrefix(lower, "file://") {
+	if strings.HasPrefix(lower, "file://") {
+		filePath := strings.TrimPrefix(raw, "file://")
+		filePath = strings.TrimPrefix(filePath, "localhost")
+		if runtime.GOOS == "windows" {
+			filePath = strings.TrimLeft(filePath, "/")
+		}
+		resolved := resolvePath(env, filePath)
+		if err := checkWorkspacePath(env, resolved); err != nil {
+			return Result{Output: fmt.Sprintf("cannot open file outside workspace: %v", err), IsError: true}, nil
+		}
+		if _, err := os.Stat(resolved); err != nil {
+			return Result{Output: fmt.Sprintf("target is not an existing local file: %s", raw), IsError: true}, nil
+		}
+		ext := strings.ToLower(filepath.Ext(resolved))
+		switch ext {
+		case ".exe", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".msi", ".com", ".scr", ".sh", ".bash":
+			return Result{Output: fmt.Sprintf("cannot open executable script or program %q in browser", ext), IsError: true}, nil
+		}
+		target = resolved
+	} else if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
 		// Treat as local file path
 		resolved := resolvePath(env, raw)
 		if err := checkWorkspacePath(env, resolved); err != nil {
@@ -362,6 +381,15 @@ func validateBrowserTarget(target string) (string, error) {
 	lower := strings.ToLower(trimmed)
 	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
 		return trimmed, nil
+	}
+	checkExt := trimmed
+	if strings.HasPrefix(lower, "file://") {
+		checkExt = strings.TrimPrefix(trimmed, "file://")
+	}
+	ext := strings.ToLower(filepath.Ext(checkExt))
+	switch ext {
+	case ".exe", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".msi", ".com", ".scr", ".sh", ".bash":
+		return "", fmt.Errorf("cannot open executable %q in browser", ext)
 	}
 	if strings.HasPrefix(lower, "file://") {
 		return trimmed, nil

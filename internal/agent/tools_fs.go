@@ -32,7 +32,7 @@ func resolvePath(env *Env, raw string) string {
 	if filepath.IsAbs(trimmed) {
 		return filepath.Clean(trimmed)
 	}
-	if strings.TrimSpace(env.Workspace) == "" {
+	if env == nil || strings.TrimSpace(env.Workspace) == "" {
 		return filepath.Clean(trimmed)
 	}
 	return filepath.Clean(filepath.Join(env.Workspace, trimmed))
@@ -40,7 +40,7 @@ func resolvePath(env *Env, raw string) string {
 
 // displayPath shortens an absolute path to a workspace-relative one.
 func displayPath(env *Env, path string) string {
-	if strings.TrimSpace(env.Workspace) == "" {
+	if env == nil || strings.TrimSpace(env.Workspace) == "" {
 		return path
 	}
 	relative, err := filepath.Rel(env.Workspace, path)
@@ -99,6 +99,32 @@ func checkWorkspacePath(env *Env, path string) error {
 			}
 		}
 		return fmt.Errorf("path escapes the workspace: %s", displayPath(env, path))
+	}
+	return nil
+}
+
+// checkProtectedPath prevents direct manipulation of internal VCS (.git) metadata
+// or application runtime state through generic file modification tools.
+func checkProtectedPath(env *Env, path string) error {
+	if env == nil || strings.TrimSpace(env.Workspace) == "" {
+		return nil
+	}
+	rel, err := filepath.Rel(env.Workspace, path)
+	if err != nil {
+		if runtime.GOOS == "windows" {
+			relLower, errLower := filepath.Rel(strings.ToLower(env.Workspace), strings.ToLower(path))
+			if errLower == nil && !strings.HasPrefix(relLower, "..") {
+				rel = relLower
+			} else {
+				return nil
+			}
+		} else {
+			return nil
+		}
+	}
+	cleanRel := filepath.ToSlash(filepath.Clean(rel))
+	if cleanRel == ".git" || strings.HasPrefix(cleanRel, ".git/") {
+		return fmt.Errorf("refusing to directly modify .git internal files; use git tools instead")
 	}
 	return nil
 }

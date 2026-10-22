@@ -170,3 +170,49 @@ func TestResolvePathTildeAndSeparators(t *testing.T) {
 		}
 	}
 }
+
+func TestResolvePathNilEnv(t *testing.T) {
+	// Must not panic on nil env
+	got := resolvePath(nil, "relative/file.txt")
+	if got != filepath.Clean("relative/file.txt") {
+		t.Errorf("resolvePath(nil, ...) = %q", got)
+	}
+	disp := displayPath(nil, "some/file.txt")
+	if disp != "some/file.txt" {
+		t.Errorf("displayPath(nil, ...) = %q", disp)
+	}
+}
+
+func TestProtectedPathGitRejection(t *testing.T) {
+	env := testEnv(t)
+	writeTool := &writeFileTool{}
+	delTool := &deleteFileTool{}
+	editTool := &editTool{}
+
+	// Write to .git/hooks/pre-commit refused
+	res, _ := writeTool.Run(context.Background(), env, map[string]any{
+		"path":    ".git/hooks/pre-commit",
+		"content": "#!/bin/sh\nexit 0",
+	})
+	if !res.IsError {
+		t.Fatalf("expected error writing into .git directory")
+	}
+
+	// Delete .git refused
+	res, _ = delTool.Run(context.Background(), env, map[string]any{
+		"path": ".git",
+	})
+	if !res.IsError {
+		t.Fatalf("expected error deleting .git directory")
+	}
+
+	// Edit .git/config refused
+	res, _ = editTool.Run(context.Background(), env, map[string]any{
+		"path":       ".git/config",
+		"old_string": "foo",
+		"new_string": "bar",
+	})
+	if !res.IsError {
+		t.Fatalf("expected error editing .git directory")
+	}
+}

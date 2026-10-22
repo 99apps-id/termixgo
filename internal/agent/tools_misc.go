@@ -769,11 +769,18 @@ func isPrivateHost(host string) bool {
 	if trimmed == "" {
 		return false
 	}
-	if strings.EqualFold(trimmed, "localhost") {
+	if strings.EqualFold(trimmed, "localhost") || strings.HasSuffix(trimmed, ".localhost") || strings.HasSuffix(trimmed, ".local") || strings.HasSuffix(trimmed, ".internal") {
 		return true
 	}
 	if ip := net.ParseIP(strings.Trim(trimmed, "[]")); ip != nil {
 		return ip.IsLoopback() || ip.IsPrivate() || !ip.IsGlobalUnicast()
+	}
+	if ips, err := net.LookupIP(trimmed); err == nil {
+		for _, resolved := range ips {
+			if resolved.IsLoopback() || resolved.IsPrivate() || !resolved.IsGlobalUnicast() {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -896,6 +903,23 @@ func fetchOnce(ctx context.Context, raw string, reader bool) (Result, int, error
 	return Result{Output: text}, response.StatusCode, nil
 }
 
+func isBlockedIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		if (ip4[0] == 169 && ip4[1] == 254) || (ip4[0] == 100 && ip4[1] == 100 && ip4[2] == 100 && ip4[3] == 200) {
+			return true
+		}
+	} else if ip.String() == "fd00:ec2::254" {
+		return true
+	}
+	return false
+}
+
 // isBlockedHost refuses cloud metadata addresses and the link-local range,
 // which are never documentation the model meant to read.
 //
@@ -909,15 +933,13 @@ func isBlockedHost(host string) bool {
 		return true
 	}
 	if ip := net.ParseIP(trimmed); ip != nil {
-		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-			return true
-		}
-		if ip4 := ip.To4(); ip4 != nil {
-			if (ip4[0] == 169 && ip4[1] == 254) || (ip4[0] == 100 && ip4[1] == 100 && ip4[2] == 100 && ip4[3] == 200) {
+		return isBlockedIP(ip)
+	}
+	if ips, err := net.LookupIP(trimmed); err == nil {
+		for _, resolved := range ips {
+			if isBlockedIP(resolved) {
 				return true
 			}
-		} else if trimmed == "fd00:ec2::254" {
-			return true
 		}
 	}
 	return false

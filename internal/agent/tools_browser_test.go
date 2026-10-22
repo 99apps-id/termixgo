@@ -99,6 +99,18 @@ func TestBrowserOpenValidation(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected error for executable file")
 	}
+
+	// Refuse dangerous executable file extension via file:// URL
+	res, _ = tool.Run(context.Background(), env, map[string]any{"url": "file://" + dummyExe})
+	if !res.IsError {
+		t.Fatalf("expected error for executable file via file://")
+	}
+
+	// Refuse file:// escaping workspace
+	res, _ = tool.Run(context.Background(), env, map[string]any{"url": "file://../outside.html"})
+	if !res.IsError {
+		t.Fatalf("expected error for file:// escaping workspace")
+	}
 }
 
 func TestRenderMermaidWorkspaceEscapeRefused(t *testing.T) {
