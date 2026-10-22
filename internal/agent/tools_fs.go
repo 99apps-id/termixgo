@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -16,7 +17,16 @@ func resolvePath(env *Env, raw string) string {
 	}
 	if strings.HasPrefix(trimmed, "~") {
 		if home, err := os.UserHomeDir(); err == nil {
-			trimmed = filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(trimmed, "~"), string(filepath.Separator)))
+			rest := strings.TrimPrefix(trimmed, "~")
+			rest = strings.TrimLeft(rest, "/\\")
+			trimmed = filepath.Join(home, filepath.FromSlash(strings.ReplaceAll(rest, "\\", "/")))
+		}
+	}
+	if runtime.GOOS == "windows" {
+		if len(trimmed) >= 3 && trimmed[0] == '/' && (trimmed[2] == ':' || (len(trimmed) >= 4 && trimmed[3] == ':')) {
+			trimmed = strings.TrimPrefix(trimmed, "/")
+		} else if len(trimmed) >= 3 && trimmed[0] == '/' && ((trimmed[1] >= 'a' && trimmed[1] <= 'z') || (trimmed[1] >= 'A' && trimmed[1] <= 'Z')) && trimmed[2] == '/' {
+			trimmed = string(trimmed[1]) + ":" + trimmed[2:]
 		}
 	}
 	if filepath.IsAbs(trimmed) {
@@ -35,6 +45,12 @@ func displayPath(env *Env, path string) string {
 	}
 	relative, err := filepath.Rel(env.Workspace, path)
 	if err != nil || strings.HasPrefix(relative, "..") {
+		if runtime.GOOS == "windows" {
+			relLower, errLower := filepath.Rel(strings.ToLower(env.Workspace), strings.ToLower(path))
+			if errLower == nil && !strings.HasPrefix(relLower, "..") && !filepath.IsAbs(relLower) {
+				return filepath.ToSlash(relLower)
+			}
+		}
 		return path
 	}
 	return filepath.ToSlash(relative)
@@ -67,9 +83,21 @@ func checkWorkspacePath(env *Env, path string) error {
 	}
 	rel, err := filepath.Rel(workspace, resolved)
 	if err != nil {
+		if runtime.GOOS == "windows" {
+			relLower, errLower := filepath.Rel(strings.ToLower(workspace), strings.ToLower(resolved))
+			if errLower == nil && relLower != ".." && !strings.HasPrefix(relLower, ".."+string(filepath.Separator)) && !filepath.IsAbs(relLower) {
+				return nil
+			}
+		}
 		return fmt.Errorf("cannot resolve path against workspace: %v", err)
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		if runtime.GOOS == "windows" {
+			relLower, errLower := filepath.Rel(strings.ToLower(workspace), strings.ToLower(resolved))
+			if errLower == nil && relLower != ".." && !strings.HasPrefix(relLower, ".."+string(filepath.Separator)) && !filepath.IsAbs(relLower) {
+				return nil
+			}
+		}
 		return fmt.Errorf("path escapes the workspace: %s", displayPath(env, path))
 	}
 	return nil

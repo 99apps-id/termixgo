@@ -1178,7 +1178,8 @@ func serviceInstallDarwin(stdout io.Writer, binary string) error {
 	if err := os.WriteFile(plistPath, []byte(plist), 0o644); err != nil {
 		return fmt.Errorf("cannot write plist: %v", err)
 	}
-	cmd := exec.Command("launchctl", "load", plistPath)
+	_ = exec.Command("launchctl", "unload", plistPath).Run()
+	cmd := exec.Command("launchctl", "load", "-w", plistPath)
 	cmd.Stdout = stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

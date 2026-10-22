@@ -506,7 +506,7 @@ func (s *Session) Save() error {
 	}
 	path := filepath.Join(dir, state.ID+".json")
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(tmp, appendNewline(data), 0o600); err != nil {
 		return fmt.Errorf("write session: %w", err)
 	}
 	// The mode above only counts on POSIX. On Windows a plain write inherits

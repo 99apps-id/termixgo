@@ -226,7 +226,7 @@ func (s *Store) save() error {
 		return fmt.Errorf("encode secrets: %w", err)
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, append(encoded, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(tmp, appendNewline(encoded), 0o600); err != nil {
 		return fmt.Errorf("write secrets: %w", err)
 	}
 	if err := restrictFile(tmp); err != nil {
@@ -298,4 +298,13 @@ func Redact(value string) string {
 		return "********"
 	}
 	return trimmed[:4] + strings.Repeat("*", 6) + trimmed[len(trimmed)-2:]
+}
+
+// appendNewline returns a copy of data with a trailing newline, allocated on a
+// fresh buffer so json.Marshal output is never overwritten past its length.
+func appendNewline(data []byte) []byte {
+	out := make([]byte, len(data)+1)
+	copy(out, data)
+	out[len(data)] = '\n'
+	return out
 }

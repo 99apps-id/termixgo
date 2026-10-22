@@ -208,11 +208,14 @@ func renderDiffSideBySide(files []diffFile, styles Styles, width, maxLines int) 
 	}
 
 	for _, file := range files {
-		title := "  " + file.label
+		var headerStr string
 		if file.adds > 0 || file.dels > 0 {
-			title += "  (+" + itoa(file.adds) + " -" + itoa(file.dels) + ")"
+			headerStr = styles.Heading.Render("  "+file.label) + "  " + styles.Dim.Render("(") + styles.ToolDone.Render("+"+itoa(file.adds)) + " " + styles.ToolError.Render("-"+itoa(file.dels)) + styles.Dim.Render(")")
+			headerStr = truncateANSI(headerStr, width)
+		} else {
+			headerStr = styles.Heading.Render(truncate("  "+file.label, width))
 		}
-		if !emit(styles.Heading.Render(truncate(title, width))) {
+		if !emit(headerStr) {
 			break
 		}
 		rows := pairDiffRows(file.lines)
@@ -326,11 +329,14 @@ func renderDiffUnified(files []diffFile, styles Styles, width, maxLines int) str
 	var out []string
 	count := 0
 	for _, file := range files {
-		head := "  " + file.label
+		var headStr string
 		if file.adds > 0 || file.dels > 0 {
-			head += "  (+" + itoa(file.adds) + " -" + itoa(file.dels) + ")"
+			headStr = styles.Heading.Render("  "+file.label) + "  " + styles.Dim.Render("(") + styles.ToolDone.Render("+"+itoa(file.adds)) + " " + styles.ToolError.Render("-"+itoa(file.dels)) + styles.Dim.Render(")")
+			headStr = truncateANSI(headStr, width)
+		} else {
+			headStr = styles.Heading.Render(truncate("  "+file.label, width))
 		}
-		out = append(out, styles.Heading.Render(truncate(head, width)))
+		out = append(out, headStr)
 		count++
 		for _, line := range file.lines {
 			if maxLines > 0 && count >= maxLines {
@@ -339,29 +345,26 @@ func renderDiffUnified(files []diffFile, styles Styles, width, maxLines int) str
 			}
 			left := padLeft(numOrEmpty(line.oldNum), diffNumWidth)
 			right := padLeft(numOrEmpty(line.newNum), diffNumWidth)
-			marker := " "
 			switch line.kind {
 			case "add":
-				marker = "+"
+				numPrefix := styles.Dim.Render("  " + left + " " + right)
+				gutter := styles.ToolDone.Render(" + ")
+				code := styles.ToolDone.Render(line.text)
+				out = append(out, truncateANSI(numPrefix+gutter+code, width))
 			case "del":
-				marker = "-"
+				numPrefix := styles.Dim.Render("  " + left + " " + right)
+				gutter := styles.ToolError.Render(" - ")
+				code := styles.ToolError.Render(line.text)
+				out = append(out, truncateANSI(numPrefix+gutter+code, width))
 			case "hunk":
 				out = append(out, styles.Dim.Render(truncate("  "+line.text, width)))
-				count++
-				continue
 			case "hdr":
 				out = append(out, styles.Dim.Render(truncate("  "+line.text, width)))
-				count++
-				continue
-			}
-			text := truncate("  "+left+" "+right+" "+marker+" "+line.text, width)
-			switch line.kind {
-			case "add":
-				out = append(out, styles.ToolDone.Render(text))
-			case "del":
-				out = append(out, styles.ToolError.Render(text))
 			default:
-				out = append(out, styles.Dim.Render(text))
+				numPrefix := styles.Dim.Render("  " + left + " " + right)
+				gutter := styles.Dim.Render("   ")
+				code := styles.Dim.Render(line.text)
+				out = append(out, truncateANSI(numPrefix+gutter+code, width))
 			}
 			count++
 		}
@@ -377,12 +380,13 @@ func numOrEmpty(num int) string {
 	return itoa(num)
 }
 
-// padLeft right-aligns text in a field.
+// padLeft right-aligns text in a field, measured in display columns so CJK
+// and other wide glyphs do not misalign the diff columns.
 func padLeft(text string, width int) string {
-	if len(text) >= width {
+	if ansi.StringWidth(text) >= width {
 		return text
 	}
-	return strings.Repeat(" ", width-len(text)) + text
+	return strings.Repeat(" ", width-ansi.StringWidth(text)) + text
 }
 
 // itoa without importing strconv into the render path.

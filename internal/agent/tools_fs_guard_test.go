@@ -149,3 +149,24 @@ func TestMemoryCapKeepsValidUTF8(t *testing.T) {
 		}
 	}
 }
+
+func TestResolvePathTildeAndSeparators(t *testing.T) {
+	env := testEnv(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot resolve home directory")
+	}
+	for _, raw := range []string{"~", "~/", "~\\"} {
+		got := resolvePath(env, raw)
+		if got != filepath.Clean(home) {
+			t.Errorf("resolvePath(%q) = %q, want home %q", raw, got, home)
+		}
+	}
+	for _, raw := range []string{"~/foo/bar", "~\\foo\\bar"} {
+		got := resolvePath(env, raw)
+		want := filepath.Join(home, "foo", "bar")
+		if got != want {
+			t.Errorf("resolvePath(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}

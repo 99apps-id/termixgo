@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -292,14 +293,23 @@ func isWorkspaceRoot(env *Env, path string) bool {
 	if strings.TrimSpace(env.Workspace) == "" || strings.TrimSpace(path) == "" {
 		return false
 	}
-	if filepath.Clean(path) == filepath.Clean(env.Workspace) {
+	pClean := filepath.Clean(path)
+	wClean := filepath.Clean(env.Workspace)
+	if pClean == wClean || (runtime.GOOS == "windows" && strings.EqualFold(pClean, wClean)) {
 		return true
 	}
 	// Compare the resolved forms too: a symlinked spelling of the root must
 	// not slip past the plain-string comparison above.
 	resolvedPath, pathErr := filepath.EvalSymlinks(path)
 	resolvedRoot, rootErr := filepath.EvalSymlinks(env.Workspace)
-	return pathErr == nil && rootErr == nil && filepath.Clean(resolvedPath) == filepath.Clean(resolvedRoot)
+	if pathErr == nil && rootErr == nil {
+		rpClean := filepath.Clean(resolvedPath)
+		rwClean := filepath.Clean(resolvedRoot)
+		if rpClean == rwClean || (runtime.GOOS == "windows" && strings.EqualFold(rpClean, rwClean)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *deleteFileTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {

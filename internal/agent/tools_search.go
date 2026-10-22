@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/99apps-id/termixgo/internal/search"
@@ -222,7 +223,13 @@ func relativeSlash(env *Env, path string) string {
 		return filepath.ToSlash(path)
 	}
 	relative, err := filepath.Rel(env.Workspace, path)
-	if err != nil {
+	if err != nil || strings.HasPrefix(relative, "..") {
+		if runtime.GOOS == "windows" {
+			relLower, errLower := filepath.Rel(strings.ToLower(env.Workspace), strings.ToLower(path))
+			if errLower == nil && !strings.HasPrefix(relLower, "..") && !filepath.IsAbs(relLower) {
+				return filepath.ToSlash(relLower)
+			}
+		}
 		return filepath.ToSlash(path)
 	}
 	return filepath.ToSlash(relative)

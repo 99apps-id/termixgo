@@ -75,7 +75,7 @@ func (l *Ledger) Record(entry Entry) error {
 		return fmt.Errorf("open audit log: %w", err)
 	}
 	defer file.Close()
-	if _, err := file.Write(append(data, '\n')); err != nil {
+	if _, err := file.Write(appendNewline(data)); err != nil {
 		return fmt.Errorf("write audit log: %w", err)
 	}
 	return nil
@@ -116,4 +116,13 @@ func (l *Ledger) Tail(limit int) ([]Entry, error) {
 		ring = append(ring, entry)
 	}
 	return ring, scanner.Err()
+}
+
+// appendNewline returns a copy of data with a trailing newline, allocated on a
+// fresh buffer so json.Marshal output is never overwritten past its length.
+func appendNewline(data []byte) []byte {
+	out := make([]byte, len(data)+1)
+	copy(out, data)
+	out[len(data)] = '\n'
+	return out
 }

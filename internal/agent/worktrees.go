@@ -51,7 +51,7 @@ func saveWorktreeEntries(workspace string, entries []worktreeEntry) error {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(tmp, appendNewline(data), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

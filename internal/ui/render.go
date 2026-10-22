@@ -434,6 +434,16 @@ func renderMarkdown(text string, styles Styles, width int) string {
 		trimmed := strings.TrimRight(raw, " \t\r")
 		if strings.HasPrefix(strings.TrimSpace(trimmed), "```") {
 			inCode = !inCode
+			if inCode {
+				lang := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(trimmed), "```"))
+				if lang != "" {
+					out = append(out, styles.Dim.Render("  ┌─ "+lang+" ─"))
+				} else {
+					out = append(out, styles.Dim.Render("  ┌─────────"))
+				}
+			} else {
+				out = append(out, styles.Dim.Render("  └─────────"))
+			}
 			continue
 		}
 		if inCode {

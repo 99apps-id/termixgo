@@ -286,7 +286,7 @@ func writePreviewLines(builder *strings.Builder, marker byte, lines []string) {
 
 func splitPreviewLines(text string) []string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.Trim(text, "\n")
+	text = strings.TrimSuffix(text, "\n")
 	if text == "" {
 		return nil
 	}

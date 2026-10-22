@@ -26,7 +26,7 @@ LDFLAGS := -s -w \
 	$(AG_ID_LDFLAG) \
 	$(AG_SECRET_LDFLAG)
 
-.PHONY: help build run test lint fmt vet check race clean cross
+.PHONY: help build run test lint fmt vet check race clean cross install uninstall
 
 help:
 	@echo "Termixgo targets:"
@@ -86,3 +86,9 @@ cross:
 
 clean:
 	rm -rf bin dist
+
+install:
+	@sh install.sh -y
+
+uninstall:
+	@sh installer/uninstall.sh

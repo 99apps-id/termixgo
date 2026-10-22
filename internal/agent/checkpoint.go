@@ -542,7 +542,16 @@ func writeFileManifest(workspace string, store *FileCheckpoint) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(snapshotManifestPath(workspace, store.ID), append(data, '\n'), 0o600)
+	path := snapshotManifestPath(workspace, store.ID)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, appendNewline(data), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func snapshotFiles(workspace string, store *FileCheckpoint) error {

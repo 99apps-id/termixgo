@@ -161,9 +161,18 @@ func gitDiffArgv(staged, stat bool, base string, paths []string) ([]string, erro
 	}
 	if len(paths) > 0 {
 		argv = append(argv, "--")
-		argv = append(argv, paths...)
+		argv = append(argv, cleanGitPaths(paths)...)
 	}
 	return argv, nil
+}
+
+// cleanGitPaths normalises paths to forward slashes for cross-platform git commands.
+func cleanGitPaths(paths []string) []string {
+	cleaned := make([]string, len(paths))
+	for i, p := range paths {
+		cleaned[i] = filepath.ToSlash(filepath.Clean(p))
+	}
+	return cleaned
 }
 
 type gitStatusTool struct{}
@@ -425,7 +434,7 @@ func (t *gitAddTool) Run(ctx context.Context, env *Env, args map[string]any) (Re
 		}
 		return Result{Output: summary}, nil
 	}
-	paths := argList(args, "paths", "path", "files")
+	paths := cleanGitPaths(argList(args, "paths", "path", "files"))
 	if len(paths) == 0 {
 		return Result{Output: "Give at least one path, or set all_changes=true.", IsError: true}, nil
 	}
@@ -475,7 +484,7 @@ func (t *gitCommitTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	}
 
 	argv := []string{"commit", "-m", message}
-	if paths := argList(args, "paths", "path", "files"); len(paths) > 0 {
+	if paths := cleanGitPaths(argList(args, "paths", "path", "files")); len(paths) > 0 {
 		argv = append(argv, "--")
 		argv = append(argv, paths...)
 	}
@@ -560,7 +569,7 @@ func (t *gitRestoreTool) Schema() map[string]any {
 }
 
 func (t *gitRestoreTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
-	paths := argList(args, "paths", "path", "files")
+	paths := cleanGitPaths(argList(args, "paths", "path", "files"))
 	if len(paths) == 0 {
 		return Result{Output: "Give at least one path; refusing to discard every change at once.", IsError: true}, nil
 	}

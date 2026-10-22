@@ -1,47 +1,88 @@
-# Termixgo Windows installer
+# Termixgo Installers
 
-Three files, one job: put `termixgo.exe` on your PATH for the current user,
-with no administrator rights and nothing written outside your profile.
+One-click and scripted installers for Termixgo on Linux and Windows. Both install per-user with no root/administrator privileges required by default.
 
-    install.bat       double-click entry point; it runs install.ps1 under
-                      ExecutionPolicy Bypass
-    install.ps1       the installer (copy, user PATH, Start Menu entry,
-                      Add-or-remove-programs registration)
-    uninstall.ps1     removes all of it; keeps your config and keys unless
-                      -Purge is given
+---
 
-## Run it from a source tree
+## Linux
 
-The scripts install the `termixgo.exe` that sits beside them. Build it here
-first, then double-click `install.bat`:
+### Quick Install (Single command)
 
-    go build -o installer/termixgo.exe ./cmd/termixgo
-    installer\install.bat
+Run from the root of the repository:
 
-`termixgo.exe` is git-ignored: this folder is the source of the scripts, not
-a place to commit binaries.
+```bash
+./install.sh
+```
 
-## Run it from a release bundle
+Or from the `installer/` directory:
 
-    powershell -File scripts/make-installer.ps1 -Version 0.1.4 -Commit abc1234 -Binary dist/termixgo-windows-amd64.exe
+```bash
+cd installer && ./install.sh
+```
 
-produces `dist/Termixgo-<version>-windows-amd64-installer.zip`, which holds
-these scripts plus a stamped `termixgo.exe`, the Linux `install.sh`, and
-LICENSE/NOTICE. Extract anywhere and run `install.bat`. `scripts/package.ps1`
-wraps the same flow for a full release.
+### What the Linux Installer Does
 
-## Options
+1. **Auto-Detection:** Detects CPU architecture (`x86_64` / `aarch64`).
+2. **Binary Resolution:** Automatically builds from source if Go is present, or downloads the verified official release binary from GitHub.
+3. **Zero Root:** Installs to `~/.local/bin/termixgo` (no `sudo` needed).
+4. **Shell Integration:** Configures `PATH` in `~/.bashrc`, `~/.zshrc`, or `~/.config/fish/config.fish`.
+5. **Shell Completion:** Generates and installs autocompletion scripts for bash, zsh, and fish.
+6. **Desktop Launcher:** Creates `~/.local/share/applications/termixgo.desktop`.
 
-    powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Source <dir-or-exe>] [-Destination <dir>] [-NoPath] [-NoPause]
+### Linux Options
 
-    -Source       where termixgo.exe lives; default: this folder
-    -Destination  where it lands; default: %LOCALAPPDATA%\Programs\Termixgo
-    -NoPath       do not touch the user PATH (locked-down machines)
-    -NoPause      no "press Enter" at the end; use this for scripted runs
+```bash
+./install.sh [options]
 
-Uninstall:
+  --binary PATH     Use a pre-existing termixgo binary
+  --build           Force building from source using Go
+  --download        Force downloading the official binary from GitHub
+  --version VER     Target release version (default: latest, e.g. 0.1.6)
+  --prefix DIR      Install directory (default: ~/.local/bin)
+  --system          Install system-wide to /usr/local/bin (requires sudo)
+  --desktop         Install .desktop application launcher
+  --service         Install and enable 24/7 background systemd service
+  --no-path         Do not modify shell configuration files
+  --no-completion   Do not install shell completion scripts
+  -y, --yes         Non-interactive mode
+  --uninstall       Uninstall Termixgo
+  --purge           Used with --uninstall to also delete ~/.termixgo (keys & history)
+```
 
-    powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 [-Purge] [-Quiet]
+### Linux Uninstall
 
-or use Add or remove programs, where the install registers itself as
-"Termixgo".
+```bash
+./installer/uninstall.sh
+# or to purge configuration and stored API keys:
+./installer/uninstall.sh --purge
+```
+
+---
+
+## Windows
+
+### Run from a source tree
+
+Build it first, then double-click `install.bat`:
+
+```powershell
+go build -o installer/termixgo.exe ./cmd/termixgo
+installer\install.bat
+```
+
+### Windows Options
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Source <dir-or-exe>] [-Destination <dir>] [-NoPath] [-NoPause]
+
+  -Source       where termixgo.exe lives; default: this folder
+  -Destination  where it lands; default: %LOCALAPPDATA%\Programs\Termixgo
+  -NoPath       do not touch the user PATH
+  -NoPause      no "press Enter" at the end; use this for scripted runs
+```
+
+### Windows Uninstall
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 [-Purge] [-Quiet]
+```

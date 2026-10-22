@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -75,7 +76,22 @@ func Start(ctx context.Context, options Options) (*Client, error) {
 	if strings.TrimSpace(options.Command) == "" {
 		return nil, errors.New("an MCP server needs a command to run; set command in the MCP config")
 	}
-	command := exec.Command(options.Command, options.Args...)
+	cmdName := options.Command
+	cmdArgs := options.Args
+	if runtime.GOOS == "windows" {
+		if binary, lookErr := exec.LookPath(options.Command); lookErr == nil {
+			lower := strings.ToLower(binary)
+			if strings.HasSuffix(lower, ".cmd") || strings.HasSuffix(lower, ".bat") {
+				comspec := os.Getenv("COMSPEC")
+				if comspec == "" {
+					comspec = "cmd.exe"
+				}
+				cmdName = comspec
+				cmdArgs = append([]string{"/c", binary}, options.Args...)
+			}
+		}
+	}
+	command := exec.Command(cmdName, cmdArgs...)
 	command.Dir = options.Dir
 	// An MCP server is a third-party binary on model-reachable input, so it
 	// inherits a scrubbed environment: PATH to find its interpreter, never
