@@ -262,7 +262,7 @@ func suggestFix(tool, err string) string {
 		return "run git init in the workspace or choose a different directory"
 	case strings.Contains(lower, "path escapes the workspace"):
 		return "use paths inside the workspace; ../ traversal is blocked"
-	case strings.Contains(lower, "no API key"):
+	case strings.Contains(lower, "no api key"):
 		return "run /setup to add the provider key"
 	case strings.Contains(lower, "context canceled"):
 		return "the turn was stopped; wait for the operator to retry"

@@ -51,7 +51,9 @@ func (m *Memory) Paths() (project, global string) {
 
 // Remember appends a fact to one scope, enforcing the caps.
 func (m *Memory) Remember(fact, scope string) error {
-	trimmed := strings.TrimSpace(fact)
+	// A fact is one bullet. Newlines would split it into a bullet plus orphan
+	// lines that splitFacts drops on read, or forge a second fact.
+	trimmed := strings.Join(strings.Fields(fact), " ")
 	if trimmed == "" {
 		return errors.New("the fact is empty")
 	}

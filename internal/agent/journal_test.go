@@ -91,6 +91,7 @@ func TestSuggestFixReturnsHints(t *testing.T) {
 		{"read_file", "path escapes the workspace", "use paths inside the workspace"},
 		{"run_command", "permission denied", "check file permissions"},
 		{"git_status", "not a git repository", "run git init"},
+		{"chat", "no API key configured for openai", "run /setup"},
 		{"unknown", "something weird", ""},
 	}
 	for _, tc := range tests {
