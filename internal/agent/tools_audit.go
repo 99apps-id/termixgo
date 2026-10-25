@@ -125,7 +125,7 @@ var defaultAuditRules = []auditRule{
 		RuleID:      "VUL001",
 		Category:    CategorySecurity,
 		Severity:    SeverityHigh,
-		Description: "Insecure TLS certificate verification (InsecureSkipVerify: true)",
+		Description: "Insecure TLS certificate verification (InsecureSkipVerify enabled)",
 		Remedy:      "Enable proper TLS certificate validation to prevent man-in-the-middle attacks",
 		Pattern:     regexp.MustCompile(`InsecureSkipVerify\s*:\s*true`),
 		SkipTests:   true,
