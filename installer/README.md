@@ -61,19 +61,36 @@ cd installer && ./install.sh
 
 ## Windows
 
-### Run from a source tree
+### Quick Install (One-click from source)
 
-Build it first, then double-click `install.bat`:
+Double-click `install.bat` in the root of the repository (or run `install.bat` in a terminal). It compiles `termixgo.exe` if not already built and installs cleanly to `%LOCALAPPDATA%\Programs\Termixgo`.
+
+### Standalone Executable Installer
+
+Download and run `TermixgoSetup.exe` (from `dist/`). It is a standalone zero-dependency installer:
+- Installs to `%LOCALAPPDATA%\Programs\Termixgo`
+- Configures user PATH in registry and broadcasts environment update
+- Creates Start Menu shortcut
+- Registers in Windows Installed apps (Add or remove programs)
+- Supports silent install: `TermixgoSetup.exe --silent`
+- Supports clean uninstall: `TermixgoSetup.exe --uninstall`
+
+### Building the Windows Installer
+
+Run the builder script from PowerShell:
 
 ```powershell
-go build -o installer/termixgo.exe ./cmd/termixgo
-installer\install.bat
+powershell -File scripts/build-windows-installer.ps1
 ```
 
-### Windows Options
+This compiles the latest binary with version stamping and produces:
+- `dist/TermixgoSetup.exe` (standalone single-file installer)
+- `dist/Termixgo-<Version>-windows-amd64-installer.zip` (portable installer bundle)
+
+### Manual Script Options
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Source <dir-or-exe>] [-Destination <dir>] [-NoPath] [-NoPause]
+powershell -NoProfile -ExecutionPolicy Bypass -File installer\install.ps1 [-Source <dir-or-exe>] [-Destination <dir>] [-NoPath] [-NoPause]
 
   -Source       where termixgo.exe lives; default: this folder
   -Destination  where it lands; default: %LOCALAPPDATA%\Programs\Termixgo
@@ -84,5 +101,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Source <dir-or
 ### Windows Uninstall
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 [-Purge] [-Quiet]
+powershell -NoProfile -ExecutionPolicy Bypass -File installer\uninstall.ps1 [-Purge] [-Quiet]
+# or:
+TermixgoSetup.exe --uninstall
 ```
+

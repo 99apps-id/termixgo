@@ -44,6 +44,10 @@ All notable changes to Termixgo are recorded here. The format follows
   for merge conflict markers, hardcoded secrets, leftover debug statements (fmt.Print,
   console.log, debugger, pdb) and syntax errors, and combines static findings with
   read-only LLM subagent review in terminal text or JSON format.
+- Standalone Windows installer executable (`TermixgoSetup.exe`) and automated builder
+  script (`scripts/build-windows-installer.ps1`). Self-contained single-file installer
+  that installs per-user without admin rights, registers in Windows settings, updates user
+  PATH with instant broadcast, creates Start Menu shortcuts, and supports silent installs.
 
 ### Fixed
 
