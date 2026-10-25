@@ -34,7 +34,11 @@ All notable changes to Termixgo are recorded here. The format follows
   functions, variables, types or classes across multiple files in the workspace
   with preview, word-boundary matching, automatic file backups and post-rename syntax diagnostics.
 - Interactive TUI slash commands for audit, diagnostics, benchmark evaluations, and repository maps
-  (`/audit code`, `/diagnostics`, `/eval`, `/map`).
+  (`/audit code`, `/diagnostics`, `/eval`, `/map`, `/testgen`).
+- Autonomous test generation and verification synthesizer (`generate_tests` tool,
+  `termixgo test-gen`, and `/testgen` slash command). Parses AST function signatures
+  and type definitions to synthesize table-driven unit tests, avoids duplicate test
+  creation against existing test suites, and executes automated verification runs.
 
 ### Fixed
 

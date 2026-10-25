@@ -45,3 +45,13 @@ func TestSlashRepoMap(t *testing.T) {
 		t.Errorf("expected repo map with api.go, got: %s", output)
 	}
 }
+
+func TestSlashTestGen(t *testing.T) {
+	model := chatModel(t)
+	_ = os.WriteFile(filepath.Join(model.app.Workspace(), "math.go"), []byte("package math\n\nfunc Square(n int) int { return n * n }\n"), 0o644)
+
+	_, output := runSlash(t, model, "/testgen math.go")
+	if !strings.Contains(output, "Synthesized unit tests") || !strings.Contains(output, "TestSquare") {
+		t.Errorf("expected testgen output with TestSquare, got: %s", output)
+	}
+}

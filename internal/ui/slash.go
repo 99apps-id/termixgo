@@ -120,7 +120,7 @@ var slashCommands = []SlashCommand{
 		{Value: "30m", Detail: "run the heartbeat every 30 minutes"},
 		{Value: "2h", Detail: "run the heartbeat every 2 hours"},
 	}},
-	{Trigger: "/audit", Args: "[count|code]", Summary: "Show recent audited actions or run static code audit", Options: []SlashOption{
+	{Trigger: "/audit", Args: "[<count>|code]", Summary: "Show recent audited actions or run static code audit", Options: []SlashOption{
 		{Value: "code", Detail: "run static code and security audit on workspace"},
 	}},
 	{Trigger: "/diagnostics", Args: "[path]", Summary: "Check in-memory syntax diagnostics across files"},
@@ -129,6 +129,7 @@ var slashCommands = []SlashCommand{
 		{Value: "list", Detail: "list available benchmark tasks"},
 	}},
 	{Trigger: "/map", Args: "[path]", Summary: "Print structural repository architecture and symbol map"},
+	{Trigger: "/testgen", Args: "<file> [symbol]", Summary: "Synthesize table-driven unit tests for a file"},
 	{Trigger: "/worker", Args: "[list|start]", Summary: "Run a background coding worker: start <kind> <task>", Options: []SlashOption{
 		{Value: "list", Detail: "show workers and whether each is ready"},
 		{Value: "start", Detail: "start a worker, then type: <kind> <task>", Complete: true},

@@ -231,6 +231,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashEval(args)
 	case "map", "repomap":
 		return m.slashRepoMap(args)
+	case "testgen", "test-gen":
+		return m.slashTestGen(args)
 	case "worker":
 		return m.slashWorker(args)
 	case "workers":
@@ -1579,6 +1581,45 @@ func (m *Model) slashRepoMap(args string) (tea.Model, tea.Cmd) {
 		m.blocks = append(m.blocks, block{kind: blockError, text: "Failed generating repo map: " + err.Error()})
 	} else {
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: res})
+	}
+	m.refresh()
+	return m, nil
+}
+
+// slashTestGen synthesizes unit tests for a file.
+func (m *Model) slashTestGen(args string) (tea.Model, tea.Cmd) {
+	parts := strings.Fields(args)
+	if len(parts) == 0 {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /testgen <file> [symbol]"})
+		m.refresh()
+		return m, nil
+	}
+
+	filePath := parts[0]
+	symbol := ""
+	if len(parts) > 1 {
+		symbol = parts[1]
+	}
+
+	env := &agent.Env{Workspace: m.app.Workspace()}
+	reg := agent.DefaultRegistry()
+	tool, ok := reg.Lookup("generate_tests")
+	if !ok {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "generate_tests tool not registered"})
+		m.refresh()
+		return m, nil
+	}
+
+	res, err := tool.Run(context.Background(), env, map[string]any{
+		"path":   filePath,
+		"symbol": symbol,
+	})
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Test generation error: " + err.Error()})
+	} else if res.IsError {
+		m.blocks = append(m.blocks, block{kind: blockError, text: res.Output})
+	} else {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: res.Output})
 	}
 	m.refresh()
 	return m, nil

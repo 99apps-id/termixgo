@@ -314,6 +314,9 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   so the agent receives immediate feedback and can self-correct within the same iteration.
 - Cross-file symbol refactoring (refactor_rename) executes atomically across all references with
   word-boundary matching, per-file undo backups, and immediate post-rename syntax diagnostics.
+- Autonomous test generation (generate_tests, /testgen, termixgo test-gen) analyzes AST function
+  signatures, parameter types and returns to synthesize table-driven unit tests, avoids duplicate test
+  creation against existing test suites, and executes automated verification runs.
 
 ## Checks
 

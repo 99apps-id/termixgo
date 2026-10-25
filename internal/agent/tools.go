@@ -157,6 +157,7 @@ func DefaultRegistry() *Registry {
 		&runChecksTool{},
 		&checkDiagnosticsTool{},
 		&auditCodeTool{},
+		&generateTestsTool{},
 		&backgroundTool{},
 		&logsTool{},
 		&waitTool{},

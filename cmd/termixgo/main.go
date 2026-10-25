@@ -93,6 +93,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runEval(args[1:], stdout)
 	case "map", "repomap":
 		return runRepoMap(args[1:], stdout)
+	case "test-gen", "testgen":
+		return runTestGen(args[1:], stdout)
 	case "models":
 		return runModels(args[1:], stdout)
 	case "model":
@@ -1023,6 +1025,64 @@ func runRepoMap(args []string, stdout io.Writer) error {
 	return nil
 }
 
+// runTestGen synthesizes unit tests for a source file and executes verification.
+func runTestGen(args []string, stdout io.Writer) error {
+	filePath := ""
+	symbol := ""
+	dryRun := false
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case (arg == "--file" || arg == "-f" || arg == "--path" || arg == "-p") && i+1 < len(args):
+			i++
+			filePath = args[i]
+		case (arg == "--symbol" || arg == "-s") && i+1 < len(args):
+			i++
+			symbol = args[i]
+		case arg == "--dry-run" || arg == "-n":
+			dryRun = true
+		case !strings.HasPrefix(arg, "-"):
+			if filePath == "" {
+				filePath = arg
+			} else if symbol == "" {
+				symbol = arg
+			}
+		}
+	}
+
+	if filePath == "" {
+		return fmt.Errorf("usage: termixgo test-gen <file> [--symbol <name>] [--dry-run]")
+	}
+
+	workspace, err := os.Getwd()
+	if err != nil {
+		workspace = "."
+	}
+
+	env := &agent.Env{Workspace: workspace}
+	reg := agent.DefaultRegistry()
+	tool, ok := reg.Lookup("generate_tests")
+	if !ok {
+		return fmt.Errorf("generate_tests tool not registered")
+	}
+
+	res, err := tool.Run(context.Background(), env, map[string]any{
+		"path":    filePath,
+		"symbol":  symbol,
+		"dry_run": dryRun,
+	})
+	if err != nil {
+		return err
+	}
+	if res.IsError {
+		return fmt.Errorf("%s", res.Output)
+	}
+
+	fmt.Fprintln(stdout, res.Output)
+	return nil
+}
+
 // runEval executes the agent evaluation and benchmark harness.
 func runEval(args []string, stdout io.Writer) error {
 	action := "run"
@@ -1612,6 +1672,8 @@ Usage:
                                   Run evaluation benchmark suites and compute pass rate
   termixgo map [--path <dir>] [--all]
                                   Print structural repository architecture and symbol map
+  termixgo test-gen <file> [--symbol <name>] [--dry-run]
+                                  Synthesize table-driven unit tests and verify
   termixgo models [--provider id] List the model catalogue
   termixgo model [id]             Show or set the default model
   termixgo endpoint [provider url]
