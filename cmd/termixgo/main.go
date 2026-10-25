@@ -91,6 +91,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runOnce(prompt, autoApprove, jsonOutput, stdout, stderr)
 	case "eval":
 		return runEval(args[1:], stdout)
+	case "map", "repomap":
+		return runRepoMap(args[1:], stdout)
 	case "models":
 		return runModels(args[1:], stdout)
 	case "model":
@@ -979,6 +981,48 @@ func runAuditCode(args []string, stdout io.Writer) error {
 	return nil
 }
 
+// runRepoMap outputs the compact repository architecture and symbol map.
+func runRepoMap(args []string, stdout io.Writer) error {
+	path := "."
+	maxTokens := agent.DefaultMaxMapTokens
+	allSymbols := false
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case (arg == "--path" || arg == "-p") && i+1 < len(args):
+			i++
+			path = args[i]
+		case (arg == "--max-tokens" || arg == "-m") && i+1 < len(args):
+			i++
+			if v, err := strconv.Atoi(args[i]); err == nil && v > 0 {
+				maxTokens = v
+			}
+		case arg == "--all" || arg == "-a":
+			allSymbols = true
+		case !strings.HasPrefix(arg, "-"):
+			path = arg
+		}
+	}
+
+	workspace, err := os.Getwd()
+	if err != nil {
+		workspace = "."
+	}
+
+	repomap, err := agent.GenerateRepoMap(workspace, agent.RepoMapOptions{
+		TargetDir:    path,
+		MaxTokens:    maxTokens,
+		ExportedOnly: !allSymbols,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(stdout, repomap)
+	return nil
+}
+
 // runEval executes the agent evaluation and benchmark harness.
 func runEval(args []string, stdout io.Writer) error {
 	action := "run"
@@ -1566,6 +1610,8 @@ Usage:
   termixgo -p, --print "<prompt>" Print answer directly to stdout (non-interactive)
   termixgo eval [run|list] [--suite <file>] [--task <id>] [--json]
                                   Run evaluation benchmark suites and compute pass rate
+  termixgo map [--path <dir>] [--all]
+                                  Print structural repository architecture and symbol map
   termixgo models [--provider id] List the model catalogue
   termixgo model [id]             Show or set the default model
   termixgo endpoint [provider url]

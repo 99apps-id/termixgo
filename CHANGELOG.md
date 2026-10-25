@@ -27,6 +27,14 @@ All notable changes to Termixgo are recorded here. The format follows
   Inspects workspace files for security vulnerabilities (injection, insecure TLS,
   weak crypto), hardcoded secrets (API keys, private keys, database URIs),
   concurrency leaks, and bad error handling, with tabular or JSON reporting.
+- Repository map generator (`repo_map` tool, `termixgo map`, and `/map` slash command).
+  Extracts structural symbol maps (exported types, interfaces, methods, functions)
+  within a token budget for an instant architectural mental model of the codebase.
+- Atomic cross-file refactoring engine (`refactor_rename` tool). Safely renames
+  functions, variables, types or classes across multiple files in the workspace
+  with preview, word-boundary matching, automatic file backups and post-rename syntax diagnostics.
+- Interactive TUI slash commands for audit, diagnostics, benchmark evaluations, and repository maps
+  (`/audit code`, `/diagnostics`, `/eval`, `/map`).
 
 ### Fixed
 

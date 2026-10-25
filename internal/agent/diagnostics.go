@@ -278,3 +278,14 @@ func (t *checkDiagnosticsTool) Run(ctx context.Context, env *Env, args map[strin
 		IsError: true,
 	}, nil
 }
+
+// CheckDiagnostics runs the diagnostics check on a file or directory.
+func CheckDiagnostics(workspace, target string) (output string, isError bool) {
+	env := &Env{Workspace: workspace}
+	t := &checkDiagnosticsTool{}
+	res, err := t.Run(context.Background(), env, map[string]any{"path": target})
+	if err != nil {
+		return err.Error(), true
+	}
+	return res.Output, res.IsError
+}

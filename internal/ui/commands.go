@@ -16,6 +16,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/app"
 	customcmd "github.com/99apps-id/termixgo/internal/command"
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/eval"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/secrets"
 	"github.com/99apps-id/termixgo/internal/version"
@@ -224,6 +225,12 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashHeartbeat(args)
 	case "audit":
 		return m.slashAudit(args)
+	case "diagnostics", "syntax":
+		return m.slashDiagnostics(args)
+	case "eval":
+		return m.slashEval(args)
+	case "map", "repomap":
+		return m.slashRepoMap(args)
 	case "worker":
 		return m.slashWorker(args)
 	case "workers":
@@ -1472,10 +1479,26 @@ func (m *Model) slashHeartbeat(args string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// slashAudit prints the newest metadata-only ledger entries.
+// slashAudit prints the newest metadata-only ledger entries or runs static code audit.
 func (m *Model) slashAudit(args string) (tea.Model, tea.Cmd) {
+	fields := strings.Fields(args)
+	if len(fields) > 0 && fields[0] == "code" {
+		target := m.app.Workspace()
+		if len(fields) > 1 {
+			target = filepath.Join(m.app.Workspace(), fields[1])
+		}
+		report, err := agent.AuditWorkspace(m.app.Workspace(), target, agent.AuditOptions{})
+		if err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: "Audit failed: " + err.Error()})
+		} else {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: agent.FormatAuditTable(report)})
+		}
+		m.refresh()
+		return m, nil
+	}
+
 	limit := 20
-	if fields := strings.Fields(args); len(fields) > 0 {
+	if len(fields) > 0 {
 		if value, err := strconv.Atoi(fields[0]); err == nil && value > 0 {
 			limit = value
 		}
@@ -1504,6 +1527,59 @@ func (m *Model) slashAudit(args string) (tea.Model, tea.Cmd) {
 		lines = append(lines, fmt.Sprintf("  %s  %-5s %-16s %-5s %s", entry.Time.Format("01-02 15:04:05"), entry.Kind, entry.Name, status, detail))
 	}
 	m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
+	m.refresh()
+	return m, nil
+}
+
+// slashDiagnostics runs fast syntax diagnostics across files.
+func (m *Model) slashDiagnostics(args string) (tea.Model, tea.Cmd) {
+	target := strings.TrimSpace(args)
+	if target == "" {
+		target = "."
+	}
+	output, isError := agent.CheckDiagnostics(m.app.Workspace(), target)
+	if isError {
+		m.blocks = append(m.blocks, block{kind: blockError, text: output})
+	} else {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: output})
+	}
+	m.refresh()
+	return m, nil
+}
+
+// slashEval runs or lists evaluation benchmark tasks.
+func (m *Model) slashEval(args string) (tea.Model, tea.Cmd) {
+	trimmed := strings.ToLower(strings.TrimSpace(args))
+	if trimmed == "list" {
+		suite := eval.BuiltinSuite()
+		var lines []string
+		lines = append(lines, fmt.Sprintf("Evaluation Benchmark Suite: %s (%d tasks)", suite.Name, len(suite.Tasks)))
+		for _, task := range suite.Tasks {
+			lines = append(lines, fmt.Sprintf("  - %s: %s (max %d steps)", task.ID, task.Description, task.MaxSteps))
+		}
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
+		m.refresh()
+		return m, nil
+	}
+
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: "To run evaluation benchmarks in isolated worktrees, run 'termixgo eval' from your terminal."})
+	m.refresh()
+	return m, nil
+}
+
+// slashRepoMap prints the repository architecture and symbol map.
+func (m *Model) slashRepoMap(args string) (tea.Model, tea.Cmd) {
+	target := strings.TrimSpace(args)
+	res, err := agent.GenerateRepoMap(m.app.Workspace(), agent.RepoMapOptions{
+		TargetDir:    target,
+		MaxTokens:    1500,
+		ExportedOnly: true,
+	})
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Failed generating repo map: " + err.Error()})
+	} else {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: res})
+	}
 	m.refresh()
 	return m, nil
 }

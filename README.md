@@ -519,7 +519,7 @@ ecosystem tools out of every request and loads them on demand through
 | --- | --- |
 | `read_file`, `list_directory` | windowed text reads, one directory level |
 | `write_file`, `create_directory`, `delete_file`, `move_file` | filesystem changes |
-| `edit`, `multi_edit`, `apply_patch` | exact-string edits, applied atomically |
+| `edit`, `multi_edit`, `apply_patch`, `undo_edit`, `refactor_rename` | exact-string edits, atomic symbol refactoring, and backups |
 | `grep`, `glob` | content and path search |
 | `search_memory` | full-text over learned memory, the journal and the workspace (SQLite FTS5) |
 
@@ -529,6 +529,7 @@ ecosystem tools out of every request and loads them on demand through
 | `run_checks` | detect and run the project's own test, lint, typecheck and build |
 | `check_diagnostics` | fast in-memory syntax diagnostics (Go, JSON, YAML, Python, JS) |
 | `audit_code` | static code and security audit (vulnerabilities, secrets, concurrency) |
+| `repo_map` | token-efficient structural symbol map of codebase architecture |
 | `run_background`, `run_logs`, `run_wait`, `run_list`, `run_kill` | managed background processes |
 
 | Tool | Purpose |
@@ -905,6 +906,7 @@ termixgo run "<prompt>"         # one prompt, streamed to stdout
 termixgo run --yes "<prompt>"   # auto-approve tool prompts for this run
 termixgo run --json "<prompt>"  # stream line-delimited JSON events (NDJSON)
 termixgo eval [run|list]        # benchmark harness for coding accuracy and pass rates
+termixgo map [--path <dir>] [--all] # print structural repository symbol map
 termixgo models [--provider id] # list the model catalogue
 termixgo model [id]             # show or set the default model
 termixgo endpoint [provider url]# show or set a provider custom base URL

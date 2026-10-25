@@ -312,6 +312,8 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
 - File mutation tools run immediate in-memory syntax diagnostics (Go, JSON, YAML, Python, JavaScript)
   after writing to disk. Any detected syntax errors are appended directly to the tool result output
   so the agent receives immediate feedback and can self-correct within the same iteration.
+- Cross-file symbol refactoring (refactor_rename) executes atomically across all references with
+  word-boundary matching, per-file undo backups, and immediate post-rename syntax diagnostics.
 
 ## Checks
 
