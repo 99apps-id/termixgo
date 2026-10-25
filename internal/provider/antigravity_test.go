@@ -260,6 +260,44 @@ func TestCleanAntigravitySchemaStringifiesNumericEnums(t *testing.T) {
 	}
 }
 
+func TestCleanAntigravitySchemaStripsExclusiveBoundsAndNonArrayItems(t *testing.T) {
+	cleaned := cleanAntigravitySchema(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"limit": map[string]any{
+				"type":             "number",
+				"exclusiveMinimum": 0,
+				"exclusiveMaximum": 100,
+				"multipleOf":       5,
+				"items":            map[string]any{"type": "string"},
+			},
+			"tags": map[string]any{
+				"type":  "array",
+				"items": map[string]any{},
+			},
+		},
+	})
+	props := cleaned["properties"].(map[string]any)
+	limit := props["limit"].(map[string]any)
+	if _, ok := limit["exclusiveMinimum"]; ok {
+		t.Errorf("exclusiveMinimum should be stripped")
+	}
+	if _, ok := limit["exclusiveMaximum"]; ok {
+		t.Errorf("exclusiveMaximum should be stripped")
+	}
+	if _, ok := limit["multipleOf"]; ok {
+		t.Errorf("multipleOf should be stripped")
+	}
+	if _, ok := limit["items"]; ok {
+		t.Errorf("items should be stripped from non-array")
+	}
+	tags := props["tags"].(map[string]any)
+	tagsItems := tags["items"].(map[string]any)
+	if tagsItems["type"] != "string" {
+		t.Errorf("empty items on array should default to string type, got %#v", tagsItems)
+	}
+}
+
 func TestAntigravitySessionIDIsNonNegative(t *testing.T) {
 	client := &antigravityClient{httpClient: &httpClient{}}
 	for i := 0; i < 50; i++ {

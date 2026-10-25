@@ -14,6 +14,11 @@ coverage.html
 AUDIT-*.md
 SCRATCH-*.md
 
+# One-off report generators and validators: local scratch, never committed.
+financial_report.py
+validate_report.py
+Laporan_Keuangan_Lengkap.xlsx
+
 # Go
 vendor/
 
