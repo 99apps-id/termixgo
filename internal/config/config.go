@@ -159,6 +159,10 @@ type Config struct {
 	// on every step, which matters with a large toolset.
 	ToolSearchEnabled bool `json:"toolSearchEnabled,omitempty"`
 
+	// PostEditDiagnosticsDisabled turns off automatic syntax checks after file
+	// mutations. By default, edits run immediate in-memory syntax validation.
+	PostEditDiagnosticsDisabled bool `json:"postEditDiagnosticsDisabled,omitempty"`
+
 	// Effort is the reasoning effort asked of models that accept one: low,
 	// medium, high or max. Empty leaves the provider's own default, which is
 	// what the API does when the field is absent.

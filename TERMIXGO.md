@@ -309,6 +309,9 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
 - Benchmark evaluations run in isolated temporary git worktrees. Each task executes
   under an ephemeral session so it leaves no trace in operator history, and validation
   commands run directly in the task workspace with turn, step, token and cost accounting.
+- File mutation tools run immediate in-memory syntax diagnostics (Go, JSON, YAML, Python, JavaScript)
+  after writing to disk. Any detected syntax errors are appended directly to the tool result output
+  so the agent receives immediate feedback and can self-correct within the same iteration.
 
 ## Checks
 

@@ -123,6 +123,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runSessions(args[1:], stdout)
 	case "audit":
 		return runAudit(args[1:], stdout)
+	case "audit-code":
+		return runAuditCode(args[1:], stdout)
 	case "worker":
 		return runWorker(args[1:], stdout)
 	case "service":
@@ -868,8 +870,12 @@ func runHeartbeat(args []string, stdout io.Writer) error {
 	return nil
 }
 
-// runAudit prints the newest metadata-only ledger entries.
+// runAudit prints the newest metadata-only ledger entries or delegates to runAuditCode.
 func runAudit(args []string, stdout io.Writer) error {
+	if len(args) > 0 && (args[0] == "code" || args[0] == "--code") {
+		return runAuditCode(args[1:], stdout)
+	}
+
 	limit := 50
 	if len(args) > 0 {
 		value, err := strconv.Atoi(strings.TrimSpace(args[0]))
@@ -905,6 +911,70 @@ func runAudit(args []string, stdout io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "%s  %-5s %-16s %-5s %s\n",
 			entry.Time.Format("2006-01-02 15:04:05"), entry.Kind, entry.Name, status, detail)
+	}
+	return nil
+}
+
+// runAuditCode performs a static code and security audit across the workspace.
+func runAuditCode(args []string, stdout io.Writer) error {
+	path := "."
+	category := "all"
+	minSeverity := "low"
+	maxResults := 100
+	jsonOutput := false
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--json":
+			jsonOutput = true
+		case (arg == "--path" || arg == "-p") && i+1 < len(args):
+			i++
+			path = args[i]
+		case (arg == "--category" || arg == "-c") && i+1 < len(args):
+			i++
+			category = args[i]
+		case (arg == "--severity" || arg == "-s") && i+1 < len(args):
+			i++
+			minSeverity = args[i]
+		case (arg == "--max" || arg == "-m") && i+1 < len(args):
+			i++
+			if v, err := strconv.Atoi(args[i]); err == nil && v > 0 {
+				maxResults = v
+			}
+		case !strings.HasPrefix(arg, "-"):
+			path = arg
+		}
+	}
+
+	workspace, err := os.Getwd()
+	if err != nil {
+		workspace = "."
+	}
+
+	report, err := agent.AuditWorkspace(workspace, path, agent.AuditOptions{
+		Category:    category,
+		MinSeverity: minSeverity,
+		MaxResults:  maxResults,
+	})
+	if err != nil {
+		return err
+	}
+
+	if jsonOutput {
+		out, err := agent.FormatAuditJSON(report)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, out)
+	} else {
+		fmt.Fprint(stdout, agent.FormatAuditTable(report)+"\n")
+	}
+
+	for _, f := range report.Findings {
+		if f.Severity == agent.SeverityCritical {
+			return fmt.Errorf("audit failed: critical security findings detected")
+		}
 	}
 	return nil
 }
@@ -1516,6 +1586,8 @@ Usage:
   termixgo sessions [list|search|export|delete|rename]
                                   Manage saved agent sessions
   termixgo audit [count]          Show recent audited actions (metadata only)
+  termixgo audit code [--category <cat>] [--json]
+                                  Run static code and security audit over workspace
   termixgo worker [list]          List the background coding workers
   termixgo serve                  Run the Telegram assistant 24/7
   termixgo service [install|uninstall|status]

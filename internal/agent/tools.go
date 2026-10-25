@@ -153,6 +153,8 @@ func DefaultRegistry() *Registry {
 		&sqliteQueryTool{},
 		&runCommandTool{},
 		&runChecksTool{},
+		&checkDiagnosticsTool{},
+		&auditCodeTool{},
 		&backgroundTool{},
 		&logsTool{},
 		&waitTool{},

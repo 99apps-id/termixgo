@@ -730,6 +730,23 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 	if feedback := r.runPostHooks(ctx, tool.Name(), call.Arguments, result); feedback != "" {
 		result.Output = strings.TrimRight(result.Output, "\n") + "\n\n[hook feedback] " + feedback
 	}
+	if !result.IsError && r.Env != nil && !r.Env.Config.PostEditDiagnosticsDisabled {
+		var changedPaths []string
+		switch strings.ToLower(tool.Name()) {
+		case "apply_patch", "patch":
+			changedPaths = patchChangedPaths(argString(args, "patch"))
+		case "edit", "replace", "multi_edit", "multi_replace", "write_file", "write", "create_file":
+			if p := argString(args, "path", "file", "filename"); p != "" {
+				changedPaths = []string{p}
+			}
+		}
+		if len(changedPaths) > 0 {
+			if diag := DiagnosePaths(r.Env, changedPaths); diag != "" {
+				result.Output = strings.TrimRight(result.Output, "\n") + "\n\n" + diag
+				emit(Event{Kind: EventNotice, Text: "Diagnostics detected syntax errors in modified file:\n" + diag})
+			}
+		}
+	}
 	if result.IsError {
 		return result
 	}

@@ -527,6 +527,8 @@ ecosystem tools out of every request and loads them on demand through
 | --- | --- |
 | `run_command` | run a shell command and stream its output |
 | `run_checks` | detect and run the project's own test, lint, typecheck and build |
+| `check_diagnostics` | fast in-memory syntax diagnostics (Go, JSON, YAML, Python, JS) |
+| `audit_code` | static code and security audit (vulnerabilities, secrets, concurrency) |
 | `run_background`, `run_logs`, `run_wait`, `run_list`, `run_kill` | managed background processes |
 
 | Tool | Purpose |
@@ -917,6 +919,7 @@ termixgo telegram [status|on|off]
 termixgo cron [list|add|remove|on|off|run]
 termixgo heartbeat [status|on|off|interval <duration>]
 termixgo audit [count]          # metadata-only action ledger
+termixgo audit code [--category <cat>] [--json] # static code and security audit
 termixgo worker [list]          # background coding workers
 termixgo serve                  # run the Telegram assistant 24/7
 termixgo service [install|uninstall|status]

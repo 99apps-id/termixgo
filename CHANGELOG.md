@@ -18,6 +18,15 @@ All notable changes to Termixgo are recorded here. The format follows
   reporting pass rate, duration, steps, tokens and cost in tabular or JSON form.
 - Headless NDJSON event streaming (`termixgo run --json`). Stream line-delimited
   JSON events directly to stdout for CI pipelines, scripts and automation tools.
+- Immediate post-edit syntax diagnostics. File mutation tools (`edit`, `multi_edit`,
+  `write_file`, `apply_patch`) run fast in-memory syntax validation on changed files
+  (Go, JSON, YAML, Python, JavaScript) and append any syntax errors directly to the
+  tool result output for immediate autonomous correction. Can be checked on demand
+  with `check_diagnostics` or disabled via `postEditDiagnosticsDisabled` in config.
+- Static code and security audit scanner (`audit_code` tool and `termixgo audit code`).
+  Inspects workspace files for security vulnerabilities (injection, insecure TLS,
+  weak crypto), hardcoded secrets (API keys, private keys, database URIs),
+  concurrency leaks, and bad error handling, with tabular or JSON reporting.
 
 ### Fixed
 
