@@ -4,6 +4,23 @@ All notable changes to Termixgo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- Configurable tool hooks. A `pre_tool` hook can block a call (exit status 2)
+  and a `post_tool` hook can hand feedback to the model, for example a linter's
+  verdict on the edit that just ran. Hooks come from `~/.termixgo/config.json`
+  only, receive the call as JSON on stdin, and fail open with a notice when they
+  break or time out.
+
+### Fixed
+
+- The "no API key" journal hint never fired because a lowercased error was
+  compared with a mixed-case literal.
+- A multi-line memory fact lost its tail on read, and a line starting with `- `
+  inside it became a second fact. A fact is now stored as one bullet.
+
 ## 0.1.6 - 2026-10-09
 
 ### Added

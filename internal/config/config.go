@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -94,6 +95,37 @@ type MCPServer struct {
 	Env     map[string]string `json:"env,omitempty"`
 	// Disabled keeps a server out of the session without removing it.
 	Disabled bool `json:"disabled,omitempty"`
+}
+
+// Hook events. A pre_tool hook runs before a tool call and may block it; a
+// post_tool hook runs after and may hand feedback back to the model.
+const (
+	HookPreTool  = "pre_tool"
+	HookPostTool = "post_tool"
+)
+
+// Default and ceiling for a hook's run time. A hook sits on the hot path of
+// every matching tool call, so a hung one must never stall a turn for long.
+const (
+	DefaultHookTimeoutSecs = 30
+	MaxHookTimeoutSecs     = 300
+)
+
+// Hook is an operator-authored command attached to a tool lifecycle event.
+//
+// The command line is written by the operator in this file. The model's tool
+// arguments reach it only as JSON on stdin, never spliced into the command, so
+// a model-chosen string cannot become shell syntax.
+type Hook struct {
+	// Event is HookPreTool or HookPostTool.
+	Event string `json:"event"`
+	// Matcher is a regular expression matched against the tool name. Empty
+	// matches every tool.
+	Matcher string `json:"matcher,omitempty"`
+	// Command runs through the platform shell in the workspace.
+	Command string `json:"command"`
+	// TimeoutSecs bounds one run. Zero means DefaultHookTimeoutSecs.
+	TimeoutSecs int `json:"timeoutSecs,omitempty"`
 }
 
 // Config is the whole non-secret configuration.
@@ -209,6 +241,10 @@ type Config struct {
 	// Heartbeat is the periodic self-check. Its jobs live in a separate file,
 	// but whether it runs at all is configuration.
 	Heartbeat Heartbeat `json:"heartbeat,omitempty"`
+
+	// Hooks are commands run around tool calls: a formatter after an edit, a
+	// policy check before a command. They are read from this file only.
+	Hooks []Hook `json:"hooks,omitempty"`
 }
 
 // Default returns the configuration a fresh install starts from.
@@ -336,6 +372,39 @@ func (c *Config) normalise() {
 		configured = append(configured, server)
 	}
 	c.MCPServers = configured
+	c.Hooks = normaliseHooks(c.Hooks)
+}
+
+// normaliseHooks drops a hook that could never run correctly, so a typo in a
+// hand-edited file costs one hook instead of failing every tool call: an
+// unknown event or empty command has nothing to do, and a matcher that does not
+// compile would otherwise be re-tried and re-failed on each call.
+func normaliseHooks(hooks []Hook) []Hook {
+	kept := make([]Hook, 0, len(hooks))
+	for _, hook := range hooks {
+		hook.Event = strings.ToLower(strings.TrimSpace(hook.Event))
+		hook.Command = strings.TrimSpace(hook.Command)
+		hook.Matcher = strings.TrimSpace(hook.Matcher)
+		if hook.Command == "" || (hook.Event != HookPreTool && hook.Event != HookPostTool) {
+			continue
+		}
+		if hook.Matcher != "" {
+			if _, err := regexp.Compile(hook.Matcher); err != nil {
+				continue
+			}
+		}
+		if hook.TimeoutSecs <= 0 {
+			hook.TimeoutSecs = DefaultHookTimeoutSecs
+		}
+		if hook.TimeoutSecs > MaxHookTimeoutSecs {
+			hook.TimeoutSecs = MaxHookTimeoutSecs
+		}
+		kept = append(kept, hook)
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
 }
 
 // EffortLevels is the accepted reasoning effort levels, in escalation order.

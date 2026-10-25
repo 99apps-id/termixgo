@@ -312,9 +312,47 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
 | `subagentModels` | run a subagent role (`explore`, `general`, `builder`, `code-review`, `security`) on another model, as a catalogue id, `provider:model` or `provider/model` |
 | `subagentFallbacks` | ordered subagent model chain tried when a provider has no credential or runs out of quota; when set it is the complete set, so a subagent never falls back to the active model |
 | `heartbeat` | `{ "enabled": true, "interval": "30m" }` for the periodic self-check |
+| `hooks` | commands run around tool calls, see [Hooks](#hooks) |
 
 Set `TERMIXGO_HOME` to move the whole state directory, which is useful for tests
 and throwaway profiles.
+
+### Hooks
+
+A hook is a command you write that runs around a tool call: a formatter after an
+edit, or a policy check before a command. Hooks apply to the main agent and to
+every subagent.
+
+```json
+{
+  "hooks": [
+    { "event": "pre_tool", "matcher": "^run_command$", "command": "./scripts/guard.sh" },
+    { "event": "post_tool", "matcher": "^(edit|write_file)$", "command": "gofmt -l .", "timeoutSecs": 20 }
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `event` | `pre_tool` runs before the call and can block it; `post_tool` runs after and can speak to the model |
+| `matcher` | regular expression on the tool name; empty matches every tool |
+| `command` | run through the platform shell in the workspace |
+| `timeoutSecs` | default 30, at most 300 |
+
+The tool call arrives as one line of JSON on stdin (`event`, `tool`, `args`,
+`workspace`, and for `post_tool` also `output` and `isError`). It is never
+placed in the command line, so a model-chosen string cannot become shell syntax.
+
+- Exit `0`: carry on.
+- Exit `2`: a `pre_tool` hook blocks the call and its stderr (or stdout) is
+  returned to the model as the reason. A `post_tool` hook's message is appended
+  to the tool result as `[hook feedback]`.
+- Any other exit status, a start failure or a timeout: the hook is reported as
+  "not enforced" and the call goes ahead, so a broken hook never costs the
+  session.
+
+Hooks are read only from `~/.termixgo/config.json`, never from a workspace file,
+so a repository you clone cannot plant a command that runs on your machine.
 
 ## Providers
 

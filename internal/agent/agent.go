@@ -649,6 +649,17 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 		}
 	}
 
+	// Hooks come before the approval prompt on purpose: a refusal from policy
+	// should not first ask the operator to approve a call that is going to be
+	// refused anyway.
+	if reason, blocked := r.runPreHooks(ctx, tool.Name(), call.Arguments); blocked {
+		emit(Event{Kind: EventToolEnd, ToolName: tool.Name(), ToolLabel: tool.DoneLabel(args), ToolResult: "blocked by hook", ToolOK: false})
+		return Result{
+			Output:  "A pre_tool hook blocked this call: " + reason + "\nDo not retry the same call. Change the approach or ask the operator.",
+			IsError: true,
+		}
+	}
+
 	if r.needsApprovalFor(tool) {
 		decision := DecisionDeny
 		if r.Env.Approve != nil {
@@ -715,6 +726,9 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 		if err := r.Env.Todos.Write(result.Plan); err == nil {
 			emit(Event{Kind: EventPlan, Plan: r.Env.Todos.Items()})
 		}
+	}
+	if feedback := r.runPostHooks(ctx, tool.Name(), call.Arguments, result); feedback != "" {
+		result.Output = strings.TrimRight(result.Output, "\n") + "\n\n[hook feedback] " + feedback
 	}
 	if result.IsError {
 		return result

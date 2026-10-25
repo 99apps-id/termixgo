@@ -296,6 +296,15 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   treated as one that can change things. Connecting is best effort and the
   handshake is bounded: one broken server must not cost the operator the session
   or the other servers.
+- Hooks are operator code, not model code. They are read from
+  `~/.termixgo/config.json` only, never from a workspace file, because a cloned
+  repository must not be able to plant a command that runs on the operator's
+  machine. The tool call reaches a hook as JSON on stdin and never in the command
+  line. A `pre_tool` hook runs before the approval prompt, so a policy refusal
+  does not first ask the operator to approve a call that will be refused. Exit
+  status 2 is the only decision a hook can make; any other failure or a timeout
+  fails open with a notice, so a broken hook cannot cost the session. Subagents
+  inherit `Config`, so delegation cannot step around a hook.
 
 ## Checks
 
