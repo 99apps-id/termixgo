@@ -11,7 +11,7 @@ package version
 const Name = "Termixgo"
 
 // Version is the semantic version of this build. Release builds override it.
-var Version = "0.1.0-dev"
+var Version = "0.2.0"
 
 // Commit is the source revision, stamped by a release build when available.
 var Commit = ""

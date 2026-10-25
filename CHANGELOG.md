@@ -6,6 +6,8 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-25
+
 ### Added
 
 - Configurable tool hooks. A `pre_tool` hook can block a call (exit status 2)
