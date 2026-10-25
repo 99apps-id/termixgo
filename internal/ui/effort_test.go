@@ -54,7 +54,7 @@ func TestSlashEffortWithoutArgumentsShowsTheLevels(t *testing.T) {
 // be noise on a line that has to survive 80 columns.
 func TestHeaderNamesTheEffortOnlyWhenItIsSet(t *testing.T) {
 	model := newTestModel(t)
-	resize(model, 120, 40)
+	resize(model, 160, 40)
 	before := model.viewHeader()
 	if strings.Contains(before, "medium") || strings.Contains(before, "  high") {
 		t.Errorf("no effort is set, so the header should not name one:\n%s", before)
