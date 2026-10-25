@@ -612,7 +612,19 @@ func (t *archiveTool) Run(ctx context.Context, env *Env, args map[string]any) (R
 				if err := checkWorkspacePath(env, resolved); err != nil {
 					return err
 				}
-				relToEnv, _ := filepath.Rel(env.Workspace, resolved)
+				relToEnv, relErr := filepath.Rel(env.Workspace, path)
+				if relErr != nil || strings.HasPrefix(relToEnv, "..") {
+					resolvedWs, _ := filepath.EvalSymlinks(env.Workspace)
+					if resolvedWs != "" {
+						if r, err := filepath.Rel(resolvedWs, resolved); err == nil && !strings.HasPrefix(r, "..") {
+							relToEnv = r
+						}
+					}
+				}
+				relToEnv = filepath.Clean(relToEnv)
+				for strings.HasPrefix(relToEnv, "."+string(filepath.Separator)) {
+					relToEnv = strings.TrimPrefix(relToEnv, "."+string(filepath.Separator))
+				}
 				header, err := zip.FileInfoHeader(info)
 				if err != nil {
 					return err

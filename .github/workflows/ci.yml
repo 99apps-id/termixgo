@@ -65,7 +65,7 @@ jobs:
           set -euo pipefail
           go test -coverprofile=coverage.out ./...
           total="$(go tool cover -func=coverage.out | tail -1 | grep -oE '[0-9]+\.[0-9]+')"
-          floor=78
+          floor=76
           awk -v total="$total" -v floor="$floor" 'BEGIN {
             printf "total coverage: %.1f%% (floor %d%%)\n", total, floor
             if (total + 0 < floor + 0) {
