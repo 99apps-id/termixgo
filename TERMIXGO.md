@@ -317,6 +317,9 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
 - Autonomous test generation (generate_tests, /testgen, termixgo test-gen) analyzes AST function
   signatures, parameter types and returns to synthesize table-driven unit tests, avoids duplicate test
   creation against existing test suites, and executes automated verification runs.
+- Pre-commit diff inspection and code review (review_changes, ReviewDiff, /diff-review, termixgo review)
+  parses unified diff additions for merge conflict markers, hardcoded secrets, leftover debug statements
+  and syntax errors, and combines static findings with read-only LLM subagent review.
 
 ## Checks
 

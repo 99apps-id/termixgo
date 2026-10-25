@@ -41,48 +41,25 @@ func (t *reviewChangesTool) Schema() map[string]any {
 		"staged": boolProp("Review the staged diff instead of the unstaged one."),
 		"scope":  strProp("Limit the review to one path (e.g. internal/agent)."),
 		"base":   strProp("Review the diff against this commit or branch instead of HEAD."),
+		"static": boolProp("Only run fast static pre-commit checks without calling LLM."),
 	})
 }
 
 func (t *reviewChangesTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
-	if env.RunSubagent == nil {
-		return Result{Output: "Subagents are not available in this session, so the review cannot run.", IsError: true}, nil
-	}
-	var paths []string
-	if scope := strings.TrimSpace(argString(args, "scope", "path")); scope != "" {
-		paths = []string{scope}
-	}
-	argv, err := gitDiffArgv(argBool(args, "staged", false), false, strings.TrimSpace(argString(args, "base", "ref")), paths)
+	staged := argBool(args, "staged", false)
+	scope := strings.TrimSpace(argString(args, "scope", "path"))
+	base := strings.TrimSpace(argString(args, "base", "ref"))
+	staticOnly := argBool(args, "static", false)
+
+	report, err := ReviewDiff(ctx, env, DiffReviewOptions{
+		Staged:     staged,
+		Base:       base,
+		Scope:      scope,
+		StaticOnly: staticOnly,
+	})
 	if err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
-	diff, gitErr := runGit(ctx, env, argv...)
-	if gitErr != nil {
-		return Result{Output: diff, IsError: true}, nil
-	}
-	if strings.TrimSpace(diff) == "" {
-		return Result{Output: "No changes to review."}, nil
-	}
-	// One attempt at the tool level; the empty-pass retry lives inside
-	// RunSubagent where the tool-call count is visible.
-	report, spend, runErr := env.RunSubagent(ctx, string(SubagentCodeReview), buildReviewPrompt(diff, false))
-	if runErr != nil {
-		return Result{
-			Output:            runErr.Error(),
-			IsError:           true,
-			SubagentUsage:     spend.Usage,
-			SubagentCost:      spend.Cost,
-			SubagentCostKnown: spend.CostKnown,
-			SubagentUnpriced:  spend.Unpriced,
-			SubagentSpent:     true,
-		}, nil
-	}
-	return Result{
-		Output:            report,
-		SubagentUsage:     spend.Usage,
-		SubagentCost:      spend.Cost,
-		SubagentCostKnown: spend.CostKnown,
-		SubagentUnpriced:  spend.Unpriced,
-		SubagentSpent:     true,
-	}, nil
+
+	return Result{Output: report.FormatText()}, nil
 }

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,5 +54,25 @@ func TestSlashTestGen(t *testing.T) {
 	_, output := runSlash(t, model, "/testgen math.go")
 	if !strings.Contains(output, "Synthesized unit tests") || !strings.Contains(output, "TestSquare") {
 		t.Errorf("expected testgen output with TestSquare, got: %s", output)
+	}
+}
+
+func TestSlashReview(t *testing.T) {
+	model := chatModel(t)
+	workspace := model.app.Workspace()
+
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workspace
+		_ = cmd.Run()
+	}
+	runGit("init", "-q")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "test")
+	runGit("commit", "--allow-empty", "-qm", "init")
+
+	_, output := runSlash(t, model, "/diff-review static")
+	if !strings.Contains(output, "No changes detected") && !strings.Contains(output, "Git Diff Review Report") {
+		t.Errorf("expected review report output, got: %s", output)
 	}
 }

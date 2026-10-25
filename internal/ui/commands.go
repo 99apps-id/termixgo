@@ -233,6 +233,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashRepoMap(args)
 	case "testgen", "test-gen":
 		return m.slashTestGen(args)
+	case "diff-review", "diff_review", "precommit":
+		return m.slashDiffReview(args)
 	case "worker":
 		return m.slashWorker(args)
 	case "workers":
@@ -1620,6 +1622,38 @@ func (m *Model) slashTestGen(args string) (tea.Model, tea.Cmd) {
 		m.blocks = append(m.blocks, block{kind: blockError, text: res.Output})
 	} else {
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: res.Output})
+	}
+	m.refresh()
+	return m, nil
+}
+
+// slashDiffReview runs pre-commit static inspections and code review over git diffs.
+func (m *Model) slashDiffReview(args string) (tea.Model, tea.Cmd) {
+	staged := false
+	staticOnly := false
+	base := ""
+
+	for _, token := range strings.Fields(args) {
+		switch strings.ToLower(token) {
+		case "staged", "--staged":
+			staged = true
+		case "static", "--static":
+			staticOnly = true
+		default:
+			base = token
+		}
+	}
+
+	env := &agent.Env{Workspace: m.app.Workspace()}
+	report, err := agent.ReviewDiff(context.Background(), env, agent.DiffReviewOptions{
+		Staged:     staged,
+		Base:       base,
+		StaticOnly: staticOnly,
+	})
+	if err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Review error: " + err.Error()})
+	} else {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: report.FormatText()})
 	}
 	m.refresh()
 	return m, nil

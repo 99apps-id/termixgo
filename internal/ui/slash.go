@@ -130,6 +130,10 @@ var slashCommands = []SlashCommand{
 	}},
 	{Trigger: "/map", Args: "[path]", Summary: "Print structural repository architecture and symbol map"},
 	{Trigger: "/testgen", Args: "<file> [symbol]", Summary: "Synthesize table-driven unit tests for a file"},
+	{Trigger: "/diff-review", Args: "[staged|static|<base>]", Summary: "Inspect git diff for issues and run code review", Options: []SlashOption{
+		{Value: "staged", Detail: "review staged git diff"},
+		{Value: "static", Detail: "run fast static checks only (no AI)"},
+	}},
 	{Trigger: "/worker", Args: "[list|start]", Summary: "Run a background coding worker: start <kind> <task>", Options: []SlashOption{
 		{Value: "list", Detail: "show workers and whether each is ready"},
 		{Value: "start", Detail: "start a worker, then type: <kind> <task>", Complete: true},

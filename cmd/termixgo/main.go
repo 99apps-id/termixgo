@@ -95,6 +95,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runRepoMap(args[1:], stdout)
 	case "test-gen", "testgen":
 		return runTestGen(args[1:], stdout)
+	case "review", "review-diff":
+		return runReview(args[1:], stdout)
 	case "models":
 		return runModels(args[1:], stdout)
 	case "model":
@@ -1083,6 +1085,68 @@ func runTestGen(args []string, stdout io.Writer) error {
 	return nil
 }
 
+// runReview executes static and agentic diff inspection and pre-commit review.
+func runReview(args []string, stdout io.Writer) error {
+	staged := false
+	base := ""
+	scope := ""
+	staticOnly := false
+	jsonOutput := false
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--staged" || arg == "-s":
+			staged = true
+		case (arg == "--base" || arg == "-b") && i+1 < len(args):
+			i++
+			base = args[i]
+		case (arg == "--scope" || arg == "-p" || arg == "--path") && i+1 < len(args):
+			i++
+			scope = args[i]
+		case arg == "--static":
+			staticOnly = true
+		case arg == "--json":
+			jsonOutput = true
+		case !strings.HasPrefix(arg, "-"):
+			if base == "" {
+				base = arg
+			} else if scope == "" {
+				scope = arg
+			}
+		}
+	}
+
+	workspace, err := os.Getwd()
+	if err != nil {
+		workspace = "."
+	}
+
+	env := &agent.Env{Workspace: workspace}
+
+	report, err := agent.ReviewDiff(context.Background(), env, agent.DiffReviewOptions{
+		Staged:     staged,
+		Base:       base,
+		Scope:      scope,
+		StaticOnly: staticOnly,
+	})
+	if err != nil {
+		return err
+	}
+
+	if jsonOutput {
+		out, err := report.FormatJSON()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, out)
+		return nil
+	}
+
+	fmt.Fprintln(stdout, report.FormatText())
+	return nil
+}
+
 // runEval executes the agent evaluation and benchmark harness.
 func runEval(args []string, stdout io.Writer) error {
 	action := "run"
@@ -1674,6 +1738,8 @@ Usage:
                                   Print structural repository architecture and symbol map
   termixgo test-gen <file> [--symbol <name>] [--dry-run]
                                   Synthesize table-driven unit tests and verify
+  termixgo review [--staged] [--base <ref>] [--static] [--json]
+                                  Run pre-commit static diff inspection and code review
   termixgo models [--provider id] List the model catalogue
   termixgo model [id]             Show or set the default model
   termixgo endpoint [provider url]
