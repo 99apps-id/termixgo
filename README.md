@@ -901,6 +901,8 @@ termixgo                        # terminal UI (setup runs on first use)
 termixgo setup                  # open the onboarding wizard
 termixgo run "<prompt>"         # one prompt, streamed to stdout
 termixgo run --yes "<prompt>"   # auto-approve tool prompts for this run
+termixgo run --json "<prompt>"  # stream line-delimited JSON events (NDJSON)
+termixgo eval [run|list]        # benchmark harness for coding accuracy and pass rates
 termixgo models [--provider id] # list the model catalogue
 termixgo model [id]             # show or set the default model
 termixgo endpoint [provider url]# show or set a provider custom base URL

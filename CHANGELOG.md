@@ -13,6 +13,11 @@ All notable changes to Termixgo are recorded here. The format follows
   verdict on the edit that just ran. Hooks come from `~/.termixgo/config.json`
   only, receive the call as JSON on stdin, and fail open with a notice when they
   break or time out.
+- Evaluation benchmark harness (`termixgo eval`). Run benchmark suites in
+  isolated workspaces to measure coding, bugfixing and refactoring accuracy,
+  reporting pass rate, duration, steps, tokens and cost in tabular or JSON form.
+- Headless NDJSON event streaming (`termixgo run --json`). Stream line-delimited
+  JSON events directly to stdout for CI pipelines, scripts and automation tools.
 
 ### Fixed
 

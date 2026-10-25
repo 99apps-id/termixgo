@@ -27,6 +27,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/audit"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/cron"
+	"github.com/99apps-id/termixgo/internal/eval"
 	"github.com/99apps-id/termixgo/internal/mcp"
 	"github.com/99apps-id/termixgo/internal/oauth"
 	"github.com/99apps-id/termixgo/internal/provider"
@@ -83,11 +84,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		return runInteractive(stdin, stdout, ui.Options{ResumeSessionID: sessionID})
 	case "run", "-p", "--print":
-		prompt, autoApprove, err := parseRunArgs(args[1:])
+		prompt, autoApprove, jsonOutput, err := parseRunArgs(args[1:])
 		if err != nil {
 			return err
 		}
-		return runOnce(prompt, autoApprove, stdout, stderr)
+		return runOnce(prompt, autoApprove, jsonOutput, stdout, stderr)
+	case "eval":
+		return runEval(args[1:], stdout)
 	case "models":
 		return runModels(args[1:], stdout)
 	case "model":
@@ -137,7 +140,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if !strings.HasPrefix(args[0], "-") && (len(args) > 1 || strings.Contains(args[0], " ")) {
 			prompt := strings.Join(args, " ")
 			if !ui.IsInteractive(stdin, stdout) {
-				return runOnce(prompt, false, stdout, stderr)
+				return runOnce(prompt, false, false, stdout, stderr)
 			}
 			return runInteractive(stdin, stdout, ui.Options{InitialPrompt: prompt})
 		}
@@ -170,28 +173,29 @@ func enableTelegram(application *app.App) {
 	}
 }
 
-// parseRunArgs splits the run subcommand's tail into the prompt and the
-// auto-approve flag. --yes and -y may appear before or after the prompt, so
-// scripts can write either `termixgo run --yes "...`" or `termixgo run "..."
-// --yes`. Everything else is the prompt.
-func parseRunArgs(args []string) (prompt string, autoApprove bool, err error) {
+// parseRunArgs splits the run subcommand's tail into the prompt and options.
+// --yes, -y, and --json may appear before or after the prompt, so scripts can
+// pass flags anywhere. Everything else is joined into the prompt.
+func parseRunArgs(args []string) (prompt string, autoApprove, jsonOutput bool, err error) {
 	var words []string
 	for _, arg := range args {
 		switch arg {
 		case "--yes", "-y":
 			autoApprove = true
+		case "--json":
+			jsonOutput = true
 		default:
 			words = append(words, arg)
 		}
 	}
 	prompt = strings.Join(words, " ")
 	if strings.TrimSpace(prompt) == "" {
-		return "", false, fmt.Errorf("run needs a prompt")
+		return "", false, false, fmt.Errorf("run needs a prompt")
 	}
-	return prompt, autoApprove, nil
+	return prompt, autoApprove, jsonOutput, nil
 }
 
-func runOnce(prompt string, autoApprove bool, stdout, stderr io.Writer) error {
+func runOnce(prompt string, autoApprove, jsonOutput bool, stdout, stderr io.Writer) error {
 	application, err := app.New("")
 	if err != nil {
 		return err
@@ -208,6 +212,9 @@ func runOnce(prompt string, autoApprove bool, stdout, stderr io.Writer) error {
 	application.SetEphemeral(true)
 	ctx, stop := signalContext()
 	defer stop()
+	if jsonOutput {
+		return ui.RunOnceJSON(ctx, application, prompt, stdout, autoApprove)
+	}
 	if autoApprove {
 		return ui.RunOnceAutoApprove(ctx, application, prompt, stdout)
 	}
@@ -902,6 +909,118 @@ func runAudit(args []string, stdout io.Writer) error {
 	return nil
 }
 
+// runEval executes the agent evaluation and benchmark harness.
+func runEval(args []string, stdout io.Writer) error {
+	action := "run"
+	suitePath := ""
+	taskFilter := ""
+	jsonOutput := false
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "run" || arg == "list":
+			action = arg
+		case arg == "--suite" && i+1 < len(args):
+			suitePath = args[i+1]
+			i++
+		case arg == "--task" && i+1 < len(args):
+			taskFilter = args[i+1]
+			i++
+		case arg == "--json":
+			jsonOutput = true
+		case strings.HasPrefix(arg, "-"):
+			return fmt.Errorf("unknown eval flag %s; use --suite <file>, --task <id>, or --json", arg)
+		default:
+			if action == "run" && suitePath == "" && strings.HasSuffix(arg, ".json") {
+				suitePath = arg
+			} else {
+				action = arg
+			}
+		}
+	}
+
+	var suite eval.Suite
+	var err error
+	if suitePath != "" {
+		suite, err = eval.LoadSuite(suitePath)
+		if err != nil {
+			return err
+		}
+	} else {
+		suite = eval.BuiltinSuite()
+	}
+
+	if taskFilter != "" {
+		var filtered []eval.Task
+		for _, t := range suite.Tasks {
+			if t.ID == taskFilter {
+				filtered = append(filtered, t)
+			}
+		}
+		if len(filtered) == 0 {
+			return fmt.Errorf("no task with id %q found in suite %s", taskFilter, suite.Name)
+		}
+		suite.Tasks = filtered
+	}
+
+	if action == "list" {
+		fmt.Fprintf(stdout, "Evaluation Suite: %s (%d tasks)\n", suite.Name, len(suite.Tasks))
+		if suite.Description != "" {
+			fmt.Fprintf(stdout, "%s\n\n", suite.Description)
+		}
+		for _, t := range suite.Tasks {
+			fmt.Fprintf(stdout, "  %-22s [%-8s] %s\n", t.ID, t.Category, t.Name)
+		}
+		return nil
+	}
+
+	ctx, cancel := signalContext()
+	defer cancel()
+
+	runner := &eval.Runner{
+		Suite: suite,
+		AppFactory: func(workspace string) (*app.App, error) {
+			return app.New(workspace)
+		},
+	}
+
+	if !jsonOutput {
+		runner.OnProgress = func(task eval.Task, result *eval.TaskResult) {
+			if result == nil {
+				fmt.Fprintf(stdout, "Running %s (%s)...\n", task.ID, task.Name)
+			} else {
+				status := "PASS"
+				if !result.Passed {
+					status = "FAIL"
+				}
+				fmt.Fprintf(stdout, "-> %s in %.2fs (%d steps, %d tokens)\n\n",
+					status, float64(result.DurationMS)/1000.0, result.Steps, result.Tokens)
+			}
+		}
+	}
+
+	res, err := runner.Run(ctx)
+	if err != nil {
+		return err
+	}
+
+	if jsonOutput {
+		out, err := eval.FormatJSON(res)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, out)
+	} else {
+		fmt.Fprint(stdout, eval.FormatTable(res))
+	}
+
+	if res.PassedTasks < res.TotalTasks {
+		return fmt.Errorf("%d of %d evaluation tasks failed", res.TotalTasks-res.PassedTasks, res.TotalTasks)
+	}
+	return nil
+}
+
 // runSessions manages saved sessions from the command line.
 func runSessions(args []string, stdout io.Writer) error {
 	action := "list"
@@ -1372,8 +1491,11 @@ Usage:
   termixgo -r, --resume [id]      Resume the last (or specified) session
   termixgo -c, --continue         Continue the most recent session
   termixgo setup                  Start the UI in the onboarding wizard
-  termixgo run [--yes] "<prompt>" Run one prompt and stream the answer
+  termixgo run [--yes] [--json] "<prompt>"
+                                  Run one prompt and stream the answer (plain text or NDJSON)
   termixgo -p, --print "<prompt>" Print answer directly to stdout (non-interactive)
+  termixgo eval [run|list] [--suite <file>] [--task <id>] [--json]
+                                  Run evaluation benchmark suites and compute pass rate
   termixgo models [--provider id] List the model catalogue
   termixgo model [id]             Show or set the default model
   termixgo endpoint [provider url]

@@ -55,6 +55,7 @@ internal/app        shared state: config, provider client, session, Telegram bri
 internal/agent      the tool-calling run loop, tools, prompt, compaction, memory
 internal/provider   BYOK clients: OpenAI-compatible, Anthropic, Google
 internal/config     ~/.termixgo config.json, defaults and folder trust
+internal/eval       benchmark suite runner, task evaluation and reporting
 internal/mcp        MCP client: stdio JSON-RPC, tool listing and dispatch
 internal/secrets    0600 secret store for API keys and the bot token
 internal/search     SQLite full-text index over memory, journal and workspace
@@ -305,6 +306,9 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   status 2 is the only decision a hook can make; any other failure or a timeout
   fails open with a notice, so a broken hook cannot cost the session. Subagents
   inherit `Config`, so delegation cannot step around a hook.
+- Benchmark evaluations run in isolated temporary git worktrees. Each task executes
+  under an ephemeral session so it leaves no trace in operator history, and validation
+  commands run directly in the task workspace with turn, step, token and cost accounting.
 
 ## Checks
 

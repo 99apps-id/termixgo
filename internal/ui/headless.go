@@ -3,6 +3,7 @@ package ui
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/app"
 	customcmd "github.com/99apps-id/termixgo/internal/command"
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/version"
 )
 
@@ -324,6 +326,104 @@ func RunOnceWithContext(ctx context.Context, application *app.App, prompt string
 // or learned memory.
 func RunOnceAutoApprove(ctx context.Context, application *app.App, prompt string, out io.Writer) error {
 	return runOnceWithOptions(ctx, application, prompt, out, true)
+}
+
+// JSONEvent is one line-delimited JSON event streamed during RunOnceJSON.
+type JSONEvent struct {
+	Type       string          `json:"type"`
+	Text       string          `json:"text,omitempty"`
+	Tool       string          `json:"tool,omitempty"`
+	Args       string          `json:"args,omitempty"`
+	Result     string          `json:"result,omitempty"`
+	OK         *bool           `json:"ok,omitempty"`
+	Millis     int64           `json:"millis,omitempty"`
+	StopReason string          `json:"stop_reason,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	Usage      *provider.Usage `json:"usage,omitempty"`
+	CostUSD    float64         `json:"cost_usd,omitempty"`
+}
+
+// RunOnceJSON streams agent events as line-delimited JSON objects to out.
+func RunOnceJSON(ctx context.Context, application *app.App, prompt string, out io.Writer, autoApprove bool) error {
+	application.SetInteractor(&plainInteractor{in: os.Stdin, out: out, autoApprove: autoApprove})
+	enc := json.NewEncoder(out)
+	var failure error
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case event := <-application.Events():
+				if event.Kind == agent.EventError && failure == nil && event.Err != nil {
+					failure = event.Err
+				}
+				je := toJSONEvent(event)
+				if je != nil {
+					_ = enc.Encode(je)
+				}
+			case <-stop:
+				for {
+					select {
+					case event := <-application.Events():
+						if event.Kind == agent.EventError && failure == nil && event.Err != nil {
+							failure = event.Err
+						}
+						je := toJSONEvent(event)
+						if je != nil {
+							_ = enc.Encode(je)
+						}
+					default:
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	err := application.RunTurn(ctx, ExpandMentions(application.Workspace(), prompt))
+	close(stop)
+	<-done
+
+	if err != nil {
+		return err
+	}
+	return failure
+}
+
+func toJSONEvent(event agent.Event) *JSONEvent {
+	switch event.Kind {
+	case agent.EventTurnStart:
+		return &JSONEvent{Type: "turn_start"}
+	case agent.EventText:
+		return &JSONEvent{Type: "text", Text: event.Text}
+	case agent.EventThinking:
+		return &JSONEvent{Type: "thinking", Text: event.Text}
+	case agent.EventReasoned:
+		return &JSONEvent{Type: "reasoned", Text: event.Text, Millis: event.ToolMillis}
+	case agent.EventToolStart:
+		return &JSONEvent{Type: "tool_start", Tool: event.ToolName, Args: event.ToolArgs, Text: event.ToolLabel}
+	case agent.EventToolEnd:
+		ok := event.ToolOK
+		return &JSONEvent{Type: "tool_end", Tool: event.ToolName, Result: event.ToolResult, OK: &ok, Millis: event.ToolMillis}
+	case agent.EventNotice:
+		return &JSONEvent{Type: "notice", Text: event.Text}
+	case agent.EventError:
+		msg := ""
+		if event.Err != nil {
+			msg = event.Err.Error()
+		}
+		return &JSONEvent{Type: "error", Error: msg}
+	case agent.EventUsage:
+		u := event.Usage
+		return &JSONEvent{Type: "usage", Usage: &u, CostUSD: event.CostUSD}
+	case agent.EventTurnEnd:
+		return &JSONEvent{Type: "turn_end", StopReason: event.StopReason, CostUSD: event.CostUSD}
+	default:
+		return nil
+	}
 }
 
 func runOnceWithOptions(ctx context.Context, application *app.App, prompt string, out io.Writer, autoApprove bool) error {

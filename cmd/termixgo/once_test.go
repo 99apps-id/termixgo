@@ -46,7 +46,7 @@ func TestRunOnceCompletesATurnAndLeavesNoSession(t *testing.T) {
 	defer server.Close()
 
 	var stdout, stderr bytes.Buffer
-	if err := runOnce("say hi", false, &stdout, &stderr); err != nil {
+	if err := runOnce("say hi", false, false, &stdout, &stderr); err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "hello from the model") {
@@ -78,7 +78,7 @@ func TestRunOnceReportsATurnFailure(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if err := runOnce("say hi", false, &stdout, &stderr); err == nil {
+	if err := runOnce("say hi", false, false, &stdout, &stderr); err == nil {
 		t.Fatalf("a rejected request must fail the command")
 	}
 }
@@ -91,23 +91,26 @@ func TestParseRunArgsHandlesYesInEveryPosition(t *testing.T) {
 		args   []string
 		prompt string
 		yes    bool
+		json   bool
 	}{
-		{[]string{"--yes", "fix", "the", "test"}, "fix the test", true},
-		{[]string{"-y", "fix the test"}, "fix the test", true},
-		{[]string{"fix the test", "--yes"}, "fix the test", true},
-		{[]string{"fix the test"}, "fix the test", false},
-		{[]string{"answer", "--yes", "me"}, "answer me", true},
+		{[]string{"--yes", "fix", "the", "test"}, "fix the test", true, false},
+		{[]string{"-y", "fix the test"}, "fix the test", true, false},
+		{[]string{"fix the test", "--yes"}, "fix the test", true, false},
+		{[]string{"fix the test"}, "fix the test", false, false},
+		{[]string{"answer", "--yes", "me"}, "answer me", true, false},
+		{[]string{"--json", "--yes", "code it"}, "code it", true, true},
+		{[]string{"inspect", "--json"}, "inspect", false, true},
 	}
 	for _, c := range cases {
-		prompt, yes, err := parseRunArgs(c.args)
+		prompt, yes, jsonOut, err := parseRunArgs(c.args)
 		if err != nil {
 			t.Fatalf("%v: %v", c.args, err)
 		}
-		if prompt != c.prompt || yes != c.yes {
-			t.Errorf("%v = (%q, %v), want (%q, %v)", c.args, prompt, yes, c.prompt, c.yes)
+		if prompt != c.prompt || yes != c.yes || jsonOut != c.json {
+			t.Errorf("%v = (%q, %v, %v), want (%q, %v, %v)", c.args, prompt, yes, jsonOut, c.prompt, c.yes, c.json)
 		}
 	}
-	if _, _, err := parseRunArgs([]string{"--yes"}); err == nil {
+	if _, _, _, err := parseRunArgs([]string{"--yes"}); err == nil {
 		t.Errorf("a --yes with no prompt must fail")
 	}
 }
