@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -205,7 +206,10 @@ func TestUsageLedgerRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat ledger: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// On Windows the 0600 mode is not how the file is protected: NTFS has no
+	// Unix mode bits (Go reports 0666), and secrets.RestrictFile applies a
+	// DACL instead. The mode assertion only means something on Unix.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Errorf("ledger mode = %v, want 0600", info.Mode().Perm())
 	}
 	records, err := ReadUsageLedger(path)

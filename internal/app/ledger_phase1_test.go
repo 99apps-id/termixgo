@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -27,7 +28,10 @@ func TestQuotaTrackerSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the state file should exist after recording: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// On Windows the 0600 mode is not how the file is protected: NTFS has no
+	// Unix mode bits (Go reports 0666), and secrets.RestrictFile applies a
+	// DACL instead. The mode assertion only means something on Unix.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Errorf("quota state mode = %v, want 0600", info.Mode().Perm())
 	}
 
