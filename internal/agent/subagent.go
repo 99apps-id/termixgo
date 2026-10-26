@@ -40,6 +40,14 @@ type SubagentSpend struct {
 	Usage     provider.Usage
 	Cost      float64
 	CostKnown bool
+	// Provider and Model name the model that ran the delegated work, so its
+	// spend can be attributed to that model rather than to the parent that
+	// folded it in. A pipeline that folds several runs keeps the first
+	// contributor's identity; the tokens stay exact either way, only the
+	// attribution of a mixed fold is approximate, and it is never silently
+	// reassigned to the parent's model.
+	Provider string
+	Model    string
 	// Unpriced counts delegated components inside this run whose model had no
 	// price, so their tokens are known but their dollars are not. It is the
 	// explicit ledger that replaces the old CostKnown AND-collapse: a priced
@@ -54,6 +62,10 @@ func (s *SubagentSpend) Fold(other SubagentSpend) {
 	s.Cost += other.Cost
 	s.CostKnown = s.CostKnown && other.CostKnown
 	s.Unpriced += other.Unpriced
+	if s.Model == "" {
+		s.Provider = other.Provider
+		s.Model = other.Model
+	}
 }
 
 // NewSubagentSpend is the zero total whose CostKnown is the identity of the
@@ -268,7 +280,7 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	// it here counts the whole tree once. The child's own RunSubagent closure
 	// must NOT fold a grandchild's spend again: it would land here a second
 	// time in that same turn-end total.
-	var spend SubagentSpend
+	spend := SubagentSpend{Provider: model.Provider, Model: model.ID}
 	turns := 0
 	// The child counts as one unpriced delegated component when its own model
 	// has no price, separate from any nested unpriced runs it spawns. Zero for

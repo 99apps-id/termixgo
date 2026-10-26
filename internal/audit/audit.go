@@ -20,6 +20,13 @@ import (
 
 // Entry is one audited action. Fields are deliberately coarse: a name, a
 // result and a timing, never the content that flowed through.
+//
+// The usage fields after OutputTokens follow the usage ledger's record
+// schema (session, provider, model, billing mode, the full token split and
+// dollars when any exist), so a turn line can be reconciled against the
+// per-session ledger instead of only reporting that a turn ran. The older
+// in/out fields are kept under their original names: readers already parse
+// them, and a rename would silently empty their reports.
 type Entry struct {
 	Time         time.Time `json:"ts"`
 	Workspace    string    `json:"workspace,omitempty"`
@@ -30,6 +37,18 @@ type Entry struct {
 	StopReason   string    `json:"stop,omitempty"`
 	InputTokens  int       `json:"in,omitempty"`
 	OutputTokens int       `json:"out,omitempty"`
+
+	SessionID        string `json:"session_id,omitempty"`
+	Provider         string `json:"provider,omitempty"`
+	Model            string `json:"model,omitempty"`
+	BillingMode      string `json:"billing_mode,omitempty"`
+	TotalTokens      int    `json:"total,omitempty"`
+	CacheReadTokens  int    `json:"cache_read,omitempty"`
+	CacheWriteTokens int    `json:"cache_write,omitempty"`
+	ReasoningTokens  int    `json:"reasoning,omitempty"`
+	// CostUSD is a pointer so a plan turn, which has no dollar figure, writes
+	// no cost field at all rather than a zero that reads as free.
+	CostUSD *float64 `json:"cost_usd,omitempty"`
 }
 
 // DefaultPath is where the ledger lives: ~/.termixgo/audit.jsonl.

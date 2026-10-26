@@ -38,6 +38,12 @@ type Session struct {
 	todos    []Todo
 	usage    provider.Usage
 	costUSD  float64
+	// segments is the same spend as usage and costUSD, split by the provider,
+	// model and billing mode that spent it. usage stays the display cache;
+	// segments are the truth it is checked against, and they are what a
+	// mid-session model switch needs so two models' spend never reads as one
+	// model's.
+	segments []UsageSegment
 	// condensed records that the stored transcript was trimmed to the history
 	// budget at least once, so the operator is told about it once instead of
 	// every turn. It is persisted with the session for the same reason.
@@ -57,6 +63,7 @@ type sessionJSON struct {
 	Todos     []Todo             `json:"todos,omitempty"`
 	Usage     provider.Usage     `json:"usage,omitempty"`
 	CostUSD   float64            `json:"costUsd,omitempty"`
+	Segments  []UsageSegment     `json:"segments,omitempty"`
 	Condensed bool               `json:"condensed,omitempty"`
 }
 
@@ -205,6 +212,43 @@ func (s *Session) AddUsage(usage provider.Usage) {
 	s.mu.Unlock()
 }
 
+// Segments returns a snapshot of the per-model spend segments.
+func (s *Session) Segments() []UsageSegment {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.segments) == 0 {
+		return nil
+	}
+	snapshot := make([]UsageSegment, len(s.segments))
+	copy(snapshot, s.segments)
+	return snapshot
+}
+
+// RecordUsage folds one ledger record into the session: its tokens join the
+// aggregate, its dollars join the spend when it carries any, and the record
+// lands in its provider/model/billing-mode segment. This is the one path a
+// measured call takes, so the aggregate can never drift from the segments:
+// both are this sum.
+func (s *Session) RecordUsage(record UsageRecord) {
+	s.mu.Lock()
+	s.usage = s.usage.Add(record.Usage.Usage())
+	if record.CostUSD != nil {
+		s.costUSD += *record.CostUSD
+	}
+	s.segments = FoldSegment(s.segments, record)
+	s.mu.Unlock()
+}
+
+// FoldSegmentOnly folds a record into the segments without touching the
+// aggregate or the spend. It exists for callers that already folded the
+// aggregate through AddUsage and AddCost, where a second fold would count
+// the call twice.
+func (s *Session) FoldSegmentOnly(record UsageRecord) {
+	s.mu.Lock()
+	s.segments = FoldSegment(s.segments, record)
+	s.mu.Unlock()
+}
+
 // ReplaceUsage overwrites the token accounting. A load uses it to repair a
 // total no real run could have produced.
 func (s *Session) ReplaceUsage(usage provider.Usage) {
@@ -313,6 +357,7 @@ func (s *Session) Reset() {
 	s.todos = nil
 	s.usage = provider.Usage{}
 	s.costUSD = 0
+	s.segments = nil
 	s.title = ""
 	s.condensed = false
 	s.updatedAt = time.Now()
@@ -470,6 +515,8 @@ func (s *Session) snapshot() sessionJSON {
 	copy(messages, s.messages)
 	todos := make([]Todo, len(s.todos))
 	copy(todos, s.todos)
+	segments := make([]UsageSegment, len(s.segments))
+	copy(segments, s.segments)
 	return sessionJSON{
 		ID:        s.id,
 		Title:     s.title,
@@ -481,6 +528,7 @@ func (s *Session) snapshot() sessionJSON {
 		Todos:     todos,
 		Usage:     s.usage,
 		CostUSD:   s.costUSD,
+		Segments:  segments,
 		Condensed: s.condensed,
 	}
 }
@@ -626,6 +674,7 @@ func fromJSON(state sessionJSON) *Session {
 		todos:     state.Todos,
 		usage:     state.Usage,
 		costUSD:   state.CostUSD,
+		segments:  state.Segments,
 		condensed: state.Condensed,
 	}
 }

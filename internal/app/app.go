@@ -98,6 +98,19 @@ type App struct {
 	costKnown bool
 	// quotaTracker tracks 5-hour rolling usage and vendor rate limits.
 	quotaTracker *QuotaTracker
+	// ledgerMu serialises appends to the session usage ledger: the emit path
+	// and the internal-task path can both record within one turn.
+	ledgerMu sync.Mutex
+	// turnStep counts the usage events of the turn in flight, which is the
+	// step number a ledger record carries.
+	turnStep int
+	// turnPending holds the delegated runs folded into the turn in flight,
+	// so the turn-end quota record can charge them to their own models
+	// instead of to the parent's.
+	turnPending []pendingSubagentUsage
+	// turnStartCost is the session spend when the turn in flight began, so a
+	// turn's own cost can be told apart from the session's running total.
+	turnStartCost float64
 	// costUSD is the estimated spend across the live session, mirrored from
 	// the runner so the status bar and /cost can show it without a lookup.
 	costUSD float64
@@ -228,6 +241,14 @@ func New(workspace string) (*App, error) {
 	}
 
 	instance.quotaTracker = NewQuotaTracker()
+	// The rolling window survives a restart: without the state file a
+	// restart in the middle of a provider's 5-hour window reset the local
+	// gauge to zero. A load failure leaves an empty window, which is the
+	// behaviour the tracker has always had, so it is not fatal.
+	if statePath, err := config.HomePath("quota-state.json"); err == nil {
+		instance.quotaTracker.SetStatePath(statePath)
+		_ = instance.quotaTracker.LoadState()
+	}
 
 	// MCP servers are connected before the first turn so the model sees their
 	// tools from the start. A server that fails is recorded and skipped: the
@@ -1055,8 +1076,15 @@ func (a *App) maybeCompactHistory(ctx context.Context, session *agent.Session) {
 	if err != nil {
 		return
 	}
-	brief, err := agent.SummarizeHistory(ctx, client, model, effort, transcript)
-	if err != nil || brief == "" {
+	brief, usage, err := agent.SummarizeHistory(ctx, client, model, effort, transcript)
+	if err != nil {
+		return
+	}
+	// The condensation call spent real tokens on its own model; record them
+	// even when the brief turns out unusable, because the spend happened
+	// either way.
+	a.recordTaskUsage(session, agent.TaskCompaction, model, usage)
+	if brief == "" {
 		return
 	}
 	if session.InsertSummary(brief) {
@@ -1093,10 +1121,11 @@ func (a *App) ForceCompact(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("task client error: %w", err)
 	}
-	brief, err := agent.SummarizeHistory(ctx, client, model, effort, transcript)
+	brief, usage, err := agent.SummarizeHistory(ctx, client, model, effort, transcript)
 	if err != nil {
 		return false, fmt.Errorf("compaction failed: %w", err)
 	}
+	a.recordTaskUsage(session, agent.TaskCompaction, model, usage)
 	if brief == "" {
 		return false, fmt.Errorf("compaction returned empty brief")
 	}
@@ -1272,6 +1301,13 @@ func (a *App) Emit(event agent.Event) {
 // app total; the throwaway session still accounts for itself.
 func (a *App) emitInto(event agent.Event, foldUsage bool) {
 	a.recordAudit(event)
+	if event.Kind == agent.EventTurnStart {
+		a.mu.Lock()
+		a.turnStep = 0
+		a.turnPending = nil
+		a.turnStartCost = a.costUSD
+		a.mu.Unlock()
+	}
 	if event.Kind == agent.EventProcessEnd {
 		// A worker announced completion; forward it to chat so a 24/7
 		// operator hears about it without watching the terminal. Delivery
@@ -1294,9 +1330,18 @@ func (a *App) emitInto(event agent.Event, foldUsage bool) {
 		tracker := a.quotaTracker
 		prov := a.model.Provider
 		mod := a.model.ID
+		pending := a.turnPending
+		a.turnPending = nil
 		a.mu.Unlock()
 		if tracker != nil {
-			tracker.RecordUsage(prov, mod, event.Usage)
+			// The turn total folds delegated spend in, but the quota window
+			// belongs to the model that spent it: each delegated run is
+			// recorded under its own provider and model, and the parent is
+			// charged only what is left.
+			for _, delegated := range pending {
+				tracker.RecordUsage(delegated.provider, delegated.model, delegated.usage)
+			}
+			tracker.RecordUsage(prov, mod, subtractDelegated(event.Usage, pending))
 		}
 		// The turn just consumed real provider quota, so re-fetch the
 		// official numbers in the background. The snapshot lands on the
@@ -1311,7 +1356,7 @@ func (a *App) emitInto(event agent.Event, foldUsage bool) {
 		}
 	}
 	if foldUsage && event.Kind == agent.EventUsage {
-		a.AddUsage(event.Usage)
+		a.recordUsageEvent(event)
 	}
 	if event.Kind == agent.EventToolEnd {
 		a.recordToolResult(event.ToolName, event.ToolOK)
@@ -1359,14 +1404,39 @@ func (a *App) recordAudit(event agent.Event) {
 			Millis:    event.ToolMillis,
 		})
 	case agent.EventTurnEnd:
-		_ = ledger.Record(audit.Entry{
-			Workspace:    a.workspace,
-			Kind:         "turn",
-			OK:           event.StopReason == "stop",
-			StopReason:   event.StopReason,
-			InputTokens:  event.Usage.PromptTokens,
-			OutputTokens: event.Usage.CompletionTokens,
-		})
+		a.mu.Lock()
+		model := a.model
+		turnStartCost := a.turnStartCost
+		a.mu.Unlock()
+		sessionID := ""
+		if session := a.currentSession(); session != nil {
+			sessionID = session.ID()
+		}
+		entry := audit.Entry{
+			Workspace:        a.workspace,
+			Kind:             "turn",
+			OK:               event.StopReason == "stop",
+			StopReason:       event.StopReason,
+			InputTokens:      event.Usage.PromptTokens,
+			OutputTokens:     event.Usage.CompletionTokens,
+			SessionID:        sessionID,
+			Provider:         model.Provider,
+			Model:            model.ID,
+			BillingMode:      string(model.BillingMode()),
+			TotalTokens:      event.Usage.TotalTokens,
+			CacheReadTokens:  event.Usage.CacheReadTokens,
+			CacheWriteTokens: event.Usage.CacheWriteTokens,
+			ReasoningTokens:  event.Usage.ReasoningTokens,
+		}
+		// The event's cost is the session's running total, so the turn's own
+		// cost is the part past where the turn began. An unpriced turn writes
+		// no cost at all rather than a zero that reads as free.
+		if event.CostKnown {
+			if cost := event.CostUSD - turnStartCost; cost >= 0 {
+				entry.CostUSD = &cost
+			}
+		}
+		_ = ledger.Record(entry)
 	}
 }
 
@@ -1759,8 +1829,14 @@ func (a *App) maybeNameSession(ctx context.Context, session *agent.Session) {
 	if err != nil {
 		return
 	}
-	title, err := agent.SuggestTitle(ctx, client, model, effort, transcript)
-	if err != nil || title == "" {
+	title, usage, err := agent.SuggestTitle(ctx, client, model, effort, transcript)
+	if err != nil {
+		return
+	}
+	// The naming call is recorded under the title model even when it answers
+	// nothing usable: the tokens were spent either way.
+	a.recordTaskUsage(session, agent.TaskTitle, model, usage)
+	if title == "" {
 		return
 	}
 	session.SetTitle(title)

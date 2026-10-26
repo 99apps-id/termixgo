@@ -69,6 +69,14 @@ type Event struct {
 	Usage     provider.Usage
 	RateLimit *provider.RateLimitInfo
 
+	// UsageProvider and UsageModel are set only on the EventUsage that folds
+	// a delegated run's spend into its parent: they name the subagent's own
+	// provider and model, so the app can attribute those tokens to the model
+	// that spent them instead of to the parent's. A plain step usage event
+	// leaves them empty, which means the run's own model.
+	UsageProvider string
+	UsageModel    string
+
 	// CostUSD is the estimated spend of the run so far, and CostKnown
 	// says whether every spend component had a recorded price. Without the
 	// flag a free local model and an unpriced one would both read as zero.

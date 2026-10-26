@@ -189,6 +189,17 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   that would pass it and names the amount in the message. `Pricing.Known()`
   separates "free" (a local model) from "unpriced", and a budget of zero means
   unlimited rather than "stop at once".
+- Usage is recorded per call, not per session. Every provider call (a run-loop
+  step, a delegated run, a compaction or title task call) becomes one
+  `agent.UsageRecord` in the session's `<id>.ledger.jsonl` (0600), carrying its
+  provider, model and `provider.BillingMode`, and the session aggregate is the
+  sum of its records, segmented per (provider, model, billing mode). A plan
+  record's `cost_usd` is null, never an invented zero: dollars exist only for
+  the api_key mode, a local model, or an operator price override. Internal
+  task calls are recorded under the task model's own segment, and a subagent's
+  usage is charged to the subagent's model in the session ledger and in
+  `QuotaTracker` alike; the tracker persists its rolling 5-hour window to
+  `~/.termixgo/quota-state.json`.
 - Delegated spend is a count, not a boolean collapse. `SubagentSpend.Unpriced`
   and `Event.CostUnpriced` count the delegated runs whose model had no price,
   while the parent's own priced spend stays known: one unpriced subagent must

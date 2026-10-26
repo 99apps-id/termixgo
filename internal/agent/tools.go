@@ -34,6 +34,11 @@ type Result struct {
 	SubagentUsage     provider.Usage
 	SubagentCost      float64
 	SubagentCostKnown bool
+	// SubagentProvider and SubagentModel name the model that did the
+	// delegated work, carried from SubagentSpend so the usage event the loop
+	// emits for the fold can attribute the tokens to that model.
+	SubagentProvider string
+	SubagentModel    string
 	// SubagentUnpriced counts delegated runs nested inside this one whose
 	// model had no price, so their dollars could not be folded. It is added to
 	// the parent's own unpriced counter rather than collapsing CostKnown.

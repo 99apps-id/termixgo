@@ -27,8 +27,9 @@ const (
 )
 
 // taskMaxTokens bounds the answer of a task call. Both jobs answer with a short
-// piece of prose, and a runaway task call is charged to the session like any
-// other request.
+// piece of prose. A task call's usage is returned to the caller, which records
+// it in the session ledger under the task's own model: the call is charged to
+// the session, but never folded into the main model's segment.
 const taskMaxTokens = 1024
 
 // transcriptByteLimit bounds how much of the history one task call reads. A
@@ -37,12 +38,20 @@ const taskMaxTokens = 1024
 // shrink.
 const transcriptByteLimit = 48000
 
-// taskCall runs one non-streaming completion and returns its text.
-func taskCall(ctx context.Context, client provider.Client, model, effort, system, prompt string) (string, error) {
+// taskCall runs one non-streaming completion and returns its text and the
+// usage the provider reported for it.
+//
+// The usage used to be discarded here, which made every compaction and title
+// call invisible spend: real tokens that landed in no ledger, no cost figure
+// and no quota window. Returning it is only half the fix; the caller records
+// it, under the task model's own segment, because the task model can differ
+// from the conversation's model in provider and billing mode alike.
+func taskCall(ctx context.Context, client provider.Client, model, effort, system, prompt string) (string, provider.Usage, error) {
 	if client == nil {
-		return "", errors.New("no client is available for the internal task")
+		return "", provider.Usage{}, errors.New("no client is available for the internal task")
 	}
 	var builder strings.Builder
+	var usage provider.Usage
 	request := provider.ChatRequest{
 		Model:     model,
 		System:    system,
@@ -51,14 +60,21 @@ func taskCall(ctx context.Context, client provider.Client, model, effort, system
 		Effort:    effort,
 	}
 	if err := client.Stream(ctx, request, func(event provider.StreamEvent) error {
-		if event.Type == provider.EventTextDelta {
+		switch event.Type {
+		case provider.EventTextDelta:
 			builder.WriteString(event.Text)
+		case provider.EventUsage:
+			if event.Usage != nil {
+				// Providers emit per-step increments, so the call's usage
+				// is the sum of its usage events.
+				usage = usage.Add(*event.Usage)
+			}
 		}
 		return nil
 	}); err != nil {
-		return "", err
+		return "", provider.Usage{}, err
 	}
-	return strings.TrimSpace(builder.String()), nil
+	return strings.TrimSpace(builder.String()), usage, nil
 }
 
 // RenderTranscript flattens messages into a readable transcript for an internal
@@ -100,7 +116,8 @@ func RenderTranscript(messages []provider.Message) string {
 const SummarySystemPrompt = "You condense the earlier part of a coding session into a brief for the assistant that continues it. Keep every decision made, every file touched with its path, every command that mattered and its result, and anything still unfinished. Name what you are unsure about instead of guessing. Write plain prose or short bullets, no headings, no preamble. Never invent a fact that is not in the transcript."
 
 // SummarizeHistory condenses an older part of the conversation into a brief.
-func SummarizeHistory(ctx context.Context, client provider.Client, model, effort, transcript string) (string, error) {
+// It returns the call's usage alongside the brief so the caller can record it.
+func SummarizeHistory(ctx context.Context, client provider.Client, model, effort, transcript string) (string, provider.Usage, error) {
 	prompt := "Condense this earlier part of the session. The turns themselves are being dropped, so the brief is the only thing the assistant will have from them.\n\n" + transcript
 	return taskCall(ctx, client, model, effort, SummarySystemPrompt, prompt)
 }
@@ -112,12 +129,12 @@ const TitleSystemPrompt = "You name coding sessions. Answer with a title of at m
 // SuggestTitle names a session from its opening. It returns an empty string
 // rather than a placeholder when the model answers nothing usable, so a caller
 // never replaces a derived title with a blank one.
-func SuggestTitle(ctx context.Context, client provider.Client, model, effort, transcript string) (string, error) {
-	title, err := taskCall(ctx, client, model, effort, TitleSystemPrompt, "Name this session:\n\n"+transcript)
+func SuggestTitle(ctx context.Context, client provider.Client, model, effort, transcript string) (string, provider.Usage, error) {
+	title, usage, err := taskCall(ctx, client, model, effort, TitleSystemPrompt, "Name this session:\n\n"+transcript)
 	if err != nil {
-		return "", err
+		return "", provider.Usage{}, err
 	}
-	return cleanTitle(title), nil
+	return cleanTitle(title), usage, nil
 }
 
 // cleanTitle turns a model answer into something safe to store and show: one

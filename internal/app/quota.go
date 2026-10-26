@@ -1,12 +1,17 @@
 package app
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/provider"
+	"github.com/99apps-id/termixgo/internal/secrets"
 )
 
 // RollingWindow is the 5-hour rolling quota window standard for coding providers.
@@ -14,12 +19,12 @@ const RollingWindow = 5 * time.Hour
 
 // UsageRecord logs one turn's accounting.
 type UsageRecord struct {
-	Timestamp        time.Time
-	Provider         string
-	Model            string
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
+	Timestamp        time.Time `json:"ts"`
+	Provider         string    `json:"provider"`
+	Model            string    `json:"model"`
+	PromptTokens     int       `json:"prompt"`
+	CompletionTokens int       `json:"completion"`
+	TotalTokens      int       `json:"total"`
 }
 
 // WindowStats summarizes activity in a rolling window.
@@ -42,6 +47,11 @@ type QuotaTracker struct {
 	records    []UsageRecord
 	rateLimits map[string]*provider.RateLimitInfo // key: provider
 	snapshots  map[string]*provider.QuotaSnapshot // key: provider
+	// statePath, when set, is where the rolling window survives a restart.
+	// The tracker used to live only in memory, so a restart in the middle of
+	// a provider's 5-hour window reset the local gauge to zero and only an
+	// official snapshot, when its fetch succeeded, covered the gap.
+	statePath string
 }
 
 // NewQuotaTracker builds a new quota tracker.
@@ -79,6 +89,98 @@ func (q *QuotaTracker) RecordUsage(providerName, model string, usage provider.Us
 	if start > 0 {
 		q.records = q.records[start:]
 	}
+	// Best effort: the gauge must never fail a turn over its own state file.
+	_ = q.saveLocked(now)
+}
+
+// quotaState is the persisted shape: the records still inside the rolling
+// window, nothing else. Rate limits and official snapshots are live data and
+// are re-fetched, never revived from disk.
+type quotaState struct {
+	Records []UsageRecord `json:"records"`
+}
+
+// SetStatePath points the tracker at its state file. Call LoadState after
+// setting it. An empty path turns persistence off.
+func (q *QuotaTracker) SetStatePath(path string) {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.statePath = path
+}
+
+// LoadState restores the rolling window from the state file. Records that
+// have aged out of the 5-hour window are dropped on load: reviving them
+// would inflate a window they no longer belong to. A missing file is an
+// empty window, not an error.
+func (q *QuotaTracker) LoadState() error {
+	if q == nil {
+		return nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.statePath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(q.statePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read quota state: %w", err)
+	}
+	var state quotaState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return fmt.Errorf("parse quota state: %w", err)
+	}
+	cutoff := time.Now().Add(-RollingWindow)
+	kept := state.Records[:0]
+	for _, record := range state.Records {
+		if record.Timestamp.After(cutoff) {
+			kept = append(kept, record)
+		}
+	}
+	q.records = append(q.records, kept...)
+	return nil
+}
+
+// saveLocked writes the in-window records to the state file. The caller
+// holds the lock. Only the rolling window is persisted: older records are
+// pruned from memory at 24 hours but would be dropped on load anyway, and
+// keeping the file to one window keeps it small.
+func (q *QuotaTracker) saveLocked(now time.Time) error {
+	if q.statePath == "" {
+		return nil
+	}
+	cutoff := now.Add(-RollingWindow)
+	state := quotaState{}
+	for _, record := range q.records {
+		if record.Timestamp.After(cutoff) {
+			state.Records = append(state.Records, record)
+		}
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(q.statePath), 0o700); err != nil {
+		return fmt.Errorf("create quota state directory: %w", err)
+	}
+	tmp := q.statePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("write quota state: %w", err)
+	}
+	if err := secrets.RestrictFile(tmp); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("protect quota state: %w", err)
+	}
+	if err := os.Rename(tmp, q.statePath); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("replace quota state: %w", err)
+	}
+	return secrets.RestrictFile(q.statePath)
 }
 
 // RecordRateLimit records live headers from a provider response.

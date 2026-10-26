@@ -181,8 +181,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 			tail = fmt.Sprintf("The %s is a prepaid quota: the plan's own console reports the %s used. A costBudgetUsd cap applies only to pay-as-you-go models.", plan.Name, plan.CreditUnit)
 		}
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf(
-			"Tokens: %d in, %d out, %d total.\n%sEstimated spend: %s (%s).\n%s%s",
-			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, formatCacheHit(usage), spend, budget, tail, formatToolStats(m.app.ToolStats()))})
+			"Tokens: %d in, %d out, %d total.\n%sEstimated spend: %s (%s).\n%s%s%s",
+			usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, formatCacheHit(usage), spend, budget, tail, formatUsageSegments(m.app.SessionSegments()), formatToolStats(m.app.ToolStats()))})
 		m.refresh()
 		return m, nil
 	case "ps":
@@ -721,6 +721,48 @@ func formatCacheHit(usage provider.Usage) string {
 		line += fmt.Sprintf("Cache writes: %d tokens.\n", usage.CacheWriteTokens)
 	}
 	return extra.String() + line
+}
+
+// formatUsageSegments renders the per-model split under the /cost total:
+// one line per (provider, model, billing mode) segment, so a session that
+// switched models, delegated to a subagent or paid for internal task calls
+// shows who spent what instead of one figure under the active model's name.
+// Plan segments show no dollars, because a plan has none; a segment with
+// unpriced records says its dollars are a floor. No segments (a session
+// written before records existed, or nothing spent yet) renders nothing.
+func formatUsageSegments(segments []agent.UsageSegment) string {
+	if len(segments) == 0 {
+		return ""
+	}
+	var out strings.Builder
+	out.WriteString("\nBy model:\n")
+	for _, segment := range segments {
+		name := segment.Model
+		if segment.Provider != "" && segment.Model != "" {
+			name = segment.Provider + "/" + segment.Model
+		} else if name == "" {
+			name = segment.Provider
+		}
+		line := fmt.Sprintf("  %s (%s): %d in, %d out, %d total",
+			name, segment.BillingMode,
+			segment.Usage.PromptTokens, segment.Usage.CompletionTokens, segment.Usage.TotalTokens)
+		switch segment.BillingMode {
+		case string(provider.BillingOAuthPlan), string(provider.BillingCreditPlan):
+			// A plan's currency is its quota or credits, not dollars.
+		case string(provider.BillingLocal):
+			line += ", free (local)"
+		default:
+			if segment.Unpriced > 0 && segment.CostUSD <= 0 {
+				line += ", cost unknown"
+			} else if segment.Unpriced > 0 {
+				line += fmt.Sprintf(", about $%.4f (a floor: %d unpriced record(s))", segment.CostUSD, segment.Unpriced)
+			} else {
+				line += fmt.Sprintf(", about $%.4f", segment.CostUSD)
+			}
+		}
+		out.WriteString(line + "\n")
+	}
+	return out.String()
 }
 
 func (m *Model) slashProcesses(args string) (tea.Model, tea.Cmd) {

@@ -11,7 +11,8 @@ import (
 )
 
 // taskClientStub answers a task call with fixed text and records what it was
-// asked, so a test can assert on the prompt and the model id.
+// asked, so a test can assert on the prompt and the model id. It reports a
+// usage event per step, in two increments, the way a streaming provider does.
 type taskClientStub struct {
 	mu       sync.Mutex
 	answer   string
@@ -31,14 +32,20 @@ func (c *taskClientStub) Stream(_ context.Context, req provider.ChatRequest, emi
 	if err != nil {
 		return err
 	}
-	return emit(provider.StreamEvent{Type: provider.EventTextDelta, Text: answer})
+	if err := emit(provider.StreamEvent{Type: provider.EventUsage, Usage: &provider.Usage{PromptTokens: 100, TotalTokens: 100}}); err != nil {
+		return err
+	}
+	if err := emit(provider.StreamEvent{Type: provider.EventTextDelta, Text: answer}); err != nil {
+		return err
+	}
+	return emit(provider.StreamEvent{Type: provider.EventUsage, Usage: &provider.Usage{CompletionTokens: 25, TotalTokens: 25, ReasoningTokens: 5}})
 }
 
 // TestTaskCallSendsOneShotRequest pins the shape of an internal call: one user
 // message, the task system prompt, no tools, and the effort the caller chose.
 func TestTaskCallSendsOneShotRequest(t *testing.T) {
 	client := &taskClientStub{answer: "done"}
-	answer, err := taskCall(context.Background(), client, "cheap-model", provider.EffortLow, "be brief", "do the thing")
+	answer, _, err := taskCall(context.Background(), client, "cheap-model", provider.EffortLow, "be brief", "do the thing")
 	if err != nil {
 		t.Fatalf("taskCall: %v", err)
 	}
@@ -72,7 +79,7 @@ func TestTaskCallSendsOneShotRequest(t *testing.T) {
 // which treats it as "fall back to the plain trim" rather than as an answer.
 func TestTaskCallReportsAProviderFailure(t *testing.T) {
 	client := &taskClientStub{err: errors.New("provider exploded")}
-	if _, err := taskCall(context.Background(), client, "m", "", "s", "p"); err == nil {
+	if _, _, err := taskCall(context.Background(), client, "m", "", "s", "p"); err == nil {
 		t.Fatalf("a failed task call must return an error")
 	}
 }
@@ -80,7 +87,7 @@ func TestTaskCallReportsAProviderFailure(t *testing.T) {
 // TestTaskCallWithoutAClientFails keeps a missing client from reading as an
 // empty answer, which would store a blank brief.
 func TestTaskCallWithoutAClientFails(t *testing.T) {
-	if _, err := taskCall(context.Background(), nil, "m", "", "s", "p"); err == nil {
+	if _, _, err := taskCall(context.Background(), nil, "m", "", "s", "p"); err == nil {
 		t.Fatalf("a nil client must return an error")
 	}
 }
