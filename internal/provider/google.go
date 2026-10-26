@@ -96,6 +96,7 @@ func (c *googleClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 				CompletionTokens: chunk.UsageMetadata.CandidatesTokenCount,
 				TotalTokens:      chunk.UsageMetadata.TotalTokenCount,
 				CacheReadTokens:  chunk.UsageMetadata.CachedContentTokenCount,
+				ReasoningTokens:  chunk.UsageMetadata.ThoughtsTokenCount,
 			}
 			if step, ok := usage.step(current); ok {
 				if err := emit(StreamEvent{Type: EventUsage, Usage: &step}); err != nil {
@@ -276,5 +277,6 @@ type googleChunk struct {
 		CandidatesTokenCount    int `json:"candidatesTokenCount"`
 		TotalTokenCount         int `json:"totalTokenCount"`
 		CachedContentTokenCount int `json:"cachedContentTokenCount"`
+		ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
 	} `json:"usageMetadata"`
 }

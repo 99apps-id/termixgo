@@ -139,6 +139,24 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 	// raw charged the same prompt tokens twice. The OpenAI reader already dedups
 	// this way; this is the same guard.
 	reportedUsage := &cumulativeUsage{}
+	// Anthropic splits one request's usage across two event shapes:
+	// message_start carries the prompt side and message_delta carries only
+	// the output side, and neither carries a total. The snapshot below joins
+	// the two halves into the cumulative request-wide figure the tracker
+	// expects, so every emitted step can name TotalTokens as prompt plus
+	// completion. Without it an Anthropic turn recorded a total of zero,
+	// which blanked the status-bar token count, /cost's total and the
+	// rolling quota window for the provider most operators use.
+	var snapPrompt, snapCompletion, snapCacheRead, snapCacheWrite int
+	snapshot := func() Usage {
+		return Usage{
+			PromptTokens:     snapPrompt,
+			CompletionTokens: snapCompletion,
+			TotalTokens:      snapPrompt + snapCompletion,
+			CacheReadTokens:  snapCacheRead,
+			CacheWriteTokens: snapCacheWrite,
+		}
+	}
 	for {
 		payload, err := reader.next()
 		if err == io.EOF {
@@ -164,11 +182,10 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 				promptTokens := event.Message.Usage.InputTokens
 				cacheRead := event.Message.Usage.CacheReadInputTokens
 				cacheWrite := event.Message.Usage.CacheCreationInputTokens
-				if step, ok := reportedUsage.step(Usage{
-					PromptTokens:     promptTokens + cacheRead + cacheWrite,
-					CacheReadTokens:  cacheRead,
-					CacheWriteTokens: cacheWrite,
-				}); ok {
+				snapPrompt = promptTokens + cacheRead + cacheWrite
+				snapCacheRead = cacheRead
+				snapCacheWrite = cacheWrite
+				if step, ok := reportedUsage.step(snapshot()); ok {
 					if err := emit(StreamEvent{Type: EventUsage, Usage: &step}); err != nil {
 						return err
 					}
@@ -220,7 +237,8 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 			}
 		case "message_delta":
 			if event.Usage != nil {
-				if step, ok := reportedUsage.step(Usage{CompletionTokens: event.Usage.OutputTokens}); ok {
+				snapCompletion = event.Usage.OutputTokens
+				if step, ok := reportedUsage.step(snapshot()); ok {
 					if err := emit(StreamEvent{Type: EventUsage, Usage: &step}); err != nil {
 						return err
 					}
