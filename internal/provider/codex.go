@@ -157,10 +157,19 @@ func decodeResponsesStream(label string, body io.Reader, emit func(StreamEvent) 
 		case "response.completed":
 			if event.Response != nil && event.Response.Usage != nil {
 				raw := event.Response.Usage
+				var cached, reasoning int
+				if raw.InputTokensDetails != nil {
+					cached = raw.InputTokensDetails.CachedTokens
+				}
+				if raw.OutputTokensDetails != nil {
+					reasoning = raw.OutputTokensDetails.ReasoningTokens
+				}
 				if step, ok := usage.step(Usage{
 					PromptTokens:     raw.InputTokens,
 					CompletionTokens: raw.OutputTokens,
 					TotalTokens:      raw.TotalTokens,
+					CacheReadTokens:  cached,
+					ReasoningTokens:  reasoning,
 				}); ok {
 					if err := emit(StreamEvent{Type: EventUsage, Usage: &step}); err != nil {
 						return err
@@ -310,9 +319,15 @@ type responsesEvent struct {
 	} `json:"item"`
 	Response *struct {
 		Usage *struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-			TotalTokens  int `json:"total_tokens"`
+			InputTokens        int `json:"input_tokens"`
+			OutputTokens       int `json:"output_tokens"`
+			TotalTokens        int `json:"total_tokens"`
+			InputTokensDetails *struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"input_tokens_details"`
+			OutputTokensDetails *struct {
+				ReasoningTokens int `json:"reasoning_tokens"`
+			} `json:"output_tokens_details"`
 		} `json:"usage"`
 	} `json:"response"`
 }

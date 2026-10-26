@@ -146,6 +146,8 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 				PromptTokens:     chunk.UsageMetadata.PromptTokenCount,
 				CompletionTokens: chunk.UsageMetadata.CandidatesTokenCount,
 				TotalTokens:      chunk.UsageMetadata.TotalTokenCount,
+				CacheReadTokens:  chunk.UsageMetadata.CachedContentTokenCount,
+				ReasoningTokens:  chunk.UsageMetadata.ThoughtsTokenCount,
 			}); ok {
 				if err := emit(StreamEvent{Type: EventUsage, Usage: &step}); err != nil {
 					return err
