@@ -661,6 +661,8 @@ func CreateFileCheckpoint(ctx context.Context, workspace, message string) (FileC
 		_ = os.RemoveAll(filepath.Join(fileCheckpointDir(workspace), store.ID))
 		return FileCheckpoint{}, err
 	}
+	// Bound disk usage by auto-pruning older snapshots (keep 20 newest).
+	_ = PruneFileCheckpoints(workspace, 20)
 	return *store, nil
 }
 
@@ -726,19 +728,52 @@ func RewindFileCheckpoint(workspace, id string) (FileCheckpoint, error) {
 	return *store, nil
 }
 
-// PruneFileCheckpoints drops all but the newest keep snapshots.
-func PruneFileCheckpoints(workspace string, keep int) error {
+// CleanSnapshotResult details pruned or dry-run snapshot cleanup.
+type CleanSnapshotResult struct {
+	PrunedCount int
+	PrunedIDs   []string
+	FreedBytes  int64
+}
+
+// CleanSnapshots inspects .termixgo/snapshots/ and prunes snapshots beyond keep.
+// When dryRun is true, it only calculates what would be removed without deleting files.
+func CleanSnapshots(workspace string, keep int, dryRun bool) (CleanSnapshotResult, error) {
 	if keep < 1 {
 		keep = 1
 	}
 	stores, err := ListFileCheckpoints(workspace)
 	if err != nil {
-		return err
+		return CleanSnapshotResult{}, err
 	}
+	var res CleanSnapshotResult
+	if len(stores) <= keep {
+		return res, nil
+	}
+	baseDir := fileCheckpointDir(workspace)
 	for index := keep; index < len(stores); index++ {
-		_ = os.RemoveAll(filepath.Join(fileCheckpointDir(workspace), stores[index].ID))
+		snap := stores[index]
+		snapDir := filepath.Join(baseDir, snap.ID)
+		var size int64
+		_ = filepath.Walk(snapDir, func(_ string, info os.FileInfo, err error) error {
+			if err == nil && info != nil && !info.IsDir() {
+				size += info.Size()
+			}
+			return nil
+		})
+		res.PrunedCount++
+		res.PrunedIDs = append(res.PrunedIDs, snap.ID)
+		res.FreedBytes += size
+		if !dryRun {
+			_ = os.RemoveAll(snapDir)
+		}
 	}
-	return nil
+	return res, nil
+}
+
+// PruneFileCheckpoints drops all but the newest keep snapshots.
+func PruneFileCheckpoints(workspace string, keep int) error {
+	_, err := CleanSnapshots(workspace, keep, false)
+	return err
 }
 
 var _ = bytes.MinRead

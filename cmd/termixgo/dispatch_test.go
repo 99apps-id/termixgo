@@ -290,6 +290,50 @@ func TestDoctorReportsAnUnreadableStore(t *testing.T) {
 	}
 }
 
+func TestHealthCommandRunsAndReportsHealth(t *testing.T) {
+	withState(t)
+	stdout, _, err := runCLI(t, "health")
+	if err != nil {
+		t.Fatalf("health failed: %v", err)
+	}
+	if !strings.Contains(stdout, "System Health & Observability") {
+		t.Fatalf("expected header, got:\n%s", stdout)
+	}
+}
+
+func TestCleanSnapshotsCommand(t *testing.T) {
+	withState(t)
+	stdout, _, err := runCLI(t, "clean-snapshots", "--dry-run", "--keep=5")
+	if err != nil {
+		t.Fatalf("clean-snapshots failed: %v", err)
+	}
+	if !strings.Contains(stdout, "Would prune (dry-run)") {
+		t.Fatalf("expected dry-run output, got:\n%s", stdout)
+	}
+}
+
+func TestDoctorFixRepairsPermissions(t *testing.T) {
+	home := withState(t)
+	cfgPath := filepath.Join(home, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"defaultModel":"test"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, err := runCLI(t, "doctor", "--fix")
+	if err != nil {
+		t.Fatalf("doctor --fix failed: %v", err)
+	}
+	if !strings.Contains(stdout, "permissions:    repaired") {
+		t.Errorf("expected repaired output, got:\n%s", stdout)
+	}
+	info, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Errorf("expected 0600 permissions, got: %o", info.Mode().Perm())
+	}
+}
+
 // ------------------------------------------------- usage and dispatch
 
 // TestUsageNamesEveryCommand is the discovery path: a subcommand that is not in
@@ -302,7 +346,8 @@ func TestUsageNamesEveryCommand(t *testing.T) {
 	for _, want := range []string{
 		"termixgo setup", "termixgo run", "termixgo models", "termixgo model",
 		"termixgo trust", "termixgo approval", "termixgo secret",
-		"termixgo telegram", "termixgo doctor", "termixgo version", "termixgo help",
+		"termixgo telegram", "termixgo doctor", "termixgo health", "termixgo clean-snapshots",
+		"termixgo version", "termixgo help",
 	} {
 		if !strings.Contains(usage, want) {
 			t.Errorf("usage is missing %q", want)

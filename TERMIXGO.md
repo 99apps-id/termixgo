@@ -399,6 +399,47 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   `~/.termixgo/cron-history.jsonl`. A job runs at most once per occurrence
   (`NextRun` advances first) and a busy slot requeues rather than skips.
 
+## Production Hardening and VPS Telemetry Roadmap
+
+Findings from running Termixgo autonomously on production Linux VPS environments
+(evidence from Contabo VPS runs documented in Desktop telemetry):
+
+1. Built-in Observability (`termixgo health`):
+   Map disk usage, system memory, swap utilization, load averages, open file
+   descriptors, systemd failed units, kernel OOM kills, and uptime in one CLI
+   command. Rapid single-command health triage replaces multiple manual shell
+   invocations and highlights resource bottlenecks early.
+2. Snapshot Retention and Pruning (`termixgo clean-snapshots`):
+   Workspace snapshot accumulation (`.termixgo/snapshots/`) can grow unchecked on
+   small storage volumes. Automated snapshot pruning (keeping the newest N
+   snapshots, defaulting to 20 on creation) plus manual dry-run and purge CLI
+   tooling prevents disk exhaustion.
+3. Configuration and Secrets Hygiene:
+   `~/.termixgo/config.json` and channel credentials must strictly adhere to mode
+   0600 (owner-only). Load and save routines enforce this automatically, and
+   `termixgo doctor --fix` repairs loose permissions on existing installations.
+4. Intent-aware Natural Query Fallback:
+   When structured API tool calls fail due to missing required arguments in
+   conversational phrasing (such as location parameters), lightweight query intent
+   heuristics extract entities and route queries before falling back to manual
+   fetch.
+5. Automated System Doctor and Remediation:
+   Extend `termixgo doctor --fix` to automate remediation for common system
+   failures: repairing file ACLs and permission bits, rotating exhausted logs, and
+   restarting stopped dependent system units.
+6. Proactive Disk and Swap Pressure Alerts:
+   Emit alerts in status output when root disk usage exceeds 90% or swap
+   utilization crosses thresholds, warning operators before an out-of-memory kill
+   occurs.
+7. Multi-step Sequential Reasoning Integration:
+   Auto-activate structured sequential step planning for complex multi-step tasks
+   exceeding three execution turns, avoiding reliance on manual tool invocations.
+8. Dial-time Network and Metadata Security:
+   SSRF protection applies at socket dial time (`blockMetadataAddress`) on all web
+   fetch and search tools, ensuring resolved addresses cannot reach cloud metadata
+   endpoints (`169.254.169.254`, `fd00:ec2::254`) or link-local targets through
+   DNS rebinding.
+
 ## Checks
 
 Run these before claiming a change is done:

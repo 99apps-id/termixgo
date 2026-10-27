@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -364,5 +365,26 @@ func TestWebSearchRespectsCount(t *testing.T) {
 	result, _ := tool.Run(context.Background(), &Env{}, map[string]any{"query": "x", "count": 2})
 	if strings.Contains(result.Output, "three") {
 		t.Errorf("only two results were asked for:\n%s", result.Output)
+	}
+}
+
+func TestDialGuardRefusesMetadataAddresses(t *testing.T) {
+	blocked := []string{
+		"169.254.169.254:80",
+		"[fe80::1]:80",
+		"[fd00:ec2::254]:80",
+	}
+	for _, address := range blocked {
+		err := blockMetadataAddress("tcp", address, nil)
+		if !errors.Is(err, errBlockedAddress) {
+			t.Errorf("%s: err = %v, want refusal of metadata address", address, err)
+		}
+	}
+
+	allowed := []string{"127.0.0.1:8080", "[::1]:8080", "10.0.0.5:80", "192.168.1.10:443", "93.184.216.34:443"}
+	for _, address := range allowed {
+		if err := blockMetadataAddress("tcp", address, nil); err != nil {
+			t.Errorf("%s: err = %v, want dial allowed", address, err)
+		}
 	}
 }

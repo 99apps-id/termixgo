@@ -95,6 +95,8 @@ type MCPServer struct {
 	Env     map[string]string `json:"env,omitempty"`
 	// Disabled keeps a server out of the session without removing it.
 	Disabled bool `json:"disabled,omitempty"`
+	// DisabledTools lists tools that are deliberately disabled on this server.
+	DisabledTools []string `json:"disabledTools,omitempty"`
 }
 
 // Hook events. A pre_tool hook runs before a tool call and may block it; a
@@ -309,6 +311,9 @@ func Load() (Config, error) {
 	if err != nil {
 		return Default(), fmt.Errorf("read config %s: %w", path, err)
 	}
+	// Restrict permissions on load to prevent world-readability of settings
+	// or sensitive credentials/pairing-codes left by older versions or loose umasks.
+	_ = os.Chmod(path, 0o600)
 	cfg := Default()
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Default(), fmt.Errorf("parse config %s: %w", path, err)
@@ -335,10 +340,12 @@ func Save(cfg Config) error {
 	if err := os.WriteFile(tmp, appendNewline(data), 0o600); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
+	_ = os.Chmod(tmp, 0o600)
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("replace config: %w", err)
 	}
+	_ = os.Chmod(path, 0o600)
 	return nil
 }
 
@@ -535,6 +542,36 @@ func (c Config) SetMCPServerDisabled(name string, disabled bool) (Config, bool) 
 	for i, s := range c.MCPServers {
 		if strings.EqualFold(s.Name, needle) {
 			c.MCPServers[i].Disabled = disabled
+			return c, true
+		}
+	}
+	return c, false
+}
+
+// SetMCPToolDisabled toggles whether one tool from an MCP server is disabled.
+func (c Config) SetMCPToolDisabled(serverName, toolName string, disabled bool) (Config, bool) {
+	sNeedle := strings.TrimSpace(serverName)
+	tNeedle := strings.TrimSpace(toolName)
+	if sNeedle == "" || tNeedle == "" {
+		return c, false
+	}
+	for i, s := range c.MCPServers {
+		if strings.EqualFold(s.Name, sNeedle) {
+			current := make([]string, 0, len(s.DisabledTools))
+			found := false
+			for _, dt := range s.DisabledTools {
+				if dt == tNeedle {
+					found = true
+					if !disabled {
+						continue
+					}
+				}
+				current = append(current, dt)
+			}
+			if disabled && !found {
+				current = append(current, tNeedle)
+			}
+			c.MCPServers[i].DisabledTools = current
 			return c, true
 		}
 	}

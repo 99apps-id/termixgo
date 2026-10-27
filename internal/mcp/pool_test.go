@@ -271,3 +271,42 @@ func TestSanitize(t *testing.T) {
 		}
 	}
 }
+
+func TestDisabledToolsAreFilteredAndRefused(t *testing.T) {
+	if !isToolDisabled([]string{"echo"}, "echo") {
+		t.Error("echo should be marked disabled")
+	}
+	if isToolDisabled([]string{"echo"}, "echo_all") {
+		t.Error("echo_all should stay enabled when only echo is disabled")
+	}
+	if isToolDisabled(nil, "echo") {
+		t.Error("nil slice disables nothing")
+	}
+
+	pool := NewPool()
+	opts := fakeOptions(modeNormal)
+	opts.DisabledTools = []string{"write_it"}
+	pool.Connect(context.Background(), nil, []Options{opts})
+	defer pool.Close()
+
+	// "write_it" must be filtered from Tools()
+	for _, bound := range pool.Tools() {
+		if bound.Tool.Name == "write_it" {
+			t.Errorf("tool 'write_it' was disabled but appears in pool.Tools()")
+		}
+	}
+
+	// Direct call to disabled tool must be rejected
+	pool.mu.Lock()
+	pool.bound = append(pool.bound, Bound{
+		Server: "fake",
+		Tool:   Tool{Name: "write_it"},
+		Name:   "mcp_fake__write_it",
+	})
+	pool.mu.Unlock()
+
+	_, err := pool.Call(context.Background(), "mcp_fake__write_it", nil)
+	if err == nil || !strings.Contains(err.Error(), "disabled in settings") {
+		t.Fatalf("call to disabled tool should return disabled in settings error, got: %v", err)
+	}
+}

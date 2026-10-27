@@ -43,6 +43,8 @@ type Options struct {
 	Env map[string]string
 	// Dir is the working directory. Empty means the session workspace.
 	Dir string
+	// DisabledTools lists tools that are deliberately disabled on this server.
+	DisabledTools []string
 }
 
 // Client is one running MCP server, seen as a JSON-RPC peer on its stdio.

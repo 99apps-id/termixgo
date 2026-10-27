@@ -29,6 +29,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/cron"
 	"github.com/99apps-id/termixgo/internal/eval"
+	"github.com/99apps-id/termixgo/internal/health"
 	"github.com/99apps-id/termixgo/internal/mcp"
 	"github.com/99apps-id/termixgo/internal/oauth"
 	"github.com/99apps-id/termixgo/internal/provider"
@@ -143,8 +144,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runService(args[1:], stdout)
 	case "completion":
 		return runCompletion(args[1:], stdout)
+	case "health":
+		return runHealth(stdout)
+	case "clean-snapshots":
+		return runCleanSnapshots(args[1:], stdout)
 	case "doctor":
-		return runDoctor(stdout)
+		return runDoctor(args[1:], stdout)
 	default:
 		// When multiple words or a prompt string containing spaces are passed,
 		// treat it as an initial prompt (matching Claude Code / OpenCode behavior:
@@ -1705,13 +1710,26 @@ func systemdUserDir() (string, error) {
 	return filepath.Join(home, ".config", "systemd", "user"), nil
 }
 
-func runDoctor(stdout io.Writer) error {
+func runDoctor(args []string, stdout io.Writer) error {
+	autoFix := false
+	for _, arg := range args {
+		if arg == "--fix" || arg == "-fix" {
+			autoFix = true
+		}
+	}
 	fmt.Fprintf(stdout, "%s (%s/%s)\n\n", version.Full(), runtime.GOOS, runtime.GOARCH)
 	home, err := config.Home()
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "state directory: %s\n", home)
+	configPath, _ := config.Path()
+	if autoFix {
+		if configPath != "" {
+			_ = secrets.RestrictFile(configPath)
+		}
+		_ = secrets.RestrictDirectory(home)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -1722,6 +1740,9 @@ func runDoctor(stdout io.Writer) error {
 	store, err := secrets.Load()
 	if err != nil {
 		return err
+	}
+	if autoFix && store != nil {
+		_ = secrets.RestrictFile(store.Path())
 	}
 	fmt.Fprintf(stdout, "telegram token: %v\n", store.Has(secrets.TelegramTokenKey()))
 	agentNames := make([]string, 0, len(cfg.Agents))
@@ -1798,7 +1819,11 @@ func runDoctor(stdout io.Writer) error {
 	if len(cfg.ModelPricing) > 0 {
 		fmt.Fprintf(stdout, "model prices:   %d override(s) in config\n", len(cfg.ModelPricing))
 	}
+	reportConfigProtection(configPath, stdout)
 	reportSecretProtection(store, stdout)
+	if autoFix {
+		fmt.Fprintln(stdout, "\npermissions:    repaired (config, secrets and state directory restricted to owner)")
+	}
 
 	fmt.Fprintln(stdout, "providers:")
 	for _, info := range provider.Providers() {
@@ -1881,7 +1906,10 @@ Usage:
   termixgo serve                  Run the Telegram assistant 24/7
   termixgo service [install|uninstall|status]
                                   Manage auto-start (systemd, launchd, schtasks)
-  termixgo doctor                 Inspect configuration and provider keys
+  termixgo health                 Report system health (disk, memory, swap, load, services)
+  termixgo clean-snapshots [--keep N] [--dry-run]
+                                  Prune old file snapshots to free disk space
+  termixgo doctor [--fix]         Inspect and repair configuration and state permissions
   termixgo version                Print the version
   termixgo help                   Show this help
 
@@ -1938,6 +1966,75 @@ func reportSecretProtection(store *secrets.Store, stdout io.Writer) {
 		return
 	}
 	fmt.Fprintf(stdout, "secrets access: WARNING, readable beyond the owner: %s\n", strings.Join(access.Entries, ", "))
+}
+
+func reportConfigProtection(path string, stdout io.Writer) {
+	if path == "" {
+		return
+	}
+	access, err := secrets.Inspect(path)
+	if err != nil {
+		if _, statErr := os.Stat(path); statErr != nil {
+			fmt.Fprintln(stdout, "config access:  (no config file yet)")
+			return
+		}
+		fmt.Fprintf(stdout, "config access:  unknown: %v\n", err)
+		return
+	}
+	if access.OwnerOnly {
+		fmt.Fprintf(stdout, "config access:  owner only (%s)\n", access.Detail)
+		return
+	}
+	fmt.Fprintf(stdout, "config access:  WARNING, readable beyond the owner: %s\n", strings.Join(access.Entries, ", "))
+}
+
+func runHealth(stdout io.Writer) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	rep := health.Collect(cwd)
+	fmt.Fprint(stdout, rep.Format())
+	return nil
+}
+
+func runCleanSnapshots(args []string, stdout io.Writer) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	dryRun := false
+	keep := 10
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--keep" && i+1 < len(args):
+			i++
+			if k, parseErr := strconv.Atoi(args[i]); parseErr == nil && k >= 0 {
+				keep = k
+			}
+		case strings.HasPrefix(arg, "--keep="):
+			if k, parseErr := strconv.Atoi(strings.TrimPrefix(arg, "--keep=")); parseErr == nil && k >= 0 {
+				keep = k
+			}
+		}
+	}
+	res, err := agent.CleanSnapshots(cwd, keep, dryRun)
+	if err != nil {
+		return err
+	}
+	modeStr := "Pruned"
+	if dryRun {
+		modeStr = "Would prune (dry-run)"
+	}
+	fmt.Fprintf(stdout, "%s %d snapshot(s), freed ~%.1f MB (keeping newest %d)\n",
+		modeStr, res.PrunedCount, float64(res.FreedBytes)/(1024*1024), keep)
+	for _, id := range res.PrunedIDs {
+		fmt.Fprintf(stdout, "  - %s\n", id)
+	}
+	return nil
 }
 
 // orDash labels an empty value instead of printing nothing.

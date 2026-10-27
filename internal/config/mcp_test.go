@@ -158,3 +158,32 @@ func TestWithMCPServerAndMutations(t *testing.T) {
 		t.Errorf("expected server removed, got %+v", cfg.MCPServers)
 	}
 }
+
+func TestSetMCPToolDisabled(t *testing.T) {
+	cfg := Default()
+	cfg = cfg.WithMCPServer(MCPServer{Name: "fs", Command: "npx"})
+
+	var ok bool
+	cfg, ok = cfg.SetMCPToolDisabled("fs", "dangerous_write", true)
+	if !ok || len(cfg.MCPServers[0].DisabledTools) != 1 || cfg.MCPServers[0].DisabledTools[0] != "dangerous_write" {
+		t.Fatalf("expected dangerous_write disabled, got: %+v", cfg.MCPServers[0].DisabledTools)
+	}
+
+	// Disable second tool
+	cfg, ok = cfg.SetMCPToolDisabled("fs", "dangerous_delete", true)
+	if !ok || len(cfg.MCPServers[0].DisabledTools) != 2 {
+		t.Fatalf("expected 2 disabled tools, got: %+v", cfg.MCPServers[0].DisabledTools)
+	}
+
+	// Re-enable first tool
+	cfg, ok = cfg.SetMCPToolDisabled("fs", "dangerous_write", false)
+	if !ok || len(cfg.MCPServers[0].DisabledTools) != 1 || cfg.MCPServers[0].DisabledTools[0] != "dangerous_delete" {
+		t.Fatalf("expected dangerous_delete to remain disabled, got: %+v", cfg.MCPServers[0].DisabledTools)
+	}
+
+	// Unknown server returns false
+	_, ok = cfg.SetMCPToolDisabled("unknown", "tool", true)
+	if ok {
+		t.Error("expected false for unknown server")
+	}
+}

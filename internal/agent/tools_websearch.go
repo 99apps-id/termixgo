@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -711,12 +713,33 @@ var dohEndpoint = "https://cloudflare-dns.com/dns-query"
 
 var dohClient = &http.Client{Timeout: 10 * time.Second}
 
+// errBlockedAddress reports a dial the guard refused.
+var errBlockedAddress = errors.New("refusing a link-local or cloud metadata address")
+
+// blockMetadataAddress is the dial-time guard wired as net.Dialer.Control.
+// It runs once the address is resolved and before the connection is established,
+// ensuring DNS rebinding or mapped names cannot connect to metadata or link-local targets.
+func blockMetadataAddress(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && isBlockedIP(ip) {
+		return fmt.Errorf("%w: %s", errBlockedAddress, host)
+	}
+	return nil
+}
+
 // dialWithDoHFallback dials an address, and when the host name cannot be
 // resolved by the system resolver it resolves over HTTPS and dials the pinned
 // IP. A literal address and a successful system lookup use the plain dialer,
 // so the fallback only runs where DNS is actually broken.
 func dialWithDoHFallback(ctx context.Context, network, addr string) (net.Conn, error) {
-	dialer := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	dialer := &net.Dialer{
+		Timeout:   15 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control:   blockMetadataAddress,
+	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil || net.ParseIP(host) != nil {
 		return dialer.DialContext(ctx, network, addr)

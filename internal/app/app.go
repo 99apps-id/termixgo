@@ -325,11 +325,12 @@ func (a *App) connectMCP(ctx context.Context) {
 	disabled := make([]mcp.Options, 0, len(cfg.MCPServers))
 	for _, server := range cfg.MCPServers {
 		options := mcp.Options{
-			Name:    server.Name,
-			Command: server.Command,
-			Args:    server.Args,
-			Env:     a.mcpEnvFor(server.Name),
-			Dir:     a.workspace,
+			Name:          server.Name,
+			Command:       server.Command,
+			Args:          server.Args,
+			Env:           a.mcpEnvFor(server.Name),
+			Dir:           a.workspace,
+			DisabledTools: server.DisabledTools,
 		}
 		if server.Disabled {
 			disabled = append(disabled, options)
@@ -2164,23 +2165,11 @@ func (a *App) RunVoicePrompt(ctx context.Context, prompt string, progress func(s
 	session := a.currentSession()
 	session.AddUser(prompt)
 	session.AddAssistant(report, "", nil)
-	// The fallback run happens outside the normal emit path, so its usage and
-	// cost must be folded into the live session by hand rather than lost.
-	// Usage goes through AddUsage so the app total and the session stay in
-	// sync; the delegated unpriced count rides along so one unpriced fallback
-	// does not vanish from the ledger.
+	// The voice fallback runs through RunSubagent, which emits through the
+	// parent's Env.Emit (a.emitInto). That path already folds the delegated
+	// usage, cost and ledger entries into the live session, so adding them
+	// again here would double-count the fallback turn.
 	a.AddUsage(spend.Usage)
-	if spend.Cost > 0 {
-		session.AddCost(spend.Cost)
-		a.mu.Lock()
-		a.costUSD += spend.Cost
-		a.costUnpriced += spend.Unpriced
-		a.mu.Unlock()
-	} else if spend.Unpriced > 0 {
-		a.mu.Lock()
-		a.costUnpriced += spend.Unpriced
-		a.mu.Unlock()
-	}
 	_ = session.Save()
 
 	return report, nil

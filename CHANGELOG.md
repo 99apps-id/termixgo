@@ -28,6 +28,21 @@ All notable changes to Termixgo are recorded here. The format follows
   (`channel:account:chat`, `local`), with `cron runs` and `cron status`.
 - `doctor` now reports agents, channel accounts, linked state and a warning when
   an account reaching non-operators is bound to the launch directory.
+- `health` command: system health and observability check (`termixgo health`)
+  reporting disk capacity, memory, swap pressure, load averages, open file
+  descriptors, systemd failed units, and kernel OOM kills.
+- `clean-snapshots` command: workspace snapshot cleanup (`termixgo clean-snapshots`)
+  with `--keep` and `--dry-run` support, plus automatic 20-snapshot pruning during
+  snapshot creation to prevent disk volume exhaustion.
+- `doctor --fix` flag: automated permission hardening for `config.json`,
+  `secrets.json`, and state directories to private owner-only access (0600/0700).
+- MCP per-tool disable: `disabledTools` configuration on MCP servers, filtering
+  disabled tools from the model catalog and rejecting calls before process spawn.
+- Socket-level metadata guard: dialer control (`blockMetadataAddress`) blocking
+  connections to cloud metadata (`169.254.169.254`, `fd00:ec2::254`) and link-local
+  addresses even when reached via DNS rebinding.
+- Partitioned token ledger: usage ledger and `/cost` command distinguish between
+  pay-per-token BYOK API keys and subscription-based OAuth quotas.
 
 ## 0.2.0 - 2026-10-25
 

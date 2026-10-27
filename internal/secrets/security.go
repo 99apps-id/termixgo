@@ -22,3 +22,6 @@ func Inspect(path string) (FileAccess, error) { return inspect(path) }
 // write inherits whatever the parent directory grants, which is how a shared
 // local group could read it. Any file that must stay private goes through here.
 func RestrictFile(path string) error { return restrictFile(path) }
+
+// RestrictDirectory makes a directory reachable only by the current user.
+func RestrictDirectory(path string) error { return restrictDirectory(path) }

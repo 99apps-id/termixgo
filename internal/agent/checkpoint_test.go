@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -302,5 +303,52 @@ func TestFileCheckpointHonoursCancelledContext(t *testing.T) {
 	}
 	if len(store.Files) != 0 {
 		t.Errorf("a cancelled snapshot must copy nothing, got %v", store.Files)
+	}
+}
+
+func TestCleanSnapshotsDryRunAndPrune(t *testing.T) {
+	dir := t.TempDir()
+	writeForTest(t, dir, "a.txt", "hello")
+	ctx := context.Background()
+
+	for i := 0; i < 5; i++ {
+		writeForTest(t, dir, "a.txt", fmt.Sprintf("content %d", i))
+		if _, err := CreateFileCheckpoint(ctx, dir, fmt.Sprintf("snap %d", i)); err != nil {
+			t.Fatalf("create snap: %v", err)
+		}
+	}
+
+	stores, err := ListFileCheckpoints(dir)
+	if err != nil {
+		t.Fatalf("ListFileCheckpoints: %v", err)
+	}
+	if len(stores) != 5 {
+		t.Fatalf("expected 5 snapshots, got %d", len(stores))
+	}
+
+	// Dry run keep 2
+	res, err := CleanSnapshots(dir, 2, true)
+	if err != nil {
+		t.Fatalf("CleanSnapshots dry-run: %v", err)
+	}
+	if res.PrunedCount != 3 {
+		t.Fatalf("expected 3 pruned in dry-run, got %d", res.PrunedCount)
+	}
+	storesAfterDry, _ := ListFileCheckpoints(dir)
+	if len(storesAfterDry) != 5 {
+		t.Fatalf("dry run must not delete snapshots, got %d", len(storesAfterDry))
+	}
+
+	// Real prune keep 2
+	resReal, err := CleanSnapshots(dir, 2, false)
+	if err != nil {
+		t.Fatalf("CleanSnapshots prune: %v", err)
+	}
+	if resReal.PrunedCount != 3 {
+		t.Fatalf("expected 3 pruned in real run, got %d", resReal.PrunedCount)
+	}
+	storesAfterReal, _ := ListFileCheckpoints(dir)
+	if len(storesAfterReal) != 2 {
+		t.Fatalf("real run must leave exactly 2 snapshots, got %d", len(storesAfterReal))
 	}
 }

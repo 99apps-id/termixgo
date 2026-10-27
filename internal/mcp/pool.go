@@ -66,12 +66,16 @@ type Pool struct {
 	status   []ServerStatus
 	// disabled is kept so the operator can see a server they turned off,
 	// rather than having it look like a typo.
-	disabled []ServerStatus
+	disabled      []ServerStatus
+	disabledTools map[string][]string
 }
 
 // NewPool builds an empty pool.
 func NewPool() *Pool {
-	return &Pool{clients: map[string]*Client{}}
+	return &Pool{
+		clients:       map[string]*Client{},
+		disabledTools: map[string][]string{},
+	}
 }
 
 // Connect starts every server. The context bounds only the handshake and the
@@ -121,6 +125,7 @@ func (p *Pool) Connect(ctx context.Context, disabled []Options, enabled []Option
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, r := range allResults {
+		p.disabledTools[r.options.Name] = r.options.DisabledTools
 		if r.failure.Err != nil {
 			p.failures = append(p.failures, r.failure)
 			p.status = append(p.status, r.status)
@@ -143,6 +148,9 @@ func (p *Pool) Connect(ctx context.Context, disabled []Options, enabled []Option
 		}
 		for _, tool := range r.tools {
 			if strings.TrimSpace(tool.Name) == "" {
+				continue
+			}
+			if isToolDisabled(r.options.DisabledTools, tool.Name) {
 				continue
 			}
 			p.bound = append(p.bound, Bound{
@@ -324,6 +332,17 @@ func (p *Pool) Lookup(name string) (Bound, bool) {
 	return Bound{}, false
 }
 
+// isToolDisabled reports whether a tool name appears in the disabled list.
+// Comparison is an exact string match.
+func isToolDisabled(disabled []string, name string) bool {
+	for _, d := range disabled {
+		if d == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Call runs a contributed tool on the server that owns it.
 func (p *Pool) Call(ctx context.Context, name string, args map[string]any) (CallResult, error) {
 	bound, ok := p.Lookup(name)
@@ -331,8 +350,12 @@ func (p *Pool) Call(ctx context.Context, name string, args map[string]any) (Call
 		return CallResult{}, fmt.Errorf("no MCP tool is named %q", name)
 	}
 	p.mu.Lock()
+	disabled := isToolDisabled(p.disabledTools[bound.Server], bound.Tool.Name)
 	client := p.clients[bound.Server]
 	p.mu.Unlock()
+	if disabled {
+		return CallResult{}, fmt.Errorf("tool %q on MCP server %q is disabled in settings", bound.Tool.Name, bound.Server)
+	}
 	if client == nil {
 		return CallResult{}, fmt.Errorf("the MCP server %q is not connected", bound.Server)
 	}
