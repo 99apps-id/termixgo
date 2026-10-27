@@ -43,6 +43,10 @@ func TestEnsureKeepsExistingPersona(t *testing.T) {
 	if err := os.WriteFile(paths.Soul, []byte(custom), 0o600); err != nil {
 		t.Fatalf("write SOUL.md: %v", err)
 	}
+	customUser := "- Nama: Iwan\n- Panggilan: Iwan\n"
+	if err := os.WriteFile(paths.User, []byte(customUser), 0o600); err != nil {
+		t.Fatalf("write USER.md: %v", err)
+	}
 	if _, err := Ensure("sales", "", "support"); err != nil {
 		t.Fatalf("second Ensure: %v", err)
 	}
@@ -52,6 +56,13 @@ func TestEnsureKeepsExistingPersona(t *testing.T) {
 	}
 	if string(content) != custom {
 		t.Errorf("Ensure overwrote the operator's persona: %q", string(content))
+	}
+	userContent, err := os.ReadFile(paths.User)
+	if err != nil {
+		t.Fatalf("read USER.md: %v", err)
+	}
+	if string(userContent) != customUser {
+		t.Errorf("Ensure overwrote the operator's user profile: %q", string(userContent))
 	}
 }
 

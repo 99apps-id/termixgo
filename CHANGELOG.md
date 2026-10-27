@@ -4,9 +4,14 @@ All notable changes to Termixgo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.2.1 - 2026-10-28
 
 ### Added
+- Bilingual slash commands in WhatsApp and Telegram: automatically adapts output language based on sender country code (+62 for Indonesian, default to English for international users).
+- Primary active model filtering in /models: only displays providers with active registered credentials or configured endpoints, filtering out redundant legacy model sub-variants.
+- Explicit agent SOUL.md and USER.md identity framing: prevents the agent from searching workspace directories for identity files or reading legacy configuration files from other software.
+- Identity and conversational exclusion in strict grounding: prevents introducing oneself from triggering unnecessary tool evidence demands or unverified notes.
+- Preservation of operator-authored SOUL.md and USER.md during installations and upgrades.
 
 - Named agents: `agents.<name>` personas with `SOUL.md`/`USER.md`, their own
   workspace, sessions, memory, search index and skills, a `/agent` switcher and
