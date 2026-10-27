@@ -105,6 +105,7 @@ type UsageRecord struct {
 	Provider    string         `json:"provider,omitempty"`
 	Model       string         `json:"model,omitempty"`
 	BillingMode string         `json:"billing_mode"`
+	AuthType    string         `json:"auth_type,omitempty"`
 	Usage       UsageBreakdown `json:"usage"`
 	CostUSD     *float64       `json:"cost_usd"`
 	Credits     *float64       `json:"credits"`
@@ -119,6 +120,7 @@ type UsageSegment struct {
 	Provider    string         `json:"provider,omitempty"`
 	Model       string         `json:"model,omitempty"`
 	BillingMode string         `json:"billing_mode"`
+	AuthType    string         `json:"auth_type,omitempty"`
 	Usage       provider.Usage `json:"usage"`
 	CostUSD     float64        `json:"costUsd,omitempty"`
 	Records     int            `json:"records"`
@@ -127,6 +129,72 @@ type UsageSegment struct {
 	// it is a floor, which is the same distinction the session-level unpriced
 	// count makes.
 	Unpriced int `json:"unpriced,omitempty"`
+}
+
+// AuthTypeFor maps a billing mode string to its authentication/billing category:
+// "byok", "oauth", "credit", "local", or "unknown".
+func AuthTypeFor(billingMode string) string {
+	switch billingMode {
+	case string(provider.BillingAPIKey):
+		return provider.AuthBYOK
+	case string(provider.BillingOAuthPlan):
+		return provider.AuthOAuth
+	case string(provider.BillingCreditPlan):
+		return provider.AuthCredit
+	case string(provider.BillingLocal):
+		return provider.AuthLocal
+	default:
+		return provider.AuthUnknown
+	}
+}
+
+// AuthUsageSummary groups token counts and dollar spend by authentication category:
+// BYOK (API key pay-per-token), OAuth (subscription quota), Credit Plan, and Local.
+type AuthUsageSummary struct {
+	BYOKTokens  int     `json:"byok_tokens"`
+	BYOKCostUSD float64 `json:"byok_cost_usd"`
+	BYOKRecords int     `json:"byok_records"`
+
+	OAuthTokens  int `json:"oauth_tokens"`
+	OAuthRecords int `json:"oauth_records"`
+
+	CreditTokens  int `json:"credit_tokens"`
+	CreditRecords int `json:"credit_records"`
+
+	LocalTokens  int `json:"local_tokens"`
+	LocalRecords int `json:"local_records"`
+
+	TotalTokens  int     `json:"total_tokens"`
+	TotalCostUSD float64 `json:"total_cost_usd"`
+}
+
+// SummarizeAuth aggregates token totals by authentication type across segments.
+func SummarizeAuth(segments []UsageSegment) AuthUsageSummary {
+	var summary AuthUsageSummary
+	for _, seg := range segments {
+		summary.TotalTokens += seg.Usage.TotalTokens
+		summary.TotalCostUSD += seg.CostUSD
+		auth := seg.AuthType
+		if auth == "" {
+			auth = AuthTypeFor(seg.BillingMode)
+		}
+		switch auth {
+		case provider.AuthBYOK:
+			summary.BYOKTokens += seg.Usage.TotalTokens
+			summary.BYOKCostUSD += seg.CostUSD
+			summary.BYOKRecords += seg.Records
+		case provider.AuthOAuth:
+			summary.OAuthTokens += seg.Usage.TotalTokens
+			summary.OAuthRecords += seg.Records
+		case provider.AuthCredit:
+			summary.CreditTokens += seg.Usage.TotalTokens
+			summary.CreditRecords += seg.Records
+		case provider.AuthLocal:
+			summary.LocalTokens += seg.Usage.TotalTokens
+			summary.LocalRecords += seg.Records
+		}
+	}
+	return summary
 }
 
 // SegmentKey is the identity a record folds into.
@@ -138,10 +206,17 @@ func SegmentKey(providerName, model, billingMode string) string {
 // list. The list is kept in first-seen order so a display reads in the order
 // the spend happened.
 func FoldSegment(segments []UsageSegment, record UsageRecord) []UsageSegment {
+	authType := record.AuthType
+	if authType == "" {
+		authType = AuthTypeFor(record.BillingMode)
+	}
 	key := SegmentKey(record.Provider, record.Model, record.BillingMode)
 	for index := range segments {
 		if SegmentKey(segments[index].Provider, segments[index].Model, segments[index].BillingMode) != key {
 			continue
+		}
+		if segments[index].AuthType == "" {
+			segments[index].AuthType = authType
 		}
 		segments[index].Usage = segments[index].Usage.Add(record.Usage.Usage())
 		segments[index].Records++
@@ -156,6 +231,7 @@ func FoldSegment(segments []UsageSegment, record UsageRecord) []UsageSegment {
 		Provider:    record.Provider,
 		Model:       record.Model,
 		BillingMode: record.BillingMode,
+		AuthType:    authType,
 		Usage:       record.Usage.Usage(),
 		Records:     1,
 	}

@@ -66,6 +66,7 @@ func (a *App) mainUsageRecord(session *agent.Session, usage provider.Usage, step
 	known := a.costKnown
 	a.mu.Unlock()
 
+	mode := model.BillingMode()
 	record := agent.UsageRecord{
 		Time:        time.Now(),
 		SessionID:   session.ID(),
@@ -74,7 +75,8 @@ func (a *App) mainUsageRecord(session *agent.Session, usage provider.Usage, step
 		Kind:        agent.LedgerKindMain,
 		Provider:    model.Provider,
 		Model:       model.ID,
-		BillingMode: string(model.BillingMode()),
+		BillingMode: string(mode),
+		AuthType:    string(mode.AuthType()),
 		Usage:       agent.BreakdownOf(usage),
 		Source:      agent.UsageSourceProvider,
 	}
@@ -89,6 +91,7 @@ func (a *App) mainUsageRecord(session *agent.Session, usage provider.Usage, step
 // attributed to the subagent's own provider and model. Its dollars are
 // priced from that model, never from the parent's.
 func (a *App) subagentUsageRecord(session *agent.Session, event agent.Event, step int) agent.UsageRecord {
+	mode := provider.BillingModeFor(event.UsageModel, event.UsageProvider)
 	record := agent.UsageRecord{
 		Time:        time.Now(),
 		SessionID:   session.ID(),
@@ -97,7 +100,8 @@ func (a *App) subagentUsageRecord(session *agent.Session, event agent.Event, ste
 		Kind:        agent.LedgerKindSubagent,
 		Provider:    event.UsageProvider,
 		Model:       event.UsageModel,
-		BillingMode: string(provider.BillingModeFor(event.UsageModel, event.UsageProvider)),
+		BillingMode: string(mode),
+		AuthType:    string(mode.AuthType()),
 		Usage:       agent.BreakdownOf(event.Usage),
 		Source:      agent.UsageSourceProvider,
 	}
@@ -127,6 +131,7 @@ func (a *App) recordTaskUsage(session *agent.Session, kind, wireModel string, us
 		providerID = model.Provider
 		modelID = model.ID
 	}
+	mode := provider.BillingModeFor(modelID, providerID)
 	record := agent.UsageRecord{
 		Time:        time.Now(),
 		SessionID:   session.ID(),
@@ -134,7 +139,8 @@ func (a *App) recordTaskUsage(session *agent.Session, kind, wireModel string, us
 		Kind:        kind,
 		Provider:    providerID,
 		Model:       modelID,
-		BillingMode: string(provider.BillingModeFor(modelID, providerID)),
+		BillingMode: string(mode),
+		AuthType:    string(mode.AuthType()),
 		Usage:       agent.BreakdownOf(usage),
 		Source:      agent.UsageSourceProvider,
 	}
@@ -232,4 +238,13 @@ func (a *App) SessionSegments() []agent.UsageSegment {
 		return nil
 	}
 	return session.Segments()
+}
+
+// AuthUsage returns the active session's usage partitioned by auth category (BYOK vs OAuth).
+func (a *App) AuthUsage() agent.AuthUsageSummary {
+	session := a.currentSession()
+	if session == nil {
+		return agent.AuthUsageSummary{}
+	}
+	return session.AuthUsage()
 }

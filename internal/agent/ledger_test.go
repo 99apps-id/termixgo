@@ -224,3 +224,46 @@ func TestUsageLedgerRoundTrip(t *testing.T) {
 		t.Errorf("a missing ledger should read empty, got %v, %v", missing, err)
 	}
 }
+
+func TestSummarizeAuthUsage(t *testing.T) {
+	session := NewSession(t.TempDir(), "test-model")
+	byokCost := 0.15
+	session.RecordUsage(UsageRecord{
+		Kind:        LedgerKindMain,
+		Provider:    "openai",
+		Model:       "gpt-4o",
+		BillingMode: string(provider.BillingAPIKey),
+		AuthType:    provider.AuthBYOK,
+		Usage:       BreakdownOf(provider.Usage{TotalTokens: 500}),
+		CostUSD:     &byokCost,
+	})
+	session.RecordUsage(UsageRecord{
+		Kind:        LedgerKindMain,
+		Provider:    "claude-oauth",
+		Model:       "claude-3-7-sonnet",
+		BillingMode: string(provider.BillingOAuthPlan),
+		AuthType:    provider.AuthOAuth,
+		Usage:       BreakdownOf(provider.Usage{TotalTokens: 2500}),
+	})
+	session.RecordUsage(UsageRecord{
+		Kind:        LedgerKindMain,
+		Provider:    "ollama",
+		Model:       "llama3",
+		BillingMode: string(provider.BillingLocal),
+		Usage:       BreakdownOf(provider.Usage{TotalTokens: 300}),
+	})
+
+	summary := session.AuthUsage()
+	if summary.BYOKTokens != 500 || summary.BYOKCostUSD != byokCost || summary.BYOKRecords != 1 {
+		t.Errorf("unexpected BYOK summary: %+v", summary)
+	}
+	if summary.OAuthTokens != 2500 || summary.OAuthRecords != 1 {
+		t.Errorf("unexpected OAuth summary: %+v", summary)
+	}
+	if summary.LocalTokens != 300 || summary.LocalRecords != 1 {
+		t.Errorf("unexpected Local summary: %+v", summary)
+	}
+	if summary.TotalTokens != 3300 {
+		t.Errorf("total tokens = %d, want 3300", summary.TotalTokens)
+	}
+}

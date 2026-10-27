@@ -743,6 +743,24 @@ func formatUsageSegments(segments []agent.UsageSegment) string {
 		return ""
 	}
 	var out strings.Builder
+	summary := agent.SummarizeAuth(segments)
+	var authParts []string
+	if summary.BYOKTokens > 0 {
+		authParts = append(authParts, fmt.Sprintf("  BYOK (API Key): %d tokens, spend about $%.4f (%d call(s))", summary.BYOKTokens, summary.BYOKCostUSD, summary.BYOKRecords))
+	}
+	if summary.OAuthTokens > 0 {
+		authParts = append(authParts, fmt.Sprintf("  OAuth (Plan): %d tokens (%d call(s), quota subscription)", summary.OAuthTokens, summary.OAuthRecords))
+	}
+	if summary.CreditTokens > 0 {
+		authParts = append(authParts, fmt.Sprintf("  Credit Plan: %d tokens (%d call(s))", summary.CreditTokens, summary.CreditRecords))
+	}
+	if summary.LocalTokens > 0 {
+		authParts = append(authParts, fmt.Sprintf("  Local (Free): %d tokens (%d call(s))", summary.LocalTokens, summary.LocalRecords))
+	}
+	if len(authParts) > 0 {
+		out.WriteString("\nBy auth type:\n" + strings.Join(authParts, "\n") + "\n")
+	}
+
 	out.WriteString("\nBy model:\n")
 	for _, segment := range segments {
 		name := segment.Model

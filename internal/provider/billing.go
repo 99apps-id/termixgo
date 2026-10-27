@@ -28,6 +28,39 @@ const (
 	BillingUnknown BillingMode = "unknown"
 )
 
+// Authentication and billing categories distinguishing BYOK vs OAuth.
+const (
+	AuthBYOK    = "byok"
+	AuthOAuth   = "oauth"
+	AuthCredit  = "credit"
+	AuthLocal   = "local"
+	AuthUnknown = "unknown"
+)
+
+// AuthType returns the human-readable authentication / billing category:
+// "byok" for pay-per-token API keys, "oauth" for OAuth subscriptions,
+// "credit" for credit plan subscriptions, "local" for local models.
+func (b BillingMode) AuthType() string {
+	switch b {
+	case BillingAPIKey:
+		return AuthBYOK
+	case BillingOAuthPlan:
+		return AuthOAuth
+	case BillingCreditPlan:
+		return AuthCredit
+	case BillingLocal:
+		return AuthLocal
+	default:
+		return AuthUnknown
+	}
+}
+
+// IsBYOK reports whether usage was billed via Bring-Your-Own-Key (API Key).
+func (b BillingMode) IsBYOK() bool { return b == BillingAPIKey }
+
+// IsOAuth reports whether usage was billed via an OAuth subscription plan.
+func (b BillingMode) IsOAuth() bool { return b == BillingOAuthPlan }
+
 // BillingMode decides how this model's usage is billed.
 //
 // The order matters. A local model is free whatever its wire name collides

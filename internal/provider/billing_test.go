@@ -42,3 +42,21 @@ func TestBillingModeForUncataloguedIDs(t *testing.T) {
 		t.Errorf("BillingModeFor catalogued id = %q, want %q", got, BillingAPIKey)
 	}
 }
+
+func TestBillingModeAuthTypeHelpers(t *testing.T) {
+	if BillingAPIKey.AuthType() != AuthBYOK || !BillingAPIKey.IsBYOK() || BillingAPIKey.IsOAuth() {
+		t.Errorf("BillingAPIKey should be BYOK")
+	}
+	if BillingOAuthPlan.AuthType() != AuthOAuth || BillingOAuthPlan.IsBYOK() || !BillingOAuthPlan.IsOAuth() {
+		t.Errorf("BillingOAuthPlan should be OAuth")
+	}
+	if BillingCreditPlan.AuthType() != AuthCredit {
+		t.Errorf("BillingCreditPlan should be Credit")
+	}
+	if BillingLocal.AuthType() != AuthLocal {
+		t.Errorf("BillingLocal should be Local")
+	}
+	if BillingUnknown.AuthType() != AuthUnknown {
+		t.Errorf("BillingUnknown should be Unknown")
+	}
+}

@@ -311,6 +311,13 @@ func (s *Session) Segments() []UsageSegment {
 	return snapshot
 }
 
+// AuthUsage returns token and cost totals partitioned by auth category (BYOK vs OAuth).
+func (s *Session) AuthUsage() AuthUsageSummary {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return SummarizeAuth(s.segments)
+}
+
 // RecordUsage folds one ledger record into the session: its tokens join the
 // aggregate, its dollars join the spend when it carries any, and the record
 // lands in its provider/model/billing-mode segment. This is the one path a

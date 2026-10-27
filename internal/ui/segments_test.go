@@ -28,6 +28,9 @@ func TestFormatUsageSegments(t *testing.T) {
 		"claude-oauth/claude-y (oauth_plan): 40 in, 5 out, 45 total",
 		"ollama/local-z (local): 0 in, 0 out, 9 total, free (local)",
 		"openrouter/auto (unknown): 0 in, 0 out, 7 total, cost unknown",
+		"BYOK (API Key): 110 tokens, spend about $0.5000",
+		"OAuth (Plan): 45 tokens",
+		"Local (Free): 9 tokens",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("segments output missing %q:\n%s", want, out)

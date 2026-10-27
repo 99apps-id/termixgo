@@ -1507,6 +1507,7 @@ func (a *App) recordAudit(event agent.Event) {
 			Provider:         model.Provider,
 			Model:            model.ID,
 			BillingMode:      string(model.BillingMode()),
+			AuthType:         string(model.BillingMode().AuthType()),
 			TotalTokens:      event.Usage.TotalTokens,
 			CacheReadTokens:  event.Usage.CacheReadTokens,
 			CacheWriteTokens: event.Usage.CacheWriteTokens,

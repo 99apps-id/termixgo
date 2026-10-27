@@ -42,6 +42,7 @@ type Entry struct {
 	Provider         string `json:"provider,omitempty"`
 	Model            string `json:"model,omitempty"`
 	BillingMode      string `json:"billing_mode,omitempty"`
+	AuthType         string `json:"auth_type,omitempty"`
 	TotalTokens      int    `json:"total,omitempty"`
 	CacheReadTokens  int    `json:"cache_read,omitempty"`
 	CacheWriteTokens int    `json:"cache_write,omitempty"`
