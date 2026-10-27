@@ -2541,8 +2541,8 @@ func (m *Model) viewHelp() string {
 	header := []string{m.styles.BoxTitle.Render("Commands"), ""}
 	keys := []string{
 		"", m.styles.BoxTitle.Render("Keys"), "",
-		m.styles.MenuDesc.Render("  Enter send | Ctrl+J newline | Tab complete | PgUp/PgDn scroll | Drag to select"),
-		m.styles.MenuDesc.Render("  Ctrl+A select all | Ctrl+C copy | Ctrl+X quit | Ctrl+Y copy answer | Ctrl+O details | Esc stop or clear"),
+		m.styles.MenuDesc.Render("  Enter send | !<cmd> exec | Ctrl+J newline | Tab complete | PgUp/PgDn scroll | Drag to select"),
+		m.styles.MenuDesc.Render("  Ctrl+L model | Ctrl+P session | Ctrl+G agent | Ctrl+T think | Ctrl+O details | Ctrl+C copy | Ctrl+X quit"),
 	}
 	trailer := []string{m.styles.Hint.Render(fmt.Sprintf("Press any key to close. %d commands in total.", len(entries)))}
 

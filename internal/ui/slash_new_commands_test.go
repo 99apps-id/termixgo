@@ -147,3 +147,21 @@ func TestTUIShortcuts(t *testing.T) {
 		t.Errorf("ctrl+g should open agent picker, got mode %v", res.current)
 	}
 }
+
+func TestResetAndRestartCommands(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("/reset")
+	res := press(t, model, "enter")
+	text := allText(res)
+	if !strings.Contains(text, "Started a new session.") {
+		t.Errorf("expected /reset to start a new session, got:\n%s", text)
+	}
+
+	model2 := chatModel(t)
+	model2.composer.SetValue("/restart")
+	res2 := press(t, model2, "enter")
+	text2 := allText(res2)
+	if !strings.Contains(text2, "Started a new session.") {
+		t.Errorf("expected /restart to start a new session, got:\n%s", text2)
+	}
+}

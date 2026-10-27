@@ -364,6 +364,15 @@ func (c *Client) EditMarkdown(ctx context.Context, chatID int64, messageID int64
 	return err
 }
 
+// DeleteMessage deletes a message in a chat.
+func (c *Client) DeleteMessage(ctx context.Context, chatID int64, messageID int64) error {
+	payload := map[string]any{
+		"chat_id":    chatID,
+		"message_id": messageID,
+	}
+	return c.call(ctx, "deleteMessage", payload, nil)
+}
+
 func (c *Client) editMessage(ctx context.Context, chatID int64, messageID int64, text string, keyboard *InlineKeyboard, parseMode string) error {
 	payload := map[string]any{
 		"chat_id":                  chatID,

@@ -104,7 +104,7 @@ func (b *Bot) showProviderModels(ctx context.Context, query *CallbackQuery, prov
 			label = model.ID
 		}
 		if model.ID == currentModel || providerID+":"+model.ID == currentModel {
-			label = "✓ " + label
+			label = "* " + label
 		}
 		labels = append(labels, label)
 		values = append(values, model.ID)

@@ -147,19 +147,25 @@ func (s *Scheduler) run(ctx context.Context, job Job) {
 	if errors.Is(err, ErrBusy) {
 		// The operator or another job holds the single-run slot. Requeue so the
 		// occurrence is not lost; the next tick tries again.
-		if requeueErr := s.Store.Requeue(job.ID, s.now()); requeueErr != nil {
-			s.logf("job %s could not be requeued: %v", job.ID, requeueErr)
-		} else {
-			s.logf("job %s deferred: the assistant is busy", job.ID)
+		if s.Store != nil {
+			if requeueErr := s.Store.Requeue(job.ID, s.now()); requeueErr != nil {
+				s.logf("job %s could not be requeued: %v", job.ID, requeueErr)
+			} else {
+				s.logf("job %s deferred: the assistant is busy", job.ID)
+			}
 		}
 		return
 	}
 	if err != nil {
-		_ = s.Store.MarkError(job.ID, err)
+		if s.Store != nil {
+			_ = s.Store.MarkError(job.ID, err)
+		}
 		s.logf("job %s failed: %v", job.ID, err)
 		return
 	}
-	_ = s.Store.MarkError(job.ID, nil)
+	if s.Store != nil {
+		_ = s.Store.MarkError(job.ID, nil)
+	}
 	if suppressed(output) || s.Deliver == nil {
 		return
 	}

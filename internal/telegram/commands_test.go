@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/channel"
+	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/provider"
 )
 
@@ -727,5 +728,49 @@ func TestRequestApprovalReceivesCallback(t *testing.T) {
 	}
 	if !api.called("answerCallbackQuery") {
 		t.Errorf("answerCallbackQuery should be called")
+	}
+}
+
+func TestRunPromptDeletesStatusCardOnSilent(t *testing.T) {
+	agent := &scriptedAgent{answer: "[SILENT]"}
+	bot, api := pairedBot(t, agent)
+
+	bot.runPrompt(context.Background(), 7, channel.Request{ChatID: "7"}, "do silent work")
+
+	if !api.called("deleteMessage") {
+		t.Errorf("deleteMessage should have been called for silent response")
+	}
+	// Verify no markdown or text answer was posted to chat
+	for _, edit := range api.calls("editMessageText") {
+		text, _ := edit["text"].(string)
+		if strings.Contains(text, "[SILENT]") {
+			t.Errorf("status card should not be edited to [SILENT], got %q", text)
+		}
+	}
+}
+
+func TestGuestCanRunPromptWithRunCommand(t *testing.T) {
+	agent := &scriptedAgent{answer: "guest answer"}
+	bot, api := pairedBot(t, agent)
+	bot.SetAccount("default", config.ChannelAccount{
+		Enabled:     true,
+		DMPolicy:    config.DMPolicyOpen,
+		GroupPolicy: config.GroupPolicyAll,
+	}, nil)
+
+	// Guest sender (not owner 9)
+	guestMsg := &Message{
+		Chat: Chat{ID: 7, Type: "private"},
+		From: &User{ID: 888},
+		Text: "/run test prompt for guest",
+	}
+
+	bot.handleMessage(context.Background(), guestMsg)
+
+	if agent.firstPrompt() != "test prompt for guest" {
+		t.Errorf("agent prompt = %q, want 'test prompt for guest'", agent.firstPrompt())
+	}
+	if !api.called("sendMessage") {
+		t.Errorf("sendMessage should have been called")
 	}
 }

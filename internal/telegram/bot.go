@@ -972,6 +972,9 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 			b.replyMarkdown(ctx, chatID, "Run failed: "+runErr.Error())
 			return
 		}
+		if strings.TrimSpace(answer) != "" && channel.Silent(answer) {
+			return
+		}
 		if strings.TrimSpace(answer) == "" {
 			answer = "(no output)"
 		}
@@ -982,6 +985,10 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 	if runErr != nil {
 		progress("Run failed: " + runErr.Error())
 		flush(true)
+		return
+	}
+	if strings.TrimSpace(answer) != "" && channel.Silent(answer) {
+		_ = b.client.DeleteMessage(ctx, chatID, statusMessage.MessageID)
 		return
 	}
 	if strings.TrimSpace(answer) == "" {
@@ -1211,7 +1218,7 @@ func (b *Bot) handleGuestMessage(ctx context.Context, request channel.Request, m
 		b.runPrompt(ctx, chatID, request, text)
 		return
 	}
-	command, _ := splitCommand(text)
+	command, rest := splitCommand(text)
 	switch command {
 	case "help", "start":
 		b.reply(ctx, chatID, helpText())
@@ -1220,6 +1227,13 @@ func (b *Bot) handleGuestMessage(ctx context.Context, request channel.Request, m
 	case "new":
 		b.agent.NewSession(request)
 		b.reply(ctx, chatID, "Mulai sesi baru ya.")
+	case "run", "query":
+		prompt := strings.TrimSpace(rest)
+		if prompt == "" {
+			b.reply(ctx, chatID, "Usage: /run <prompt>")
+			return
+		}
+		b.runPrompt(ctx, chatID, request, prompt)
 	default:
 		b.reply(ctx, chatID, "Maaf, perintah itu hanya untuk operator.")
 	}

@@ -52,6 +52,8 @@ var slashCommands = []SlashCommand{
 	{Trigger: "/clear", Args: "", Summary: "Clear the visual transcript on screen"},
 	{Trigger: "/cls", Args: "", Summary: "Clear the visual transcript on screen"},
 	{Trigger: "/new", Args: "", Summary: "Start a new session"},
+	{Trigger: "/reset", Args: "", Summary: "Start a new session (alias for /new)"},
+	{Trigger: "/restart", Args: "", Summary: "Start a new session (alias for /new)"},
 	{Trigger: "/sessions", Args: "[list|search|rename|delete|export]", Summary: "List, find, rename, delete or export sessions", Options: []SlashOption{
 		{Value: "list", Detail: "print every saved session with its id"},
 		{Value: "search", Detail: "find a session by title or content", Complete: true},

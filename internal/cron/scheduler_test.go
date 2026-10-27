@@ -2,6 +2,7 @@ package cron
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -225,4 +226,19 @@ func TestHeartbeatSuppressesItsAck(t *testing.T) {
 	if got := deliverer.delivered(); len(got) != 1 || got[0] != "server is up" {
 		t.Fatalf("delivered = %v, want the update", got)
 	}
+}
+
+func TestSchedulerNilStoreSafety(t *testing.T) {
+	runner := &fakeRunner{err: ErrBusy}
+	scheduler := &Scheduler{
+		Store:  nil,
+		Runner: runner,
+	}
+	// Calling run directly with nil store must not panic when runner returns ErrBusy or an error
+	scheduler.wg.Add(1)
+	scheduler.run(context.Background(), Job{ID: "test", Prompt: "ping"})
+
+	runner.err = errors.New("temporary failure")
+	scheduler.wg.Add(1)
+	scheduler.run(context.Background(), Job{ID: "test", Prompt: "ping"})
 }

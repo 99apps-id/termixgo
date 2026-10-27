@@ -124,7 +124,7 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 	case "exit", "quit":
 		m.app.Stop()
 		return m, tea.Quit
-	case "new":
+	case "new", "reset", "restart":
 		m.app.NewSession()
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Started a new session."})
 		m.refresh()
