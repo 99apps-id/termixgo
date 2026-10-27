@@ -259,3 +259,22 @@ func (writeProbe) DoneLabel(map[string]any) string { return "Wrote" }
 func (writeProbe) Run(context.Context, *agent.Env, map[string]any) (agent.Result, error) {
 	return agent.Result{}, nil
 }
+
+func TestModelAliasResolutionAndAvailableModels(t *testing.T) {
+	application := newTestApp(t)
+
+	if got := application.resolveModelAlias("muse"); got != "muse-spark-1.3" {
+		t.Errorf("muse alias = %q, want muse-spark-1.3", got)
+	}
+	if got := application.resolveModelAlias("stepfun"); got != "step-3.7-flash" && got != "stepfun-plan/step-3.7-flash" {
+		t.Errorf("stepfun alias = %q", got)
+	}
+	if got := application.resolveModelAlias("antigravity"); got != "gemini-3.8-flash" && got != "antigravity-gemini-3.8-flash" {
+		t.Errorf("antigravity alias = %q", got)
+	}
+
+	text := application.AvailableModelsText()
+	if text == "" {
+		t.Errorf("AvailableModelsText should not be empty")
+	}
+}
