@@ -102,6 +102,10 @@ func TestEscWhileRunningKeepsTheQueue(t *testing.T) {
 // so the operator can see that something is waiting.
 func TestQueuedCountIsVisible(t *testing.T) {
 	model := chatModel(t)
+	// The queue count rides near the end of the status line, and the
+	// longer honest context figure leaves it no room at 120 columns.
+	// Widen: this test asserts the count is shown, not the drop policy.
+	resize(model, 160, 40)
 	model.running = true
 	model.composer.SetValue("/new")
 	model = press(t, model, "enter")

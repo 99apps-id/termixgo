@@ -409,7 +409,7 @@ func TestStatusReportsEveryLine(t *testing.T) {
 	status := application.Status()
 	for _, want := range []string{
 		"workspace:", "model:", "approval:", "context:", "session:", "plan: 1/2",
-		"tokens: 12 in, 4 out", "telegram:",
+		"billed: 12 in, 4 out", "telegram:",
 	} {
 		if !strings.Contains(status, want) {
 			t.Errorf("status is missing %q:\n%s", want, status)

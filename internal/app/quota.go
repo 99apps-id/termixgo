@@ -319,33 +319,95 @@ func (q *QuotaTracker) AllStats(window time.Duration) []WindowStats {
 	return list
 }
 
+// LocalEstimateLabel marks numbers that come from the local rolling window
+// rather than from the provider. It is spelled out on every surface that
+// shows the fallback counts, so a local count is never read as an official
+// quota figure.
+const LocalEstimateLabel = "estimasi lokal, bukan angka provider"
+
+// SnapshotAgeText renders how long ago a quota snapshot was fetched, the
+// marker that keeps a cached snapshot from reading as live data. An empty
+// string means the snapshot carries no fetch time.
+func SnapshotAgeText(fetchedAt time.Time) string {
+	if fetchedAt.IsZero() {
+		return ""
+	}
+	return fmt.Sprintf("fetched %s ago", time.Since(fetchedAt).Round(time.Second))
+}
+
+// QuotaRef names the official quota window a call against this provider and
+// model draws on, for stamping usage ledger records. The session window
+// applies to every model, so it wins; a plain weekly window is next; a
+// model-scoped window (weekly_sonnet and kin) is named only when the model
+// matches its suffix, because naming another model's window would attribute
+// the spend to an allowance it never touched. No snapshot, no name: the
+// empty string leaves the record's quota_ref null rather than inventing a
+// window.
+func (q *QuotaTracker) QuotaRef(providerName, model string) string {
+	snap := q.Snapshot(providerName)
+	if snap == nil || len(snap.Windows) == 0 {
+		return ""
+	}
+	pick := snap.SessionWindow()
+	if pick == nil {
+		for i := range snap.Windows {
+			if snap.Windows[i].Key == provider.QuotaWeeklyKey {
+				pick = &snap.Windows[i]
+				break
+			}
+		}
+	}
+	if pick == nil {
+		lowerModel := strings.ToLower(strings.TrimSpace(model))
+		for i := range snap.Windows {
+			key := snap.Windows[i].Key
+			idx := strings.Index(key, "_")
+			if idx < 0 || idx+1 >= len(key) {
+				continue
+			}
+			if strings.Contains(lowerModel, key[idx+1:]) {
+				pick = &snap.Windows[i]
+				break
+			}
+		}
+	}
+	if pick == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(providerName)) + ":" + pick.Key
+}
+
 // ActiveQuotaGauge returns a compact gauge string for the header or status.
-// It prefers the provider's official quota snapshot when available: the
-// 5-hour session window renders "[████░░] 78%" and the reset countdown
-// appends "(3h12m)". Otherwise it falls back to live rate-limit headers,
-// then to the local 5h activity estimate "[5h: 12r/42k]".
+// Bars always mean used, on every surface: when the provider's official
+// quota snapshot is available its session window renders the used percent
+// ("[██░░░░░░] 22%"), the reset countdown appends "(3h12m)" and the
+// snapshot's age follows so a cached figure is not read as live. Otherwise
+// it falls back to live rate-limit headers (also as used), then to the
+// local 5h activity counts, which carry no bar and are labelled as a local
+// estimate.
 func (q *QuotaTracker) ActiveQuotaGauge(providerName string, width int) string {
 	if q == nil {
 		return ""
 	}
 	if snap := q.Snapshot(providerName); snap != nil {
 		if w := snap.SessionWindow(); w != nil {
-			remaining := 100 - w.UsedPercent
-			g := VisualGauge(remaining, width)
+			g := VisualGauge(w.UsedPercent, width)
 			if w.ResetsAt != nil {
 				left := time.Until(*w.ResetsAt).Round(time.Minute)
 				if left > 0 {
-					return g + fmt.Sprintf("(%s)", left)
+					g += fmt.Sprintf("(%s)", left)
 				}
+			}
+			if age := SnapshotAgeText(snap.FetchedAt); age != "" {
+				g += " " + age
 			}
 			return g
 		}
 	}
 	stats := q.Stats(providerName, RollingWindow)
 	if stats.RateLimit != nil && stats.RateLimit.TokensLimit > 0 {
-		pct := stats.RateLimit.PercentTokensRemaining()
-		if pct >= 0 {
-			return VisualGauge(pct, width)
+		if remaining := stats.RateLimit.PercentTokensRemaining(); remaining >= 0 {
+			return VisualGauge(100-remaining, width)
 		}
 	}
 	// For OAuth providers or providers with an official snapshot history,
@@ -353,7 +415,7 @@ func (q *QuotaTracker) ActiveQuotaGauge(providerName string, width int) string {
 	// For standard API key / local models, showing "[5h: ...]" is misleading
 	// because they do not have a 5-hour subscription quota window.
 	if (isOAuthProvider(providerName) || q.Snapshot(providerName) != nil) && stats.Requests > 0 {
-		return fmt.Sprintf("[5h: %dr/%dk]", stats.Requests, (stats.TotalTokens+500)/1000)
+		return fmt.Sprintf("[5h: %dr/%dk] %s", stats.Requests, (stats.TotalTokens+500)/1000, LocalEstimateLabel)
 	}
 	return ""
 }

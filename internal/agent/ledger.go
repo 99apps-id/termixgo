@@ -94,8 +94,9 @@ func (b UsageBreakdown) Usage() provider.Usage {
 // likewise set only when a credit-plan provider reports credits spent, which
 // none of the current clients do; the field exists so the schema does not
 // have to change when one starts. QuotaRef names the official quota window a
-// plan record drew against; it stays null until a provider's window identity
-// is wired through, rather than naming a window nobody identified.
+// plan record drew against, stamped at record time from the tracker's
+// snapshot when one is known for the record's provider; it stays null when
+// no window is known, rather than naming a window nobody identified.
 type UsageRecord struct {
 	Time        time.Time      `json:"ts"`
 	SessionID   string         `json:"session_id"`

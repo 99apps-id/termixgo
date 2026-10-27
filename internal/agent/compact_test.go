@@ -216,11 +216,14 @@ func TestElideDoesNotMutateTheStoredMessage(t *testing.T) {
 	}
 }
 
-func TestHistoryHint(t *testing.T) {
+func TestContextHint(t *testing.T) {
 	messages := []provider.Message{{Role: provider.RoleUser, Content: strings.Repeat("w", 520)}}
-	hint := HistoryHint(messages, 1000)
-	if !strings.Contains(hint, "tokens") || !strings.Contains(hint, "%") {
-		t.Errorf("the hint should mention tokens and a percentage, got %q", hint)
+	hint := ContextHint(messages, 0, 1000, "test-model")
+	if !strings.Contains(hint, "/") || !strings.Contains(hint, "%") {
+		t.Errorf("the hint should mention a count and a percentage, got %q", hint)
+	}
+	if !strings.Contains(hint, "ctx:") || !strings.Contains(hint, "compact:") {
+		t.Errorf("the hint should carry both the window and the compaction figure, got %q", hint)
 	}
 }
 

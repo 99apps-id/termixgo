@@ -200,6 +200,21 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   usage is charged to the subagent's model in the session ledger and in
   `QuotaTracker` alike; the tracker persists its rolling 5-hour window to
   `~/.termixgo/quota-state.json`.
+- Gauges keep their denominators separate and labelled. The context figure
+  (`agent.ContextHint`) is estimated tokens over the model's real window,
+  and its numerator includes the system prompt and tool schemas, not just
+  stored messages; the `compact:` figure beside it is a percentage of the
+  compaction budget and means only "how close compaction is", never window
+  usage. The cumulative session total is labelled `billed:`, because every
+  step re-bills the history it sends, so it can legitimately exceed the
+  window. Bars mean **used** on every surface (header gauge, `/quota`,
+  rate limits converted from remaining), so a bar and the percent printed
+  beside it can never move in opposite directions. When no official quota
+  snapshot is available, the local 5-hour counts are shown without a bar
+  and labelled as a local estimate, not provider numbers; the header shows
+  the snapshot's age. A ledger record's `quota_ref` names the official
+  quota window when one is known for its provider and model, and stays
+  null when none is: it is never invented.
 - Delegated spend is a count, not a boolean collapse. `SubagentSpend.Unpriced`
   and `Event.CostUnpriced` count the delegated runs whose model had no price,
   while the parent's own priced spend stays known: one unpriced subagent must

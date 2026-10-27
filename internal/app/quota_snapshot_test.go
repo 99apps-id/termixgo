@@ -34,15 +34,20 @@ func TestQuotaGaugePrefersOfficialSnapshot(t *testing.T) {
 	if gauge == "" {
 		t.Fatal("expected a gauge from the official snapshot")
 	}
-	// Local fallback would read "[5h: 1r/42k]"; the official gauge is a
-	// percent bar with a reset countdown, e.g. "[██████░░] 78%(3h12m0s)".
-	if got := VisualGauge(78, 8); gauge == "[5h: 1r/42k]" || gauge == got {
+	// Local fallback would read "[5h: 1r/42k] ..."; the official gauge is a
+	// percent bar with a reset countdown and the snapshot's age, e.g.
+	// "[██░░░░░░] 22%(3h12m0s) fetched 0s ago". Bars mean used, so the bar
+	// shows the snapshot's 22% used, not the 78% remaining it once drew.
+	if got := VisualGauge(22, 8); gauge == "[5h: 1r/42k]" || gauge == got {
 		t.Errorf("gauge %q looks like the local estimate, want official snapshot with reset", gauge)
 	}
-	for _, want := range []string{"78%", "(3h12m0s)"} {
+	for _, want := range []string{"22%", "(3h12m0s)", "fetched"} {
 		if !containsStr(gauge, want) {
 			t.Errorf("gauge %q should contain %q", gauge, want)
 		}
+	}
+	if containsStr(gauge, "78%") {
+		t.Errorf("gauge %q should not present the remaining percent as the bar figure", gauge)
 	}
 }
 
@@ -57,8 +62,8 @@ func TestQuotaGaugeSnapshotFallbackChain(t *testing.T) {
 		Provider: "codex",
 		Windows:  []provider.QuotaWindow{{Key: provider.QuotaWeeklyKey, UsedPercent: 10}},
 	})
-	if got := tracker.ActiveQuotaGauge("codex", 8); got != "[5h: 1r/42k]" {
-		t.Errorf("weekly-only snapshot should fall back to local estimate, got %q", got)
+	if got := tracker.ActiveQuotaGauge("codex", 8); !containsStr(got, "[5h: 1r/42k]") || !containsStr(got, LocalEstimateLabel) {
+		t.Errorf("weekly-only snapshot should fall back to the labelled local estimate, got %q", got)
 	}
 
 	// Clearing the snapshot restores the plain local gauge.
@@ -66,8 +71,8 @@ func TestQuotaGaugeSnapshotFallbackChain(t *testing.T) {
 	if tracker.Snapshot("codex") != nil {
 		t.Error("nil snapshot should clear the stored one")
 	}
-	if got := tracker.ActiveQuotaGauge("codex", 8); got != "[5h: 1r/42k]" {
-		t.Errorf("cleared snapshot should show local estimate, got %q", got)
+	if got := tracker.ActiveQuotaGauge("codex", 8); !containsStr(got, "[5h: 1r/42k]") || !containsStr(got, LocalEstimateLabel) {
+		t.Errorf("cleared snapshot should show the labelled local estimate, got %q", got)
 	}
 }
 
@@ -86,13 +91,14 @@ func TestQuotaGaugeNonOAuthSuppresses5h(t *testing.T) {
 		t.Errorf("expected empty gauge for deepseek without rate limit, got %q", got)
 	}
 
-	// But if live rate limit headers arrive, VisualGauge should be shown
+	// But if live rate limit headers arrive, a gauge should be shown. Bars
+	// mean used, so 75% remaining renders as a 25% bar, matching /quota.
 	tracker.RecordRateLimit("openai", &provider.RateLimitInfo{
 		TokensLimit:     100000,
 		TokensRemaining: 75000,
 	})
-	if got := tracker.ActiveQuotaGauge("openai", 8); !containsStr(got, "75%") {
-		t.Errorf("expected rate limit percentage gauge for openai, got %q", got)
+	if got := tracker.ActiveQuotaGauge("openai", 8); !containsStr(got, "25%") {
+		t.Errorf("expected rate limit used-percent gauge for openai, got %q", got)
 	}
 }
 
