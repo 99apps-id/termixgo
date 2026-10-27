@@ -250,7 +250,7 @@ func New(application *app.App) *Model { return NewWithOptions(application, Optio
 
 // NewWithOptions builds the program model with explicit start options.
 func NewWithOptions(application *app.App, options Options) *Model {
-	styles := NewStyles(DefaultPalette())
+	styles := NewStyles(PaletteFor(application.Config().Theme))
 
 	composer := textarea.New()
 	composer.Placeholder = "Ask Termixgo to change something, or type /help"

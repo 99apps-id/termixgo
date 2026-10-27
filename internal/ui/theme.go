@@ -30,7 +30,25 @@ type Palette struct {
 
 // DefaultPalette is the Termixgo dark theme: a cyan-to-violet accent on a
 // near-black background.
-func DefaultPalette() Palette {
+func DefaultPalette() Palette { return PaletteFor("dark") }
+
+// LightPalette is the light counterpart to Termixgo's cyan-violet identity.
+// It uses terminal-default backgrounds so the palette stays legible in
+// terminals that do not advertise a background color.
+func LightPalette() Palette { return PaletteFor("light") }
+
+// PaletteFor selects the named palette, defaulting to dark.
+func PaletteFor(theme string) Palette {
+	if theme == "light" {
+		return Palette{
+			Accent: lipgloss.Color("#087f8c"), Accent2: lipgloss.Color("#6842a6"),
+			Text: lipgloss.Color("#18212b"), Dim: lipgloss.Color("#526170"), Faint: lipgloss.Color("#718096"),
+			Success: lipgloss.Color("#16803c"), Warning: lipgloss.Color("#946200"), Error: lipgloss.Color("#b42332"),
+			User: lipgloss.Color("#1758a6"), Thinking: lipgloss.Color("#7042a6"), Tool: lipgloss.Color("#8a5c00"),
+			Border: lipgloss.Color("#b8c3ce"), Selection: lipgloss.Color("#dce8f0"),
+			DiffAdd: lipgloss.Color("#1758a6"), DiffDel: lipgloss.Color("#b42332"), DiffContext: lipgloss.Color("#16803c"),
+		}
+	}
 	return Palette{
 		Accent:    lipgloss.Color("#5eead4"),
 		Accent2:   lipgloss.Color("#a78bfa"),

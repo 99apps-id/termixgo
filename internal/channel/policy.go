@@ -61,14 +61,21 @@ func Decide(policy config.ChannelAccount, in Request) Decision {
 }
 
 // CanonicalID folds the shapes one identity is written in onto one comparison
-// form: spaces, dashes and a leading plus are dropped and case is folded. A
-// WhatsApp JID and the bare number, or a Telegram id with and without its
-// group minus sign, then compare equal.
+// form: spaces, dashes and a leading plus are dropped, case is folded, and
+// domain suffixes (@s.whatsapp.net, @g.us, @lid, @c.us) or device IDs (:device)
+// are trimmed. A WhatsApp JID and the bare number, or a Telegram id with and
+// without its group minus sign, then compare equal.
 func CanonicalID(raw string) string {
 	trimmed := strings.ToLower(strings.TrimSpace(raw))
 	trimmed = strings.ReplaceAll(trimmed, " ", "")
 	trimmed = strings.ReplaceAll(trimmed, "-", "")
 	trimmed = strings.TrimPrefix(trimmed, "+")
+	if at := strings.Index(trimmed, "@"); at > 0 {
+		trimmed = trimmed[:at]
+	}
+	if colon := strings.Index(trimmed, ":"); colon > 0 {
+		trimmed = trimmed[:colon]
+	}
 	return trimmed
 }
 

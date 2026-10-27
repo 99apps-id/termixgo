@@ -54,6 +54,12 @@ func TestCanonicalIDAndLists(t *testing.T) {
 	if CanonicalID("+62 812-345") != CanonicalID("62812345") {
 		t.Errorf("canonical forms must fold spaces, dashes and the leading plus")
 	}
+	if CanonicalID("62812345@s.whatsapp.net") != CanonicalID("62812345") {
+		t.Errorf("canonical forms must match WhatsApp JID with bare number")
+	}
+	if CanonicalID("62812345:1@s.whatsapp.net") != CanonicalID("62812345") {
+		t.Errorf("canonical forms must match WhatsApp device JID with bare number")
+	}
 	list := AddID([]string{"6281"}, "+6 281")
 	if len(list) != 1 {
 		t.Errorf("AddID must not duplicate an existing identity: %v", list)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/secrets"
 	"github.com/99apps-id/termixgo/internal/telegram"
+	"github.com/99apps-id/termixgo/internal/whatsapp"
 )
 
 // ChannelStatus is one account's runtime state, for the status views.
@@ -161,9 +163,14 @@ func (a *App) ChannelStatuses() []ChannelStatus {
 		})
 	}
 	for name, entry := range cfg.Channels.WhatsApp.Accounts {
-		state := "not linked (engine lands in the next phase)"
+		key := channel.AccountID{Channel: config.ChannelWhatsApp, Account: name}
+		state := "linked, not running"
 		if !entry.Enabled {
 			state = "disabled"
+		} else if runtime, ok := runtimes[key]; ok {
+			state = runtime.status
+		} else if agentName := entry.AgentName(name); !whatsAppLinked(a.Config(), agentName, name) {
+			state = "not linked"
 		}
 		statuses = append(statuses, ChannelStatus{
 			Channel: config.ChannelWhatsApp, Account: name,
@@ -177,6 +184,21 @@ func (a *App) ChannelStatuses() []ChannelStatus {
 		return statuses[i].Account < statuses[j].Account
 	})
 	return statuses
+}
+
+// whatsAppLinked reports whether the device store file of one account exists.
+// It reads the same path the login command writes, so the status view agrees
+// with what `channel status` prints.
+func whatsAppLinked(cfg config.Config, agentName, account string) bool {
+	paths, err := agenthome.Resolve(agentName, cfg.Agent(agentName).Workspace)
+	if err != nil {
+		return false
+	}
+	path := whatsapp.SessionPath(paths.Home, account)
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	return true
 }
 
 // RedactForChannel removes secret-shaped text and every stored secret value
@@ -432,6 +454,10 @@ func (a *App) startTelegramAccount(name string) error {
 		if err := bot.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			a.setChannelStatus(key, "stopped: "+err.Error())
 		}
+		// The loop exited on its own (token rejected, conflict, network
+		// down): drop the runtime so a retry can start it again instead of
+		// reporting a live account that no longer polls.
+		a.dropChannelRuntime(key)
 	}()
 	return nil
 }

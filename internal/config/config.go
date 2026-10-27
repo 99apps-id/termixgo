@@ -136,6 +136,11 @@ type Config struct {
 	ApprovalMode  ApprovalMode `json:"approvalMode"`
 	ShowReasoning bool         `json:"showReasoning"`
 	Language      string       `json:"language"`
+	// Theme selects the terminal palette: dark (default) or light.
+	Theme string `json:"theme,omitempty"`
+	// Statusline is an optional ordered list of components. Empty preserves the
+	// built-in priority and width behavior.
+	Statusline []string `json:"statusline,omitempty"`
 	// MaxSteps is the whole per-turn ceiling: the agent pauses after this many
 	// steps in one reply, and the operator continues if the work is not done.
 	// It is one explicit number, not a segment of a larger hidden budget.
@@ -351,6 +356,8 @@ func (c *Config) normalise() {
 	if c.Language == "" {
 		c.Language = "en"
 	}
+	c.Theme = NormalizeTheme(c.Theme)
+	c.Statusline = NormalizeStatusline(c.Statusline)
 	if c.CostBudgetUSD < 0 {
 		c.CostBudgetUSD = 0
 	}

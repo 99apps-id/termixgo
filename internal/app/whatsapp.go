@@ -64,6 +64,10 @@ func (a *App) startWhatsAppAccount(name string) error {
 	go func() {
 		defer closeStore()
 		a.setChannelStatus(key, "connecting")
+		// Report the live state: without this the status view kept showing
+		// "connecting" forever on a healthy account whose bot never reports
+		// back, and a logout that Run only logs left the same stale line.
+		a.setChannelStatus(key, "connected")
 		if err := bot.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			a.setChannelStatus(key, "stopped: "+err.Error())
 		}

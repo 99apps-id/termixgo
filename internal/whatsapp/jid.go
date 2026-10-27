@@ -6,7 +6,10 @@ import "strings"
 func PhoneFromJID(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if index := strings.Index(trimmed, "@"); index > 0 {
-		return trimmed[:index]
+		trimmed = trimmed[:index]
+	}
+	if colon := strings.Index(trimmed, ":"); colon > 0 {
+		trimmed = trimmed[:colon]
 	}
 	return trimmed
 }

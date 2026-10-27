@@ -18,6 +18,7 @@ import (
 func forceColor(t *testing.T) {
 	t.Helper()
 	t.Setenv("NO_COLOR", "")
+	t.Setenv("TERM", "xterm-256color")
 	previous := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })

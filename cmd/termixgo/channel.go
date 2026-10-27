@@ -148,11 +148,11 @@ func whatsappState(cfg config.Config, name string) string {
 	if err != nil {
 		return "unknown agent"
 	}
-	session := filepath.Join(paths.Home, "channels", "whatsapp", name, "session.db")
+	session := whatsapp.SessionPath(paths.Home, name)
 	if _, err := os.Stat(session); err == nil {
 		return "linked"
 	}
-	return "not linked (the WhatsApp engine lands in the next phase)"
+	return "not linked"
 }
 
 func addChannel(args []string, stdout io.Writer) error {
