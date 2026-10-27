@@ -336,7 +336,7 @@ runLoop:
 				// (they would have streamed its transcript), so this one event
 				// is their only route into the app total, the session and the
 				// audit ledger.
-				emit(Event{Kind: EventUsage, Usage: result.SubagentUsage, CostUSD: sessionCost, CostKnown: costKnown, CostUnpriced: unpriced})
+				emit(Event{Kind: EventUsage, Usage: result.SubagentUsage, CostUSD: sessionCost, CostKnown: costKnown, CostUnpriced: unpriced, UsageProvider: result.SubagentProvider, UsageModel: result.SubagentModel})
 			}
 			if !result.IsError {
 				// A call that moved the work forward clears the repetition state:

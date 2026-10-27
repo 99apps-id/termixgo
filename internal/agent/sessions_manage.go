@@ -63,6 +63,12 @@ func DeleteSession(id string) error {
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("delete session: %w", err)
 	}
+	// The usage ledger belongs to the session; a deleted conversation should
+	// not leave its accounting behind. Best effort: a missing ledger is the
+	// normal case for a session written before records existed.
+	if ledgerPath, err := SessionLedgerPath(id); err == nil {
+		_ = os.Remove(ledgerPath)
+	}
 	return nil
 }
 

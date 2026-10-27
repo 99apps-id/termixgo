@@ -695,6 +695,8 @@ func (t *subagentTool) Run(ctx context.Context, env *Env, args map[string]any) (
 			SubagentCost:      spend.Cost,
 			SubagentCostKnown: spend.CostKnown,
 			SubagentUnpriced:  spend.Unpriced,
+			SubagentProvider:  spend.Provider,
+			SubagentModel:     spend.Model,
 			SubagentSpent:     true,
 		}, nil
 	}
@@ -704,6 +706,8 @@ func (t *subagentTool) Run(ctx context.Context, env *Env, args map[string]any) (
 		SubagentCost:      spend.Cost,
 		SubagentCostKnown: spend.CostKnown,
 		SubagentUnpriced:  spend.Unpriced,
+		SubagentProvider:  spend.Provider,
+		SubagentModel:     spend.Model,
 		SubagentSpent:     true,
 	}, nil
 }
