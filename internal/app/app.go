@@ -467,11 +467,18 @@ func (a *App) restoreModel() error {
 	if id == "" {
 		return errors.New("no default model is configured")
 	}
-	model, ok := provider.ModelByID(id)
+	resolved := a.resolveModelAlias(id)
+	model, ok := provider.ModelByID(resolved)
+	if !ok {
+		if m, found := provider.ModelFromQuery(resolved); found {
+			model = m
+			ok = true
+		}
+	}
 	if !ok {
 		// A custom endpoint or a model added by hand keeps its provider from
 		// the config, or falls back to the first key-based provider.
-		model = provider.Model{ID: id, Label: id, Provider: a.guessProvider(id)}
+		model = provider.Model{ID: resolved, Label: resolved, Provider: a.guessProvider(resolved)}
 	}
 	return a.applyModel(model)
 }
@@ -839,8 +846,11 @@ func (a *App) AllowTool(name string) {
 func (a *App) resolveModelAlias(query string) string {
 	q := strings.ToLower(strings.TrimSpace(query))
 	switch q {
-	case "stepfun", "step", "step-plan", "stepfun-plan":
-		if a.store != nil && (provider.HasKey(a.store, "stepfun-plan") || a.store.Has("provider:stepfun-plan")) {
+	case "stepfun", "step", "step-plan", "stepfun-plan", "step-3.7-flash", "step-3.7":
+		if a.store != nil && (provider.HasKey(a.store, "stepfun-plan") || a.store.Has("provider:stepfun-plan")) && !provider.HasKey(a.store, "stepfun") && !a.store.Has("provider:stepfun") {
+			return "stepfun-plan/step-3.7-flash"
+		}
+		if a.store != nil && (provider.HasKey(a.store, "stepfun-plan") || a.store.Has("provider:stepfun-plan")) && (q == "stepfun" || q == "step" || q == "stepfun-plan" || q == "step-plan") {
 			return "stepfun-plan/step-3.7-flash"
 		}
 		return "step-3.7-flash"
