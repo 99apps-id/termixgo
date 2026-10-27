@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 )
@@ -152,5 +151,5 @@ func CriticSummary(v CriticVerdict) string {
 	if !v.BlockFinish {
 		return ""
 	}
-	return fmt.Sprintf("Critic review blocked the finish: open plan or missing verification evidence.")
+	return "Critic review blocked the finish: open plan or missing verification evidence."
 }

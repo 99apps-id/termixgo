@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/config"
@@ -37,7 +37,7 @@ func RecordHistory(entry HistoryEntry) {
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(strings.TrimSuffix(path, "/cron-history.jsonl"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
