@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -696,7 +697,11 @@ func runServe(stdout io.Writer) error {
 	}
 
 	if err := application.StartChannels(); err != nil {
-		return err
+		if errors.Is(err, app.ErrNoChannelsEnabled) {
+			fmt.Fprintln(stdout, "Channels: none active (enable with 'termixgo channel on <channel> <account>')")
+		} else {
+			return err
+		}
 	}
 	for _, status := range application.ChannelStatuses() {
 		state := "off"
@@ -1646,6 +1651,7 @@ After=network.target
 
 [Service]
 Type=simple
+Environment="PATH=%%h/.local/bin:%%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
 ExecStart=%s serve
 Restart=on-failure
 RestartSec=5

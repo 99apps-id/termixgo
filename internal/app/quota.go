@@ -323,7 +323,7 @@ func (q *QuotaTracker) AllStats(window time.Duration) []WindowStats {
 // rather than from the provider. It is spelled out on every surface that
 // shows the fallback counts, so a local count is never read as an official
 // quota figure.
-const LocalEstimateLabel = "estimasi lokal, bukan angka provider"
+const LocalEstimateLabel = "local estimate, not official provider figure"
 
 // SnapshotAgeText renders how long ago a quota snapshot was fetched, the
 // marker that keeps a cached snapshot from reading as live data. An empty

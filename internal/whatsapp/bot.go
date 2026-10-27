@@ -143,8 +143,22 @@ func (b *Bot) isSelf(senderID string) bool {
 }
 
 func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
-	if evt == nil || evt.Info.IsFromMe {
+	if evt == nil {
 		return
+	}
+	if evt.Info.IsFromMe {
+		// Ignore outbound messages to other chats, or messages sent by this companion bot instance.
+		selfUser := ""
+		selfDevice := uint16(0)
+		if b.client != nil && b.client.Store != nil && b.client.Store.ID != nil {
+			selfUser = b.client.Store.ID.User
+			selfDevice = b.client.Store.ID.Device
+		}
+		isSelfChat := selfUser != "" && evt.Info.Chat.User == selfUser
+		isOwnDevice := selfDevice != 0 && evt.Info.Sender.Device == selfDevice
+		if !isSelfChat || isOwnDevice {
+			return
+		}
 	}
 	request := b.requestFrom(evt)
 	if strings.TrimSpace(request.Text) == "" {
@@ -162,7 +176,7 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 			b.reply(ctx, request.ChatID, b.pairingPrompt(request))
 			return
 		}
-		b.logfLine("ignored a message (" + decision.Reason + ")")
+		b.logfLine("ignored message from " + request.SenderID + " (" + decision.Reason + ")")
 		return
 	}
 	request.Admin = decision.Admin

@@ -39,6 +39,8 @@ func runChannel(args []string, stdout io.Writer) error {
 		return removeChannel(args[1:], stdout)
 	case "allow", "admin":
 		return editChannelList(args[1:], strings.ToLower(args[0]), stdout)
+	case "dm":
+		return editChannelDM(args[1:], stdout)
 	case "groups":
 		return editChannelGroups(args[1:], stdout)
 	case "guest":
@@ -46,7 +48,7 @@ func runChannel(args []string, stdout io.Writer) error {
 	case "pairing":
 		return pairingCommand(args[1:], stdout)
 	default:
-		return fmt.Errorf("usage: termixgo channel [list|add|login|on|off|status|rm|allow|admin|groups|guest|pairing]")
+		return fmt.Errorf("usage: termixgo channel [list|add|login|on|off|status|rm|allow|admin|dm|groups|guest|pairing]")
 	}
 }
 
@@ -443,6 +445,11 @@ func statusChannel(args []string, stdout io.Writer) error {
 			fmt.Fprintf(stdout, "  enabled:    %v\n", entry.Enabled)
 			fmt.Fprintf(stdout, "  state:      %s\n", telegramState(cfg, name, entry))
 			fmt.Fprintf(stdout, "  dmPolicy:   %s (%d allowlisted)\n", config.NormalizeDMPolicy(entry.DMPolicy), len(entry.AllowFrom))
+			if config.NormalizeDMPolicy(entry.DMPolicy) == config.DMPolicyAllowlist && len(entry.AllowFrom) == 0 {
+				fmt.Fprintln(stdout, "  note:       allowlist is empty; incoming DMs will be ignored")
+				fmt.Fprintf(stdout, "              add sender with: termixgo channel allow add telegram %s <id>\n", name)
+				fmt.Fprintf(stdout, "              or set policy: termixgo channel dm telegram %s open|pairing\n", name)
+			}
 			fmt.Fprintf(stdout, "  groupPolicy: %s (%d groups listed)\n", config.NormalizeGroupPolicy(entry.GroupPolicy), len(entry.GroupAllowFrom))
 		case config.ChannelWhatsApp:
 			entry, ok := cfg.WhatsAppAccount(name)
@@ -454,6 +461,11 @@ func statusChannel(args []string, stdout io.Writer) error {
 			fmt.Fprintf(stdout, "  enabled:    %v\n", entry.Enabled)
 			fmt.Fprintf(stdout, "  state:      %s\n", whatsappState(cfg, name))
 			fmt.Fprintf(stdout, "  dmPolicy:   %s (%d allowlisted)\n", config.NormalizeDMPolicy(entry.DMPolicy), len(entry.AllowFrom))
+			if config.NormalizeDMPolicy(entry.DMPolicy) == config.DMPolicyAllowlist && len(entry.AllowFrom) == 0 {
+				fmt.Fprintln(stdout, "  note:       allowlist is empty; incoming DMs will be ignored")
+				fmt.Fprintf(stdout, "              add sender with: termixgo channel allow add whatsapp %s <phone>\n", name)
+				fmt.Fprintf(stdout, "              or set policy: termixgo channel dm whatsapp %s open|pairing\n", name)
+			}
 			fmt.Fprintf(stdout, "  groupPolicy: %s (%d groups listed)\n", config.NormalizeGroupPolicy(entry.GroupPolicy), len(entry.GroupAllowFrom))
 		}
 	}
@@ -658,6 +670,59 @@ func isGroupVerb(value string) bool {
 		return true
 	}
 	return false
+}
+
+func isDMVerb(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case config.DMPolicyAllowlist, config.DMPolicyPairing, config.DMPolicyOpen, config.DMPolicyDeny:
+		return true
+	}
+	return false
+}
+
+func editChannelDM(args []string, stdout io.Writer) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: termixgo channel dm <whatsapp|telegram> [agent] <allowlist|pairing|open|deny>")
+	}
+	kind, err := channelType(args[0])
+	if err != nil {
+		return err
+	}
+	rest := args[1:]
+	name := config.FinalAgentName
+	if len(rest) > 1 && !isDMVerb(rest[0]) {
+		name = strings.TrimSpace(rest[0])
+		rest = rest[1:]
+	}
+	policy := strings.ToLower(strings.TrimSpace(rest[0]))
+	if !isDMVerb(policy) {
+		return fmt.Errorf("unknown dm policy %q; use allowlist, pairing, open, or deny", rest[0])
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	switch kind {
+	case config.ChannelTelegram:
+		entry, ok := cfg.TelegramAccount(name)
+		if !ok {
+			return fmt.Errorf("no telegram account %q", name)
+		}
+		entry.DMPolicy = policy
+		cfg = cfg.WithTelegramAccount(name, entry)
+	case config.ChannelWhatsApp:
+		entry, ok := cfg.WhatsAppAccount(name)
+		if !ok {
+			return fmt.Errorf("no whatsapp account %q", name)
+		}
+		entry.DMPolicy = policy
+		cfg = cfg.WithWhatsAppAccount(name, entry)
+	}
+	if err := config.Save(cfg); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "%s account %q dm policy set to %s\n", kind, name, policy)
+	return nil
 }
 
 func editChannelGuest(args []string, stdout io.Writer) error {

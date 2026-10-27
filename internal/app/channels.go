@@ -28,6 +28,9 @@ type ChannelStatus struct {
 	State   string
 }
 
+// ErrNoChannelsEnabled reports that the assistant started with no active channel accounts.
+var ErrNoChannelsEnabled = errors.New("no channel accounts are enabled")
+
 // channelRuntime is one running account.
 type channelRuntime struct {
 	id     channel.AccountID
@@ -62,7 +65,7 @@ func (a *App) StartChannels() error {
 	}
 	switch {
 	case started == 0 && len(problems) == 0:
-		return fmt.Errorf("no channel accounts are enabled; add one with 'termixgo channel add telegram|whatsapp'")
+		return ErrNoChannelsEnabled
 	case started == 0:
 		return fmt.Errorf("%s", strings.Join(problems, "; "))
 	}
@@ -313,6 +316,9 @@ func (a *App) setChannelStatus(key channel.AccountID, state string) {
 	}
 	if key.Channel == config.ChannelTelegram && key.Account == config.FinalAgentName {
 		a.botStatus = state
+	}
+	if state != "" && state != "connected" && state != "connecting" {
+		fmt.Fprintf(os.Stderr, "channel %s/%s: %s\n", key.Channel, key.Account, state)
 	}
 }
 
