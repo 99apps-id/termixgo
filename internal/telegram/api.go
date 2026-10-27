@@ -52,10 +52,11 @@ func newClientAt(token, baseURL string) *Client {
 	}
 }
 
-// User is the bot identity.
+// User is the bot or sender identity.
 type User struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
+	ID           int64  `json:"id"`
+	Username     string `json:"username"`
+	LanguageCode string `json:"language_code,omitempty"`
 }
 
 // Chat identifies a conversation.

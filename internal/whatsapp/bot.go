@@ -180,19 +180,28 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 		b.logfLine("ignored message from " + request.SenderID + " (" + decision.Reason + ")")
 		return
 	}
+	lang := b.userLanguage(request)
 	request.Admin = decision.Admin
 	if !decision.Admin {
 		b.mu.RLock()
 		limiter := b.limiter
 		b.mu.RUnlock()
 		if limiter != nil && !limiter.Allow(request.SenderID, time.Now()) {
-			b.reply(ctx, request.ChatID, "Terlalu banyak pesan. Coba lagi sebentar ya.")
+			if lang == "id" {
+				b.reply(ctx, request.ChatID, "Terlalu banyak pesan. Coba lagi sebentar ya.")
+			} else {
+				b.reply(ctx, request.ChatID, "Too many messages. Please try again in a moment.")
+			}
 			return
 		}
 	}
 	if strings.HasPrefix(strings.TrimSpace(request.Text), "/") {
 		if !decision.Admin {
-			b.reply(ctx, request.ChatID, "Maaf, perintah itu hanya untuk operator.")
+			if lang == "id" {
+				b.reply(ctx, request.ChatID, "Maaf, perintah itu hanya untuk operator.")
+			} else {
+				b.reply(ctx, request.ChatID, "Sorry, that command is restricted to the operator.")
+			}
 			return
 		}
 		b.handleCommand(ctx, request)
@@ -204,7 +213,7 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 	answer, err := b.agent.RunPrompt(ctx, request, request.Text, nil)
 	close(done)
 	if err != nil {
-		b.reply(ctx, request.ChatID, naturalError(err))
+		b.reply(ctx, request.ChatID, naturalError(err, lang))
 		return
 	}
 	if channel.Silent(answer) {
@@ -299,6 +308,39 @@ func (b *Bot) mayPair(policy config.ChannelAccount, request channel.Request) boo
 	return store != nil
 }
 
+func (b *Bot) userLanguage(request channel.Request) string {
+	sender := request.SenderID
+	if idx := strings.Index(sender, "@"); idx > 0 {
+		sender = sender[:idx]
+	}
+	var digits strings.Builder
+	for _, r := range sender {
+		if r >= '0' && r <= '9' {
+			digits.WriteRune(r)
+		}
+	}
+	phone := digits.String()
+	if strings.HasPrefix(phone, "62") {
+		return "id"
+	}
+	if request.SenderAlt != "" {
+		alt := request.SenderAlt
+		if idx := strings.Index(alt, "@"); idx > 0 {
+			alt = alt[:idx]
+		}
+		var altDigits strings.Builder
+		for _, r := range alt {
+			if r >= '0' && r <= '9' {
+				altDigits.WriteRune(r)
+			}
+		}
+		if strings.HasPrefix(altDigits.String(), "62") {
+			return "id"
+		}
+	}
+	return "en"
+}
+
 func (b *Bot) pairingPrompt(request channel.Request) string {
 	b.mu.RLock()
 	store := b.pairing
@@ -307,8 +349,12 @@ func (b *Bot) pairingPrompt(request channel.Request) string {
 	if created {
 		b.logfLine("pairing request from " + request.SenderID + " (" + pending.Code + ")")
 	}
-	return "Halo! Percakapan ini belum diizinkan. Sandi pairing kamu: " + pending.Code +
-		"\nMinta operator menyetujui dengan: termixgo channel pairing approve " + pending.Code
+	if b.userLanguage(request) == "id" {
+		return "Halo! Percakapan ini belum diizinkan. Sandi pairing kamu: " + pending.Code +
+			"\nMinta operator menyetujui dengan: termixgo channel pairing approve " + pending.Code
+	}
+	return "Hello! This conversation is not yet authorized. Your pairing code: " + pending.Code +
+		"\nAsk the operator to approve with: termixgo channel pairing approve " + pending.Code
 }
 
 // SendTo posts one message to one chat, chunked to the account's limit. It is
@@ -378,14 +424,28 @@ func (b *Bot) keepTyping(ctx context.Context, chatID string, done <-chan struct{
 
 // naturalError turns a failure into one human sentence. Tool names, paths and
 // internal errors never reach a chat.
-func naturalError(err error) string {
+func naturalError(err error, lang ...string) string {
+	l := "id"
+	if len(lang) > 0 {
+		l = lang[0]
+	}
+	if l == "id" {
+		switch {
+		case errors.Is(err, channel.ErrBusy):
+			return "Sebentar ya, aku masih menyelesaikan permintaan sebelumnya. Coba lagi sesaat lagi."
+		case errors.Is(err, context.Canceled):
+			return "Permintaan dibatalkan."
+		default:
+			return "Maaf, ada gangguan sebentar. Coba lagi ya."
+		}
+	}
 	switch {
 	case errors.Is(err, channel.ErrBusy):
-		return "Sebentar ya, aku masih menyelesaikan permintaan sebelumnya. Coba lagi sesaat lagi."
+		return "Please wait a moment, I am still finishing the previous request. Please try again shortly."
 	case errors.Is(err, context.Canceled):
-		return "Permintaan dibatalkan."
+		return "Request was canceled."
 	default:
-		return "Maaf, ada gangguan sebentar. Coba lagi ya."
+		return "Sorry, an error occurred. Please try again."
 	}
 }
 
@@ -396,53 +456,98 @@ type DiffProvider interface {
 
 func (b *Bot) handleCommand(ctx context.Context, request channel.Request) {
 	command, argument := splitCommand(request.Text)
+	lang := b.userLanguage(request)
 	switch command {
 	case "help", "menu", "start":
-		b.sendReply(ctx, request.ChatID, b.helpText())
+		b.sendReply(ctx, request.ChatID, b.helpText(lang))
 	case "models":
-		b.sendReply(ctx, request.ChatID, b.agent.Models())
+		if lister, ok := b.agent.(interface{ ModelsFor(string) string }); ok {
+			b.sendReply(ctx, request.ChatID, lister.ModelsFor(lang))
+		} else {
+			b.sendReply(ctx, request.ChatID, b.agent.Models())
+		}
 	case "model":
 		if strings.TrimSpace(argument) == "" {
 			current := b.agent.Model()
-			b.sendReply(ctx, request.ChatID, "Model aktif saat ini: "+current+"\n\nKetik /model <nama> untuk beralih model.\nContoh: /model stepfun, /model muse, /model antigravity.\nKetik /models untuk melihat semua model.")
+			if lang == "id" {
+				b.sendReply(ctx, request.ChatID, "Model aktif saat ini: "+current+"\n\nKetik /model <nama> untuk beralih model.\nContoh: /model stepfun, /model muse, /model antigravity.\nKetik /models untuk melihat semua model.")
+			} else {
+				b.sendReply(ctx, request.ChatID, "Current active model: "+current+"\n\nType /model <name> to switch models.\nExamples: /model stepfun, /model muse, /model antigravity.\nType /models to view all available models.")
+			}
 			return
 		}
 		updated, err := b.agent.SetModel(argument)
 		if err != nil {
-			b.sendReply(ctx, request.ChatID, "Gagal mengganti model: "+err.Error())
+			if lang == "id" {
+				b.sendReply(ctx, request.ChatID, "Gagal mengganti model: "+err.Error())
+			} else {
+				b.sendReply(ctx, request.ChatID, "Failed to switch model: "+err.Error())
+			}
 			return
 		}
-		b.sendReply(ctx, request.ChatID, "Model berhasil diubah ke: "+updated)
+		if lang == "id" {
+			b.sendReply(ctx, request.ChatID, "Model berhasil diubah ke: "+updated)
+		} else {
+			b.sendReply(ctx, request.ChatID, "Model successfully switched to: "+updated)
+		}
 	case "status":
 		b.sendReply(ctx, request.ChatID, b.agent.Status())
 	case "new", "reset", "clear":
 		b.agent.NewSession(request)
-		b.sendReply(ctx, request.ChatID, "Sesi percakapan baru telah dimulai.")
+		if lang == "id" {
+			b.sendReply(ctx, request.ChatID, "Sesi percakapan baru telah dimulai.")
+		} else {
+			b.sendReply(ctx, request.ChatID, "A new conversation session has been started.")
+		}
 	case "stop":
 		b.agent.Stop()
-		b.sendReply(ctx, request.ChatID, "Perintah berhenti dikirim ke proses yang sedang berjalan.")
+		if lang == "id" {
+			b.sendReply(ctx, request.ChatID, "Perintah berhenti dikirim ke proses yang sedang berjalan.")
+		} else {
+			b.sendReply(ctx, request.ChatID, "Stop signal sent to the running process.")
+		}
 	case "diff":
 		diffProv, ok := b.agent.(DiffProvider)
 		if !ok {
-			b.sendReply(ctx, request.ChatID, "Fitur diff tidak didukung oleh agent ini.")
+			if lang == "id" {
+				b.sendReply(ctx, request.ChatID, "Fitur diff tidak didukung oleh agent ini.")
+			} else {
+				b.sendReply(ctx, request.ChatID, "Diff feature is not supported by this agent.")
+			}
 			return
 		}
 		diff, err := diffProv.GitDiff(ctx)
 		if err != nil {
-			b.sendReply(ctx, request.ChatID, "Gagal membaca git diff: "+err.Error())
+			if lang == "id" {
+				b.sendReply(ctx, request.ChatID, "Gagal membaca git diff: "+err.Error())
+			} else {
+				b.sendReply(ctx, request.ChatID, "Failed to read git diff: "+err.Error())
+			}
 			return
 		}
 		trimmed := strings.TrimSpace(diff)
 		if trimmed == "" {
-			b.sendReply(ctx, request.ChatID, "Tidak ada perubahan git di workspace.")
+			if lang == "id" {
+				b.sendReply(ctx, request.ChatID, "Tidak ada perubahan git di workspace.")
+			} else {
+				b.sendReply(ctx, request.ChatID, "No git changes in workspace.")
+			}
 			return
 		}
 		if len(trimmed) > 3000 {
-			trimmed = trimmed[:3000] + "\n... (dipotong karena terlalu panjang)"
+			if lang == "id" {
+				trimmed = trimmed[:3000] + "\n... (dipotong karena terlalu panjang)"
+			} else {
+				trimmed = trimmed[:3000] + "\n... (truncated because too long)"
+			}
 		}
 		b.sendReply(ctx, request.ChatID, "```diff\n"+trimmed+"\n```")
 	default:
-		b.sendReply(ctx, request.ChatID, "Perintah /"+command+" tidak dikenal. Ketik /menu atau /help untuk melihat daftar perintah.")
+		if lang == "id" {
+			b.sendReply(ctx, request.ChatID, "Perintah /"+command+" tidak dikenal. Ketik /menu atau /help untuk melihat daftar perintah.")
+		} else {
+			b.sendReply(ctx, request.ChatID, "Unknown command /"+command+". Type /menu or /help to view available commands.")
+		}
 	}
 }
 
@@ -452,17 +557,34 @@ func (b *Bot) sendReply(ctx context.Context, chatID, text string) {
 	}
 }
 
-func (b *Bot) helpText() string {
+func (b *Bot) helpText(lang ...string) string {
+	l := "id"
+	if len(lang) > 0 {
+		l = lang[0]
+	}
+	if l == "id" {
+		return strings.Join([]string{
+			"Daftar Perintah Slash Termixgo:",
+			"",
+			"/models - Lihat daftar model yang terdaftar dan siap digunakan",
+			"/model <nama> - Ganti model aktif (misal: /model stepfun, /model muse, /model antigravity)",
+			"/status - Status runtime dan resource agent",
+			"/new atau /reset - Mulai percakapan sesi baru",
+			"/stop - Hentikan proses yang sedang berjalan",
+			"/diff - Lihat perubahan git di workspace",
+			"/help atau /menu - Menampilkan menu bantuan ini",
+		}, "\n")
+	}
 	return strings.Join([]string{
-		"Daftar Perintah Slash Termixgo:",
+		"Termixgo Slash Commands:",
 		"",
-		"/models - Lihat daftar model yang terdaftar dan siap digunakan",
-		"/model <nama> - Ganti model aktif (misal: /model stepfun, /model muse, /model antigravity)",
-		"/status - Status runtime dan resource agent",
-		"/new atau /reset - Mulai percakapan sesi baru",
-		"/stop - Hentikan proses yang sedang berjalan",
-		"/diff - Lihat perubahan git di workspace",
-		"/help atau /menu - Menampilkan menu bantuan ini",
+		"/models - List registered and ready-to-use models",
+		"/model <name> - Switch active model (e.g. /model stepfun, /model muse, /model antigravity)",
+		"/status - Agent runtime and resource status",
+		"/new or /reset - Start a fresh conversation session",
+		"/stop - Stop currently running process",
+		"/diff - View git changes in workspace",
+		"/help or /menu - Show this help menu",
 	}, "\n")
 }
 

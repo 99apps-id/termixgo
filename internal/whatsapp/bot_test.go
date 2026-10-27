@@ -258,3 +258,59 @@ func TestWhatsAppSlashCommandsNonAdmin(t *testing.T) {
 		t.Errorf("model should not have changed, got: %s", agent.model)
 	}
 }
+
+func TestWhatsAppSlashCommandsForeignLanguage(t *testing.T) {
+	agent := &fakeAgent{
+		model:  "muse-spark-1.3",
+		models: "Registered & Ready-to-Use Models",
+		status: "agent online",
+		diff:   "diff --git a/test.txt",
+	}
+	var replies []string
+	bot := New(nil, agent)
+	bot.sendHook = func(chatID, text string) {
+		replies = append(replies, text)
+	}
+	bot.SetAccount("default", config.ChannelAccount{
+		Enabled:  true,
+		Admins:   []string{"14155552671@s.whatsapp.net"},
+		DMPolicy: "open",
+	}, nil)
+
+	ctx := context.Background()
+
+	// Foreign admin: /model
+	req := channel.Request{ChatID: "14155552671@s.whatsapp.net", SenderID: "14155552671@s.whatsapp.net", Text: "/model", Admin: true}
+	bot.handleCommand(ctx, req)
+	if !strings.Contains(replies[len(replies)-1], "Current active model: muse-spark-1.3") {
+		t.Errorf("unexpected foreign /model reply: %v", replies[len(replies)-1])
+	}
+
+	// /menu
+	req.Text = "/menu"
+	bot.handleCommand(ctx, req)
+	if !strings.Contains(replies[len(replies)-1], "Termixgo Slash Commands:") {
+		t.Errorf("unexpected foreign /menu reply: %v", replies[len(replies)-1])
+	}
+
+	// Non-admin foreign user
+	replies = nil
+	nonAdminEvent := &events.Message{
+		Info: types.MessageInfo{
+			MessageSource: types.MessageSource{
+				Chat:   types.NewJID("14155559999", types.DefaultUserServer),
+				Sender: types.NewJID("14155559999", types.DefaultUserServer),
+			},
+			PushName: "John",
+		},
+		Message: &waE2E.Message{
+			ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+				Text: proto.String("/model stepfun"),
+			},
+		},
+	}
+	bot.handleMessage(ctx, nonAdminEvent)
+	if len(replies) == 0 || !strings.Contains(replies[0], "restricted to the operator") {
+		t.Fatalf("expected English operator restriction for foreign user, got: %v", replies)
+	}
+}

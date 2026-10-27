@@ -146,7 +146,9 @@ func (b *whatsappBridge) Model() string { return b.app.ModelLabel() }
 
 func (b *whatsappBridge) SetModel(query string) (string, error) { return b.app.SetModel(query) }
 
-func (b *whatsappBridge) Models() string { return b.app.AvailableModelsText() }
+func (b *whatsappBridge) Models() string { return b.app.AvailableModelsText("en") }
+
+func (b *whatsappBridge) ModelsFor(lang string) string { return b.app.AvailableModelsText(lang) }
 
 func (b *whatsappBridge) GitDiff(ctx context.Context) (string, error) { return b.app.GitDiff(ctx) }
 

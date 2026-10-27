@@ -690,7 +690,15 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		}
 		b.reply(ctx, chatID, "Model is now "+updated+".")
 	case "models":
-		b.reply(ctx, chatID, b.agent.Models())
+		if lister, ok := b.agent.(interface{ ModelsFor(string) string }); ok {
+			lang := "en"
+			if message.From != nil && strings.HasPrefix(strings.ToLower(message.From.LanguageCode), "id") {
+				lang = "id"
+			}
+			b.reply(ctx, chatID, lister.ModelsFor(lang))
+		} else {
+			b.reply(ctx, chatID, b.agent.Models())
+		}
 	case "diff":
 		diffProv, ok := b.agent.(DiffProvider)
 		if !ok {

@@ -874,21 +874,91 @@ func (a *App) resolveModelAlias(query string) string {
 	}
 }
 
+// isPrimaryModel filters out redundant or older sub-variants for concise display.
+func isPrimaryModel(m provider.Model, currentID string) bool {
+	if m.ID == currentID {
+		return true
+	}
+	id := strings.ToLower(m.ID)
+	if strings.Contains(id, "-contributor") {
+		return false
+	}
+	if strings.Contains(id, "-1.1") || strings.Contains(id, "-1.2") {
+		return false
+	}
+	if strings.Contains(id, "-3.5") || strings.Contains(id, "-3.6") {
+		return false
+	}
+	if strings.Contains(id, "gemini-3.7") {
+		return false
+	}
+	if strings.Contains(id, "-0813") || strings.Contains(id, "-0731") {
+		return false
+	}
+	if strings.Contains(id, "kimi-k2.") {
+		return false
+	}
+	if strings.Contains(id, "glm-4.7") || strings.Contains(id, "glm-5.2") {
+		return false
+	}
+	if strings.Contains(id, "qwen3.7") || strings.Contains(id, "qwen3.6") {
+		return false
+	}
+	if strings.Contains(id, "grok-4.5") || strings.Contains(id, "grok-4.6") {
+		return false
+	}
+	if strings.Contains(id, "claude-opus-5") && !strings.Contains(id, "5-5") && !strings.Contains(id, "5.5") {
+		return false
+	}
+	if strings.Contains(id, "claude-sonnet-4") {
+		return false
+	}
+	if id == "deepseek-v4-flash" {
+		return false
+	}
+	return true
+}
+
 // AvailableModelsText formats the list of models for active/configured providers.
-func (a *App) AvailableModelsText() string {
+func (a *App) AvailableModelsText(lang ...string) string {
+	language := "en"
+	if len(lang) > 0 && lang[0] == "id" {
+		language = "id"
+	}
 	providers := a.ActiveProviders()
 	if len(providers) == 0 {
-		return "Belum ada provider model yang dikonfigurasi. Konfigurasi dengan 'termixgo secret <provider>' atau 'termixgo login <provider>'."
+		if language == "id" {
+			return "Belum ada provider model yang dikonfigurasi. Konfigurasi dengan 'termixgo secret <provider>' atau 'termixgo login <provider>'."
+		}
+		return "No model providers configured yet. Configure with 'termixgo secret <provider>' or 'termixgo login <provider>'."
 	}
 	var sb strings.Builder
-	sb.WriteString("Daftar Model yang Terdaftar & Siap Digunakan:\n\n")
+	if language == "id" {
+		sb.WriteString("Daftar Model yang Terdaftar & Siap Digunakan:\n\n")
+	} else {
+		sb.WriteString("Registered & Ready-to-Use Models:\n\n")
+	}
 	current := a.CurrentModel()
 	for _, prov := range providers {
+		models := provider.ModelsFor(prov.ID)
+		var filtered []provider.Model
+		for _, m := range models {
+			if isPrimaryModel(m, current.ID) {
+				filtered = append(filtered, m)
+			}
+		}
+		if len(filtered) == 0 {
+			filtered = models
+		}
 		sb.WriteString("- " + prov.Label + " (" + prov.ID + "):\n")
-		for _, m := range provider.ModelsFor(prov.ID) {
+		for _, m := range filtered {
 			marker := "  - "
 			if m.ID == current.ID || (m.Provider == current.Provider && m.APIID == current.APIID) {
-				marker = "  * [AKTIF] "
+				if language == "id" {
+					marker = "  * [AKTIF] "
+				} else {
+					marker = "  * [ACTIVE] "
+				}
 			}
 			sb.WriteString(marker + m.ID)
 			if m.Label != "" && m.Label != m.ID {
@@ -898,7 +968,11 @@ func (a *App) AvailableModelsText() string {
 		}
 		sb.WriteString("\n")
 	}
-	sb.WriteString("Ketik /model <nama> untuk beralih.\nContoh cepat: /model stepfun, /model muse, /model antigravity")
+	if language == "id" {
+		sb.WriteString("Ketik /model <nama> untuk beralih.\nContoh cepat: /model stepfun, /model muse, /model antigravity")
+	} else {
+		sb.WriteString("Type /model <name> to switch.\nQuick examples: /model stepfun, /model muse, /model antigravity")
+	}
 	return strings.TrimSpace(sb.String())
 }
 
@@ -2285,12 +2359,13 @@ func (a *App) SetImageModel(model string) error {
 }
 
 // ActiveProviders lists the providers the operator can use right now: the
-// current provider, local providers that need no key, and providers with a
-// stored key or login.
+// current provider, providers with a stored key or login, or providers with a
+// custom base URL configured.
 func (a *App) ActiveProviders() []provider.Provider {
 	a.mu.Lock()
 	current := a.model.Provider
 	store := a.store
+	baseURLs := a.cfg.BaseURLs
 	a.mu.Unlock()
 
 	var active []provider.Provider
@@ -2298,10 +2373,15 @@ func (a *App) ActiveProviders() []provider.Provider {
 		if len(provider.ModelsFor(info.ID)) == 0 {
 			continue
 		}
-		if info.ID != current && info.NeedsKey && provider.KeySource(store, info.ID) == "" {
+		if info.ID == current {
+			active = append(active, info)
 			continue
 		}
-		active = append(active, info)
+		hasKey := info.NeedsKey && provider.KeySource(store, info.ID) != ""
+		hasCustomURL := strings.TrimSpace(baseURLs[info.ID]) != ""
+		if hasKey || hasCustomURL {
+			active = append(active, info)
+		}
 	}
 	return active
 }

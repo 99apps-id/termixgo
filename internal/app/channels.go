@@ -299,7 +299,11 @@ func evidenceRetryNeeded(grounding, answer string, toolCalls int) bool {
 		return false
 	}
 	lowered := strings.ToLower(trimmed)
-	for _, honest := range []string{"tidak menemukan", "tidak tahu", "tidak ada bukti", "tidak bisa memastikan"} {
+	for _, honest := range []string{
+		"tidak menemukan", "tidak tahu", "tidak ada bukti", "tidak bisa memastikan",
+		"saya adalah", "nama saya", "namaku", "i am", "my name is", "termixgo", "anes",
+		"asisten", "bantuan apa", "ada yang bisa dibantu",
+	} {
 		if strings.Contains(lowered, honest) {
 			return false
 		}
@@ -543,7 +547,9 @@ func (b *telegramBridge) Model() string { return b.app.ModelLabel() }
 
 func (b *telegramBridge) SetModel(query string) (string, error) { return b.app.SetModel(query) }
 
-func (b *telegramBridge) Models() string { return b.app.AvailableModelsText() }
+func (b *telegramBridge) Models() string { return b.app.AvailableModelsText("en") }
+
+func (b *telegramBridge) ModelsFor(lang string) string { return b.app.AvailableModelsText(lang) }
 
 func (b *telegramBridge) GitDiff(ctx context.Context) (string, error) { return b.app.GitDiff(ctx) }
 
