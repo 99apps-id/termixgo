@@ -13,6 +13,7 @@ import (
 func restoreLookupEndpoints() {
 	lookupGeocodeEndpoint = "https://geocoding-api.open-meteo.com/v1/search"
 	lookupForecastEndpoint = "https://api.open-meteo.com/v1/forecast"
+	lookupWttrEndpoint = "https://wttr.in"
 	lookupFXEndpoint = "https://api.frankfurter.app/latest"
 	lookupCryptoEndpoint = "https://api.coingecko.com/api/v3/simple/price"
 	lookupWikiEndpoint = "https://en.wikipedia.org/api/rest_v1/page/summary/"
@@ -42,6 +43,36 @@ func TestLookupWeather(t *testing.T) {
 		if !strings.Contains(result.Output, want) {
 			t.Errorf("output is missing %q:\n%s", want, result.Output)
 		}
+	}
+}
+
+func TestLookupWeatherFallbackWhenPrimaryFails(t *testing.T) {
+	wttrServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(writer, `{"current_condition":[{"temp_C":"28","FeelsLikeC":"31","humidity":"75","precipMM":"0.0","windspeedKmph":"10","weatherDesc":[{"value":"Partly Cloudy"}]}],"nearest_area":[{"areaName":[{"value":"Jakarta"}],"country":[{"value":"Indonesia"}]}]}`)
+	}))
+	defer wttrServer.Close()
+
+	// Broken primary Open-Meteo endpoint (immediate 500 error server)
+	brokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "TLS handshake timeout", http.StatusBadGateway)
+	}))
+	defer brokenServer.Close()
+
+	lookupGeocodeEndpoint = brokenServer.URL
+	lookupForecastEndpoint = brokenServer.URL
+	lookupWttrEndpoint = wttrServer.URL
+	t.Cleanup(func() {
+		restoreLookupEndpoints()
+	})
+
+	// When primary fails, lookupWeather must fall back to wttr.in
+	res, err := lookupWeather(context.Background(), "Jakarta")
+	if err != nil {
+		t.Fatalf("expected fallback to succeed, got error: %v", err)
+	}
+	if !strings.Contains(res, "(wttr.in)") || !strings.Contains(res, "28 C") {
+		t.Errorf("output missing expected wttr fallback content:\n%s", res)
 	}
 }
 

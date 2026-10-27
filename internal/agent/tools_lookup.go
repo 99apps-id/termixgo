@@ -14,6 +14,7 @@ import (
 var (
 	lookupGeocodeEndpoint  = "https://geocoding-api.open-meteo.com/v1/search"
 	lookupForecastEndpoint = "https://api.open-meteo.com/v1/forecast"
+	lookupWttrEndpoint     = "https://wttr.in"
 	lookupFXEndpoint       = "https://api.frankfurter.app/latest"
 	lookupCryptoEndpoint   = "https://api.coingecko.com/api/v3/simple/price"
 	lookupWikiEndpoint     = "https://en.wikipedia.org/api/rest_v1/page/summary/"
@@ -79,6 +80,80 @@ func lookupResult(text string, err error) Result {
 }
 
 func lookupWeather(ctx context.Context, place string) (string, error) {
+	place = strings.TrimSpace(place)
+	if place == "" {
+		return "", fmt.Errorf("weather needs a place")
+	}
+	res, err := lookupWeatherOpenMeteo(ctx, place)
+	if err == nil {
+		return res, nil
+	}
+	// Fall back to wttr.in when Open-Meteo fails or times out
+	if fallback, wttrErr := lookupWeatherWttr(ctx, place); wttrErr == nil && strings.TrimSpace(fallback) != "" {
+		return fallback, nil
+	}
+	return "", err
+}
+
+func lookupWeatherWttr(ctx context.Context, place string) (string, error) {
+	// Try wttr.in JSON format first
+	wttrURL := fmt.Sprintf("%s/%s?format=j1", lookupWttrEndpoint, url.QueryEscape(place))
+	body, err := fetchURL(ctx, wttrURL)
+	if err == nil {
+		var parsed struct {
+			CurrentCondition []struct {
+				TempC         string `json:"temp_C"`
+				FeelsLikeC    string `json:"FeelsLikeC"`
+				Humidity      string `json:"humidity"`
+				PrecipMM      string `json:"precipMM"`
+				WindspeedKmph string `json:"windspeedKmph"`
+				WeatherDesc   []struct {
+					Value string `json:"value"`
+				} `json:"weatherDesc"`
+			} `json:"current_condition"`
+			NearestArea []struct {
+				AreaName []struct {
+					Value string `json:"value"`
+				} `json:"areaName"`
+				Country []struct {
+					Value string `json:"value"`
+				} `json:"country"`
+			} `json:"nearest_area"`
+		}
+		if jsonErr := json.Unmarshal([]byte(body), &parsed); jsonErr == nil && len(parsed.CurrentCondition) > 0 {
+			cc := parsed.CurrentCondition[0]
+			desc := "clear"
+			if len(cc.WeatherDesc) > 0 {
+				desc = strings.ToLower(cc.WeatherDesc[0].Value)
+			}
+			locName := place
+			if len(parsed.NearestArea) > 0 && len(parsed.NearestArea[0].AreaName) > 0 {
+				locName = parsed.NearestArea[0].AreaName[0].Value
+				if len(parsed.NearestArea[0].Country) > 0 {
+					locName += ", " + parsed.NearestArea[0].Country[0].Value
+				}
+			}
+			headline := fmt.Sprintf("Weather for %s (wttr.in)", locName)
+			now := fmt.Sprintf("Now: %s C (feels %s), %s, humidity %s%%, wind %s km/h, rain %s mm",
+				cc.TempC, cc.FeelsLikeC, desc, cc.Humidity, cc.WindspeedKmph, cc.PrecipMM)
+			return headline + "\n" + now, nil
+		}
+	}
+
+	// Plain text format fallback
+	wttrTextURL := fmt.Sprintf("%s/%s?format=3", lookupWttrEndpoint, url.QueryEscape(place))
+	textBody, textErr := fetchURL(ctx, wttrTextURL)
+	if textErr == nil && strings.TrimSpace(textBody) != "" {
+		return strings.TrimSpace(textBody), nil
+	}
+
+	if err != nil {
+		return "", err
+	}
+	return "", textErr
+}
+
+func lookupWeatherOpenMeteo(ctx context.Context, place string) (string, error) {
 	place = strings.TrimSpace(place)
 	if place == "" {
 		return "", fmt.Errorf("weather needs a place")

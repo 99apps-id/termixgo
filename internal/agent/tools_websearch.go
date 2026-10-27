@@ -748,9 +748,8 @@ func dialWithDoHFallback(ctx context.Context, network, addr string) (net.Conn, e
 	if dialErr == nil {
 		return conn, nil
 	}
-	if !isDNSFailure(dialErr) {
-		return nil, dialErr
-	}
+	// Fall back to DoH on any dial failure (DNS failure, unreachable route,
+	// or connection timeout). DoH resolves clean IPv4 addresses.
 	ips, resolveErr := dohResolve(ctx, host)
 	if resolveErr != nil || len(ips) == 0 {
 		return nil, dialErr
@@ -845,6 +844,9 @@ func isNetworkUnreachable(err error) bool {
 		"connection reset",
 		"i/o timeout",
 		"context deadline exceeded",
+		"tls handshake timeout",
+		"handshake timeout",
+		"timeout",
 	} {
 		if strings.Contains(lowered, needle) {
 			return true
