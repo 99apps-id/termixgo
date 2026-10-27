@@ -107,7 +107,11 @@ func Collect(dir string) Report {
 			if line != "" {
 				fields := strings.Fields(line)
 				if len(fields) > 0 {
-					r.FailedUnits = append(r.FailedUnits, fields[0])
+					unit := fields[0]
+					if (unit == "●" || unit == "*" || unit == "×") && len(fields) > 1 {
+						unit = fields[1]
+					}
+					r.FailedUnits = append(r.FailedUnits, unit)
 				}
 			}
 		}
