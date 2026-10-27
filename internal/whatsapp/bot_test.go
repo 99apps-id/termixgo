@@ -106,3 +106,155 @@ func TestNaturalErrorHidesInternals(t *testing.T) {
 		t.Errorf("a cancelled turn reads %q", got)
 	}
 }
+
+type fakeAgent struct {
+	model     string
+	models    string
+	status    string
+	diff      string
+	diffErr   error
+	setErr    error
+	newCalls  int
+	stopCalls int
+	prompts   []string
+}
+
+func (a *fakeAgent) RunPrompt(ctx context.Context, req channel.Request, prompt string, progress func(string)) (string, error) {
+	a.prompts = append(a.prompts, prompt)
+	return "ok", nil
+}
+
+func (a *fakeAgent) NewSession(req channel.Request) {
+	a.newCalls++
+}
+
+func (a *fakeAgent) Stop() {
+	a.stopCalls++
+}
+
+func (a *fakeAgent) Model() string {
+	return a.model
+}
+
+func (a *fakeAgent) SetModel(query string) (string, error) {
+	if a.setErr != nil {
+		return "", a.setErr
+	}
+	a.model = query
+	return query, nil
+}
+
+func (a *fakeAgent) Models() string {
+	return a.models
+}
+
+func (a *fakeAgent) Status() string {
+	return a.status
+}
+
+func (a *fakeAgent) GitDiff(ctx context.Context) (string, error) {
+	return a.diff, a.diffErr
+}
+
+func TestWhatsAppSlashCommandsAdmin(t *testing.T) {
+	agent := &fakeAgent{
+		model:  "muse-spark-1.3",
+		models: "Registered models list",
+		status: "agent online",
+		diff:   "diff --git a/test.txt",
+	}
+	var replies []string
+	bot := New(nil, agent)
+	bot.sendHook = func(chatID, text string) {
+		replies = append(replies, text)
+	}
+	bot.SetAccount("default", config.ChannelAccount{
+		Enabled: true,
+		Admins:  []string{"628111@s.whatsapp.net"},
+	}, nil)
+
+	ctx := context.Background()
+
+	// /models
+	req := channel.Request{ChatID: "628111@s.whatsapp.net", SenderID: "628111@s.whatsapp.net", Text: "/models", Admin: true}
+	bot.handleCommand(ctx, req)
+	if len(replies) == 0 || replies[len(replies)-1] != "Registered models list" {
+		t.Fatalf("unexpected /models reply: %v", replies)
+	}
+
+	// /model without arg
+	req.Text = "/model"
+	bot.handleCommand(ctx, req)
+	if !strings.Contains(replies[len(replies)-1], "Model aktif saat ini: muse-spark-1.3") {
+		t.Errorf("unexpected /model reply: %v", replies[len(replies)-1])
+	}
+
+	// /model stepfun
+	req.Text = "/model stepfun"
+	bot.handleCommand(ctx, req)
+	if !strings.Contains(replies[len(replies)-1], "Model berhasil diubah ke: stepfun") {
+		t.Errorf("unexpected /model stepfun reply: %v", replies[len(replies)-1])
+	}
+	if agent.model != "stepfun" {
+		t.Errorf("expected model to be updated, got %s", agent.model)
+	}
+
+	// /status
+	req.Text = "/status"
+	bot.handleCommand(ctx, req)
+	if replies[len(replies)-1] != "agent online" {
+		t.Errorf("unexpected /status reply: %v", replies[len(replies)-1])
+	}
+
+	// /new
+	req.Text = "/new"
+	bot.handleCommand(ctx, req)
+	if agent.newCalls != 1 {
+		t.Errorf("expected 1 new session call, got %d", agent.newCalls)
+	}
+
+	// /stop
+	req.Text = "/stop"
+	bot.handleCommand(ctx, req)
+	if agent.stopCalls != 1 {
+		t.Errorf("expected 1 stop call, got %d", agent.stopCalls)
+	}
+
+	// /diff
+	req.Text = "/diff"
+	bot.handleCommand(ctx, req)
+	if !strings.Contains(replies[len(replies)-1], "diff --git a/test.txt") {
+		t.Errorf("unexpected /diff reply: %v", replies[len(replies)-1])
+	}
+
+	// /menu
+	req.Text = "/menu"
+	bot.handleCommand(ctx, req)
+	if !strings.Contains(replies[len(replies)-1], "Daftar Perintah Slash Termixgo:") {
+		t.Errorf("unexpected /menu reply: %v", replies[len(replies)-1])
+	}
+}
+
+func TestWhatsAppSlashCommandsNonAdmin(t *testing.T) {
+	agent := &fakeAgent{model: "muse-spark-1.3"}
+	var replies []string
+	bot := New(nil, agent)
+	bot.sendHook = func(chatID, text string) {
+		replies = append(replies, text)
+	}
+	bot.SetAccount("default", config.ChannelAccount{
+		Enabled:  true,
+		Admins:   []string{"628111@s.whatsapp.net"},
+		DMPolicy: "open",
+	}, nil)
+
+	// Sender is not admin
+	event := testEvent("/model stepfun")
+	bot.handleMessage(context.Background(), event)
+	if len(replies) == 0 || !strings.Contains(replies[0], "hanya untuk operator") {
+		t.Fatalf("expected operator restriction, got: %v", replies)
+	}
+	if agent.model != "muse-spark-1.3" {
+		t.Errorf("model should not have changed, got: %s", agent.model)
+	}
+}

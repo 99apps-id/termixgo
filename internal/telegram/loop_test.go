@@ -894,6 +894,7 @@ func (a *recordingAgent) Stop()                           {}
 func (a *recordingAgent) NewSession(channel.Request)      {}
 func (a *recordingAgent) Model() string                   { return "test-model" }
 func (a *recordingAgent) SetModel(string) (string, error) { return "test-model", nil }
+func (a *recordingAgent) Models() string                  { return "test-models" }
 
 func (a *recordingAgent) Status() string {
 	a.mu.Lock()
@@ -927,6 +928,7 @@ func (a *blockingRecordingAgent) Stop()                           {}
 func (a *blockingRecordingAgent) NewSession(channel.Request)      {}
 func (a *blockingRecordingAgent) Model() string                   { return "blocking" }
 func (a *blockingRecordingAgent) SetModel(string) (string, error) { return "blocking", nil }
+func (a *blockingRecordingAgent) Models() string                  { return "blocking-models" }
 
 func (a *blockingRecordingAgent) Status() string {
 	a.once.Do(func() {})

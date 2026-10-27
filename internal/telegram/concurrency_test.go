@@ -120,6 +120,7 @@ func (a *blockingAgent) Stop()                           {}
 func (a *blockingAgent) NewSession(channel.Request)      {}
 func (a *blockingAgent) Model() string                   { return "test-model" }
 func (a *blockingAgent) SetModel(string) (string, error) { return "test-model", nil }
+func (a *blockingAgent) Models() string                  { return "test-models" }
 func (a *blockingAgent) Status() string                  { return "status line" }
 
 func (a *blockingAgent) runCount() int {

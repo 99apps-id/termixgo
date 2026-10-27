@@ -543,6 +543,10 @@ func (b *telegramBridge) Model() string { return b.app.ModelLabel() }
 
 func (b *telegramBridge) SetModel(query string) (string, error) { return b.app.SetModel(query) }
 
+func (b *telegramBridge) Models() string { return b.app.AvailableModelsText() }
+
+func (b *telegramBridge) GitDiff(ctx context.Context) (string, error) { return b.app.GitDiff(ctx) }
+
 func (b *telegramBridge) Status() string { return b.app.Status() }
 
 func (b *telegramBridge) interactor() Interactor {

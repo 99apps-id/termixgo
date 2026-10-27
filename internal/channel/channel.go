@@ -52,5 +52,6 @@ type Agent interface {
 	Stop()
 	Model() string
 	SetModel(query string) (string, error)
+	Models() string
 	Status() string
 }

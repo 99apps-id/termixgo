@@ -146,6 +146,10 @@ func (b *whatsappBridge) Model() string { return b.app.ModelLabel() }
 
 func (b *whatsappBridge) SetModel(query string) (string, error) { return b.app.SetModel(query) }
 
+func (b *whatsappBridge) Models() string { return b.app.AvailableModelsText() }
+
+func (b *whatsappBridge) GitDiff(ctx context.Context) (string, error) { return b.app.GitDiff(ctx) }
+
 func (b *whatsappBridge) Status() string { return b.app.Status() }
 
 func (b *whatsappBridge) session(request channel.Request) (*agent.Session, error) {

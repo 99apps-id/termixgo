@@ -31,13 +31,14 @@ type Bot struct {
 	client *whatsmeow.Client
 	agent  channel.Agent
 
-	mu      sync.RWMutex
-	account string
-	policy  config.ChannelAccount
-	pairing *channel.PairingStore
-	selfIDs map[string]bool
-	limiter *channel.RateLimiter
-	logf    func(string)
+	mu       sync.RWMutex
+	account  string
+	policy   config.ChannelAccount
+	pairing  *channel.PairingStore
+	selfIDs  map[string]bool
+	limiter  *channel.RateLimiter
+	logf     func(string)
+	sendHook func(chatID, text string)
 }
 
 // New builds the bot for one client and bridge.
@@ -189,8 +190,12 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 			return
 		}
 	}
-	if !decision.Admin && strings.HasPrefix(strings.TrimSpace(request.Text), "/") {
-		b.reply(ctx, request.ChatID, "Maaf, perintah itu hanya untuk operator.")
+	if strings.HasPrefix(strings.TrimSpace(request.Text), "/") {
+		if !decision.Admin {
+			b.reply(ctx, request.ChatID, "Maaf, perintah itu hanya untuk operator.")
+			return
+		}
+		b.handleCommand(ctx, request)
 		return
 	}
 
@@ -323,6 +328,17 @@ func (b *Bot) SendTo(ctx context.Context, chatID, text string) error {
 
 // reply sends one message. A failure is logged, never surfaced to the chat.
 func (b *Bot) reply(ctx context.Context, chatID, text string) {
+	b.mu.RLock()
+	hook := b.sendHook
+	b.mu.RUnlock()
+	if hook != nil {
+		hook(chatID, text)
+		return
+	}
+	if b.client == nil {
+		b.logfLine("no client to reply: " + text)
+		return
+	}
 	jid, err := types.ParseJID(chatID)
 	if err != nil {
 		b.logfLine("bad chat id " + chatID + ": " + err.Error())
@@ -371,4 +387,95 @@ func naturalError(err error) string {
 	default:
 		return "Maaf, ada gangguan sebentar. Coba lagi ya."
 	}
+}
+
+// DiffProvider is an optional interface that an agent may implement to provide workspace diffs.
+type DiffProvider interface {
+	GitDiff(ctx context.Context) (string, error)
+}
+
+func (b *Bot) handleCommand(ctx context.Context, request channel.Request) {
+	command, argument := splitCommand(request.Text)
+	switch command {
+	case "help", "menu", "start":
+		b.sendReply(ctx, request.ChatID, b.helpText())
+	case "models":
+		b.sendReply(ctx, request.ChatID, b.agent.Models())
+	case "model":
+		if strings.TrimSpace(argument) == "" {
+			current := b.agent.Model()
+			b.sendReply(ctx, request.ChatID, "Model aktif saat ini: "+current+"\n\nKetik /model <nama> untuk beralih model.\nContoh: /model stepfun, /model muse, /model antigravity.\nKetik /models untuk melihat semua model.")
+			return
+		}
+		updated, err := b.agent.SetModel(argument)
+		if err != nil {
+			b.sendReply(ctx, request.ChatID, "Gagal mengganti model: "+err.Error())
+			return
+		}
+		b.sendReply(ctx, request.ChatID, "Model berhasil diubah ke: "+updated)
+	case "status":
+		b.sendReply(ctx, request.ChatID, b.agent.Status())
+	case "new", "reset", "clear":
+		b.agent.NewSession(request)
+		b.sendReply(ctx, request.ChatID, "Sesi percakapan baru telah dimulai.")
+	case "stop":
+		b.agent.Stop()
+		b.sendReply(ctx, request.ChatID, "Perintah berhenti dikirim ke proses yang sedang berjalan.")
+	case "diff":
+		diffProv, ok := b.agent.(DiffProvider)
+		if !ok {
+			b.sendReply(ctx, request.ChatID, "Fitur diff tidak didukung oleh agent ini.")
+			return
+		}
+		diff, err := diffProv.GitDiff(ctx)
+		if err != nil {
+			b.sendReply(ctx, request.ChatID, "Gagal membaca git diff: "+err.Error())
+			return
+		}
+		trimmed := strings.TrimSpace(diff)
+		if trimmed == "" {
+			b.sendReply(ctx, request.ChatID, "Tidak ada perubahan git di workspace.")
+			return
+		}
+		if len(trimmed) > 3000 {
+			trimmed = trimmed[:3000] + "\n... (dipotong karena terlalu panjang)"
+		}
+		b.sendReply(ctx, request.ChatID, "```diff\n"+trimmed+"\n```")
+	default:
+		b.sendReply(ctx, request.ChatID, "Perintah /"+command+" tidak dikenal. Ketik /menu atau /help untuk melihat daftar perintah.")
+	}
+}
+
+func (b *Bot) sendReply(ctx context.Context, chatID, text string) {
+	for _, chunk := range channel.Chunk(text, b.policySnapshot().EffectiveTextChunkLimit()) {
+		b.reply(ctx, chatID, chunk)
+	}
+}
+
+func (b *Bot) helpText() string {
+	return strings.Join([]string{
+		"Daftar Perintah Slash Termixgo:",
+		"",
+		"/models - Lihat daftar model yang terdaftar dan siap digunakan",
+		"/model <nama> - Ganti model aktif (misal: /model stepfun, /model muse, /model antigravity)",
+		"/status - Status runtime dan resource agent",
+		"/new atau /reset - Mulai percakapan sesi baru",
+		"/stop - Hentikan proses yang sedang berjalan",
+		"/diff - Lihat perubahan git di workspace",
+		"/help atau /menu - Menampilkan menu bantuan ini",
+	}, "\n")
+}
+
+func splitCommand(text string) (string, string) {
+	trimmed := strings.TrimPrefix(strings.TrimSpace(text), "/")
+	command := trimmed
+	rest := ""
+	if index := strings.IndexAny(trimmed, " \n\t"); index >= 0 {
+		command = trimmed[:index]
+		rest = strings.TrimSpace(trimmed[index+1:])
+	}
+	if index := strings.Index(command, "@"); index > 0 {
+		command = command[:index]
+	}
+	return strings.ToLower(command), rest
 }

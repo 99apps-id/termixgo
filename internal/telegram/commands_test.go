@@ -123,6 +123,8 @@ func (a *scriptedAgent) SetModel(query string) (string, error) {
 
 func (a *scriptedAgent) Status() string { return a.status }
 
+func (a *scriptedAgent) Models() string { return "available models" }
+
 func (a *scriptedAgent) firstPrompt() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()

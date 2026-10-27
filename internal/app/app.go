@@ -835,6 +835,63 @@ func (a *App) AllowTool(name string) {
 	_ = config.Save(cfg)
 }
 
+// resolveModelAlias maps friendly shorthand names to specific provider models.
+func (a *App) resolveModelAlias(query string) string {
+	q := strings.ToLower(strings.TrimSpace(query))
+	switch q {
+	case "stepfun", "step", "step-plan", "stepfun-plan":
+		if a.store != nil && (provider.HasKey(a.store, "stepfun-plan") || a.store.Has("provider:stepfun-plan")) {
+			return "stepfun-plan/step-3.7-flash"
+		}
+		return "step-3.7-flash"
+	case "muse", "spark", "musespark", "muse-spark", "muse-spart-1.3", "muse-spart":
+		return "muse-spark-1.3"
+	case "antigravity", "ag", "gemini-antigravity", "gemini-3.8-flash", "gemini-3.8":
+		if a.store != nil && (provider.HasKey(a.store, "antigravity") || a.store.Has("oauth:antigravity")) {
+			return "antigravity-gemini-3.8-flash"
+		}
+		return "gemini-3.8-flash"
+	case "gemini":
+		return "gemini-3.8-flash"
+	case "copilot", "github-copilot":
+		return "copilot-gemini-3.8-flash"
+	case "deepseek":
+		return "deepseek-chat"
+	case "qwen":
+		return "qwen-max"
+	default:
+		return query
+	}
+}
+
+// AvailableModelsText formats the list of models for active/configured providers.
+func (a *App) AvailableModelsText() string {
+	providers := a.ActiveProviders()
+	if len(providers) == 0 {
+		return "Belum ada provider model yang dikonfigurasi. Konfigurasi dengan 'termixgo secret <provider>' atau 'termixgo login <provider>'."
+	}
+	var sb strings.Builder
+	sb.WriteString("Daftar Model yang Terdaftar & Siap Digunakan:\n\n")
+	current := a.CurrentModel()
+	for _, prov := range providers {
+		sb.WriteString("- " + prov.Label + " (" + prov.ID + "):\n")
+		for _, m := range provider.ModelsFor(prov.ID) {
+			marker := "  - "
+			if m.ID == current.ID || (m.Provider == current.Provider && m.APIID == current.APIID) {
+				marker = "  * [AKTIF] "
+			}
+			sb.WriteString(marker + m.ID)
+			if m.Label != "" && m.Label != m.ID {
+				sb.WriteString(" (" + m.Label + ")")
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("Ketik /model <nama> untuk beralih.\nContoh cepat: /model stepfun, /model muse, /model antigravity")
+	return strings.TrimSpace(sb.String())
+}
+
 // SetModelByQuery switches model from free text: a catalogue id, a label, a
 // substring, or "provider:id" for anything not in the catalogue.
 func (a *App) SetModelByQuery(query string) (provider.Model, error) {
@@ -842,8 +899,9 @@ func (a *App) SetModelByQuery(query string) (provider.Model, error) {
 	if trimmed == "" {
 		return provider.Model{}, errors.New("a model id is required")
 	}
+	resolved := a.resolveModelAlias(trimmed)
 	var model provider.Model
-	if found, ok := provider.ModelFromQuery(trimmed); ok {
+	if found, ok := provider.ModelFromQuery(resolved); ok {
 		model = found
 	}
 	if model.ID == "" {
@@ -853,9 +911,9 @@ func (a *App) SetModelByQuery(query string) (provider.Model, error) {
 		current := a.CurrentModel()
 		providerID := current.Provider
 		if providerID == "" {
-			providerID = a.guessProvider(trimmed)
+			providerID = a.guessProvider(resolved)
 		}
-		model = provider.Model{ID: trimmed, Provider: providerID, Label: trimmed, APIID: trimmed}
+		model = provider.Model{ID: resolved, Provider: providerID, Label: resolved, APIID: resolved}
 	}
 	a.mu.Lock()
 	err := a.applyModel(model)

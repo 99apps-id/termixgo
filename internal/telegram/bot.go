@@ -37,6 +37,8 @@ type Agent interface {
 	Model() string
 	// SetModel switches model by id or search text and returns the new id.
 	SetModel(query string) (string, error)
+	// Models returns the formatted list of available models.
+	Models() string
 	// Status returns a short multi-line status block.
 	Status() string
 }
@@ -322,6 +324,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		{Command: "new", Description: "Start a new session"},
 		{Command: "status", Description: "Show status"},
 		{Command: "model", Description: "Choose or switch the model"},
+		{Command: "models", Description: "List registered and available models"},
 		{Command: "unpair", Description: "Detach this chat"},
 		{Command: "help", Description: "List commands"},
 	}
@@ -686,6 +689,8 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 			return
 		}
 		b.reply(ctx, chatID, "Model is now "+updated+".")
+	case "models":
+		b.reply(ctx, chatID, b.agent.Models())
 	case "diff":
 		diffProv, ok := b.agent.(DiffProvider)
 		if !ok {
@@ -1295,6 +1300,7 @@ func helpText() string {
 		"/stop          stop the running turn",
 		"/new           start a new session",
 		"/model [id]    choose a model, or switch by id",
+		"/models        list registered and available models",
 		"/status        show status",
 		"/unpair        detach this chat",
 		"/help          this list",
