@@ -2296,7 +2296,7 @@ func (a *App) Status() string {
 		fmt.Sprintf("context: %s", a.contextUsage()),
 		fmt.Sprintf("session: %s, %d turn(s)", session.ID(), session.Turns()),
 		fmt.Sprintf("plan: %d/%d complete", done, total),
-		fmt.Sprintf("tokens: %d in, %d out", usage.PromptTokens, usage.CompletionTokens),
+		fmt.Sprintf("billed: %d in, %d out", usage.PromptTokens, usage.CompletionTokens),
 	)
 	if err := a.ModelError(); err != nil {
 		lines = append(lines, "model problem: "+err.Error())
@@ -2331,7 +2331,22 @@ func (a *App) ContextUsage() string { return a.contextUsage() }
 
 func (a *App) contextUsage() string {
 	session := a.Session()
-	return agent.HistoryHint(session.Messages(), agent.HistoryBudget(a.CurrentModel().Window()))
+	model := a.CurrentModel()
+	// The numerator is the whole request estimate, not just the stored
+	// messages: the system prompt and the tool schemas are sent (and
+	// billed) on every step. The schema figure counts the full catalogue;
+	// with tool search on, a request carries only the always-on and
+	// discovered subset, so the gauge reads as an upper bound rather than
+	// understating the request.
+	overhead := agent.EstimateTokens(agent.BuildSystem(a.env(), model.ID))
+	if a.tools != nil {
+		overhead += agent.EstimateToolSchemas(a.tools.Definitions())
+	}
+	name := model.Label
+	if name == "" {
+		name = model.ID
+	}
+	return agent.ContextHint(session.Messages(), overhead, model.Window(), name)
 }
 
 // NeedsSetup reports whether onboarding is required.

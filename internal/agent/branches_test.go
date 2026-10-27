@@ -439,26 +439,26 @@ func TestGitToolsNeedARepositoryForEveryCommand(t *testing.T) {
 	}
 }
 
-// ------------------------------------------------- history hints
+// ------------------------------------------------- context hints
 
-func TestHistoryHintCoversTheEmptyAndFullCases(t *testing.T) {
+func TestContextHintCoversTheEmptyAndFullCases(t *testing.T) {
 	// No messages is the first turn, which must report a usable figure rather
 	// than a division by zero.
-	if got := HistoryHint(nil, 100000); strings.TrimSpace(got) == "" {
-		t.Errorf("HistoryHint(nil) = %q, want a readable hint", got)
+	if got := ContextHint(nil, 0, 100000, "m"); strings.TrimSpace(got) == "" {
+		t.Errorf("ContextHint(nil) = %q, want a readable hint", got)
 	}
-	if got := HistoryHint(nil, 0); strings.TrimSpace(got) == "" {
+	if got := ContextHint(nil, 0, 0, "m"); strings.TrimSpace(got) == "" {
 		t.Errorf("a zero window must still produce a hint, got %q", got)
 	}
 	// A single huge message exceeds the budget, which is the state the hint
 	// exists to explain.
 	huge := []provider.Message{{Role: provider.RoleUser, Content: strings.Repeat("x", 400000)}}
-	over := HistoryHint(huge, 1000)
-	if !strings.Contains(over, "tokens") {
-		t.Errorf("HistoryHint = %q, want a token count", over)
+	over := ContextHint(huge, 0, 1000, "m")
+	if !strings.Contains(over, "ctx:") {
+		t.Errorf("ContextHint = %q, want a token count", over)
 	}
 	small := []provider.Message{{Role: provider.RoleUser, Content: "hello"}}
-	if got := HistoryHint(small, 100000); !strings.Contains(got, "tokens") {
-		t.Errorf("HistoryHint = %q", got)
+	if got := ContextHint(small, 0, 100000, "m"); !strings.Contains(got, "ctx:") {
+		t.Errorf("ContextHint = %q", got)
 	}
 }

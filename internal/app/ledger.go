@@ -156,7 +156,19 @@ func (a *App) recordTaskUsage(session *agent.Session, kind, wireModel string, us
 // too when the caller has not already folded it, then appends it to the
 // session's usage ledger file. Recording is best effort throughout: a turn
 // never fails over its accounting.
+//
+// The record is stamped with the official quota window it drew against when
+// the tracker holds a snapshot for its provider; without one the stamp
+// stays null, because naming a window nobody identified would be inventing
+// accounting.
 func (a *App) storeRecord(session *agent.Session, record agent.UsageRecord, foldAggregate bool) {
+	if record.QuotaRef == nil {
+		if tracker := a.QuotaTracker(); tracker != nil {
+			if ref := tracker.QuotaRef(record.Provider, record.Model); ref != "" {
+				record.QuotaRef = &ref
+			}
+		}
+	}
 	if foldAggregate {
 		session.RecordUsage(record)
 	} else {

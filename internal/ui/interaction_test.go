@@ -374,17 +374,19 @@ func TestStepCapExplainsItself(t *testing.T) {
 	}
 }
 
-// TestStatusBarShowsTokenUsage checks the number the operator watches.
+// TestStatusBarShowsBilledTotal checks the number the operator watches: the
+// cumulative session total, labelled billed so it is not read as context
+// occupancy.
 //
 // The status bar reads the app, not the event stream: the app is what
 // accumulates usage and cost, and the UI only renders it. Asserting on an
 // event here would test a path that does not exist.
-func TestStatusBarShowsTokenUsage(t *testing.T) {
+func TestStatusBarShowsBilledTotal(t *testing.T) {
 	model := chatModel(t)
 	model.app.AddUsage(provider.Usage{PromptTokens: 1200, CompletionTokens: 300, TotalTokens: 1500})
 
-	if view := display(model); !strings.Contains(view, "tokens 1500") {
-		t.Errorf("the token count should reach the status bar:\n%s", view)
+	if view := display(model); !strings.Contains(view, "billed: 1500") {
+		t.Errorf("the billed count should reach the status bar:\n%s", view)
 	}
 }
 
@@ -399,7 +401,7 @@ func TestStatusBarAlwaysShowsTheVitals(t *testing.T) {
 		t.Fatalf("the local fixture should report a known cost")
 	}
 	view := display(model)
-	for _, want := range []string{"tokens 0", "$0.0000"} {
+	for _, want := range []string{"billed: 0", "$0.0000"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the bar should show %q before any turn:\n%s", want, view)
 		}
@@ -428,8 +430,8 @@ func TestStatusBarKeepsTheVitalsOnANarrowTerminal(t *testing.T) {
 		model.notice = "Telegram paired."
 
 		row := stripANSI(model.viewStatus())
-		if !strings.Contains(row, "tokens 1500") {
-			t.Errorf("at %d columns the token count was dropped:\n%s", width, row)
+		if !strings.Contains(row, "billed: 1500") {
+			t.Errorf("at %d columns the billed count was dropped:\n%s", width, row)
 		}
 		if !strings.Contains(row, "$") {
 			t.Errorf("at %d columns the spend was dropped:\n%s", width, row)
@@ -486,6 +488,10 @@ func TestEnterSubmitsAndClearsTheComposer(t *testing.T) {
 
 func TestEscStopsARunningTurn(t *testing.T) {
 	model := chatModel(t)
+	// The notice rides at the end of the status line, and the longer
+	// honest context figure leaves it no room at 120 columns. Widen: this
+	// test asserts the notice is visible, not the drop policy.
+	resize(model, 160, 40)
 	model.running = true
 
 	updated := pressEsc(t, model)
@@ -1977,6 +1983,10 @@ func scrollFixture(model *Model) *Model {
 // while reading history must not yank the view to the bottom.
 func TestScrollUpHoldsPositionAcrossRefresh(t *testing.T) {
 	model := scrollFixture(chatModel(t))
+	// The "way back" marker rides near the end of the status line, and the
+	// longer honest context figure leaves it no room at 120 columns.
+	// Widen: this test asserts the marker is shown, not the drop policy.
+	resize(model, 160, 40)
 	if !model.viewport.AtBottom() {
 		t.Fatalf("a fresh transcript should follow the bottom")
 	}

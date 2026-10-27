@@ -1858,6 +1858,62 @@ func (m *Model) slashDiffReview(args string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// quotaWindowLine renders one official quota window for /quota. The bar
+// and the percent beside it are the same number, the used percent: bars
+// mean used on every surface, so the two can never move in opposite
+// directions the way they once did (bar drawn from remaining, text
+// printing used).
+func quotaWindowLine(w provider.QuotaWindow) string {
+	gauge := app.VisualGauge(w.UsedPercent, 16)
+	line := fmt.Sprintf("  %-14s %s %.1f%% used", w.DisplayName+":", gauge, w.UsedPercent)
+	if w.ResetsAt != nil && !w.ResetsAt.IsZero() {
+		left := time.Until(*w.ResetsAt).Round(time.Minute)
+		if left > 0 {
+			line += fmt.Sprintf(" (resets in %s)", left)
+		} else {
+			line += " (resetting...)"
+		}
+	}
+	return line
+}
+
+// rateLimitLines renders the live rate-limit headers for /quota. These are
+// per-minute header figures, not a quota window, and are labelled that
+// way; the bar follows the same convention as everywhere else (used), and
+// the counts beside it state what remains of the minute's allowance.
+func rateLimitLines(rl *provider.RateLimitInfo) []string {
+	if rl == nil {
+		return nil
+	}
+	var lines []string
+	if rl.TokensLimit > 0 {
+		if remaining := rl.PercentTokensRemaining(); remaining >= 0 {
+			gauge := app.VisualGauge(100-remaining, 16)
+			lines = append(lines, fmt.Sprintf("Token rate limit:   %s (%d / %d tokens remaining per minute)", gauge, rl.TokensRemaining, rl.TokensLimit))
+		}
+		if rl.TokensReset != nil {
+			if left := time.Until(*rl.TokensReset).Round(time.Second); left > 0 {
+				lines = append(lines, fmt.Sprintf("Token reset:        in %s", left))
+			}
+		}
+	}
+	if rl.RequestsLimit > 0 {
+		if remaining := rl.PercentRequestsRemaining(); remaining >= 0 {
+			gauge := app.VisualGauge(100-remaining, 16)
+			lines = append(lines, fmt.Sprintf("Request rate limit: %s (%d / %d requests remaining per minute)", gauge, rl.RequestsRemaining, rl.RequestsLimit))
+		}
+		if rl.RequestsReset != nil {
+			if left := time.Until(*rl.RequestsReset).Round(time.Second); left > 0 {
+				lines = append(lines, fmt.Sprintf("Request reset:      in %s", left))
+			}
+		}
+	}
+	if rl.RetryAfter > 0 {
+		lines = append(lines, fmt.Sprintf("Rate limited:       retry after %s", rl.RetryAfter))
+	}
+	return lines
+}
+
 func (m *Model) slashQuota(args string) (tea.Model, tea.Cmd) {
 	tracker := m.app.QuotaTracker()
 	if tracker == nil {
@@ -1888,24 +1944,13 @@ func (m *Model) slashQuota(args string) (tea.Model, tea.Cmd) {
 	// Official provider numbers come first: they count usage from every
 	// client on this login, not just this session.
 	if snap != nil && len(snap.Windows) > 0 {
-		sb.WriteString(fmt.Sprintf("\nOfficial Provider Usage (fetched %s ago):\n",
-			time.Since(snap.FetchedAt).Round(time.Second)))
+		if age := app.SnapshotAgeText(snap.FetchedAt); age != "" {
+			sb.WriteString(fmt.Sprintf("\nOfficial Provider Usage (%s):\n", age))
+		} else {
+			sb.WriteString("\nOfficial Provider Usage:\n")
+		}
 		for _, w := range snap.Windows {
-			remaining := 100 - w.UsedPercent
-			if remaining < 0 {
-				remaining = 0
-			}
-			gauge := app.VisualGauge(remaining, 16)
-			line := fmt.Sprintf("  %-14s %s %.1f%% used", w.DisplayName+":", gauge, w.UsedPercent)
-			if w.ResetsAt != nil && !w.ResetsAt.IsZero() {
-				left := time.Until(*w.ResetsAt).Round(time.Minute)
-				if left > 0 {
-					line += fmt.Sprintf(" (resets in %s)", left)
-				} else {
-					line += " (resetting...)"
-				}
-			}
-			sb.WriteString(line)
+			sb.WriteString(quotaWindowLine(w))
 			sb.WriteByte('\n')
 		}
 	} else if snap != nil && snap.Unavailable != "" {
@@ -1915,33 +1960,9 @@ func (m *Model) slashQuota(args string) (tea.Model, tea.Cmd) {
 		sb.WriteString("\nOfficial Provider Usage: not fetched yet. Use /quota refresh.\n")
 	}
 
-	if stats.RateLimit != nil {
-		rl := stats.RateLimit
-		if rl.TokensLimit > 0 {
-			pct := rl.PercentTokensRemaining()
-			gauge := app.VisualGauge(pct, 16)
-			sb.WriteString(fmt.Sprintf("Token Quota:   %s (%d / %d tokens remaining)\n", gauge, rl.TokensRemaining, rl.TokensLimit))
-			if rl.TokensReset != nil {
-				remaining := time.Until(*rl.TokensReset).Round(time.Second)
-				if remaining > 0 {
-					sb.WriteString(fmt.Sprintf("Token Reset:   in %s\n", remaining))
-				}
-			}
-		}
-		if rl.RequestsLimit > 0 {
-			pct := rl.PercentRequestsRemaining()
-			gauge := app.VisualGauge(pct, 16)
-			sb.WriteString(fmt.Sprintf("Request Quota: %s (%d / %d requests remaining)\n", gauge, rl.RequestsRemaining, rl.RequestsLimit))
-			if rl.RequestsReset != nil {
-				remaining := time.Until(*rl.RequestsReset).Round(time.Second)
-				if remaining > 0 {
-					sb.WriteString(fmt.Sprintf("Request Reset: in %s\n", remaining))
-				}
-			}
-		}
-		if rl.RetryAfter > 0 {
-			sb.WriteString(fmt.Sprintf("Rate Limited:  Retry-After %s\n", rl.RetryAfter))
-		}
+	for _, line := range rateLimitLines(stats.RateLimit) {
+		sb.WriteString(line)
+		sb.WriteByte('\n')
 	}
 
 	sb.WriteString(fmt.Sprintf("\n5-Hour Window Activity (%s):\n", providerID))
@@ -1963,7 +1984,7 @@ func (m *Model) slashQuota(args string) (tea.Model, tea.Cmd) {
 		}
 		sb.WriteString(fmt.Sprintf("  %s: %d turns, %d tokens", s.Provider, s.Requests, s.TotalTokens))
 		if s.RateLimit != nil && s.RateLimit.TokensLimit > 0 {
-			sb.WriteString(fmt.Sprintf(" | %s remaining", app.VisualGauge(s.RateLimit.PercentTokensRemaining(), 10)))
+			sb.WriteString(fmt.Sprintf(" | %s used", app.VisualGauge(100-s.RateLimit.PercentTokensRemaining(), 10)))
 		}
 		if s.Requests > 0 && s.ResetIn > 0 {
 			sb.WriteString(fmt.Sprintf(" (rolls off in %s)", s.ResetIn.Round(time.Second)))

@@ -31,7 +31,7 @@ func TestRunTurnWithoutAModelReportsTheSentinel(t *testing.T) {
 func TestContextUsageIsReported(t *testing.T) {
 	application := newTestApp(t)
 	usage := application.ContextUsage()
-	if !strings.Contains(usage, "tokens") {
+	if !strings.Contains(usage, "ctx:") {
 		t.Errorf("usage = %q, want a token count", usage)
 	}
 	// The budget follows the model, so a local model must report a small one.

@@ -2087,7 +2087,11 @@ func (m *Model) viewStatus() string {
 	// are built first and always kept on screen. A narrow terminal drops the
 	// session id and the approval label instead: both are repeated in the header
 	// and in /status, while the token count and the spend have nowhere else to go.
-	vitals := []string{m.styles.Dim.Render(fmt.Sprintf("tokens %d", usage.TotalTokens))}
+	// The cumulative session total is labelled billed: providers charge the
+	// whole history again on every step, so the number grows far past the
+	// window and must not sit unlabelled next to the context figure, where
+	// it reads as context occupancy.
+	vitals := []string{m.styles.Dim.Render(fmt.Sprintf("billed: %d", usage.TotalTokens))}
 	costStyle := m.styles.Dim
 	if limit := m.appConfig().CostBudgetUSD; limit > 0 && spend >= limit {
 		// Over budget is the one spend figure that should shout.
@@ -2115,7 +2119,9 @@ func (m *Model) viewStatus() string {
 		if isOAuth || tracker.Snapshot(provName) != nil {
 			stats := tracker.Stats(provName, app.RollingWindow)
 			if stats.Requests > 0 {
-				vitals = append(vitals, m.styles.Dim.Render(fmt.Sprintf("5h:%dr/%dk", stats.Requests, (stats.TotalTokens+500)/1000)))
+				// These counts are the local rolling window, not the
+				// provider's own numbers, and are labelled as such.
+				vitals = append(vitals, m.styles.Dim.Render(fmt.Sprintf("5h:%dr/%dk (%s)", stats.Requests, (stats.TotalTokens+500)/1000, app.LocalEstimateLabel)))
 			}
 		}
 	}

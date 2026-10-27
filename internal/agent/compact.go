@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -268,18 +269,60 @@ func compactForModel(messages []provider.Message, budget int) []provider.Message
 	return Compact(messages, budget)
 }
 
-// HistoryHint returns a short human summary of context usage for the status
-// bar.
-func HistoryHint(messages []provider.Message, budget int) string {
-	if budget <= 0 {
-		budget = defaultContextBudget
+// EstimateToolSchemas estimates what a set of tool definitions costs in a
+// request. Names, descriptions and JSON schemas are all sent as input and
+// billed as such, so the context gauge has to count them alongside the
+// messages; leaving them out understates every request by the size of the
+// tool catalogue.
+func EstimateToolSchemas(defs []provider.ToolDef) int {
+	total := 0
+	for _, def := range defs {
+		total += EstimateTokens(def.Name) + EstimateTokens(def.Description)
+		if len(def.Schema) > 0 {
+			if raw, err := json.Marshal(def.Schema); err == nil {
+				total += EstimateTokens(string(raw))
+			}
+		}
 	}
-	used := EstimateMessages(messages)
-	percent := used * 100 / budget
-	if percent > 100 {
-		percent = 100
+	return total
+}
+
+// ContextHint renders the two context figures for the status bar and
+// /status, kept apart because they answer different questions.
+//
+// The ctx figure is the estimated size of the next request (the stored
+// messages plus overheadTokens, the caller's estimate of the system prompt
+// and the tool schemas) against the model's real window. The compact figure
+// is the stored history alone against HistoryBudget: how close the
+// conversation is to being trimmed. The two used to be one number, the
+// history divided by the compaction budget, which reaches 100% when the
+// window is only half full on a large-window model (and reads far fuller
+// than the window on a small one), so it is now labelled for what it is.
+//
+// The model name rides along so a denominator change on a model switch is
+// visible as a switch, not as sudden spend.
+func ContextHint(messages []provider.Message, overheadTokens int, window int, modelName string) string {
+	if window <= 0 {
+		window = defaultContextBudget
 	}
-	return fmt.Sprintf("%s/%s tokens (%d%%)", shortNumber(used), shortNumber(budget), percent)
+	if overheadTokens < 0 {
+		overheadTokens = 0
+	}
+	history := EstimateMessages(messages)
+	ctxPercent := (history + overheadTokens) * 100 / window
+	if ctxPercent > 100 {
+		ctxPercent = 100
+	}
+	compactPercent := history * 100 / HistoryBudget(window)
+	if compactPercent > 100 {
+		compactPercent = 100
+	}
+	hint := fmt.Sprintf("ctx: %s/%s (%d%% of window) · compact: %d%%",
+		shortNumber(history+overheadTokens), shortNumber(window), ctxPercent, compactPercent)
+	if modelName != "" {
+		hint += " · " + modelName
+	}
+	return hint
 }
 
 func shortNumber(value int) string {

@@ -1064,8 +1064,8 @@ func TestViewStatusShowsSpendFromTheStart(t *testing.T) {
 	if !strings.Contains(before, "$0.0000") {
 		t.Errorf("the spend should be visible before the first turn:\n%s", before)
 	}
-	if !strings.Contains(before, "tokens 0") {
-		t.Errorf("the token count should be visible before the first turn:\n%s", before)
+	if !strings.Contains(before, "billed: 0") {
+		t.Errorf("the billed count should be visible before the first turn:\n%s", before)
 	}
 
 	var out bytes.Buffer
@@ -1074,8 +1074,8 @@ func TestViewStatusShowsSpendFromTheStart(t *testing.T) {
 	}
 
 	after := display(model)
-	if !strings.Contains(after, "tokens 150000") {
-		t.Errorf("the bar should show the token total:\n%s", after)
+	if !strings.Contains(after, "billed: 150000") {
+		t.Errorf("the bar should show the billed total:\n%s", after)
 	}
 	if !strings.Contains(after, "$") {
 		t.Errorf("the bar should show a spend figure after a priced turn:\n%s", after)
@@ -1087,6 +1087,11 @@ func TestViewStatusShowsSpendFromTheStart(t *testing.T) {
 // others being present.
 func TestViewStatusReportsEachFactIndependently(t *testing.T) {
 	model := chatModel(t)
+	// The honest context figure is longer than the hint it replaced, so at
+	// the fixture's 120 columns the status line's drop policy sheds the
+	// last identity items. Widen: this test asserts each fact is reported,
+	// not the drop policy (which has its own tests).
+	resize(model, 160, 40)
 	baseline := display(model)
 	for _, want := range []string{"session ", "turns ", "approval all"} {
 		if !strings.Contains(baseline, want) {
@@ -1095,8 +1100,8 @@ func TestViewStatusReportsEachFactIndependently(t *testing.T) {
 	}
 
 	model.app.AddUsage(provider.Usage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150})
-	if got := display(model); !strings.Contains(got, "tokens 150") {
-		t.Errorf("the bar should show the token total:\n%s", got)
+	if got := display(model); !strings.Contains(got, "billed: 150") {
+		t.Errorf("the bar should show the billed total:\n%s", got)
 	}
 
 	// A plan only appears once there is one.
