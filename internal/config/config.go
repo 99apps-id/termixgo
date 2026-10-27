@@ -239,8 +239,24 @@ type Config struct {
 	// approval policy because they run in processes this program did not write.
 	MCPServers []MCPServer `json:"mcpServers,omitempty"`
 
+	// RecentProjects is the list of folders the operator worked in lately.
 	RecentProjects []string `json:"recentProjects,omitempty"`
-	Telegram       Telegram `json:"telegram,omitempty"`
+
+	// Agents is the named persona registry. Every install has a "default"
+	// entry after normalisation, which is the operator's own terminal agent.
+	Agents map[string]Agent `json:"agents,omitempty"`
+	// ActiveAgent is the agent the terminal session talks to. It is always
+	// one of Agents after normalisation.
+	ActiveAgent string `json:"activeAgent,omitempty"`
+
+	// Channels is every messaging account: Telegram bots and WhatsApp
+	// numbers, each with its own access policy and bound agent.
+	Channels Channels `json:"channels,omitempty"`
+
+	// Telegram is the pre-registry pairing block. It is read once, folded
+	// into Channels.Telegram.Accounts["default"], and cleared so the two
+	// shapes cannot disagree.
+	Telegram Telegram `json:"telegram,omitempty"`
 
 	// Heartbeat is the periodic self-check. Its jobs live in a separate file,
 	// but whether it runs at all is configuration.
@@ -261,6 +277,8 @@ func Default() Config {
 		Language:      "en",
 		MaxSteps:      300,
 		BaseURLs:      map[string]string{},
+		Agents:        map[string]Agent{FinalAgentName: {}},
+		ActiveAgent:   FinalAgentName,
 	}
 }
 
@@ -377,6 +395,8 @@ func (c *Config) normalise() {
 	}
 	c.MCPServers = configured
 	c.Hooks = normaliseHooks(c.Hooks)
+	c.normaliseAgents()
+	c.normaliseChannels()
 }
 
 // normaliseHooks drops a hook that could never run correctly, so a typo in a

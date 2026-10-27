@@ -15,10 +15,10 @@ type fakeRunner struct {
 	err     error
 }
 
-func (f *fakeRunner) RunScheduled(_ context.Context, prompt string, _ func(string)) (string, error) {
+func (f *fakeRunner) RunScheduled(_ context.Context, job Job) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.prompts = append(f.prompts, prompt)
+	f.prompts = append(f.prompts, job.Prompt)
 	return f.answer, f.err
 }
 
@@ -39,7 +39,7 @@ type fakeDeliverer struct {
 	texts []string
 }
 
-func (d *fakeDeliverer) Deliver(_ context.Context, text string) error {
+func (d *fakeDeliverer) Deliver(_ context.Context, _ Job, text string) error {
 	d.mu.Lock()
 	d.texts = append(d.texts, text)
 	d.mu.Unlock()

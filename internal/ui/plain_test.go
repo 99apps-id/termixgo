@@ -508,7 +508,8 @@ func TestSetupProgressCounts(t *testing.T) {
 		setupTelegramAsk:   3,
 		setupTelegramToken: 3,
 		setupTelegramPair:  3,
-		setupDone:          4,
+		setupWhatsAppAsk:   4,
+		setupDone:          5,
 	}
 	for step, want := range cases {
 		if got := setupProgress(step); got != want {

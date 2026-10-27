@@ -31,6 +31,13 @@ type Session struct {
 	title     string
 	workspace string
 	model     string
+	// agent names the persona this conversation belongs to. Empty on sessions
+	// written before the agent registry existed; they read as the default.
+	agent string
+	// dir overrides the sessions directory this file is saved to and loaded
+	// from. Empty means the shared config.SessionsDir(), which is where the
+	// default agent's conversations live.
+	dir       string
 	createdAt time.Time
 	updatedAt time.Time
 
@@ -55,6 +62,7 @@ type Session struct {
 type sessionJSON struct {
 	ID        string             `json:"id"`
 	Title     string             `json:"title"`
+	Agent     string             `json:"agent,omitempty"`
 	Workspace string             `json:"workspace"`
 	Model     string             `json:"model"`
 	CreatedAt time.Time          `json:"createdAt"`
@@ -69,11 +77,33 @@ type sessionJSON struct {
 
 // NewSession starts an empty conversation with a random id.
 func NewSession(workspace, model string) *Session {
+	return newSession(workspace, model, "")
+}
+
+// NewSessionFor starts an empty conversation owned by one agent.
+func NewSessionFor(agentName, workspace, model string) *Session {
+	return newSession(workspace, model, agentName)
+}
+
+// NewSessionWithID starts an empty conversation with a caller-chosen id, which
+// is how a channel chat gets one stable session. The id names the session
+// file, so it passes the same guard a load does.
+func NewSessionWithID(agentName, id, workspace, model string) (*Session, error) {
+	if err := checkSessionID(id); err != nil {
+		return nil, err
+	}
+	session := newSession(workspace, model, agentName)
+	session.id = id
+	return session, nil
+}
+
+func newSession(workspace, model, agentName string) *Session {
 	now := time.Now()
 	return &Session{
 		id:        newID(),
 		workspace: workspace,
 		model:     model,
+		agent:     agentName,
 		createdAt: now,
 		updatedAt: now,
 	}
@@ -110,6 +140,63 @@ func (s *Session) Workspace() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.workspace
+}
+
+// ToolCallCountSince counts the assistant tool calls added after one message
+// index. It is how a caller proves a turn actually consulted a tool instead of
+// narrating from memory.
+func (s *Session) ToolCallCountSince(mark int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if mark < 0 {
+		mark = 0
+	}
+	if mark > len(s.messages) {
+		mark = len(s.messages)
+	}
+	count := 0
+	for _, message := range s.messages[mark:] {
+		if message.Role == provider.RoleAssistant {
+			count += len(message.ToolCalls)
+		}
+	}
+	return count
+}
+
+// Agent is the persona that owns this conversation. A session written before
+// the agent registry existed reports the empty string and reads as default.
+func (s *Session) Agent() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.agent
+}
+
+// SetAgent records the owning persona.
+func (s *Session) SetAgent(name string) {
+	s.mu.Lock()
+	s.agent = strings.TrimSpace(name)
+	s.mu.Unlock()
+}
+
+// StoreDir is the sessions directory this file lives in, or "" for the shared
+// directory the default agent uses.
+func (s *Session) StoreDir() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dir
+}
+
+// SetStoreDir pins the sessions directory this file saves to. The app sets it
+// from the owning agent's home before the first save.
+func (s *Session) SetStoreDir(dir string) {
+	s.mu.Lock()
+	s.dir = strings.TrimSpace(dir)
+	s.mu.Unlock()
+}
+
+// LedgerPath is where this session's usage records live.
+func (s *Session) LedgerPath() (string, error) {
+	return SessionLedgerPathIn(s.StoreDir(), s.ID())
 }
 
 // Title is the short summary shown in a listing.
@@ -520,6 +607,7 @@ func (s *Session) snapshot() sessionJSON {
 	return sessionJSON{
 		ID:        s.id,
 		Title:     s.title,
+		Agent:     s.agent,
 		Workspace: s.workspace,
 		Model:     s.model,
 		CreatedAt: s.createdAt,
@@ -533,9 +621,11 @@ func (s *Session) snapshot() sessionJSON {
 	}
 }
 
-// Save writes the session to the state directory.
+// Save writes the session to its sessions directory: the one pinned on the
+// session when it belongs to a named agent, and the shared directory
+// otherwise.
 func (s *Session) Save() error {
-	dir, err := config.SessionsDir()
+	dir, err := sessionsDir(s.StoreDir())
 	if err != nil {
 		return err
 	}
@@ -572,21 +662,27 @@ func (s *Session) Save() error {
 	return secrets.RestrictFile(path)
 }
 
-// LoadSession reads one session by id.
+// LoadSession reads one session by id from the shared sessions directory.
+func LoadSession(id string) (*Session, error) {
+	return LoadSessionIn("", id)
+}
+
+// LoadSessionIn reads one session by id from one sessions directory. An empty
+// dir means the shared directory.
 //
 // The id is confined to the sessions directory, the same guard DeleteSession
 // applies. Joining an unchecked id let "../name" read a file one level above the
 // directory, and the id is operator input from /sessions, which is exactly where
 // a separator has to be refused rather than joined.
-func LoadSession(id string) (*Session, error) {
+func LoadSessionIn(dir, id string) (*Session, error) {
 	if err := checkSessionID(id); err != nil {
 		return nil, err
 	}
-	dir, err := config.SessionsDir()
+	resolved, err := sessionsDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(filepath.Join(dir, id+".json"))
+	data, err := os.ReadFile(filepath.Join(resolved, id+".json"))
 	if err != nil {
 		return nil, fmt.Errorf("read session %s: %w", id, err)
 	}
@@ -596,6 +692,7 @@ func LoadSession(id string) (*Session, error) {
 	}
 	session := fromJSON(state)
 	session.adoptID(id)
+	session.SetStoreDir(dir)
 	repairImpossibleUsage(session)
 	return session, nil
 }
@@ -666,6 +763,7 @@ func fromJSON(state sessionJSON) *Session {
 	return &Session{
 		id:        state.ID,
 		title:     state.Title,
+		agent:     state.Agent,
 		workspace: state.Workspace,
 		model:     state.Model,
 		createdAt: created,
@@ -681,20 +779,41 @@ func fromJSON(state sessionJSON) *Session {
 
 // SessionSummary is the listing shown by /sessions.
 type SessionSummary struct {
-	ID        string
-	Title     string
+	ID    string
+	Title string
+	// Agent is the owning persona; empty reads as the default agent.
+	Agent     string
 	Model     string
 	UpdatedAt time.Time
 	Turns     int
 }
 
+// sessionsDir resolves the directory a session file lives in, creating it
+// when missing. An empty override means the shared sessions directory, which
+// is where the default agent's conversations live.
+func sessionsDir(override string) (string, error) {
+	trimmed := strings.TrimSpace(override)
+	if trimmed == "" {
+		return config.SessionsDir()
+	}
+	if err := os.MkdirAll(trimmed, 0o700); err != nil {
+		return "", fmt.Errorf("create sessions directory: %w", err)
+	}
+	return trimmed, nil
+}
+
 // ListSessions returns saved sessions, newest first.
 func ListSessions() ([]SessionSummary, error) {
-	dir, err := config.SessionsDir()
+	return ListSessionsIn("")
+}
+
+// ListSessionsIn lists the saved sessions of one sessions directory.
+func ListSessionsIn(dir string) ([]SessionSummary, error) {
+	sessionsPath, err := sessionsDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(sessionsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -703,7 +822,7 @@ func ListSessions() ([]SessionSummary, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		data, err := os.ReadFile(filepath.Join(sessionsPath, entry.Name()))
 		if err != nil {
 			continue
 		}
@@ -715,6 +834,7 @@ func ListSessions() ([]SessionSummary, error) {
 		summaries = append(summaries, SessionSummary{
 			ID:        session.ID(),
 			Title:     session.Title(),
+			Agent:     session.Agent(),
 			Model:     session.Model(),
 			UpdatedAt: session.UpdatedAt(),
 			Turns:     session.Turns(),
@@ -722,4 +842,28 @@ func ListSessions() ([]SessionSummary, error) {
 	}
 	sort.Slice(summaries, func(i, j int) bool { return summaries[i].UpdatedAt.After(summaries[j].UpdatedAt) })
 	return summaries, nil
+}
+
+// LatestSessionFor returns the newest session owned by one agent in a sessions
+// directory. A session stored before the agent registry existed has no agent
+// and reads as the default agent's.
+func LatestSessionFor(agentName, dir string) (SessionSummary, bool, error) {
+	summaries, err := ListSessionsIn(dir)
+	if err != nil {
+		return SessionSummary{}, false, err
+	}
+	trimmed := strings.TrimSpace(agentName)
+	if trimmed == "" {
+		trimmed = "default"
+	}
+	for _, summary := range summaries {
+		owner := strings.TrimSpace(summary.Agent)
+		if owner == "" {
+			owner = "default"
+		}
+		if owner == trimmed {
+			return summary, true, nil
+		}
+	}
+	return SessionSummary{}, false, nil
 }

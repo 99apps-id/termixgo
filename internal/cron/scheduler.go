@@ -29,12 +29,12 @@ const DefaultInterval = 30 * time.Second
 // Runner is the agent side of a scheduled job. It runs one isolated turn and
 // returns the final answer text.
 type Runner interface {
-	RunScheduled(ctx context.Context, prompt string, progress func(string)) (string, error)
+	RunScheduled(ctx context.Context, job Job) (string, error)
 }
 
 // Deliverer sends a job's result to the operator, normally the paired chat.
 type Deliverer interface {
-	Deliver(ctx context.Context, text string) error
+	Deliver(ctx context.Context, job Job, text string) error
 }
 
 // Heartbeat is the periodic self-check. When it has nothing to say the turn
@@ -112,7 +112,7 @@ func (s *Scheduler) tick(ctx context.Context) {
 			continue
 		}
 		s.wg.Add(1)
-		go s.run(ctx, advanced.ID, advanced.Prompt)
+		go s.run(ctx, advanced)
 	}
 	s.tickHeartbeat(ctx, now)
 }
@@ -134,35 +134,40 @@ func (s *Scheduler) tickHeartbeat(ctx context.Context, now time.Time) {
 		return
 	}
 	s.wg.Add(1)
-	go s.run(ctx, "heartbeat", heartbeat.Prompt)
+	go s.run(ctx, Job{ID: "heartbeat", Prompt: heartbeat.Prompt})
 }
 
 // run executes one job and delivers its result unless it asked to stay silent.
-func (s *Scheduler) run(ctx context.Context, id, prompt string) {
+func (s *Scheduler) run(ctx context.Context, job Job) {
 	defer s.wg.Done()
-	defer s.release(id)
-	output, err := s.Runner.RunScheduled(ctx, prompt, nil)
+	defer s.release(job.ID)
+	output, err := s.Runner.RunScheduled(ctx, job)
 	if errors.Is(err, ErrBusy) {
 		// The operator or another job holds the single-run slot. Requeue so the
 		// occurrence is not lost; the next tick tries again.
-		if requeueErr := s.Store.Requeue(id, s.now()); requeueErr != nil {
-			s.logf("job %s could not be requeued: %v", id, requeueErr)
+		if requeueErr := s.Store.Requeue(job.ID, s.now()); requeueErr != nil {
+			s.logf("job %s could not be requeued: %v", job.ID, requeueErr)
 		} else {
-			s.logf("job %s deferred: the assistant is busy", id)
+			s.logf("job %s deferred: the assistant is busy", job.ID)
 		}
 		return
 	}
 	if err != nil {
-		_ = s.Store.MarkError(id, err)
-		s.logf("job %s failed: %v", id, err)
+		_ = s.Store.MarkError(job.ID, err)
+		s.logf("job %s failed: %v", job.ID, err)
 		return
 	}
-	_ = s.Store.MarkError(id, nil)
+	_ = s.Store.MarkError(job.ID, nil)
 	if suppressed(output) || s.Deliver == nil {
 		return
 	}
-	if err := s.Deliver.Deliver(ctx, strings.TrimSpace(output)); err != nil {
-		s.logf("job %s could not be delivered: %v", id, err)
+	if job.DeliverTo != "" && !job.Announce {
+		// A job with an explicit target and announce off runs for its side
+		// effects only.
+		return
+	}
+	if err := s.Deliver.Deliver(ctx, job, strings.TrimSpace(output)); err != nil {
+		s.logf("job %s could not be delivered: %v", job.ID, err)
 	}
 }
 

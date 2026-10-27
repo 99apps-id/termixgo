@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/channel"
 )
 
 // ------------------------------------------------------------------ API client
@@ -874,14 +876,14 @@ type recordingAgent struct {
 	calls  int
 }
 
-func (a *recordingAgent) RunPrompt(context.Context, string, func(string)) (string, error) {
+func (a *recordingAgent) RunPrompt(context.Context, channel.Request, string, func(string)) (string, error) {
 	a.mu.Lock()
 	a.calls++
 	a.mu.Unlock()
 	return "answer", nil
 }
 
-func (a *recordingAgent) RunPromptWithImage(context.Context, string, string, string, func(string)) (string, error) {
+func (a *recordingAgent) RunPromptWithImage(context.Context, channel.Request, string, string, string, func(string)) (string, error) {
 	a.mu.Lock()
 	a.calls++
 	a.mu.Unlock()
@@ -889,7 +891,7 @@ func (a *recordingAgent) RunPromptWithImage(context.Context, string, string, str
 }
 
 func (a *recordingAgent) Stop()                           {}
-func (a *recordingAgent) NewSession()                     {}
+func (a *recordingAgent) NewSession(channel.Request)      {}
 func (a *recordingAgent) Model() string                   { return "test-model" }
 func (a *recordingAgent) SetModel(string) (string, error) { return "test-model", nil }
 
@@ -913,16 +915,16 @@ type blockingRecordingAgent struct {
 	once    sync.Once
 }
 
-func (a *blockingRecordingAgent) RunPrompt(ctx context.Context, prompt string, progress func(string)) (string, error) {
+func (a *blockingRecordingAgent) RunPrompt(ctx context.Context, request channel.Request, prompt string, progress func(string)) (string, error) {
 	return "", fmt.Errorf("unused")
 }
 
-func (a *blockingRecordingAgent) RunPromptWithImage(context.Context, string, string, string, func(string)) (string, error) {
+func (a *blockingRecordingAgent) RunPromptWithImage(context.Context, channel.Request, string, string, string, func(string)) (string, error) {
 	return "", fmt.Errorf("unused")
 }
 
 func (a *blockingRecordingAgent) Stop()                           {}
-func (a *blockingRecordingAgent) NewSession()                     {}
+func (a *blockingRecordingAgent) NewSession(channel.Request)      {}
 func (a *blockingRecordingAgent) Model() string                   { return "blocking" }
 func (a *blockingRecordingAgent) SetModel(string) (string, error) { return "blocking", nil }
 

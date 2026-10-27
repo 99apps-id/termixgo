@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/99apps-id/termixgo/internal/config"
 )
 
 // titleCap keeps a renamed session readable in the picker list.
@@ -31,10 +29,15 @@ func (s *Session) SetTitle(title string) {
 
 // RenameSession changes a saved session's title.
 func RenameSession(id, title string) (SessionSummary, error) {
+	return RenameSessionIn("", id, title)
+}
+
+// RenameSessionIn renames one session in one sessions directory.
+func RenameSessionIn(dir, id, title string) (SessionSummary, error) {
 	if strings.TrimSpace(title) == "" {
 		return SessionSummary{}, fmt.Errorf("title is required")
 	}
-	session, err := LoadSession(id)
+	session, err := LoadSessionIn(dir, id)
 	if err != nil {
 		return SessionSummary{}, err
 	}
@@ -42,21 +45,26 @@ func RenameSession(id, title string) (SessionSummary, error) {
 	if err := session.Save(); err != nil {
 		return SessionSummary{}, err
 	}
-	return SessionSummary{ID: session.ID(), Title: session.Title(), Model: session.Model(), UpdatedAt: session.UpdatedAt(), Turns: session.Turns()}, nil
+	return SessionSummary{ID: session.ID(), Title: session.Title(), Agent: session.Agent(), Model: session.Model(), UpdatedAt: session.UpdatedAt(), Turns: session.Turns()}, nil
 }
 
 // DeleteSession removes one saved session file. The id is confined to the
 // sessions directory: separators are refused rather than joined, so a crafted
 // id cannot reach outside it.
 func DeleteSession(id string) error {
+	return DeleteSessionIn("", id)
+}
+
+// DeleteSessionIn removes one session from one sessions directory.
+func DeleteSessionIn(dir, id string) error {
 	if err := checkSessionID(id); err != nil {
 		return err
 	}
-	dir, err := config.SessionsDir()
+	resolved, err := sessionsDir(dir)
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, id+".json")
+	path := filepath.Join(resolved, id+".json")
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("session %s not found", shortSessionID(id))
 	}
@@ -66,7 +74,7 @@ func DeleteSession(id string) error {
 	// The usage ledger belongs to the session; a deleted conversation should
 	// not leave its accounting behind. Best effort: a missing ledger is the
 	// normal case for a session written before records existed.
-	if ledgerPath, err := SessionLedgerPath(id); err == nil {
+	if ledgerPath, err := SessionLedgerPathIn(dir, id); err == nil {
 		_ = os.Remove(ledgerPath)
 	}
 	return nil
@@ -74,7 +82,12 @@ func DeleteSession(id string) error {
 
 // SearchSessions filters the saved sessions by title or id, newest first.
 func SearchSessions(query string) ([]SessionSummary, error) {
-	summaries, err := ListSessions()
+	return SearchSessionsIn("", query)
+}
+
+// SearchSessionsIn filters one sessions directory by title or id, newest first.
+func SearchSessionsIn(dir, query string) ([]SessionSummary, error) {
+	summaries, err := ListSessionsIn(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +127,12 @@ func (s *Session) Export(format SessionExportFormat) (string, error) {
 
 // ExportSession renders one saved session in the requested format.
 func ExportSession(id string, format SessionExportFormat) (string, error) {
-	session, err := LoadSession(id)
+	return ExportSessionIn("", id, format)
+}
+
+// ExportSessionIn renders one saved session from one sessions directory.
+func ExportSessionIn(dir, id string, format SessionExportFormat) (string, error) {
+	session, err := LoadSessionIn(dir, id)
 	if err != nil {
 		return "", err
 	}

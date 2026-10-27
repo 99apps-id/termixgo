@@ -13,22 +13,26 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/99apps-id/termixgo/internal/channel"
+	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/version"
 )
 
 // Agent is the bridge the bot drives. The app implements it over the same
-// runner and session the terminal uses.
+// runner and session the terminal uses. Every turn carries the channel Request
+// so one app can serve many accounts: the request names the account, the chat
+// and the sender the turn belongs to.
 type Agent interface {
 	// RunPrompt runs one turn, calling progress with short status lines.
-	RunPrompt(ctx context.Context, prompt string, progress func(string)) (string, error)
+	RunPrompt(ctx context.Context, request channel.Request, prompt string, progress func(string)) (string, error)
 	// RunPromptWithImage runs one turn with an image attached for a vision model.
 	// mediaType is a MIME type and data is base64.
-	RunPromptWithImage(ctx context.Context, prompt, mediaType, data string, progress func(string)) (string, error)
+	RunPromptWithImage(ctx context.Context, request channel.Request, prompt, mediaType, data string, progress func(string)) (string, error)
 	// Stop cancels the running turn.
 	Stop()
-	// NewSession starts a fresh conversation.
-	NewSession()
+	// NewSession starts a fresh conversation for the request's chat.
+	NewSession(request channel.Request)
 	// Model returns the current model id.
 	Model() string
 	// SetModel switches model by id or search text and returns the new id.
@@ -54,7 +58,7 @@ type WorkspaceProvider interface {
 
 // VoicePromptRunner can run a turn initiated from a voice note, with fallback to a voice model.
 type VoicePromptRunner interface {
-	RunVoicePrompt(ctx context.Context, prompt string, progress func(string)) (string, error)
+	RunVoicePrompt(ctx context.Context, request channel.Request, prompt string, progress func(string)) (string, error)
 }
 
 // ProviderLister can return the providers currently active or usable.
@@ -93,6 +97,22 @@ type Bot struct {
 	// Log receives diagnostic lines; nil discards them.
 	Log func(string)
 
+	// identityMu guards the bot identity and the account policy, which are
+	// written once before Run and read on every handler goroutine.
+	identityMu sync.RWMutex
+	// accountName labels the account this bot serves.
+	accountName string
+	// policy is the access policy of this account: who may talk to it.
+	policy config.ChannelAccount
+	// pairing collects unknown DM senders when the policy is "pairing".
+	pairing *channel.PairingStore
+	// selfID and username identify the bot itself, which is what a group
+	// mention is matched against.
+	selfID   int64
+	username string
+	// limiter bounds how fast one guest sender may post.
+	limiter *channel.RateLimiter
+
 	offset int64
 	// cursorPath, when set, is where the last confirmed update id is kept so a
 	// restart resumes instead of replaying the prompts Telegram still holds.
@@ -123,7 +143,48 @@ type Bot struct {
 
 // New builds a bot for a token and agent.
 func New(token string, agent Agent) *Bot {
-	return &Bot{client: NewClient(token), agent: agent}
+	return &Bot{
+		client: NewClient(token),
+		agent:  agent,
+		// A bot with no policy would refuse every message, so the default is
+		// the safe one: the operator's chat, allowlisted DMs, mention-only
+		// groups.
+		policy: config.ChannelAccount{Enabled: true, DMPolicy: config.DMPolicyAllowlist, GroupPolicy: config.GroupPolicyMention},
+	}
+}
+
+// SetAccount installs the account identity and access policy. It is called
+// before Run, so the handlers that read them see one value for the bot's life.
+func (b *Bot) SetAccount(name string, policy config.ChannelAccount, pairing *channel.PairingStore) {
+	b.identityMu.Lock()
+	b.accountName = strings.TrimSpace(name)
+	b.policy = policy
+	b.pairing = pairing
+	b.limiter = channel.ForAccount(policy)
+	b.identityMu.Unlock()
+}
+
+// Account returns the account name this bot serves.
+func (b *Bot) Account() string {
+	b.identityMu.RLock()
+	defer b.identityMu.RUnlock()
+	return b.accountName
+}
+
+// Policy returns the access policy of this account.
+func (b *Bot) Policy() config.ChannelAccount {
+	b.identityMu.RLock()
+	defer b.identityMu.RUnlock()
+	return b.policy
+}
+
+// setIdentity records who the bot is, which is what a mention is matched
+// against.
+func (b *Bot) setIdentity(self User) {
+	b.identityMu.Lock()
+	b.selfID = self.ID
+	b.username = strings.TrimSpace(strings.TrimPrefix(self.Username, "@"))
+	b.identityMu.Unlock()
 }
 
 // Paired reports whether the bot is bound to a chat.
@@ -226,9 +287,14 @@ func (b *Bot) saveOffset(offset int64) {
 	_ = os.Rename(tmp, b.cursorPath)
 }
 
-// Verify checks the token and returns the bot identity.
+// Verify checks the token and returns the bot identity, which is also kept so
+// a group mention can be recognised.
 func (b *Bot) Verify(ctx context.Context) (User, error) {
-	return b.client.GetMe(ctx)
+	user, err := b.client.GetMe(ctx)
+	if err == nil {
+		b.setIdentity(user)
+	}
+	return user, err
 }
 
 // Run polls until the context is cancelled.
@@ -374,7 +440,12 @@ func (b *Bot) handleCallback(ctx context.Context, query *CallbackQuery) {
 	if query.Message != nil {
 		chat = query.Message.Chat
 	}
-	if !b.isOwner(chat, query.From) {
+	pairedChat, owner := b.Pairing()
+	if pairedChat == 0 || owner == 0 || query.From == nil || query.From.ID != owner {
+		_ = b.client.AnswerCallbackQuery(ctx, query.ID, "Not allowed.")
+		return
+	}
+	if chat.ID != 0 && chat.ID != pairedChat {
 		_ = b.client.AnswerCallbackQuery(ctx, query.ID, "Not allowed.")
 		return
 	}
@@ -511,7 +582,35 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		return
 	}
 
-	if !b.isOwner(message.Chat, message.From) {
+	request := b.requestFrom(message)
+	policy := b.Policy()
+	decision := channel.Decide(policy, request)
+	if b.isOperator(request) {
+		// The paired owner is the account's implicit admin.
+		decision = channel.Decision{Allow: true, Admin: true, Reason: "operator"}
+	}
+	if !decision.Allow {
+		if b.mayPair(policy, request) {
+			b.reply(ctx, chatID, b.pairingPrompt(request))
+			return
+		}
+		// A refused message is ignored rather than answered: a stranger learns
+		// nothing by probing, and a group message without a mention stays out
+		// of everyone's way.
+		b.logf("ignored a message (%s)", decision.Reason)
+		return
+	}
+
+	request.Admin = decision.Admin
+	if !decision.Admin {
+		b.identityMu.RLock()
+		limiter := b.limiter
+		b.identityMu.RUnlock()
+		if limiter != nil && !limiter.Allow(request.SenderID, time.Now()) {
+			b.reply(ctx, chatID, "Terlalu banyak pesan. Coba lagi sebentar ya.")
+			return
+		}
+		b.handleGuestMessage(ctx, request, message, text, isCommand)
 		return
 	}
 
@@ -519,13 +618,13 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 	// asks the model to describe it. It runs before the command switch because
 	// an image message carries no text.
 	if len(message.Photo) > 0 {
-		b.runPhoto(ctx, chatID, message)
+		b.runPhoto(ctx, chatID, request, message)
 		return
 	}
 
 	// Voice notes and audio tracks are transcribed and run as prompts.
 	if message.Voice != nil {
-		b.runVoice(ctx, chatID, message.Voice.FileID, "voice.ogg", message.Caption)
+		b.runVoice(ctx, chatID, request, message.Voice.FileID, "voice.ogg", message.Caption)
 		return
 	}
 	if message.Audio != nil {
@@ -533,13 +632,13 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		if name == "" {
 			name = "audio.mp3"
 		}
-		b.runVoice(ctx, chatID, message.Audio.FileID, name, message.Caption)
+		b.runVoice(ctx, chatID, request, message.Audio.FileID, name, message.Caption)
 		return
 	}
 
 	// Documents (files, patches, logs, images sent as documents) are saved or inspected.
 	if message.Document != nil {
-		b.runDocument(ctx, chatID, message)
+		b.runDocument(ctx, chatID, request, message)
 		return
 	}
 
@@ -550,7 +649,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 
 	if !isCommand {
 		// Plain text is a prompt, which is the natural way to use the bot.
-		b.runPrompt(ctx, chatID, text)
+		b.runPrompt(ctx, chatID, request, text)
 		return
 	}
 
@@ -569,7 +668,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		}
 		b.reply(ctx, chatID, "Unpaired.")
 	case "new":
-		b.agent.NewSession()
+		b.agent.NewSession(request)
 		b.reply(ctx, chatID, "Started a new session.")
 	case "stop":
 		b.agent.Stop()
@@ -617,22 +716,22 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 			b.reply(ctx, chatID, "Usage: /run <prompt>")
 			return
 		}
-		b.runPrompt(ctx, chatID, prompt)
+		b.runPrompt(ctx, chatID, request, prompt)
 	default:
 		b.reply(ctx, chatID, "Unknown command. Send /help.")
 	}
 }
 
 // runPrompt runs one text turn and mirrors progress into a single edited card.
-func (b *Bot) runPrompt(ctx context.Context, chatID int64, prompt string) {
+func (b *Bot) runPrompt(ctx context.Context, chatID int64, request channel.Request, prompt string) {
 	b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
-		return b.agent.RunPrompt(runCtx, prompt, progress)
+		return b.agent.RunPrompt(runCtx, request, prompt, progress)
 	})
 }
 
 // runPhoto downloads a photo the operator sent and runs the agent with it
 // attached, so a vision model can see it. The message caption is the prompt.
-func (b *Bot) runPhoto(ctx context.Context, chatID int64, message *Message) {
+func (b *Bot) runPhoto(ctx context.Context, chatID int64, request channel.Request, message *Message) {
 	prompt := strings.TrimSpace(message.Caption)
 	if prompt == "" {
 		prompt = "Describe this image and act on anything notable in it."
@@ -652,7 +751,7 @@ func (b *Bot) runPhoto(ctx context.Context, chatID int64, message *Message) {
 	encoded := base64.StdEncoding.EncodeToString(data)
 	mediaType := imageMediaType(file.FilePath)
 	b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
-		return b.agent.RunPromptWithImage(runCtx, prompt, mediaType, encoded, progress)
+		return b.agent.RunPromptWithImage(runCtx, request, prompt, mediaType, encoded, progress)
 	})
 }
 
@@ -668,7 +767,7 @@ func isImageExtension(name string) bool {
 // runDocument downloads a document file. If it is an image, it is passed to
 // vision; otherwise text files are displayed inline and all files are saved
 // to the workspace uploads directory when available.
-func (b *Bot) runDocument(ctx context.Context, chatID int64, message *Message) {
+func (b *Bot) runDocument(ctx context.Context, chatID int64, request channel.Request, message *Message) {
 	doc := message.Document
 	if doc == nil {
 		return
@@ -696,7 +795,7 @@ func (b *Bot) runDocument(ctx context.Context, chatID int64, message *Message) {
 			mediaType = imageMediaType(doc.FileName)
 		}
 		b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
-			return b.agent.RunPromptWithImage(runCtx, prompt, mediaType, encoded, progress)
+			return b.agent.RunPromptWithImage(runCtx, request, prompt, mediaType, encoded, progress)
 		})
 		return
 	}
@@ -737,12 +836,12 @@ func (b *Bot) runDocument(ctx context.Context, chatID int64, message *Message) {
 		builder.WriteString("Please inspect the uploaded document and proceed.")
 	}
 
-	b.runPrompt(ctx, chatID, builder.String())
+	b.runPrompt(ctx, chatID, request, builder.String())
 }
 
 // runVoice downloads an incoming voice note or audio file, transcribes it to
 // text, and runs the agent with the transcribed prompt.
-func (b *Bot) runVoice(ctx context.Context, chatID int64, fileID, filename, caption string) {
+func (b *Bot) runVoice(ctx context.Context, chatID int64, request channel.Request, fileID, filename, caption string) {
 	transcriber, ok := b.agent.(AudioTranscriber)
 	if !ok {
 		b.reply(ctx, chatID, "Voice transcription is not supported by this agent.")
@@ -780,12 +879,12 @@ func (b *Bot) runVoice(ctx context.Context, chatID int64, fileID, filename, capt
 
 	if runner, ok := b.agent.(VoicePromptRunner); ok {
 		b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
-			return runner.RunVoicePrompt(runCtx, prompt, progress)
+			return runner.RunVoicePrompt(runCtx, request, prompt, progress)
 		})
 		return
 	}
 
-	b.runPrompt(ctx, chatID, prompt)
+	b.runPrompt(ctx, chatID, request, prompt)
 }
 
 // typingRefresh is how often the typing action is renewed while a turn runs.
@@ -996,25 +1095,152 @@ func (b *Bot) tryPair(ctx context.Context, message *Message, code string) {
 	b.reply(ctx, message.Chat.ID, fmt.Sprintf("Paired. Send any message to run the agent.\n%s", helpText()))
 }
 
-// isOwner gates a message. A group chat with no pinned owner fails closed.
-func (b *Bot) isOwner(chat Chat, from *User) bool {
+// requestFrom normalizes one Telegram message into the transport-neutral
+// request the gate and the app read.
+func (b *Bot) requestFrom(message *Message) channel.Request {
+	request := channel.Request{
+		Channel: config.ChannelTelegram,
+		Account: b.Account(),
+		ChatID:  strconv.FormatInt(message.Chat.ID, 10),
+		IsGroup: !message.Chat.IsPrivate(),
+	}
+	if message.From != nil {
+		request.SenderID = strconv.FormatInt(message.From.ID, 10)
+		request.SenderName = strings.TrimSpace(message.From.Username)
+	}
+	if request.SenderName == "" && message.From != nil && message.From.ID != 0 {
+		request.SenderName = strconv.FormatInt(message.From.ID, 10)
+	}
+	request.MentionsBot = b.mentionsBot(message)
+	return request
+}
+
+// mentionsBot reports whether a message addresses this bot.
+//
+// Telegram marks a mention as a text entity (the "@name" form) or, for a user
+// with no username, as a text_mention entity carrying the id; a reply to one
+// of the bot's own messages counts too. The "@name" form is confirmed against
+// the message text instead of slicing by the entity's UTF-16 offsets, which
+// would cut multi-byte text in the wrong place.
+func (b *Bot) mentionsBot(message *Message) bool {
+	if message == nil {
+		return false
+	}
+	b.identityMu.RLock()
+	selfID, username := b.selfID, b.username
+	b.identityMu.RUnlock()
+
+	if reply := message.ReplyToMessage; reply != nil && reply.From != nil && selfID != 0 && reply.From.ID == selfID {
+		return true
+	}
+	lowered := strings.ToLower(message.Text)
+	for _, entity := range message.Entities {
+		switch entity.Type {
+		case "mention":
+			if username != "" && strings.Contains(lowered, "@"+strings.ToLower(username)) {
+				return true
+			}
+		case "text_mention":
+			if entity.User != nil && selfID != 0 && entity.User.ID == selfID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isOperator reports whether a sender is the account's paired owner, who is an
+// admin whether or not the policy lists one. The pairing binds one chat, so a
+// message from the same user in another chat is not the operator: that is what
+// stops an owner id from being reused elsewhere.
+//
+// A legacy pairing may carry no owner id (the chat was configured by hand).
+// In that case the paired private chat is the operator's, which is the rule the
+// pre-registry gate used.
+func (b *Bot) isOperator(request channel.Request) bool {
 	pairedChat, owner := b.Pairing()
 	if pairedChat == 0 {
 		return false
 	}
-	if chat.ID != pairedChat {
+	if strings.TrimSpace(request.ChatID) != strconv.FormatInt(pairedChat, 10) {
 		return false
 	}
 	if owner == 0 {
-		return chat.IsPrivate()
+		return !request.IsGroup
 	}
-	return from != nil && from.ID == owner
+	return strings.TrimSpace(request.SenderID) == strconv.FormatInt(owner, 10)
+}
+
+// mayPair reports whether an unknown DM sender should receive a pairing code.
+func (b *Bot) mayPair(policy config.ChannelAccount, request channel.Request) bool {
+	if request.IsGroup || config.NormalizeDMPolicy(policy.DMPolicy) != config.DMPolicyPairing {
+		return false
+	}
+	b.identityMu.RLock()
+	store := b.pairing
+	b.identityMu.RUnlock()
+	return store != nil
+}
+
+// pairingPrompt records the request and returns the message the sender reads.
+// It is written like a person replying, because the sender is a person.
+func (b *Bot) pairingPrompt(request channel.Request) string {
+	b.identityMu.RLock()
+	store := b.pairing
+	b.identityMu.RUnlock()
+	pending, created := store.Request(config.ChannelTelegram, request.Account, request.SenderID, request.SenderName)
+	if created {
+		b.logf("pairing request from %s (%s)", request.SenderID, pending.Code)
+	}
+	return "Halo! Percakapan ini belum diizinkan. Sandi pairing kamu: " + pending.Code +
+		"\nMinta operator menyetujui dengan: termixgo channel pairing approve " + pending.Code
+}
+
+// handleGuestMessage serves a sender the policy allows but who is not an admin:
+// text turns only, and a small set of commands.
+func (b *Bot) handleGuestMessage(ctx context.Context, request channel.Request, message *Message, text string, isCommand bool) {
+	chatID := message.Chat.ID
+	if len(message.Photo) > 0 || message.Voice != nil || message.Audio != nil || message.Document != nil {
+		b.reply(ctx, chatID, "Maaf, untuk sekarang saya hanya bisa membalas pesan teks di percakapan ini.")
+		return
+	}
+	if text == "" {
+		return
+	}
+	if !isCommand {
+		b.runPrompt(ctx, chatID, request, text)
+		return
+	}
+	command, _ := splitCommand(text)
+	switch command {
+	case "help", "start":
+		b.reply(ctx, chatID, helpText())
+	case "status":
+		b.reply(ctx, chatID, "Sesi ini aktif. Silakan kirim pertanyaan.")
+	case "new":
+		b.agent.NewSession(request)
+		b.reply(ctx, chatID, "Mulai sesi baru ya.")
+	default:
+		b.reply(ctx, chatID, "Maaf, perintah itu hanya untuk operator.")
+	}
 }
 
 func (b *Bot) reply(ctx context.Context, chatID int64, text string) {
 	if _, err := b.client.SendMessage(ctx, chatID, text, nil); err != nil {
 		b.logf("send failed: %v", err)
 	}
+}
+
+// SendTo posts one message to one chat, chunked to the account's limit. It is
+// how a scheduled job reaches a chat that is not the paired operator chat.
+func (b *Bot) SendTo(ctx context.Context, chatID int64, text string) error {
+	limit := b.Policy().EffectiveTextChunkLimit()
+	for _, chunk := range channel.Chunk(text, limit) {
+		if _, err := b.client.SendMarkdown(ctx, chatID, chunk, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Send posts a message to the paired chat, whether or not the bot is polling.

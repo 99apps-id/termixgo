@@ -23,6 +23,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/99apps-id/termixgo/internal/agent"
+	"github.com/99apps-id/termixgo/internal/agenthome"
 	"github.com/99apps-id/termixgo/internal/app"
 	"github.com/99apps-id/termixgo/internal/audit"
 	"github.com/99apps-id/termixgo/internal/config"
@@ -34,6 +35,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/secrets"
 	"github.com/99apps-id/termixgo/internal/ui"
 	"github.com/99apps-id/termixgo/internal/version"
+	"github.com/99apps-id/termixgo/internal/whatsapp"
 )
 
 func main() {
@@ -109,6 +111,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runApproval(args[1:], stdout)
 	case "harness":
 		return runHarness(args[1:], stdout)
+	case "agent":
+		return runAgent(args[1:], stdout)
 	case "mcp":
 		return runMCP(args[1:], stdout)
 	case "secret":
@@ -119,6 +123,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runLogout(args[1:], stdout)
 	case "telegram":
 		return runTelegram(args[1:], stdout)
+	case "channel":
+		return runChannel(args[1:], stdout)
 	case "serve":
 		return runServe(stdout)
 	case "cron":
@@ -164,7 +170,7 @@ func runInteractive(stdin io.Reader, stdout io.Writer, options ui.Options) error
 		return err
 	}
 	defer application.Shutdown()
-	enableTelegram(application)
+	enableChannels(application)
 	if !ui.IsInteractive(stdin, stdout) {
 		ctx, stop := signalContext()
 		defer stop()
@@ -173,12 +179,11 @@ func runInteractive(stdin io.Reader, stdout io.Writer, options ui.Options) error
 	return ui.RunWithOptions(application, options)
 }
 
-// enableTelegram starts the bot when the configuration says it should run.
-func enableTelegram(application *app.App) {
-	cfg := application.Config()
-	if cfg.Telegram.Enabled && application.TelegramToken() != "" {
-		_ = application.StartTelegram()
-	}
+// enableChannels starts every enabled channel account in the interactive
+// session. A setup problem is reported by the status view, not by refusing to
+// open the terminal.
+func enableChannels(application *app.App) {
+	_ = application.StartChannels()
 }
 
 // parseRunArgs splits the run subcommand's tail into the prompt and options.
@@ -652,9 +657,9 @@ func runTelegram(args []string, stdout io.Writer) error {
 	}
 	switch args[0] {
 	case "on":
-		cfg.Telegram.Enabled = true
+		cfg.SyncLegacyTelegram(true, cfg.Telegram.ChatID, cfg.Telegram.OwnerUserID, cfg.Telegram.PairingCode)
 	case "off":
-		cfg.Telegram.Enabled = false
+		cfg.SyncLegacyTelegram(false, cfg.Telegram.ChatID, cfg.Telegram.OwnerUserID, cfg.Telegram.PairingCode)
 	default:
 		return fmt.Errorf("usage: termixgo telegram [status|on|off]")
 	}
@@ -666,25 +671,7 @@ func runTelegram(args []string, stdout io.Writer) error {
 }
 
 func runServe(stdout io.Writer) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	store, loadErr := secrets.Load()
-	if loadErr != nil {
-		return loadErr
-	}
-	token := strings.TrimSpace(store.Get(secrets.TelegramTokenKey()))
-	if token == "" {
-		return fmt.Errorf("no Telegram token configured; run 'termixgo setup' or 'termixgo telegram on'")
-	}
-	if !cfg.Telegram.Enabled {
-		return fmt.Errorf("the Telegram companion is disabled; run 'termixgo telegram on' first")
-	}
-
 	fmt.Fprintf(stdout, "Starting Termixgo assistant (Ctrl+C to stop)...\n")
-	fmt.Fprintf(stdout, "Telegram: enabled\n")
-	fmt.Fprintf(stdout, "Chat: %d\n", cfg.Telegram.ChatID)
 
 	application, err := app.New("")
 	if err != nil {
@@ -703,8 +690,15 @@ func runServe(stdout io.Writer) error {
 		return fmt.Errorf("the assistant has no usable model: %v\nSet it up for this CLI, which keeps its own settings:\n  termixgo endpoint <provider> <url>\n  termixgo secret <provider>\n  termixgo model <provider>:<model-id>\nA custom endpoint set in the Termigo app is not shared with this binary", problem)
 	}
 
-	if err := application.StartTelegram(); err != nil {
+	if err := application.StartChannels(); err != nil {
 		return err
+	}
+	for _, status := range application.ChannelStatuses() {
+		state := "off"
+		if status.Enabled {
+			state = "on"
+		}
+		fmt.Fprintf(stdout, "%s/%s [%s] agent=%s: %s\n", status.Channel, status.Account, state, status.Agent, status.State)
 	}
 	if err := application.StartScheduler(); err != nil {
 		fmt.Fprintf(stdout, "Scheduler: off (%v)\n", err)
@@ -761,18 +755,76 @@ func runCron(args []string, stdout io.Writer) error {
 	}
 	switch args[0] {
 	case "add":
-		if len(args) < 4 {
-			return fmt.Errorf(`usage: termixgo cron add "<schedule>" <name> <prompt>`)
-		}
-		schedule, err := cron.Parse(args[1])
+		parsed, err := parseCronAdd(args[1:])
 		if err != nil {
 			return err
 		}
-		job, err := store.Add(args[2], strings.Join(args[3:], " "), schedule, time.Now())
+		schedule, err := cron.Parse(parsed.schedule)
 		if err != nil {
 			return err
+		}
+		job, err := store.Add(parsed.name, parsed.prompt, schedule, time.Now())
+		if err != nil {
+			return err
+		}
+		if parsed.agent != "" || parsed.target != "" || parsed.announceSet {
+			job, _, err = store.Update(job.ID, func(stored *cron.Job) {
+				stored.Agent = parsed.agent
+				stored.DeliverTo = parsed.target
+				stored.Announce = parsed.announce
+			})
+			if err != nil {
+				return err
+			}
 		}
 		fmt.Fprintf(stdout, "Added job %s (%s), first run %s\n", job.ID, job.Schedule.String(), job.NextRun.Format("2006-01-02 15:04"))
+		if job.Agent != "" || job.DeliverTo != "" {
+			fmt.Fprintf(stdout, "  agent: %s\n  target: %s\n  announce: %v\n", orDash(job.Agent), orDash(job.DeliverTo), job.Announce)
+		}
+		return nil
+	case "runs":
+		jobID := ""
+		if len(args) > 1 {
+			jobID = strings.TrimSpace(args[1])
+		}
+		entries, err := cron.ReadHistory(20, jobID)
+		if err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			fmt.Fprintln(stdout, "No scheduled runs recorded.")
+			return nil
+		}
+		for _, entry := range entries {
+			state := "ok"
+			if !entry.OK {
+				state = "error"
+			}
+			fmt.Fprintf(stdout, "%s  %-7s %-5s job=%s agent=%s target=%s %dms\n",
+				entry.Time.Format("2006-01-02 15:04"), entry.Kind, state,
+				orDash(entry.Job), orDash(entry.Agent), orDash(entry.Target), entry.Millis)
+			if entry.Error != "" {
+				fmt.Fprintf(stdout, "    %s\n", entry.Error)
+			}
+		}
+		return nil
+	case "status":
+		jobs := store.List()
+		enabled := 0
+		var next time.Time
+		for _, job := range jobs {
+			if !job.Enabled {
+				continue
+			}
+			enabled++
+			if !job.NextRun.IsZero() && (next.IsZero() || job.NextRun.Before(next)) {
+				next = job.NextRun
+			}
+		}
+		fmt.Fprintf(stdout, "jobs: %d (%d enabled)\n", len(jobs), enabled)
+		if !next.IsZero() {
+			fmt.Fprintf(stdout, "next run: %s\n", next.Format("2006-01-02 15:04"))
+		}
 		return nil
 	case "remove":
 		if len(args) < 2 {
@@ -825,7 +877,7 @@ func runCron(args []string, stdout io.Writer) error {
 		fmt.Fprintln(stdout, output)
 		return nil
 	default:
-		return fmt.Errorf("usage: termixgo cron [list|add|remove|on|off|run]")
+		return fmt.Errorf("usage: termixgo cron [list|add|remove|on|off|run|runs|status]")
 	}
 }
 
@@ -1672,6 +1724,65 @@ func runDoctor(stdout io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "telegram token: %v\n", store.Has(secrets.TelegramTokenKey()))
+	agentNames := make([]string, 0, len(cfg.Agents))
+	for name := range cfg.Agents {
+		agentNames = append(agentNames, name)
+	}
+	sort.Strings(agentNames)
+	fmt.Fprintf(stdout, "agents:         %d (active: %s)\n", len(cfg.Agents), cfg.ActiveAgent)
+	for _, name := range agentNames {
+		entry := cfg.Agent(name)
+		workspace := entry.Workspace
+		if paths, resolveErr := agenthome.Resolve(name, entry.Workspace); resolveErr == nil {
+			workspace = paths.Workspace
+		}
+		if name == config.FinalAgentName && entry.Workspace == "" {
+			workspace = "(launch directory)"
+		}
+		marker := " "
+		if name == cfg.ActiveAgent {
+			marker = "*"
+		}
+		fmt.Fprintf(stdout, "  %s %-14s %s\n", marker, name, workspace)
+	}
+	fmt.Fprintln(stdout, "channels:")
+	if len(cfg.Channels.Telegram.Accounts)+len(cfg.Channels.WhatsApp.Accounts) == 0 {
+		fmt.Fprintln(stdout, "  none configured (add one with: termixgo channel add telegram|whatsapp)")
+	}
+	telegramNames := make([]string, 0, len(cfg.Channels.Telegram.Accounts))
+	for name := range cfg.Channels.Telegram.Accounts {
+		telegramNames = append(telegramNames, name)
+	}
+	sort.Strings(telegramNames)
+	for _, name := range telegramNames {
+		entry, _ := cfg.TelegramAccount(name)
+		state := "no token"
+		if store.Has(secrets.TelegramAccountTokenKey(name)) {
+			state = "token stored"
+		}
+		if entry.ChatID != 0 {
+			state = fmt.Sprintf("paired chat %d", entry.ChatID)
+		}
+		fmt.Fprintf(stdout, "  telegram/%-12s enabled=%-5v agent=%-12s %s\n", name, entry.Enabled, entry.AgentName(name), state)
+		warnGuestBinding(stdout, cfg, name, entry.ChannelAccount, "telegram")
+	}
+	whatsAppNames := make([]string, 0, len(cfg.Channels.WhatsApp.Accounts))
+	for name := range cfg.Channels.WhatsApp.Accounts {
+		whatsAppNames = append(whatsAppNames, name)
+	}
+	sort.Strings(whatsAppNames)
+	for _, name := range whatsAppNames {
+		entry, _ := cfg.WhatsAppAccount(name)
+		state := "not linked"
+		agentName := entry.AgentName(name)
+		if paths, resolveErr := agenthome.Resolve(agentName, cfg.Agent(agentName).Workspace); resolveErr == nil {
+			if _, statErr := os.Stat(whatsapp.SessionPath(paths.Home, name)); statErr == nil {
+				state = "session stored"
+			}
+		}
+		fmt.Fprintf(stdout, "  whatsapp/%-12s enabled=%-5v agent=%-12s %s\n", name, entry.Enabled, agentName, state)
+		warnGuestBinding(stdout, cfg, name, entry, "whatsapp")
+	}
 	if cfg.CostBudgetUSD > 0 {
 		fmt.Fprintf(stdout, "cost budget:    $%.2f per session\n", cfg.CostBudgetUSD)
 		// A cap with no price behind it can never fire. Reporting the budget
@@ -1747,13 +1858,17 @@ Usage:
   termixgo trust [on|off]         Show or set folder trust for this directory
   termixgo approval [mode]        Show or set ask|edits|all|plan
   termixgo harness [id]           Show or set the agent harness profile
+  termixgo agent [list|add|rm|use|show|soul|set]
+                                  Manage named agents: persona, workspace, sessions
   termixgo mcp                    List the MCP servers and the tools they add
   termixgo completion [shell]     Print shell completion (bash|zsh|fish|powershell)
   termixgo secret <provider> [k]  Store a provider API key
   termixgo login <provider>       Log in with a device code (xai-oauth, openai-codex)
   termixgo logout <provider>       Remove a stored OAuth token
   termixgo telegram [status|on|off]
-  termixgo cron [list|add|remove|on|off|run]
+  termixgo channel [list|add|login|on|off|status|rm|allow|admin|groups|guest|pairing]
+                                  Manage WhatsApp and Telegram accounts, policy and pairing
+  termixgo cron [list|add|remove|on|off|run|runs|status]
                                   Manage scheduled assistant jobs
   termixgo heartbeat [status|on|off|interval <duration>]
                                   Periodic self-check for the 24/7 assistant
@@ -1776,6 +1891,26 @@ for a provider key, a default model and optionally a Telegram bot token.
 Secrets are stored in ~/.termixgo/secrets.json with mode 0600. Nothing is
 written to the workspace except .termixgo/ skills and memory.
 `, version.Version)
+}
+
+// warnGuestBinding flags the dangerous pairing: an account that reaches
+// non-operators while its agent works in the launch directory, where the
+// operator's own project files live.
+func warnGuestBinding(stdout io.Writer, cfg config.Config, account string, entry config.ChannelAccount, kind string) {
+	if !entry.Enabled {
+		return
+	}
+	agents := config.NormalizeDMPolicy(entry.DMPolicy) == config.DMPolicyOpen || len(entry.AllowFrom) > 0
+	groups := config.NormalizeGroupPolicy(entry.GroupPolicy) != config.GroupPolicyDisabled
+	if !agents && !groups {
+		return
+	}
+	agentName := entry.AgentName(account)
+	if agentName != config.FinalAgentName || cfg.Agent(agentName).Workspace != "" {
+		return
+	}
+	fmt.Fprintf(stdout, "    WARNING: %s/%s reaches non-operators while agent %q works in the launch directory;\n", kind, account, agentName)
+	fmt.Fprintf(stdout, "             bind it to an agent with its own workspace (termixgo agent set %s --workspace <path>).\n", agentName)
 }
 
 // reportSecretProtection prints who can read the secret file.
@@ -1803,4 +1938,100 @@ func reportSecretProtection(store *secrets.Store, stdout io.Writer) {
 		return
 	}
 	fmt.Fprintf(stdout, "secrets access: WARNING, readable beyond the owner: %s\n", strings.Join(access.Entries, ", "))
+}
+
+// orDash labels an empty value instead of printing nothing.
+func orDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return value
+}
+
+// cronAddArgs is one parsed `cron add` invocation.
+type cronAddArgs struct {
+	schedule    string
+	name        string
+	prompt      string
+	agent       string
+	target      string
+	announce    bool
+	announceSet bool
+}
+
+// parseCronAdd reads the flags and the positional schedule/name/prompt. A
+// schedule may come as the first positional (the original form) or as
+// --every/--at/--cron.
+func parseCronAdd(args []string) (cronAddArgs, error) {
+	out := cronAddArgs{announce: false}
+	var positionals []string
+	scheduleFlag := ""
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		value := func(flag string) (string, error) {
+			if index+1 >= len(args) {
+				return "", fmt.Errorf("%s needs a value", flag)
+			}
+			index++
+			return args[index], nil
+		}
+		var err error
+		switch arg {
+		case "--agent":
+			var v string
+			v, err = value(arg)
+			out.agent = strings.TrimSpace(v)
+		case "--to":
+			var v string
+			v, err = value(arg)
+			out.target = strings.TrimSpace(v)
+		case "--every":
+			var v string
+			v, err = value(arg)
+			scheduleFlag = "every " + strings.TrimSpace(v)
+		case "--at":
+			var v string
+			v, err = value(arg)
+			scheduleFlag = "at " + strings.TrimSpace(v)
+		case "--cron":
+			var v string
+			v, err = value(arg)
+			scheduleFlag = "cron " + strings.TrimSpace(v)
+		case "--announce":
+			out.announce = true
+			out.announceSet = true
+		case "--no-announce":
+			out.announce = false
+			out.announceSet = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return out, fmt.Errorf("unknown cron add option %q", arg)
+			}
+			positionals = append(positionals, arg)
+		}
+		if err != nil {
+			return out, err
+		}
+	}
+	if scheduleFlag != "" {
+		out.schedule = scheduleFlag
+	} else if len(positionals) > 0 {
+		out.schedule = positionals[0]
+		positionals = positionals[1:]
+	}
+	if strings.TrimSpace(out.schedule) == "" {
+		return out, fmt.Errorf("usage: termixgo cron add [\"<schedule>\"|--every 30m|--at <when>|--cron \"<expr>\"] [--agent <name>] [--to <target>] [--no-announce] <name> <prompt>")
+	}
+	if len(positionals) < 1 {
+		return out, fmt.Errorf("cron add needs a name")
+	}
+	out.name = positionals[0]
+	out.prompt = strings.Join(positionals[1:], " ")
+	if strings.TrimSpace(out.prompt) == "" {
+		return out, fmt.Errorf("cron add needs a prompt")
+	}
+	if !out.announceSet {
+		out.announce = out.target != ""
+	}
+	return out, nil
 }

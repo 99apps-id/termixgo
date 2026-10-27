@@ -31,6 +31,17 @@ type Job struct {
 	// LastError is the last failure, kept so `cron list` can show why a job
 	// stopped producing output.
 	LastError string `json:"lastError,omitempty"`
+
+	// Agent names the persona the job runs as. Empty means the terminal's
+	// active agent.
+	Agent string `json:"agent,omitempty"`
+	// DeliverTo sends the result somewhere other than the paired chat:
+	// "channel:account:chat", "origin", or "local". Empty keeps the
+	// pre-registry behaviour.
+	DeliverTo string `json:"deliverTo,omitempty"`
+	// Announce sends the result to DeliverTo. It exists so a job can run for
+	// its side effects without posting anything.
+	Announce bool `json:"announce,omitempty"`
 }
 
 // DefaultPath is where jobs live: ~/.termixgo/cron/jobs.json.
@@ -138,6 +149,25 @@ func (s *Store) Add(name, prompt string, schedule Schedule, now time.Time) (Job,
 		return Job{}, err
 	}
 	return job, nil
+}
+
+// Update applies a change to one stored job and persists it.
+func (s *Store) Update(id string, change func(*Job)) (Job, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.jobs {
+		if s.jobs[index].ID != id {
+			continue
+		}
+		previous := s.jobs[index]
+		change(&s.jobs[index])
+		if err := s.saveLocked(); err != nil {
+			s.jobs[index] = previous
+			return Job{}, true, err
+		}
+		return s.jobs[index], true, nil
+	}
+	return Job{}, false, nil
 }
 
 // Get returns one job by id.

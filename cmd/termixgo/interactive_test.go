@@ -87,7 +87,7 @@ func TestEnableTelegramStaysOffWithoutAToken(t *testing.T) {
 	}
 	defer application.Shutdown()
 
-	enableTelegram(application)
+	enableChannels(application)
 
 	if status := application.TelegramStatus(); !strings.Contains(status, "off") {
 		t.Errorf("telegram should stay off without a token, status = %q", status)
@@ -125,7 +125,7 @@ func TestEnableTelegramStartsWithATokenButNoNetwork(t *testing.T) {
 	}
 	defer application.Shutdown()
 
-	enableTelegram(application)
+	enableChannels(application)
 	// Give the goroutine a moment to attempt verification and give up.
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {

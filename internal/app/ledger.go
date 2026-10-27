@@ -166,7 +166,7 @@ func (a *App) storeRecord(session *agent.Session, record agent.UsageRecord, fold
 		// An ephemeral run writes no session files; its ledger would be one.
 		return
 	}
-	path, err := agent.SessionLedgerPath(session.ID())
+	path, err := session.LedgerPath()
 	if err != nil {
 		return
 	}

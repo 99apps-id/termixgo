@@ -2,6 +2,8 @@ package agent
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/99apps-id/termixgo/internal/search"
 )
@@ -45,4 +47,29 @@ func indexFile(store *search.Store, scope, documentPath, title, file string) {
 		return
 	}
 	_ = store.Index(scope, documentPath, title, string(data))
+}
+
+// IndexAgentDocs indexes the agent's own documents: the persona, the operator
+// profile, the curated memory and every skill. A question about who the agent
+// is or what it can do is then answered from a file with a citation, not from
+// the model's imagination.
+func IndexAgentDocs(store *search.Store, home string) {
+	trimmed := strings.TrimSpace(home)
+	if store == nil || trimmed == "" {
+		return
+	}
+	indexFile(store, "agent", "SOUL.md", "Agent persona", filepath.Join(trimmed, "SOUL.md"))
+	indexFile(store, "agent", "USER.md", "Operator profile", filepath.Join(trimmed, "USER.md"))
+	indexFile(store, "agent", "memories/MEMORY.md", "Agent memory", filepath.Join(trimmed, "memories", "MEMORY.md"))
+	entries, err := os.ReadDir(filepath.Join(trimmed, "skills"))
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		indexFile(store, "agent", "skills/"+name+"/SKILL.md", "Skill: "+name, filepath.Join(trimmed, "skills", name, "SKILL.md"))
+	}
 }

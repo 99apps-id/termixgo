@@ -193,6 +193,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashApproval(args)
 	case "harness":
 		return m.slashHarness(args)
+	case "agent":
+		return m.slashAgent(args)
 	case "effort":
 		return m.slashEffort(args)
 	case "taskmodel":
@@ -1004,6 +1006,35 @@ func (m *Model) slashHarness(args string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.blocks = append(m.blocks, block{kind: blockNotice, text: "Harness is now " + profile.Label + ". It applies from the next turn."})
+	m.refresh()
+	return m, nil
+}
+
+// slashAgent shows the agent registry, or switches the active agent. The
+// switch moves the workspace, persona and live session together, so the next
+// turn runs in the agent's own world.
+func (m *Model) slashAgent(args string) (tea.Model, tea.Cmd) {
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
+		lines := []string{"Agents:"}
+		for _, name := range m.app.AgentNames() {
+			marker := "  "
+			if name == m.app.ActiveAgent() {
+				marker = "> "
+			}
+			lines = append(lines, fmt.Sprintf("%s%-14s %s", marker, name, m.app.AgentWorkspace(name)))
+		}
+		lines = append(lines, "Switch with /agent <name>; create one with: termixgo agent add <name>")
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
+		m.refresh()
+		return m, nil
+	}
+	if err := m.app.SetActiveAgent(trimmed); err != nil {
+		m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		m.refresh()
+		return m, nil
+	}
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Agent is now %q. Workspace, persona and session switched.", trimmed)})
 	m.refresh()
 	return m, nil
 }

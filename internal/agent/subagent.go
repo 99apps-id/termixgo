@@ -262,6 +262,15 @@ func subagentPolicy(parent *Env) *ApprovalPolicy {
 // than running free: an unpriced default silently disables the cost cap, an
 // oversized default history overflows a small local window, and a hardcoded
 // allow-all policy let plan mode mutate through a subagent.
+// delegationDepthExceeded reports whether a nested run would pass the depth an
+// agent configured. Zero means the runner's own cap is the only one.
+func delegationDepthExceeded(parent *Env) error {
+	if parent.DelegationMaxDepth > 0 && parent.Depth+1 > parent.DelegationMaxDepth {
+		return fmt.Errorf("delegation depth limit reached (%d)", parent.DelegationMaxDepth)
+	}
+	return nil
+}
+
 func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model provider.Model, subType, prompt string, maxSteps int) (string, SubagentSpend, error) {
 	def := LookupSubagent(subType)
 	if client == nil {
@@ -301,17 +310,27 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	// promise the subagent broke on every call. The folder gate keeps its own
 	// rule: SessionAllowed silences it for this folder, AlwaysAllowed never
 	// does, which is what the parent does too.
+	if err := delegationDepthExceeded(parent); err != nil {
+		return "", SubagentSpend{}, err
+	}
 	child := &Env{
-		Workspace:      parent.Workspace,
-		Config:         parent.Config,
-		Secrets:        parent.Secrets,
-		Skills:         parent.Skills,
-		Memory:         parent.Memory,
-		Todos:          NewTodoStore(),
-		Trusted:        parent.Trusted,
-		SessionAllowed: parent.SessionAllowed,
-		AlwaysAllowed:  parent.AlwaysAllowed,
-		Depth:          parent.Depth + 1,
+		Workspace:             parent.Workspace,
+		AgentName:             parent.AgentName,
+		AgentHome:             parent.AgentHome,
+		Guest:                 parent.Guest,
+		Grounding:             parent.Grounding,
+		ToolDeny:              parent.ToolDeny,
+		DelegationMaxDepth:    parent.DelegationMaxDepth,
+		DelegationMaxChildren: parent.DelegationMaxChildren,
+		Config:                parent.Config,
+		Secrets:               parent.Secrets,
+		Skills:                parent.Skills,
+		Memory:                parent.Memory,
+		Todos:                 NewTodoStore(),
+		Trusted:               parent.Trusted,
+		SessionAllowed:        parent.SessionAllowed,
+		AlwaysAllowed:         parent.AlwaysAllowed,
+		Depth:                 parent.Depth + 1,
 		Emit: func(event Event) {
 			if event.Kind == EventTurnEnd {
 				spend.Usage = spend.Usage.Add(event.Usage)
@@ -335,15 +354,24 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		Journal:   parent.Journal,
 		Search:    parent.Search,
 	}
+	children := 0
 	child.RunSubagent = func(childCtx context.Context, childType, childPrompt string) (string, SubagentSpend, error) {
+		children++
+		if parent.DelegationMaxChildren > 0 && children > parent.DelegationMaxChildren {
+			return "", SubagentSpend{}, fmt.Errorf("delegation limit reached: at most %d subagent(s) per turn", parent.DelegationMaxChildren)
+		}
 		return RunSubagent(childCtx, child, client, model, childType, childPrompt, maxSteps)
+	}
+	tools := subagentRegistry(string(def.Type), parent.Depth+1)
+	if len(parent.ToolDeny) > 0 {
+		tools = tools.Without(parent.ToolDeny...)
 	}
 	runner := &Runner{
 		Client:        client,
 		Model:         provider.WireModel(parent.Config, model),
 		Config:        parent.Config,
 		Env:           child,
-		Tools:         subagentRegistry(string(def.Type), parent.Depth+1),
+		Tools:         tools,
 		Policy:        subagentPolicy(parent),
 		MaxSteps:      maxSteps,
 		Harness:       string(parent.Config.HarnessProfile),

@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/channel"
 )
 
 // TestTypingIndicatorIsRenewedWhileTheRunContinues is the operator-visible
@@ -26,7 +28,7 @@ func TestTypingIndicatorIsRenewedWhileTheRunContinues(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		bot.runPrompt(context.Background(), 42, "a long task")
+		bot.runPrompt(context.Background(), 42, channel.Request{ChatID: "42"}, "a long task")
 	}()
 
 	select {

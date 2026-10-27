@@ -71,12 +71,30 @@ type Tool interface {
 // Env is everything a tool needs from the running process.
 type Env struct {
 	Workspace string
-	Config    config.Config
-	Secrets   *secrets.Store
-	Skills    []skill.Skill
-	Memory    *Memory
-	Todos     *TodoStore
-	Trusted   bool
+	// AgentName and AgentHome identify the agent whose turn this is. The
+	// system prompt reads SOUL.md and USER.md from AgentHome. Both are empty
+	// for a run with no agent registry (a one-shot helper, a white-box test).
+	AgentName string
+	AgentHome string
+	// Guest marks a non-operator turn: the tool registry is already reduced
+	// and Secrets is nil, and the prompt says so plainly.
+	Guest bool
+	// Grounding is config.GroundingStrict when an answer without tool
+	// evidence is challenged and marked.
+	Grounding string
+	// ToolDeny is the effective deny-list of this run. A subagent inherits it,
+	// so a nested run cannot reach a tool its parent was denied.
+	ToolDeny []string
+	// DelegationMaxDepth and DelegationMaxChildren bound nested runs. Zero
+	// means no extra cap beyond the runner's own.
+	DelegationMaxDepth    int
+	DelegationMaxChildren int
+	Config                config.Config
+	Secrets               *secrets.Store
+	Skills                []skill.Skill
+	Memory                *Memory
+	Todos                 *TodoStore
+	Trusted               bool
 	// SessionAllowed carries this folder's answered trust gates: tools the
 	// operator cleared with "session" or "always" at this folder's prompt.
 	// The app re-seeds a fresh snapshot every turn, and needsApprovalFor
@@ -283,8 +301,52 @@ func canonicalToolName(name string) string {
 	return b.String()
 }
 
+// Without returns a new registry without the named tools. Aliases go with the
+// tool, and a name that is not present is ignored, so a config entry that no
+// longer matches a tool costs nothing.
+func (r *Registry) Without(names ...string) *Registry {
+	drop := make(map[string]bool, len(names))
+	for _, name := range names {
+		drop[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	kept := make([]Tool, 0, len(r.tools))
+	for _, tool := range r.tools {
+		if drop[strings.ToLower(tool.Name())] {
+			continue
+		}
+		aliased := false
+		for _, alias := range tool.Aliases() {
+			if drop[strings.ToLower(alias)] {
+				aliased = true
+				break
+			}
+		}
+		if aliased {
+			continue
+		}
+		kept = append(kept, tool)
+	}
+	return NewRegistry(kept...)
+}
+
+// WithoutPrefix drops every tool whose name starts with prefix. It is how the
+// guest registry loses all mcp_ tools without naming each server's tools.
+func (r *Registry) WithoutPrefix(prefix string) *Registry {
+	needle := strings.ToLower(strings.TrimSpace(prefix))
+	if needle == "" {
+		return r
+	}
+	kept := make([]Tool, 0, len(r.tools))
+	for _, tool := range r.tools {
+		if strings.HasPrefix(strings.ToLower(tool.Name()), needle) {
+			continue
+		}
+		kept = append(kept, tool)
+	}
+	return NewRegistry(kept...)
+}
+
 // With returns a new registry holding this registry's tools plus the extras.
-//
 // A name that is already taken is skipped rather than replaced. The registry
 // indexes by name, so letting a contributed tool displace a built-in one would
 // be a silent hijack of that call; the qualified prefix an extension uses is

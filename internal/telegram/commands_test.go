@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/99apps-id/termixgo/internal/channel"
 	"github.com/99apps-id/termixgo/internal/provider"
 )
 
@@ -43,8 +44,8 @@ func (a *scriptedAgent) TranscribeAudio(ctx context.Context, data []byte, filena
 	return a.transcribeText, a.transcribeErr
 }
 
-func (a *scriptedAgent) RunVoicePrompt(ctx context.Context, prompt string, progress func(string)) (string, error) {
-	return a.RunPrompt(ctx, prompt, progress)
+func (a *scriptedAgent) RunVoicePrompt(ctx context.Context, request channel.Request, prompt string, progress func(string)) (string, error) {
+	return a.RunPrompt(ctx, request, prompt, progress)
 }
 
 func (a *scriptedAgent) Workspace() string {
@@ -55,7 +56,7 @@ func (a *scriptedAgent) GitDiff(ctx context.Context) (string, error) {
 	return a.diffOutput, a.diffErr
 }
 
-func (a *scriptedAgent) RunPrompt(ctx context.Context, prompt string, progress func(string)) (string, error) {
+func (a *scriptedAgent) RunPrompt(ctx context.Context, request channel.Request, prompt string, progress func(string)) (string, error) {
 	a.mu.Lock()
 	a.prompts = append(a.prompts, prompt)
 	a.mu.Unlock()
@@ -73,7 +74,7 @@ func (a *scriptedAgent) RunPrompt(ctx context.Context, prompt string, progress f
 	return a.answer, a.runErr
 }
 
-func (a *scriptedAgent) RunPromptWithImage(ctx context.Context, prompt, mediaType, data string, progress func(string)) (string, error) {
+func (a *scriptedAgent) RunPromptWithImage(ctx context.Context, request channel.Request, prompt, mediaType, data string, progress func(string)) (string, error) {
 	a.mu.Lock()
 	a.prompts = append(a.prompts, prompt)
 	a.lastMediaType = mediaType
@@ -97,7 +98,7 @@ func (a *scriptedAgent) Stop() {
 	a.mu.Unlock()
 }
 
-func (a *scriptedAgent) NewSession() {
+func (a *scriptedAgent) NewSession(request channel.Request) {
 	a.mu.Lock()
 	a.newCalls++
 	a.mu.Unlock()
@@ -530,7 +531,7 @@ func TestCardShowsProgressThenBecomesTheAnswer(t *testing.T) {
 	agent := &scriptedAgent{answer: "done", progressLines: lines}
 	bot, api := pairedBot(t, agent)
 
-	bot.runPrompt(context.Background(), 7, "do the thing")
+	bot.runPrompt(context.Background(), 7, channel.Request{ChatID: "7"}, "do the thing")
 
 	edits := api.calls("editMessageText")
 	if len(edits) == 0 {
@@ -563,7 +564,7 @@ func TestLongAnswerGoesOnTheCardAndAsFollowUps(t *testing.T) {
 	agent := &scriptedAgent{answer: answer, progressLines: []string{"step one"}}
 	bot, api := pairedBot(t, agent)
 
-	bot.runPrompt(context.Background(), 7, "do it")
+	bot.runPrompt(context.Background(), 7, channel.Request{ChatID: "7"}, "do it")
 
 	edits := api.calls("editMessageText")
 	if len(edits) == 0 {
@@ -587,7 +588,7 @@ func TestRunPromptSaysSoWhenThereIsNoOutput(t *testing.T) {
 	agent := &scriptedAgent{answer: "   "}
 	bot, api := pairedBot(t, agent)
 
-	bot.runPrompt(context.Background(), 7, "say nothing")
+	bot.runPrompt(context.Background(), 7, channel.Request{ChatID: "7"}, "say nothing")
 
 	edits := api.calls("editMessageText")
 	if len(edits) == 0 {
@@ -603,7 +604,7 @@ func TestRunPromptReportsAFailedTurn(t *testing.T) {
 	agent := &scriptedAgent{runErr: errors.New("provider is down")}
 	bot, api := pairedBot(t, agent)
 
-	bot.runPrompt(context.Background(), 7, "hello")
+	bot.runPrompt(context.Background(), 7, channel.Request{ChatID: "7"}, "hello")
 
 	edits := api.calls("editMessageText")
 	if len(edits) == 0 {
@@ -632,7 +633,7 @@ func TestRunPromptFallsBackToANewMessageWhenTheCardFails(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		bot.runPrompt(context.Background(), 7, "hello")
+		bot.runPrompt(context.Background(), 7, channel.Request{ChatID: "7"}, "hello")
 	}()
 	select {
 	case <-done:
@@ -649,7 +650,7 @@ func TestRunPromptRefusesASecondRun(t *testing.T) {
 	bot, api := pairedBot(t, agent)
 	bot.running = true
 
-	bot.runPrompt(context.Background(), 7, "hello")
+	bot.runPrompt(context.Background(), 7, channel.Request{ChatID: "7"}, "hello")
 
 	got := lastText(t, api, "sendMessage")
 	if !strings.Contains(got, "already in progress") {

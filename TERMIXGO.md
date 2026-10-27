@@ -23,10 +23,15 @@ truth for Termixgo.
 - Memory discipline: the binary must stay comfortable on a 2 GB machine. The
   process should idle well under 100 MB and never approach 500 MB. Do not add a
   dependency that pulls in a large transitive tree without a clear reason.
-- Security: provider keys and the Telegram token live in
+- Security: provider keys and every channel token live in
   `~/.termixgo/secrets.json` with mode 0600 and nowhere else. Never log a
   secret, never write one into `config.json`, a session file or the transcript.
-  OAuth access and refresh tokens live there too, under `oauth:<provider>`. A
+  OAuth access and refresh tokens live there too, under `oauth:<provider>`.
+  A Telegram account's token is `telegram:<account>:token` (the default account
+  keeps the historical `telegram:token`). The one exception to the file rule is
+  a channel's device session: a linked WhatsApp account keeps its protocol keys
+  in `~/.termixgo/agents/<agent>/channels/whatsapp/<account>/session.db` with
+  the directory 0700 and the file 0600, because the protocol needs them there. A
   vendor's public installed-app client pair is never committed: a release build
   stamps the Antigravity pair into the binary with ldflags, from a git-ignored
   `.env.local` or the environment, and an unstamped build prompts and stores it.
@@ -45,22 +50,34 @@ truth for Termixgo.
   `yaml.v3`, plus `modernc.org/sqlite` for the full-text index behind
   `search_memory`. That one is pure Go, so it keeps the build cgo-free, and it
   is the single largest transitive tree in the module: weigh it against the
-  memory budget before adding anything that pulls in more.
+  memory budget before adding anything that pulls in more. `go.mau.fi/whatsmeow`
+  is the WhatsApp engine: the multi-device protocol in pure Go, pinned to a
+  commit, using the same `modernc.org/sqlite` driver for its device store, so
+  the build stays cgo-free. `github.com/mdp/qrterminal/v3` draws the login QR.
+  The Baileys/Node alternative was rejected because it needs a runtime this
+  binary does not have.
 
 ## Layout
 
 ```
-cmd/termixgo        entry point and subcommands (run, models, doctor, secret, ...)
-internal/app        shared state: config, provider client, session, Telegram bridge
-internal/agent      the tool-calling run loop, tools, prompt, compaction, memory
-internal/provider   BYOK clients: OpenAI-compatible, Anthropic, Google
-internal/config     ~/.termixgo config.json, defaults and folder trust
+cmd/termixgo        entry point and subcommands (run, agent, channel, cron, doctor, ...)
+internal/app        shared state: config, provider client, sessions, agent contexts,
+                    channel registry and delivery, cron integration
+internal/agent      the tool-calling run loop, tools, prompt, compaction, memory,
+                    delegation and the subagent roster
+internal/agenthome  per-agent home: persona files, workspace, sessions, memory
+internal/channel    transport-neutral request, access gate, pairing store, rate
+                    limit, outbound redaction and chat text helpers
+internal/config     ~/.termixgo config.json: agents, channel accounts, defaults,
+                    folder trust
 internal/eval       benchmark suite runner, task evaluation and reporting
 internal/mcp        MCP client: stdio JSON-RPC, tool listing and dispatch
-internal/secrets    0600 secret store for API keys and the bot token
+internal/secrets    0600 secret store for API keys and channel tokens
 internal/search     SQLite full-text index over memory, journal and workspace
 internal/skill      SKILL.md discovery and parsing
 internal/telegram   Bot API client and the long-polling companion bot
+internal/whatsapp   linked-device WhatsApp channel on whatsmeow: store, login,
+                    message flow and outbound sends
 internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
 ```
 
@@ -331,6 +348,41 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
 - Pre-commit diff inspection and code review (review_changes, ReviewDiff, /diff-review, termixgo review)
   parses unified diff additions for merge conflict markers, hardcoded secrets, leftover debug statements
   and syntax errors, and combines static findings with read-only LLM subagent review.
+
+- An agent owns its world. `agents.<name>` is a persona home with `SOUL.md`,
+  `USER.md`, its own workspace, sessions, memory, search index and skills. The
+  `default` agent works in the directory Termixgo was launched in unless the
+  operator configured a workspace; every other agent works inside its home.
+  Switching with `/agent` swaps workspace, persona and the live session
+  together, and a channel chat never touches the operator's session.
+- The access gate is one function for every transport. `channel.Decide` reads
+  the account policy: `admins` always pass, a group needs its policy and a
+  mention, a DM follows `dmPolicy`, and an unknown sender under `pairing` gets
+  a code the operator approves from a terminal. A refused message is ignored,
+  not answered, except the pairing code and the guest refusals, which are
+  written like a person speaking.
+- The guest class is enforced by the registry, not the prompt. A non-operator
+  run is offered the read and approval-gated write tools only: shell, process,
+  worker, subagent, git mutation, checkpoint, outbound request, browser,
+  GitHub, `env_get` and every `mcp_` tool are removed before the request is
+  built, `Secrets` is nil, the operator's "always allow" answers do not apply,
+  the approval mode is `ask`, and the rate/step/cost limits are the account's.
+- Chat answers are final text only. A WhatsApp chat sees a typing presence and
+  then one answer, never a tool line, a path or a raw error; every answer is
+  redacted for token shapes and stored secret values before it is sent.
+- Evidence or silence. The prompt's `## EVIDENCE` block requires a `path:line`
+  for a workspace claim and a URL for a web claim, and `grounding: strict`
+  (always on for guests) challenges an answer that used no tool, retries once
+  with an evidence reminder, then marks the answer as unverified.
+- Delegation is bounded and inherited. A subagent inherits the run's agent
+  home, workspace, persona, guest state, deny-list and delegation limits; the
+  per-turn fan-out cap and depth cap are enforced before the model call, and a
+  guest or an `autoApprove: false` agent asks the operator first.
+- A scheduled job names its agent and its target. `cron` jobs run in an
+  isolated session of that agent's workspace and deliver to
+  `channel:account:chat` or `local`; every run and delivery is recorded in
+  `~/.termixgo/cron-history.jsonl`. A job runs at most once per occurrence
+  (`NextRun` advances first) and a busy slot requeues rather than skips.
 
 ## Checks
 

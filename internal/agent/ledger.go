@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/secrets"
 )
@@ -183,14 +182,21 @@ func SumRecords(records []UsageRecord) (provider.Usage, []UsageSegment) {
 // session file, under the same id guard, so a crafted id can no more reach
 // outside the sessions directory through the ledger than through the session.
 func SessionLedgerPath(sessionID string) (string, error) {
+	return SessionLedgerPathIn("", sessionID)
+}
+
+// SessionLedgerPathIn is SessionLedgerPath for one sessions directory. An
+// empty dir means the shared directory, which is where the default agent's
+// conversations and ledgers live.
+func SessionLedgerPathIn(dir, sessionID string) (string, error) {
 	if err := checkSessionID(sessionID); err != nil {
 		return "", err
 	}
-	dir, err := config.SessionsDir()
+	resolved, err := sessionsDir(dir)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, sessionID+".ledger.jsonl"), nil
+	return filepath.Join(resolved, sessionID+".ledger.jsonl"), nil
 }
 
 // UsageLedger appends usage records to one session's JSONL file.

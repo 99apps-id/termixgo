@@ -34,6 +34,17 @@ func ProviderKey(provider string) string { return providerPrefix + provider }
 // TelegramTokenKey is the store key for the bot token.
 func TelegramTokenKey() string { return telegramTokenKey }
 
+// TelegramAccountTokenKey is the store key for one Telegram account's bot
+// token. The default account keeps the historical key, so an existing install
+// migrates nothing when the account registry arrives.
+func TelegramAccountTokenKey(account string) string {
+	trimmed := strings.TrimSpace(account)
+	if trimmed == "" || trimmed == "default" {
+		return telegramTokenKey
+	}
+	return "telegram:" + trimmed + ":token"
+}
+
 // Store is a concurrency-safe secret map backed by a private file.
 type Store struct {
 	mu   sync.Mutex

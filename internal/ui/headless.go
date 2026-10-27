@@ -668,6 +668,23 @@ func runPlainSlash(ctx context.Context, application *app.App, name, args string,
 			return false, err
 		}
 		fmt.Fprintf(out, "  harness is now %s\n", profile.Label)
+	case "agent":
+		trimmed := strings.TrimSpace(args)
+		if trimmed == "" {
+			fmt.Fprintf(out, "  agent: %s\n", application.ActiveAgent())
+			for _, name := range application.AgentNames() {
+				marker := "  "
+				if name == application.ActiveAgent() {
+					marker = "> "
+				}
+				fmt.Fprintf(out, "    %s%-14s %s\n", marker, name, application.AgentWorkspace(name))
+			}
+			return false, nil
+		}
+		if err := application.SetActiveAgent(trimmed); err != nil {
+			return false, err
+		}
+		fmt.Fprintf(out, "  agent is now %s\n", trimmed)
 	case "plan":
 		items := application.Todos().Items()
 		if len(items) == 0 {

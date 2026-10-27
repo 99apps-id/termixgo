@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/99apps-id/termixgo/internal/agent"
+	"github.com/99apps-id/termixgo/internal/cron"
 	"github.com/99apps-id/termixgo/internal/provider"
 )
 
@@ -16,7 +17,7 @@ func TestRunScheduledKeepsTheLiveSessionClean(t *testing.T) {
 	live := application.Session()
 	before := len(live.Messages())
 
-	output, err := application.RunScheduled(context.Background(), "say ok", nil)
+	output, err := application.RunScheduled(context.Background(), cron.Job{Prompt: "say ok"})
 	if err != nil {
 		t.Fatalf("RunScheduled: %v", err)
 	}
@@ -105,7 +106,7 @@ func TestDeliverWithoutAPairingReportsIt(t *testing.T) {
 	defer server.Close()
 	defer application.Shutdown()
 
-	if err := application.Deliver(context.Background(), "hello"); err == nil {
+	if err := application.Deliver(context.Background(), cron.Job{}, "hello"); err == nil {
 		t.Errorf("delivering with no paired chat should fail")
 	}
 }

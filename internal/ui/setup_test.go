@@ -364,7 +364,11 @@ func TestWizardPairStepClosesOnEitherKey(t *testing.T) {
 			if !strings.Contains(display(model), "123456") {
 				t.Errorf("the pairing code must be visible while waiting:\n%s", display(model))
 			}
-			closed := press(t, model, name)
+			advanced := press(t, model, name)
+			if advanced.setup.step != setupWhatsAppAsk {
+				t.Errorf("step = %d, want the WhatsApp step", advanced.setup.step)
+			}
+			closed := press(t, advanced, "n")
 			if closed.setup.step != setupDone {
 				t.Errorf("step = %d, want done", closed.setup.step)
 			}
@@ -377,7 +381,7 @@ func TestWizardPairStepClosesOnEitherKey(t *testing.T) {
 func TestWizardRendersEveryStep(t *testing.T) {
 	steps := []setupStep{
 		setupProvider, setupKey, setupModel, setupCustomModel,
-		setupTelegramAsk, setupTelegramToken, setupTelegramPair, setupDone,
+		setupTelegramAsk, setupTelegramToken, setupTelegramPair, setupWhatsAppAsk, setupDone,
 	}
 	for _, step := range steps {
 		name := fmt.Sprintf("step-%d", step)

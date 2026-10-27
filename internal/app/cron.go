@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/agent"
+	"github.com/99apps-id/termixgo/internal/channel"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/cron"
 	"github.com/99apps-id/termixgo/internal/telegram"
@@ -123,35 +124,117 @@ func (a *App) StopScheduler() {
 	}
 }
 
-// RunScheduled runs one isolated turn for a scheduled job. It shares the model,
-// budget and tool wiring, but uses a throwaway session so a scheduled run never
-// becomes the operator's conversation.
-func (a *App) RunScheduled(ctx context.Context, prompt string, progress func(string)) (string, error) {
-	if progress != nil {
-		progress("Working...")
-		claim := a.SetObserver(func(event agent.Event) {
-			if line := telegramProgressLine(event); line != "" {
-				progress(line)
-			}
-		})
-		defer a.ClearObserver(claim)
+// RunScheduled runs one isolated turn for a scheduled job. The turn uses the
+// job's agent (its workspace, persona and tool policy) and never touches the
+// operator's conversation, so a background run leaves no trace in it.
+func (a *App) RunScheduled(ctx context.Context, job cron.Job) (string, error) {
+	agentName := a.scheduledAgent(job)
+	session := agent.NewSessionFor(agentName, a.AgentWorkspace(agentName), a.CurrentModel().ID)
+	started := time.Now()
+	err := a.runWithOptions(ctx, job.Prompt, runOptions{
+		session:   session,
+		isolated:  true,
+		agentName: agentName,
+	})
+	entry := cron.HistoryEntry{
+		Time:   started,
+		Kind:   "run",
+		Job:    job.ID,
+		Name:   job.Name,
+		Agent:  agentName,
+		Target: job.DeliverTo,
+		OK:     err == nil,
+		Millis: time.Since(started).Milliseconds(),
 	}
-	session := agent.NewSession(a.workspace, a.CurrentModel().ID)
-	if err := a.runOn(ctx, prompt, nil, session); err != nil {
+	if err != nil {
 		if errors.Is(err, ErrBusy) {
-			// Surface it as the scheduler's busy sentinel so the job is requeued
-			// rather than marked failed.
+			entry.Error = "busy"
+			cron.RecordHistory(entry)
+			// Surface it as the scheduler's busy sentinel so the job is
+			// requeued rather than marked failed.
 			return "", cron.ErrBusy
 		}
+		entry.Error = err.Error()
+		cron.RecordHistory(entry)
 		return "", err
 	}
+	cron.RecordHistory(entry)
 	return session.LastAssistantText(), nil
 }
 
-// Deliver is the scheduler's delivery seam: a scheduled result goes to the
-// same chat an operator message would answer in.
-func (a *App) Deliver(ctx context.Context, text string) error {
-	return a.Notify(ctx, text)
+// scheduledAgent resolves the agent a job runs as, falling back to the active
+// agent when the configured name no longer exists.
+func (a *App) scheduledAgent(job cron.Job) string {
+	agentName := strings.TrimSpace(job.Agent)
+	if agentName == "" || !a.Config().HasAgent(agentName) {
+		return a.ActiveAgent()
+	}
+	return agentName
+}
+
+// Deliver is the scheduler's delivery seam. A job with an explicit target
+// sends there; a legacy job keeps answering in the paired chat. The text is
+// redacted before it leaves, exactly like a chat answer.
+func (a *App) Deliver(ctx context.Context, job cron.Job, text string) error {
+	clean := a.RedactForChannel(text)
+	if job.DeliverTo == "" {
+		return a.Notify(ctx, clean)
+	}
+	started := time.Now()
+	err := a.DeliverTo(ctx, job.DeliverTo, clean)
+	entry := cron.HistoryEntry{
+		Time:   started,
+		Kind:   "deliver",
+		Job:    job.ID,
+		Name:   job.Name,
+		Agent:  job.Agent,
+		Target: job.DeliverTo,
+		OK:     err == nil,
+		Millis: time.Since(started).Milliseconds(),
+	}
+	if err != nil {
+		entry.Error = err.Error()
+	}
+	cron.RecordHistory(entry)
+	return err
+}
+
+// DeliverTo sends one message to an explicit target: "channel:account:chat"
+// through a running account, or "local" into the cron output directory.
+func (a *App) DeliverTo(ctx context.Context, target, text string) error {
+	trimmed := strings.TrimSpace(target)
+	switch {
+	case trimmed == "":
+		return fmt.Errorf("no delivery target is set")
+	case strings.EqualFold(trimmed, "local"):
+		dir, err := config.HomePath(filepath.Join("cron", "output"))
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create the cron output directory: %w", err)
+		}
+		name := "job-" + time.Now().Format("20060102-150405.000000000") + ".md"
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(text+"\n"), 0o600); err != nil {
+			return fmt.Errorf("write the cron output: %w", err)
+		}
+		return nil
+	case strings.EqualFold(trimmed, "origin"):
+		return fmt.Errorf("origin delivery needs a job created from a chat, which is not supported yet")
+	}
+	parts := strings.SplitN(trimmed, ":", 3)
+	if len(parts) != 3 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" || strings.TrimSpace(parts[2]) == "" {
+		return fmt.Errorf("delivery target %q must be channel:account:chat, origin or local", target)
+	}
+	key := channel.AccountID{Channel: strings.ToLower(strings.TrimSpace(parts[0])), Account: strings.TrimSpace(parts[1])}
+	a.mu.Lock()
+	runtime := a.channels[key]
+	a.mu.Unlock()
+	if runtime == nil || runtime.send == nil {
+		return fmt.Errorf("%s/%s is not running", key.Channel, key.Account)
+	}
+	return runtime.send(ctx, strings.TrimSpace(parts[2]), text)
 }
 
 // Notify posts a message to the paired Telegram chat, whether or not the bot is
@@ -240,7 +323,7 @@ func (a *App) CronRun(ctx context.Context, id string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("no job with id %q", id)
 	}
-	return a.RunScheduled(ctx, job.Prompt, nil)
+	return a.RunScheduled(ctx, job)
 }
 
 // HeartbeatStatus summarises the heartbeat for the status view.

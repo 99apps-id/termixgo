@@ -5,12 +5,15 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/99apps-id/termixgo/internal/channel"
+	"github.com/99apps-id/termixgo/internal/config"
 )
 
 // bound builds a bot already attached to a chat, which is the state most
 // handler tests want.
 func bound(chatID, ownerUserID int64) *Bot {
-	bot := &Bot{}
+	bot := New("123:test", nil)
 	bot.Pair(chatID, ownerUserID)
 	return bot
 }
@@ -67,35 +70,50 @@ func TestCursorOffsetMissingFileIsZero(t *testing.T) {
 	}
 }
 
-func TestOwnerGating(t *testing.T) {
+func TestOwnerIsTheImplicitAdmin(t *testing.T) {
 	bot := bound(100, 7)
 
-	if bot.isOwner(Chat{ID: 100, Type: "private"}, &User{ID: 8}) {
-		t.Errorf("a different user id must not be the owner")
+	if !bot.isOperator(channel.Request{Channel: config.ChannelTelegram, ChatID: "100", SenderID: "7"}) {
+		t.Errorf("the paired owner must be the operator")
 	}
-	if !bot.isOwner(Chat{ID: 100, Type: "private"}, &User{ID: 7}) {
-		t.Errorf("the pinned owner should be allowed")
+	if bot.isOperator(channel.Request{Channel: config.ChannelTelegram, ChatID: "100", SenderID: "8"}) {
+		t.Errorf("a different user id must not be the operator")
 	}
-	if bot.isOwner(Chat{ID: 200, Type: "private"}, &User{ID: 7}) {
-		t.Errorf("another chat must not be allowed")
+	policy := bot.Policy()
+	stranger := channel.Request{Channel: config.ChannelTelegram, ChatID: "100", SenderID: "8"}
+	if channel.Decide(policy, stranger).Allow {
+		t.Errorf("a stranger must be refused by the default policy")
 	}
 }
 
-func TestUnpairedBotRejectsEverything(t *testing.T) {
+func TestUnpairedBotHasNoOperator(t *testing.T) {
 	bot := &Bot{}
-	if bot.isOwner(Chat{ID: 5, Type: "private"}, &User{ID: 5}) {
-		t.Fatalf("an unpaired bot must not accept messages")
+	if bot.isOperator(channel.Request{Channel: config.ChannelTelegram, ChatID: "5", SenderID: "5"}) {
+		t.Fatalf("an unpaired bot must not treat anyone as the operator")
 	}
 }
 
-func TestGroupChatWithoutOwnerFailsClosed(t *testing.T) {
+func TestGroupReplyNeedsAMention(t *testing.T) {
 	bot := bound(-100, 0)
-	if bot.isOwner(Chat{ID: -100, Type: "group"}, &User{ID: 7}) {
-		t.Fatalf("a group chat with no pinned owner must fail closed")
+	policy := bot.Policy()
+	group := channel.Request{Channel: config.ChannelTelegram, ChatID: "-100", SenderID: "5", IsGroup: true}
+	if channel.Decide(policy, group).Allow {
+		t.Errorf("a group message without a mention must be ignored")
+	}
+	group.MentionsBot = true
+	if !channel.Decide(policy, group).Allow {
+		t.Errorf("a group message that mentions the bot must be allowed")
+	}
+}
+
+func TestGroupOwnerIsTheOperator(t *testing.T) {
+	bot := bound(-100, 0)
+	if bot.isOperator(channel.Request{Channel: config.ChannelTelegram, ChatID: "-100", SenderID: "7", IsGroup: true}) {
+		t.Fatalf("a group with no pinned owner must not have an operator")
 	}
 	bot.Pair(-100, 7)
-	if !bot.isOwner(Chat{ID: -100, Type: "group"}, &User{ID: 7}) {
-		t.Fatalf("a pinned owner in a group should be allowed")
+	if !bot.isOperator(channel.Request{Channel: config.ChannelTelegram, ChatID: "-100", SenderID: "7", IsGroup: true}) {
+		t.Fatalf("a pinned owner in a group is the operator")
 	}
 }
 

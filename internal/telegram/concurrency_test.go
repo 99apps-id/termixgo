@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/channel"
 )
 
 // fakeAPI is a stand-in for the Telegram Bot API. It records the text of every
@@ -97,7 +99,7 @@ func newBlockingAgent() *blockingAgent {
 	return &blockingAgent{release: make(chan struct{}), started: make(chan struct{})}
 }
 
-func (a *blockingAgent) RunPrompt(ctx context.Context, prompt string, progress func(string)) (string, error) {
+func (a *blockingAgent) RunPrompt(ctx context.Context, request channel.Request, prompt string, progress func(string)) (string, error) {
 	a.mu.Lock()
 	a.runs++
 	a.mu.Unlock()
@@ -110,12 +112,12 @@ func (a *blockingAgent) RunPrompt(ctx context.Context, prompt string, progress f
 	}
 }
 
-func (a *blockingAgent) RunPromptWithImage(ctx context.Context, prompt, mediaType, data string, progress func(string)) (string, error) {
-	return a.RunPrompt(ctx, prompt, progress)
+func (a *blockingAgent) RunPromptWithImage(ctx context.Context, request channel.Request, prompt, mediaType, data string, progress func(string)) (string, error) {
+	return a.RunPrompt(ctx, request, prompt, progress)
 }
 
 func (a *blockingAgent) Stop()                           {}
-func (a *blockingAgent) NewSession()                     {}
+func (a *blockingAgent) NewSession(channel.Request)      {}
 func (a *blockingAgent) Model() string                   { return "test-model" }
 func (a *blockingAgent) SetModel(string) (string, error) { return "test-model", nil }
 func (a *blockingAgent) Status() string                  { return "status line" }
@@ -150,7 +152,7 @@ func TestSecondPromptIsRejectedWhileARunIsInFlight(t *testing.T) {
 	first := make(chan struct{})
 	go func() {
 		defer close(first)
-		bot.runPrompt(context.Background(), 42, "do the long thing")
+		bot.runPrompt(context.Background(), 42, channel.Request{ChatID: "42"}, "do the long thing")
 	}()
 
 	select {
@@ -161,7 +163,7 @@ func TestSecondPromptIsRejectedWhileARunIsInFlight(t *testing.T) {
 
 	// The second prompt must be refused with an explanation, not queued and
 	// not run in parallel.
-	bot.runPrompt(context.Background(), 42, "a second thing")
+	bot.runPrompt(context.Background(), 42, channel.Request{ChatID: "42"}, "a second thing")
 	if !api.contains("already in progress") {
 		t.Errorf("the second prompt should be refused politely, got %v", api.messages())
 	}
@@ -186,7 +188,7 @@ func TestCommandsAreAnsweredWhileARunIsInFlight(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		bot.runPrompt(context.Background(), 42, "long task")
+		bot.runPrompt(context.Background(), 42, channel.Request{ChatID: "42"}, "long task")
 	}()
 	<-agent.started
 

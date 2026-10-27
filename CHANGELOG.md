@@ -6,6 +6,29 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- Named agents: `agents.<name>` personas with `SOUL.md`/`USER.md`, their own
+  workspace, sessions, memory, search index and skills, a `/agent` switcher and
+  the `termixgo agent` command group.
+- Channel registry: per-account Telegram and WhatsApp configuration with
+  `dmPolicy`, `groupPolicy`, allowlists, admins, guest limits, per-chat prompt
+  overrides and a pairing store (`termixgo channel ...`).
+- WhatsApp channel on whatsmeow: QR or pairing-code login, one device store per
+  account, mention-only group replies, per-chat sessions and natural text
+  answers with typing presence.
+- Guest guardrails: an admin-only tool class removed from the guest registry,
+  no secret store, forced approval, rate/step/cost limits and polite refusals.
+- Anti-hallucination: an `## EVIDENCE` prompt block, `grounding: strict` with a
+  single evidence retry and an unverified marker, outbound secret redaction and
+  untrusted-input wrapping.
+- Delegation limits: per-agent `maxChildren`/`maxDepth`/`autoApprove`, context
+  inheritance and operator approval for guest delegation.
+- Multi-agent cron: jobs carry an agent and a delivery target
+  (`channel:account:chat`, `local`), with `cron runs` and `cron status`.
+- `doctor` now reports agents, channel accounts, linked state and a warning when
+  an account reaching non-operators is bound to the launch directory.
+
 ## 0.2.0 - 2026-10-25
 
 ### Added

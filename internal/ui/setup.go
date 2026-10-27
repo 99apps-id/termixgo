@@ -38,6 +38,10 @@ const (
 	setupCustomVoiceModel
 	setupImageModel
 	setupCustomImageModel
+	// setupWhatsAppAsk is the last step, so the numeric order of the others is
+	// unchanged. It registers the account; the QR login runs from the CLI
+	// command the step prints.
+	setupWhatsAppAsk
 )
 
 // setupTitlePrefix brands every wizard title with the plain wordmark and the
@@ -236,7 +240,21 @@ func (m *Model) handleSetupKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case setupTelegramPair:
 		if key.String() == "enter" || key.String() == "esc" {
-			m.finishSetup("Setup complete. Telegram is waiting for /pair.")
+			return m.advanceToWhatsAppAsk()
+		}
+		return m, nil
+
+	case setupWhatsAppAsk:
+		switch strings.ToLower(key.String()) {
+		case "y", "enter":
+			if err := m.app.AddWhatsAppAccount("default"); err != nil {
+				m.setup.errText = err.Error()
+				return m, nil
+			}
+			m.finishSetup("WhatsApp is registered. Link the number with: termixgo channel login whatsapp default")
+			return m, nil
+		case "n", "esc":
+			m.finishSetup("Setup complete. Add WhatsApp later with: termixgo channel add whatsapp")
 			return m, nil
 		}
 		return m, nil
@@ -457,6 +475,17 @@ func (m *Model) saveTelegramToken() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// advanceToWhatsAppAsk is the WhatsApp step: it registers the account and
+// points at the login command, which owns the QR rendering.
+func (m *Model) advanceToWhatsAppAsk() (tea.Model, tea.Cmd) {
+	m.setup.step = setupWhatsAppAsk
+	m.setup.message = "Add a WhatsApp account for the default agent?"
+	m.setup.errText = ""
+	m.current = modeSetup
+	m.refresh()
+	return m, nil
+}
+
 // finishSetup closes the wizard with a summary.
 func (m *Model) finishSetup(message string) {
 	if m.app.HasModel() {
@@ -481,7 +510,7 @@ func (m *Model) userMessage() {
 // viewSetup renders the wizard.
 func (m *Model) viewSetup() string {
 	body := []string{
-		m.styles.BoxTitle.Render(fmt.Sprintf("%s (%d/%d)", setupTitlePrefix, setupProgress(m.setup.step), 4)),
+		m.styles.BoxTitle.Render(fmt.Sprintf("%s (%d/%d)", setupTitlePrefix, setupProgress(m.setup.step), 5)),
 		"",
 	}
 	if m.setup.message != "" {
@@ -512,6 +541,9 @@ func (m *Model) viewSetup() string {
 	case setupTelegramPair:
 		body = append(body, m.styles.StatusValue.Render(m.setup.pairingCode))
 		body = append(body, "", m.styles.Dim.Render("The bot is polling already. After you send /pair, press Enter."))
+	case setupWhatsAppAsk:
+		body = append(body, m.styles.MenuKey.Render("y")+" yes   "+m.styles.MenuKey.Render("n")+" not now")
+		body = append(body, "", m.styles.Dim.Render("Login (QR) runs from the terminal: termixgo channel login whatsapp default"))
 	case setupDone:
 		for _, line := range m.setup.summary {
 			body = append(body, m.styles.Dim.Render("  "+line))
@@ -546,8 +578,10 @@ func setupProgress(step setupStep) int {
 		return 3
 	case setupTelegramAsk, setupTelegramToken, setupTelegramPair:
 		return 3
-	default:
+	case setupWhatsAppAsk:
 		return 4
+	default:
+		return 5
 	}
 }
 

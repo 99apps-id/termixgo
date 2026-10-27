@@ -18,7 +18,9 @@ import (
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/agent"
+	"github.com/99apps-id/termixgo/internal/agenthome"
 	"github.com/99apps-id/termixgo/internal/audit"
+	"github.com/99apps-id/termixgo/internal/channel"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/cron"
 	"github.com/99apps-id/termixgo/internal/mcp"
@@ -108,6 +110,9 @@ type App struct {
 	// so the turn-end quota record can charge them to their own models
 	// instead of to the parent's.
 	turnPending []pendingSubagentUsage
+	// turnDelegations counts the subagents started in the turn in flight,
+	// which is the per-turn fan-out cap.
+	turnDelegations int
 	// turnStartCost is the session spend when the turn in flight began, so a
 	// turn's own cost can be told apart from the session's running total.
 	turnStartCost float64
@@ -143,6 +148,18 @@ type App struct {
 	bot       *telegram.Bot
 	botCancel context.CancelFunc
 	botStatus string
+
+	// activeAgent is the persona the terminal session talks to; agentSessions
+	// remembers each agent's live conversation for this process; agentCtx
+	// caches the per-workspace stores of every agent.
+	activeAgent   string
+	agentSessions map[string]*agent.Session
+	agentCtx      map[string]*agentContext
+
+	// channels is the runtime registry of every started account, and pairing
+	// is the file of unknown DM senders waiting for the operator's answer.
+	channels map[channel.AccountID]*channelRuntime
+	pairing  *channel.PairingStore
 
 	// cronStore is the scheduled-job list. It is opened lazily so a terminal
 	// session with no scheduler still pays nothing for it.
@@ -190,6 +207,10 @@ func New(workspace string) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The default agent works in the launch directory unless the operator
+	// configured a workspace for it; everything below is that agent's state.
+	workspace = defaultAgentWorkspace(cfg, workspace)
+
 	store, err := secrets.Load()
 	if err != nil {
 		return nil, err
@@ -200,16 +221,20 @@ func New(workspace string) (*App, error) {
 	}
 
 	instance := &App{
-		cfg:       cfg,
-		store:     store,
-		workspace: workspace,
-		trusted:   cfg.IsTrusted(workspace),
-		skills:    skills,
-		memory:    agent.NewMemory(workspace),
-		todos:     agent.NewTodoStore(),
-		tools:     agent.DefaultRegistry(),
-		processes: agent.NewProcessManager(),
-		events:    make(chan agent.Event, eventBuffer),
+		cfg:           cfg,
+		store:         store,
+		workspace:     workspace,
+		trusted:       cfg.IsTrusted(workspace),
+		skills:        skills,
+		memory:        agent.NewMemory(workspace),
+		todos:         agent.NewTodoStore(),
+		tools:         agent.DefaultRegistry(),
+		processes:     agent.NewProcessManager(),
+		events:        make(chan agent.Event, eventBuffer),
+		activeAgent:   cfg.ActiveAgent,
+		agentSessions: map[string]*agent.Session{},
+		agentCtx:      map[string]*agentContext{},
+		channels:      map[channel.AccountID]*channelRuntime{},
 	}
 	journal, err := agent.NewErrorJournal(workspace)
 	if err == nil {
@@ -229,7 +254,6 @@ func New(workspace string) (*App, error) {
 		SessionAllowed: map[string]bool{},
 		Memory:         instance.memory,
 	}
-	instance.session = agent.NewSession(workspace, "")
 
 	// The full-text index lives in the state directory inside the workspace,
 	// which is where the error journal already is: the database is state, not
@@ -239,6 +263,25 @@ func New(workspace string) (*App, error) {
 		instance.search = store
 		agent.IndexLearnedContent(store, instance.memory, instance.journal)
 	}
+
+	// The default agent's context shares the stores above instead of opening a
+	// second connection to the same index. A named active agent is built
+	// lazily by agentSessionFor below.
+	defaultHome, homeErr := config.HomePath(filepath.Join("agents", config.FinalAgentName))
+	if homeErr != nil {
+		defaultHome = ""
+	}
+	instance.agentCtx[config.FinalAgentName] = &agentContext{
+		name:      config.FinalAgentName,
+		home:      defaultHome,
+		workspace: workspace,
+		memory:    instance.memory,
+		journal:   instance.journal,
+		search:    instance.search,
+		skills:    instance.skills,
+		trusted:   instance.trusted,
+	}
+	instance.session = instance.agentSessionFor(cfg.ActiveAgent)
 
 	instance.quotaTracker = NewQuotaTracker()
 	// The rolling window survives a restart: without the state file a
@@ -639,7 +682,11 @@ func (a *App) RefreshQuota(ctx context.Context) *provider.QuotaSnapshot {
 }
 
 // SetInteractor installs the UI callbacks.
-func (a *App) SetInteractor(interactor Interactor) { a.interactor = interactor }
+func (a *App) SetInteractor(interactor Interactor) {
+	a.mu.Lock()
+	a.interactor = interactor
+	a.mu.Unlock()
+}
 
 // SetEphemeral controls whether a turn writes a session file. One-shot runs
 // set it so repeated invocations do not accumulate sessions in CI.
@@ -857,19 +904,32 @@ func (a *App) SetApprovalMode(mode config.ApprovalMode) error {
 	return config.Save(cfg)
 }
 
-// NewSession starts a fresh conversation and clears the plan.
+// NewSession starts a fresh conversation for the active agent and clears the
+// plan. The previous conversation stays on disk and is reachable from
+// /sessions.
 func (a *App) NewSession() {
-	session := agent.NewSession(a.workspace, a.CurrentModel().ID)
+	name := a.ActiveAgent()
+	session := a.newSessionForAgent(name)
 	a.mu.Lock()
 	a.session = session
+	if a.agentSessions != nil {
+		a.agentSessions[name] = session
+	}
 	a.mu.Unlock()
 	a.todos.Set(nil)
 }
 
-// LoadSession replaces the live session.
+// LoadSession replaces the live session. A session loaded from a named
+// agent's directory is pinned to that directory so the next save lands beside
+// the file it came from.
 func (a *App) LoadSession(session *agent.Session) {
 	if session == nil {
 		return
+	}
+	if owner := strings.TrimSpace(session.Agent()); owner != "" && session.StoreDir() == "" {
+		if dir, err := agenthome.SessionsDirFor(owner); err == nil {
+			session.SetStoreDir(dir)
+		}
 	}
 	a.mu.Lock()
 	a.session = session
@@ -1150,27 +1210,36 @@ func (a *App) TakeSteer() []string {
 	return taken
 }
 
-// env builds the per-run tool environment.
+// env builds the per-run tool environment for the active agent.
 func (a *App) env() *agent.Env {
+	return a.envFor(a.ActiveAgent())
+}
+
+// envFor builds the per-run tool environment for one agent: its workspace,
+// persona files, memory, journal, search index and skills.
+func (a *App) envFor(agentName string) *agent.Env {
+	ctx := a.agentContextFor(agentName)
 	cfg := a.Config()
 	return &agent.Env{
-		Workspace: a.workspace,
+		Workspace: ctx.workspace,
+		AgentName: ctx.name,
+		AgentHome: ctx.home,
 		Config:    cfg,
 		Secrets:   a.store,
-		Skills:    a.Skills(),
-		Memory:    a.memory,
+		Skills:    ctx.skills,
+		Memory:    ctx.memory,
 		Todos:     a.todos,
-		Trusted:   a.Trusted(),
+		Trusted:   ctx.trusted,
 		Processes: a.processes,
 		// The journal is shared with the runner, which records into it, and read
 		// back by search_memory, which is why the same store is passed here.
-		Journal: a.journal,
+		Journal: ctx.journal,
 		// The full-text index behind search_memory. Nil degrades that tool to
 		// its substring fallback rather than failing the turn.
-		Search:         a.search,
+		Search:         ctx.search,
 		Emit:           a.emit,
 		Approve:        a.approve,
-		SessionAllowed: a.folderGrants(),
+		SessionAllowed: a.folderGrantsFor(ctx.workspace),
 		AlwaysAllowed:  stringSet(cfg.AlwaysAllowedTools),
 		Ask:            a.ask,
 		RunSubagent:    a.runSubagent,
@@ -1244,7 +1313,12 @@ func (a *App) migrateMCPEnv() {
 // emitter that does not fold usage into the operator's live session, so a
 // background turn cannot rewrite the operator's plan or its spend.
 func (a *App) isolatedEnv() *agent.Env {
-	base := a.env()
+	return a.isolatedEnvFor(a.ActiveAgent())
+}
+
+// isolatedEnvFor is isolatedEnv for one agent's workspace and persona.
+func (a *App) isolatedEnvFor(agentName string) *agent.Env {
+	base := a.envFor(agentName)
 	base.Todos = agent.NewTodoStore()
 	base.Emit = func(event agent.Event) {
 		a.emitInto(event, false)
@@ -1259,6 +1333,7 @@ func (a *App) Processes() *agent.ProcessManager { return a.processes }
 // dev server does not outlive the terminal that started it.
 func (a *App) Shutdown() {
 	a.StopScheduler()
+	a.StopChannels()
 	a.StopTelegram()
 	// Cancel a turn in flight, then hold the single-run slot while the stores
 	// it writes are closed. runOn takes the same slot for the whole turn, so a
@@ -1278,12 +1353,21 @@ func (a *App) Shutdown() {
 	a.mcp = nil
 	store := a.search
 	a.search = nil
+	contexts := a.agentCtx
+	a.agentCtx = map[string]*agentContext{}
 	a.mu.Unlock()
 	if pool != nil {
 		pool.Close()
 	}
 	if store != nil {
 		_ = store.Close()
+	}
+	// The default agent shares the store above; every other agent opened its
+	// own index and that connection has to go with it.
+	for _, ctx := range contexts {
+		if ctx != nil && ctx.search != nil && ctx.search != store {
+			_ = ctx.search.Close()
+		}
 	}
 }
 
@@ -1479,12 +1563,18 @@ func (a *App) recordFolderGrant(tool string) {
 }
 
 // folderGrants merges the persisted folder-always answers with the grants
-// made during this run. A fresh copy per turn keeps config edits and answers
-// given mid-run visible to the next turn without sharing mutable state.
+// made during this run, for the workspace the app was launched in.
 func (a *App) folderGrants() map[string]bool {
+	return a.folderGrantsFor(a.workspace)
+}
+
+// folderGrantsFor is folderGrants for one folder. A fresh copy per turn keeps
+// config edits and answers given mid-run visible to the next turn without
+// sharing mutable state.
+func (a *App) folderGrantsFor(folder string) map[string]bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	persisted := a.cfg.ToolsAllowedInFolder(a.workspace)
+	persisted := a.cfg.ToolsAllowedInFolder(folder)
 	out := make(map[string]bool, len(persisted)+4)
 	for _, name := range persisted {
 		out[name] = true
@@ -1498,22 +1588,61 @@ func (a *App) folderGrants() map[string]bool {
 }
 
 func (a *App) approve(request agent.ApprovalRequest) agent.Decision {
-	if a.interactor == nil {
+	a.mu.Lock()
+	interactor := a.interactor
+	a.mu.Unlock()
+	if interactor == nil {
 		return agent.DecisionDeny
 	}
-	decision := a.interactor.Approve(request)
+	decision := interactor.Approve(request)
 	a.noteFolderDecision(request.Tool, decision)
 	return decision
 }
 
 func (a *App) ask(question string, options []string) (string, error) {
-	if a.interactor == nil {
+	a.mu.Lock()
+	interactor := a.interactor
+	a.mu.Unlock()
+	if interactor == nil {
 		return "", errors.New("the operator is not available for questions")
 	}
-	return a.interactor.Ask(question, options)
+	return interactor.Ask(question, options)
 }
 
+// runSubagent is the delegation path of the terminal's active agent.
 func (a *App) runSubagent(ctx context.Context, subType, prompt string) (string, agent.SubagentSpend, error) {
+	return a.runSubagentFor(ctx, a.env(), a.ActiveAgent(), false, subType, prompt)
+}
+
+// runSubagentFor runs one delegated task for a specific run. It applies the
+// agent's delegation settings before any model call: a guest or a
+// non-auto-approving agent asks the operator first, and the per-turn fan-out
+// cap is a hard stop.
+func (a *App) runSubagentFor(ctx context.Context, parent *agent.Env, agentName string, guest bool, subType, prompt string) (string, agent.SubagentSpend, error) {
+	cfg := a.Config()
+	children, _ := cfg.DelegationLimits(agentName)
+	if guest || !cfg.DelegationAutoApprove(agentName) {
+		decision := a.approve(agent.ApprovalRequest{
+			Tool:   "subagent",
+			Detail: strings.TrimSpace(subType) + ": " + strings.TrimSpace(prompt),
+			Risk:   string(agent.RiskEdit),
+		})
+		if !decision.Allowed() {
+			return "", agent.SubagentSpend{}, errors.New("the operator did not approve the delegation")
+		}
+	}
+	a.mu.Lock()
+	if children > 0 && a.turnDelegations >= children {
+		a.mu.Unlock()
+		return "", agent.SubagentSpend{}, fmt.Errorf("delegation limit reached: at most %d subagent(s) per turn", children)
+	}
+	a.turnDelegations++
+	a.mu.Unlock()
+	return a.runSubagentHead(ctx, parent, subType, prompt)
+}
+
+// runSubagentHead resolves the client and model, then runs the nested pass.
+func (a *App) runSubagentHead(ctx context.Context, parent *agent.Env, subType, prompt string) (string, agent.SubagentSpend, error) {
 	a.mu.Lock()
 	client := a.client
 	model := a.model
@@ -1543,7 +1672,7 @@ func (a *App) runSubagent(ctx context.Context, subType, prompt string) (string, 
 				continue
 			}
 			seen[key] = true
-			report, spend, runErr := agent.RunSubagent(ctx, a.env(), roleClient, roleModel, subType, prompt, agent.SubagentMaxSteps)
+			report, spend, runErr := agent.RunSubagent(ctx, parent, roleClient, roleModel, subType, prompt, agent.SubagentMaxSteps)
 			if runErr == nil {
 				return report, spend, nil
 			}
@@ -1561,7 +1690,7 @@ func (a *App) runSubagent(ctx context.Context, subType, prompt string) (string, 
 	// No chain: the role model, then the active model.
 	if primary != "" {
 		if roleClient, roleModel, err := a.subagentClient(primary); err == nil && roleModel.ID != model.ID {
-			report, spend, runErr := agent.RunSubagent(ctx, a.env(), roleClient, roleModel, subType, prompt, agent.SubagentMaxSteps)
+			report, spend, runErr := agent.RunSubagent(ctx, parent, roleClient, roleModel, subType, prompt, agent.SubagentMaxSteps)
 			if runErr == nil {
 				return report, spend, nil
 			}
@@ -1570,7 +1699,7 @@ func (a *App) runSubagent(ctx context.Context, subType, prompt string) (string, 
 			}
 		}
 	}
-	return agent.RunSubagent(ctx, a.env(), client, model, subType, prompt, agent.SubagentMaxSteps)
+	return agent.RunSubagent(ctx, parent, client, model, subType, prompt, agent.SubagentMaxSteps)
 }
 
 // subagentChain is the role's model followed by the fallbacks, blank entries
@@ -1697,34 +1826,94 @@ func (a *App) runTurnWithImages(ctx context.Context, input string, images []prov
 	return a.runOn(ctx, input, images, nil)
 }
 
-// runOn is the single run path. A nil isolated session uses the live one; a
-// session passed in is a scheduled run that must not touch the operator's
-// conversation, so it is never saved and its todos are not published.
+// runOptions selects what one turn runs against. A nil session is the live
+// operator conversation; a session passed in belongs to the caller (a
+// scheduled job, one channel chat) and never becomes the operator's session.
+type runOptions struct {
+	images  []provider.Image
+	session *agent.Session
+	// agentName is whose workspace, persona and model the turn uses. Empty
+	// means the active terminal agent.
+	agentName string
+	// interactor answers this run's approvals. A channel turn installs its
+	// own, so a guest's approval lands in the operator's chat; the terminal
+	// leaves it nil and keeps the UI's interactor.
+	interactor Interactor
+	// guest marks a non-operator turn: the admin-only tools are removed, the
+	// approval policy always asks, and secrets are withheld.
+	guest bool
+	// maxSteps and costBudgetUSD override the configured ceilings for this
+	// run, which is how one guest chat is bounded.
+	maxSteps      int
+	costBudgetUSD float64
+	// isolated marks a throwaway session: the turn runs, its answer returns,
+	// and no session file is written.
+	isolated bool
+}
+
+// runOn is the single run path for a caller that only knows the session it
+// owns. A non-nil session is a scheduled run that must not touch the
+// operator's conversation, so it is never saved and its todos are not
+// published.
 func (a *App) runOn(ctx context.Context, input string, images []provider.Image, isolated *agent.Session) error {
+	if isolated != nil {
+		return a.runWithOptions(ctx, input, runOptions{images: images, session: isolated, isolated: true})
+	}
+	return a.runWithOptions(ctx, input, runOptions{images: images})
+}
+
+// runWithOptions is the single run path. Every caller goes through it so the
+// model, budget, approval policy, tool wiring and agent context stay identical
+// whether the turn came from the terminal, a channel or a schedule.
+//
+// The single-run slot is taken with TryLock rather than Lock: a second caller
+// must be told the agent is busy instead of queueing behind a turn it cannot
+// see, which is what let a Telegram prompt block the terminal indefinitely.
+func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions) error {
 	if !a.runMu.TryLock() {
 		return ErrBusy
 	}
 	defer a.runMu.Unlock()
 
 	a.mu.Lock()
-	client := a.client
-	model := a.wireModel
-	// The effort is resolved against the model id, not the wire id, because the
-	// per-model override is keyed by the id the operator configured.
-	currentModel := a.model
-	window := a.model.Window()
-	price := a.pricing
-	costKnown := a.costKnown
-	modelErr := a.modelErr
-	if client == nil {
+	a.turnDelegations = 0
+	a.mu.Unlock()
+
+	if opts.interactor != nil {
+		// The run owns the approval route for its turn. Since runMu is held,
+		// restoring the previous interactor cannot race another run.
+		a.mu.Lock()
+		previous := a.interactor
+		a.interactor = opts.interactor
 		a.mu.Unlock()
-		if modelErr != nil {
+		defer func() {
+			a.mu.Lock()
+			a.interactor = previous
+			a.mu.Unlock()
+		}()
+	}
+
+	agentName := strings.TrimSpace(opts.agentName)
+	if agentName == "" {
+		agentName = a.ActiveAgent()
+	}
+	client, currentModel, model := a.agentModel(agentName)
+	if client == nil {
+		a.mu.Lock()
+		modelErr := a.modelErr
+		a.mu.Unlock()
+		if modelErr != nil && agentName == a.ActiveAgent() {
 			// Name the actual cause: a bare ErrNoModel read as "nothing is
 			// configured" while /model was showing a configured id.
 			return fmt.Errorf("%w: %v", ErrNoModel, modelErr)
 		}
 		return ErrNoModel
 	}
+	window := currentModel.Window()
+
+	a.mu.Lock()
+	price := a.pricing
+	costKnown := a.costKnown
 	a.running = true
 	a.mu.Unlock()
 
@@ -1740,48 +1929,59 @@ func (a *App) runOn(ctx context.Context, input string, images []provider.Image, 
 		a.mu.Unlock()
 	}()
 
+	runEnv := a.envForRun(agentName, opts.guest)
+	if opts.session != nil {
+		// A run that belongs to a caller keeps a throwaway todo store and an
+		// emitter that does not fold its usage into the operator's live
+		// session; the owned session still accounts for itself.
+		runEnv = a.isolatedEnvForRun(agentName, opts.guest)
+	}
+	// Delegation belongs to this run: its agent, guest state and ceilings.
+	// Without this a channel turn of a named agent would delegate as the
+	// terminal's active agent.
+	runEnv.RunSubagent = func(runCtx context.Context, subType, prompt string) (string, agent.SubagentSpend, error) {
+		return a.runSubagentFor(runCtx, runEnv, agentName, opts.guest, subType, prompt)
+	}
+
 	// A best-effort snapshot before the turn, so a bad edit can be undone
 	// with /rewind. It never fails the turn: outside git, or when git is
 	// slow, the turn simply runs without a new checkpoint.
-	agent.AutoCheckpoint(runCtx, a.workspace)
+	agent.AutoCheckpoint(runCtx, runEnv.Workspace)
 
 	cfg := a.Config()
-	runEnv := a.env()
-	if isolated != nil {
-		runEnv = a.isolatedEnv()
-	}
 	runner := &agent.Runner{
 		Client: client,
 		Model:  model,
 		Config: cfg,
 		Env:    runEnv,
-		Tools:  a.tools,
-		Policy: a.Policy(),
+		Tools:  a.toolsFor(agentName, opts.guest),
+		Policy: a.policyFor(agentName, opts.guest),
 		// cfg.MaxSteps is the whole per-turn ceiling, so an interactive turn
-		// pauses once, at the number the operator configured.
-		MaxSteps:      cfg.MaxSteps,
+		// pauses once, at the number the operator configured. A guest run may
+		// carry a tighter ceiling.
+		MaxSteps:      ceilingSteps(cfg.MaxSteps, opts.maxSteps),
 		Harness:       cfg.HarnessProfile,
 		ContextBudget: agent.HistoryBudget(window),
 		Pricing:       price,
 		CostKnown:     costKnown,
-		CostBudgetUSD: cfg.CostBudgetUSD,
+		CostBudgetUSD: ceilingBudget(cfg.CostBudgetUSD, opts.costBudgetUSD),
 		Effort:        cfg.EffortFor(currentModel.ID),
 		Steer:         a.TakeSteer,
-		Journal:       a.journal,
+		Journal:       runEnv.Journal,
 		ToolSearch:    cfg.ToolSearchEnabled,
-		TurnImages:    images,
+		TurnImages:    opts.images,
 	}
-	session := isolated
+	session := opts.session
 	if session == nil {
 		session = a.currentSession()
 	}
 	if err := runner.Run(runCtx, session, input); err != nil {
 		return err
 	}
-	if isolated == nil {
+	if opts.session == nil {
 		session.SetTodos(a.todos.Items())
 	}
-	if isolated != nil || a.Ephemeral() {
+	if opts.isolated || a.Ephemeral() {
 		return nil
 	}
 	// Condensation runs between turns, never inside one: rewriting history
@@ -1797,7 +1997,7 @@ func (a *App) runOn(ctx context.Context, input string, images []provider.Image, 
 	// no dedicated model is the point, since the plain trim only ever reached
 	// the request while the file and the in-memory history kept growing.
 	if !session.Condensed() && session.CompactStoredHistory(a.historyBudget()) {
-		a.emit(agent.Event{
+		runEnv.Emit(agent.Event{
 			Kind: agent.EventNotice,
 			Text: "Condensed the stored transcript to the context budget so the session file and memory stay bounded. Older turns read as they already did for the model.",
 		})
@@ -2078,8 +2278,14 @@ func (a *App) Status() string {
 		trust = "trusted"
 	}
 	model := a.CurrentModel()
+	activeAgent := a.ActiveAgent()
+	agentLine := "agent: " + activeAgent
+	if paths, err := agenthome.Resolve(activeAgent, a.Config().Agent(activeAgent).Workspace); err == nil {
+		agentLine = fmt.Sprintf("agent: %s (%s)", activeAgent, paths.Workspace)
+	}
 	lines := []string{
 		fmt.Sprintf("workspace: %s (%s)", a.workspace, trust),
+		agentLine,
 		fmt.Sprintf("model: %s (%s)", orNone(a.ModelLabel()), orNone(model.Provider)),
 	}
 	if plan, ok := model.Plan(); ok {
@@ -2133,13 +2339,22 @@ func (a *App) NeedsSetup() bool {
 	return !a.HasModel()
 }
 
-// ReloadSkills refreshes the skill list.
+// ReloadSkills refreshes the skill list of the active agent.
 func (a *App) ReloadSkills() {
-	if skills, err := skill.Discover(a.workspace); err == nil {
-		a.mu.Lock()
-		a.skills = skills
-		a.mu.Unlock()
+	agentName := a.ActiveAgent()
+	ctx := a.agentContextFor(agentName)
+	skills, err := skill.Discover(ctx.workspace)
+	if err != nil {
+		return
 	}
+	a.mu.Lock()
+	if current, ok := a.agentCtx[agentName]; ok {
+		current.skills = skills
+	}
+	if agentName == config.FinalAgentName {
+		a.skills = skills
+	}
+	a.mu.Unlock()
 }
 
 // Tools exposes the tool registry for /tools.
@@ -2174,4 +2389,22 @@ func orNone(value string) string {
 		return "none"
 	}
 	return value
+}
+
+// ceilingSteps is the per-turn step ceiling for one run: the configured value
+// unless a caller supplied a positive override.
+func ceilingSteps(configured, override int) int {
+	if override > 0 {
+		return override
+	}
+	return configured
+}
+
+// ceilingBudget is the dollar ceiling for one run: the configured value unless
+// a caller supplied a positive override.
+func ceilingBudget(configured, override float64) float64 {
+	if override > 0 {
+		return override
+	}
+	return configured
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/99apps-id/termixgo/internal/agent"
+	"github.com/99apps-id/termixgo/internal/config"
 )
 
 // SlashOption is one argument choice in the composer menu.
@@ -74,6 +75,7 @@ var slashCommands = []SlashCommand{
 		{Value: "plan", Detail: "read only: mutating tools are blocked"},
 	}},
 	{Trigger: "/harness", Args: "[id]", Summary: "Show or change the agent harness"},
+	{Trigger: "/agent", Args: "[nama]", Summary: "Show or switch the active agent (persona, workspace, session)"},
 	{Trigger: "/effort", Args: "[low|medium|high|max|default]", Summary: "Show or change the reasoning effort", Options: []SlashOption{
 		{Value: "low", Detail: "least thinking, fastest and cheapest"},
 		{Value: "medium", Detail: "balanced"},
@@ -241,8 +243,35 @@ func SlashOptions(name string) []SlashOption {
 	if !ok {
 		return nil
 	}
-	if command.Trigger == "/harness" {
+	switch command.Trigger {
+	case "/harness":
 		return harnessOptions()
+	case "/agent":
+		return agentOptions()
 	}
 	return command.Options
+}
+
+// agentOptions lists the configured agents for the /agent menu, so picking the
+// command offers the same names the command accepts instead of only listing
+// them. It reads the config, which is the same file the running app writes.
+func agentOptions() []SlashOption {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(cfg.Agents))
+	for name := range cfg.Agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	options := make([]SlashOption, 0, len(names))
+	for _, name := range names {
+		detail := "switch to this agent"
+		if name == cfg.ActiveAgent {
+			detail = "active agent"
+		}
+		options = append(options, SlashOption{Value: name, Detail: detail})
+	}
+	return options
 }

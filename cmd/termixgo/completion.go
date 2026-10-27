@@ -23,7 +23,7 @@ func runCompletion(args []string, stdout io.Writer) error {
 }
 
 func completionScript(shell string) (string, bool) {
-	const commands = "setup run models model trust approval harness mcp secret telegram serve service doctor completion version help"
+	const commands = "setup run models model trust approval harness agent channel mcp secret telegram serve service doctor completion version help"
 	switch shell {
 	case "bash":
 		return fmt.Sprintf(`# termixgo completion for bash. Install with:
@@ -39,6 +39,8 @@ _termixgo() {
   case "${COMP_WORDS[1]}" in
     approval) COMPREPLY=($(compgen -W "ask edits all plan" -- "$cur")) ;;
     trust) COMPREPLY=($(compgen -W "on off" -- "$cur")) ;;
+    agent) COMPREPLY=($(compgen -W "list add rm use show soul set" -- "$cur")) ;;
+    channel) COMPREPLY=($(compgen -W "list add login on off status rm allow admin groups guest pairing" -- "$cur")) ;;
     completion) COMPREPLY=($(compgen -W "bash zsh fish powershell" -- "$cur")) ;;
     service) COMPREPLY=($(compgen -W "install uninstall status" -- "$cur")) ;;
   esac
@@ -59,6 +61,8 @@ _termixgo() {
   case "${words[2]}" in
     approval) _describe 'mode' '(ask edits all plan)' ;;
     trust) _describe 'trust' '(on off)' ;;
+    agent) _describe 'action' '(list add rm use show soul set)' ;;
+    channel) _describe 'action' '(list add login on off status rm allow admin groups guest pairing)' ;;
     completion) _describe 'shell' '(bash zsh fish powershell)' ;;
     service) _describe 'action' '(install uninstall status)' ;;
   esac
@@ -68,10 +72,12 @@ _termixgo
 	case "fish":
 		return `# termixgo completion for fish. Install with:
 #   termixgo completion fish > ~/.config/fish/completions/termixgo.fish
-set -l cmds setup run models model trust approval harness mcp secret telegram serve service doctor completion version help
+set -l cmds setup run models model trust approval harness agent channel mcp secret telegram serve service doctor completion version help
 complete -c termixgo -f -n '__fish_use_subcommand' -a "$cmds"
 complete -c termixgo -f -n '__fish_seen_subcommand_from approval' -a "ask edits all plan"
 complete -c termixgo -f -n '__fish_seen_subcommand_from trust' -a "on off"
+complete -c termixgo -f -n '__fish_seen_subcommand_from agent' -a "list add rm use show soul set"
+complete -c termixgo -f -n '__fish_seen_subcommand_from channel' -a "list add login on off status rm allow admin groups guest pairing"
 complete -c termixgo -f -n '__fish_seen_subcommand_from completion' -a "bash zsh fish powershell"
 complete -c termixgo -f -n '__fish_seen_subcommand_from service' -a "install uninstall status"
 `, true
@@ -80,10 +86,12 @@ complete -c termixgo -f -n '__fish_seen_subcommand_from service' -a "install uni
 #   termixgo completion powershell | Out-String | Invoke-Expression
 Register-ArgumentCompleter -Native -CommandName termixgo -ScriptBlock {
   param($wordToComplete, $commandAst, $cursorPosition)
-  $cmds = @('setup','run','models','model','trust','approval','harness','mcp','secret','telegram','serve','service','doctor','completion','version','help')
+  $cmds = @('setup','run','models','model','trust','approval','harness','agent','channel','mcp','secret','telegram','serve','service','doctor','completion','version','help')
   $modes = @{
     'approval'   = @('ask','edits','all','plan')
     'trust'      = @('on','off')
+    'agent'      = @('list','add','rm','use','show','soul','set')
+    'channel'    = @('list','add','login','on','off','status','rm','allow','admin','groups','guest','pairing')
     'completion' = @('bash','zsh','fish','powershell')
     'service'    = @('install','uninstall','status')
   }

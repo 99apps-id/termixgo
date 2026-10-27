@@ -36,7 +36,7 @@ func (a *App) ClearTelegram() error {
 		return err
 	}
 	return a.UpdateConfig(func(cfg *config.Config) {
-		cfg.Telegram = config.Telegram{}
+		cfg.SyncLegacyTelegram(false, 0, 0, "")
 	})
 }
 
@@ -73,7 +73,9 @@ func (a *App) RegeneratePairingCode() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := a.UpdateConfig(func(cfg *config.Config) { cfg.Telegram.PairingCode = code }); err != nil {
+	if err := a.UpdateConfig(func(cfg *config.Config) {
+		cfg.SyncLegacyTelegram(cfg.Telegram.Enabled, cfg.Telegram.ChatID, cfg.Telegram.OwnerUserID, code)
+	}); err != nil {
 		return "", err
 	}
 	a.applyPairingCode(code)
@@ -117,89 +119,29 @@ func (a *App) SetTelegramEnabled(enabled bool) error {
 	} else {
 		a.StopTelegram()
 	}
-	return a.UpdateConfig(func(cfg *config.Config) { cfg.Telegram.Enabled = enabled })
+	return a.UpdateConfig(func(cfg *config.Config) {
+		cfg.SyncLegacyTelegram(enabled, cfg.Telegram.ChatID, cfg.Telegram.OwnerUserID, cfg.Telegram.PairingCode)
+	})
 }
 
-// StartTelegram launches the polling loop if it is not already running.
+// StartTelegram starts the default Telegram account. It is the pre-registry
+// entry point; every account, including this one, runs through the channel
+// registry so there is one runtime rather than two.
 func (a *App) StartTelegram() error {
 	a.mu.Lock()
 	if a.bot != nil {
 		a.mu.Unlock()
 		return nil
 	}
-	token := a.TelegramToken()
-	if strings.TrimSpace(token) == "" {
-		a.mu.Unlock()
-		return fmt.Errorf("no bot token is stored")
-	}
-	cfg := a.cfg
 	a.mu.Unlock()
-
-	bot := telegram.New(token, a)
-	bot.Pair(cfg.Telegram.ChatID, cfg.Telegram.OwnerUserID)
-	bot.SetPairingCode(cfg.Telegram.PairingCode)
-	// The confirmed update id lives beside the rest of the state, scoped to this
-	// bot id, so a restart resumes instead of replaying an old prompt. A token
-	// without a numeric id has no id to scope by, so no cursor is set rather
-	// than sharing one file across bots.
-	if id := telegram.BotIDFromToken(token); id != "" {
-		if _, err := config.EnsureHome(); err == nil {
-			if path, err := config.HomePath("telegram-offset-" + id + ".txt"); err == nil {
-				bot.SetCursorPath(path)
-			}
-		}
-	}
-	bot.Log = func(line string) {
-		a.mu.Lock()
-		a.botStatus = "error: " + line
-		a.mu.Unlock()
-	}
-	bot.OnPaired = func(chatID, ownerUserID int64) {
-		_ = a.SetTelegramChat(chatID, ownerUserID)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	a.mu.Lock()
-	a.bot = bot
-	a.botCancel = cancel
-	a.botStatus = "connecting"
-	if a.interactor == nil {
-		a.interactor = &telegramInteractor{bot: bot}
-	}
-	a.mu.Unlock()
-
-	go func() {
-		if _, err := bot.Verify(ctx); err != nil {
-			a.mu.Lock()
-			a.botStatus = "token rejected: " + err.Error()
-			a.mu.Unlock()
-			cancel()
-			a.mu.Lock()
-			if a.bot == bot {
-				a.bot = nil
-			}
-			a.botCancel = nil
-			a.mu.Unlock()
-			return
-		}
-		a.mu.Lock()
-		if bot.Paired() {
-			a.botStatus = "paired"
-		} else {
-			a.botStatus = "waiting for /pair"
-		}
-		a.mu.Unlock()
-		if err := bot.Run(ctx); err != nil && err != context.Canceled {
-			a.mu.Lock()
-			a.botStatus = "stopped: " + err.Error()
-			a.mu.Unlock()
-		}
-	}()
-	return nil
+	return a.StartChannel(config.ChannelTelegram, config.FinalAgentName)
 }
 
-// StopTelegram stops the polling loop.
+// StopTelegram stops the default Telegram account.
 func (a *App) StopTelegram() {
+	a.StopChannel(config.ChannelTelegram, config.FinalAgentName)
+	// A bot registered by an older path (a test fixture, a previous build)
+	// still has to be released.
 	a.mu.Lock()
 	cancel := a.botCancel
 	a.bot = nil
@@ -216,15 +158,14 @@ func (a *App) StopTelegram() {
 
 func (a *App) SetTelegramChat(chatID, ownerUserID int64) error {
 	if err := a.UpdateConfig(func(cfg *config.Config) {
-		cfg.Telegram.ChatID = chatID
-		cfg.Telegram.OwnerUserID = ownerUserID
+		enabled := cfg.Telegram.Enabled
+		if chatID != 0 {
+			enabled = true
+		}
 		// Pairing consumes the code and unpairing drops it, so a code that was
 		// live never stays valid: a leaked code cannot re-pair the bot. A fresh
 		// code is generated on the next /setup.
-		cfg.Telegram.PairingCode = ""
-		if chatID != 0 {
-			cfg.Telegram.Enabled = true
-		}
+		cfg.SyncLegacyTelegram(enabled, chatID, ownerUserID, "")
 	}); err != nil {
 		return err
 	}

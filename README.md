@@ -1045,6 +1045,28 @@ go build -ldflags "-X github.com/99apps-id/termixgo/internal/version.Version=9.9
 | [`CHANGELOG.md`](CHANGELOG.md) | what changed, release by release |
 | [`SECURITY.md`](SECURITY.md) | the threat model and how to report a vulnerability |
 
+## Agents and channels
+
+Termixgo can run more than one agent, and each agent can answer on its own
+WhatsApp number or Telegram bot.
+
+```
+termixgo agent add sales --template sales     # persona, workspace, sessions
+termixgo agent use sales                      # the terminal now talks to sales
+termixgo channel add whatsapp sales           # register the account
+termixgo channel login whatsapp sales         # scan the QR from Linked devices
+termixgo channel login telegram sales <token> # or pair a second bot
+termixgo channel pairing approve <code>       # let a non-operator DM through
+termixgo serve                                # run every enabled account
+termixgo cron add --agent sales --to whatsapp:sales:628123 --every 30m laporan "ringkas status"
+```
+
+Inside the terminal UI, `/agent` switches agents and `/channel` shows the
+accounts. A guest chat gets the read tools and approval-gated writes only:
+shell, background processes, workers, subagents, outbound requests and secrets
+are operator-only, and every mutating tool asks the operator first. WhatsApp
+replies are plain conversation, with a typing indicator while the turn runs.
+
 ## License
 
 Apache-2.0. See [`LICENSE`](LICENSE) for the full text and [`NOTICE`](NOTICE) for
