@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/channel"
 )
 
 // ErrBusy is returned by a Runner when the assistant is already running a
@@ -210,7 +212,7 @@ func suppressed(text string) bool {
 	if trimmed == "" {
 		return true
 	}
-	return strings.EqualFold(trimmed, SilentToken) || strings.EqualFold(trimmed, HeartbeatToken)
+	return channel.Silent(trimmed) || strings.EqualFold(trimmed, SilentToken) || strings.EqualFold(trimmed, HeartbeatToken)
 }
 
 func jobLabel(job Job) string {

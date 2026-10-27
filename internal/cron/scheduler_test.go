@@ -142,23 +142,25 @@ func TestSchedulerRequeuesAJobWhenTheAssistantIsBusy(t *testing.T) {
 }
 
 func TestSchedulerSuppressesSilentJobs(t *testing.T) {
-	now := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
-	store := newStore(t)
-	if _, err := store.Add("quiet", "check things", Schedule{Kind: Every, Every: time.Minute}, now); err != nil {
-		t.Fatalf("Add: %v", err)
-	}
-	deliverer := &fakeDeliverer{}
-	scheduler := &Scheduler{
-		Store:   store,
-		Runner:  &fakeRunner{answer: "[SILENT]"},
-		Deliver: deliverer,
-		Now:     func() time.Time { return now.Add(2 * time.Minute) },
-	}
-	scheduler.tick(context.Background())
-	scheduler.Wait()
+	for _, silentAnswer := range []string{"[SILENT]", "[SILENT].", "*(silent)*", "(silent)", "HEARTBEAT_OK", "no reply."} {
+		now := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+		store := newStore(t)
+		if _, err := store.Add("quiet", "check things", Schedule{Kind: Every, Every: time.Minute}, now); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+		deliverer := &fakeDeliverer{}
+		scheduler := &Scheduler{
+			Store:   store,
+			Runner:  &fakeRunner{answer: silentAnswer},
+			Deliver: deliverer,
+			Now:     func() time.Time { return now.Add(2 * time.Minute) },
+		}
+		scheduler.tick(context.Background())
+		scheduler.Wait()
 
-	if got := deliverer.delivered(); len(got) != 0 {
-		t.Errorf("a silent job must not be delivered, got %v", got)
+		if got := deliverer.delivered(); len(got) != 0 {
+			t.Errorf("a silent job (%q) must not be delivered, got %v", silentAnswer, got)
+		}
 	}
 }
 
