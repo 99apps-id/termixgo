@@ -1040,32 +1040,71 @@ go build -ldflags "-X github.com/99apps-id/termixgo/internal/version.Version=9.9
 | Document | Contents |
 | --- | --- |
 | [`TERMIXGO.md`](TERMIXGO.md) | project memory: architecture, invariants and conventions |
+| [`CHANNELS.md`](CHANNELS.md) | setup guide for WhatsApp and Telegram channel companions |
 | [`AGENTS.md`](AGENTS.md) | instructions for an agent working in this repository |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | how to build, test and contribute |
 | [`CHANGELOG.md`](CHANGELOG.md) | what changed, release by release |
 | [`SECURITY.md`](SECURITY.md) | the threat model and how to report a vulnerability |
 
-## Agents and channels
+## Agents and channels (WhatsApp & Telegram)
 
 Termixgo can run more than one agent, and each agent can answer on its own
-WhatsApp number or Telegram bot.
+WhatsApp number or Telegram bot. For the complete, detailed step-by-step
+guide, see [`CHANNELS.md`](CHANNELS.md).
 
-```
-termixgo agent add sales --template sales     # persona, workspace, sessions
-termixgo agent use sales                      # the terminal now talks to sales
-termixgo channel add whatsapp sales           # register the account
-termixgo channel login whatsapp sales         # scan the QR from Linked devices
-termixgo channel login telegram sales <token> # or pair a second bot
-termixgo channel pairing approve <code>       # let a non-operator DM through
-termixgo serve                                # run every enabled account
-termixgo cron add --agent sales --to whatsapp:sales:628123 --every 30m laporan "ringkas status"
-```
+### Quick activation workflow
+
+1. **WhatsApp Companion:**
+   ```sh
+   # 1. Register the WhatsApp account tied to an agent
+   termixgo channel add whatsapp default
+
+   # 2. Link your phone via QR code or 8-digit pairing code
+   termixgo channel login whatsapp default
+   # Or for headless VPS without camera:
+   # termixgo channel login whatsapp default --pair 628xxxxxxxxxx
+
+   # 3. Designate your personal phone as admin
+   termixgo channel admin add whatsapp default 628xxxxxxxxxx
+
+   # 4. Set inbound DM policy (open, pairing, or allowlist)
+   termixgo channel dm whatsapp default open
+
+   # 5. Enable and run
+   termixgo channel on whatsapp default
+   termixgo serve
+   ```
+
+2. **Telegram Companion:**
+   ```sh
+   # 1. Create bot via @BotFather in Telegram and obtain bot token
+   # 2. Store the token in Termixgo vault
+   termixgo secret telegram <BOT_TOKEN>
+
+   # 3. Add and authenticate the Telegram channel
+   termixgo channel add telegram default
+   termixgo channel login telegram default <BOT_TOKEN>
+
+   # 4. Enable and run
+   termixgo channel on telegram default
+   termixgo serve
+   ```
+
+3. **Install 24/7 background service on VPS:**
+   ```sh
+   termixgo service install
+   termixgo service status
+   ```
 
 Inside the terminal UI, `/agent` switches agents and `/channel` shows the
 accounts. A guest chat gets the read tools and approval-gated writes only:
 shell, background processes, workers, subagents, outbound requests and secrets
 are operator-only, and every mutating tool asks the operator first. WhatsApp
 replies are plain conversation, with a typing indicator while the turn runs.
+
+Interactive in-chat slash commands (`/models`, `/model <name>`, `/status`,
+`/new`, `/stop`, `/diff`, `/help`) work directly in WhatsApp and Telegram,
+automatically adjusting output language based on caller country code.
 
 ## License
 
