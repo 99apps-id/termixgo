@@ -75,7 +75,7 @@ var slashCommands = []SlashCommand{
 		{Value: "plan", Detail: "read only: mutating tools are blocked"},
 	}},
 	{Trigger: "/harness", Args: "[id]", Summary: "Show or change the agent harness"},
-	{Trigger: "/agent", Args: "[nama]", Summary: "Show or switch the active agent (persona, workspace, session)"},
+	{Trigger: "/agent", Args: "[<name>]", Summary: "Show or switch the active agent (persona, workspace, session)"},
 	{Trigger: "/effort", Args: "[low|medium|high|max|default]", Summary: "Show or change the reasoning effort", Options: []SlashOption{
 		{Value: "low", Detail: "least thinking, fastest and cheapest"},
 		{Value: "medium", Detail: "balanced"},
@@ -107,6 +107,20 @@ var slashCommands = []SlashCommand{
 		{Value: "off", Detail: "stop the bot"},
 		{Value: "setup", Detail: "paste the bot token"},
 		{Value: "pair", Detail: "show the code to send from Telegram"},
+	}},
+	{Trigger: "/whatsapp", Args: "[status|on|off]", Summary: "Manage WhatsApp companion", Options: []SlashOption{
+		{Value: "status", Detail: "show WhatsApp account status"},
+		{Value: "on", Detail: "start WhatsApp account"},
+		{Value: "off", Detail: "stop WhatsApp account"},
+	}},
+	{Trigger: "/channels", Args: "[status|start|stop]", Summary: "Manage multi-channel companions", Options: []SlashOption{
+		{Value: "status", Detail: "show status of every channel account"},
+		{Value: "start", Detail: "start all enabled channel accounts"},
+		{Value: "stop", Detail: "stop all running channel accounts"},
+	}},
+	{Trigger: "/theme", Args: "[dark|light]", Summary: "Switch TUI color theme", Options: []SlashOption{
+		{Value: "dark", Detail: "dark theme with cyan-violet accents"},
+		{Value: "light", Detail: "light terminal theme"},
 	}},
 	{Trigger: "/cron", Args: "[list|add|remove|on|off|run]", Summary: "Schedule assistant jobs", Options: []SlashOption{
 		{Value: "list", Detail: "show every scheduled job"},

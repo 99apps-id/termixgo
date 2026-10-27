@@ -76,3 +76,74 @@ func TestSlashReview(t *testing.T) {
 		t.Errorf("expected review report output, got: %s", output)
 	}
 }
+
+func TestSlashWhatsApp(t *testing.T) {
+	model := chatModel(t)
+	_, output := runSlash(t, model, "/whatsapp status")
+	if !strings.Contains(output, "WhatsApp") {
+		t.Errorf("expected WhatsApp status, got: %s", output)
+	}
+}
+
+func TestSlashChannels(t *testing.T) {
+	model := chatModel(t)
+	_, output := runSlash(t, model, "/channels status")
+	if !strings.Contains(output, "channels") && !strings.Contains(output, "Channels") {
+		t.Errorf("expected channels status, got: %s", output)
+	}
+}
+
+func TestSlashTheme(t *testing.T) {
+	model := chatModel(t)
+	_, output := runSlash(t, model, "/theme")
+	if !strings.Contains(output, "Current theme:") {
+		t.Errorf("expected theme output, got: %s", output)
+	}
+	_, switched := runSlash(t, model, "/theme light")
+	if !strings.Contains(switched, "Theme switched to light") {
+		t.Errorf("expected theme switch to light, got: %s", switched)
+	}
+	if model.app.Config().Theme != "light" {
+		t.Errorf("config Theme = %q, want light", model.app.Config().Theme)
+	}
+}
+
+func TestLocalShellExecution(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue("!echo hello-world")
+	res := press(t, model, "enter")
+	text := allText(res)
+	if !strings.Contains(text, "hello-world") {
+		t.Errorf("expected local shell command execution to print hello-world, got:\n%s", text)
+	}
+}
+
+func TestTUIShortcuts(t *testing.T) {
+	model := chatModel(t)
+	// Ctrl+T toggles thinking
+	initThinking := model.app.Config().ShowReasoning
+	res := press(t, model, "ctrl+t")
+	if res.app.Config().ShowReasoning == initThinking {
+		t.Errorf("ctrl+t should toggle thinking")
+	}
+
+	// Ctrl+L opens model picker
+	res = press(t, model, "ctrl+l")
+	if res.current != modePicker {
+		t.Errorf("ctrl+l should open picker, got mode %v", res.current)
+	}
+
+	// Ctrl+P opens session picker
+	model2 := chatModel(t)
+	res = press(t, model2, "ctrl+p")
+	if res.current != modePicker && !strings.Contains(allText(res), "No saved sessions") {
+		t.Errorf("ctrl+p should open session picker or notice")
+	}
+
+	// Ctrl+G opens agent picker
+	model3 := chatModel(t)
+	res = press(t, model3, "ctrl+g")
+	if res.current != modePicker {
+		t.Errorf("ctrl+g should open agent picker, got mode %v", res.current)
+	}
+}

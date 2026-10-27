@@ -221,6 +221,12 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashWorktree(args)
 	case "telegram":
 		return m.slashTelegram(args)
+	case "whatsapp":
+		return m.slashWhatsApp(args)
+	case "channel", "channels":
+		return m.slashChannels(args)
+	case "theme":
+		return m.slashTheme(args)
 	case "cron":
 		return m.slashCron(args)
 	case "heartbeat":
@@ -1015,7 +1021,10 @@ func (m *Model) slashHarness(args string) (tea.Model, tea.Cmd) {
 // turn runs in the agent's own world.
 func (m *Model) slashAgent(args string) (tea.Model, tea.Cmd) {
 	trimmed := strings.TrimSpace(args)
-	if trimmed == "" {
+	if strings.EqualFold(trimmed, "pick") || strings.EqualFold(trimmed, "picker") {
+		return m.openAgentPicker()
+	}
+	if trimmed == "" || strings.EqualFold(trimmed, "list") {
 		lines := []string{"Agents:"}
 		for _, name := range m.app.AgentNames() {
 			marker := "  "
@@ -1024,7 +1033,7 @@ func (m *Model) slashAgent(args string) (tea.Model, tea.Cmd) {
 			}
 			lines = append(lines, fmt.Sprintf("%s%-14s %s", marker, name, m.app.AgentWorkspace(name)))
 		}
-		lines = append(lines, "Switch with /agent <name>; create one with: termixgo agent add <name>")
+		lines = append(lines, "Switch with /agent <name>; choose with: Ctrl+G")
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
 		m.refresh()
 		return m, nil
@@ -1036,6 +1045,32 @@ func (m *Model) slashAgent(args string) (tea.Model, tea.Cmd) {
 	}
 	m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Agent is now %q. Workspace, persona and session switched.", trimmed)})
 	m.refresh()
+	return m, nil
+}
+
+// openAgentPicker opens an interactive picker for choosing the active agent.
+func (m *Model) openAgentPicker() (tea.Model, tea.Cmd) {
+	names := m.app.AgentNames()
+	if len(names) == 0 {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: "No agents configured."})
+		m.refresh()
+		return m, nil
+	}
+	active := m.app.ActiveAgent()
+	items := make([]pickerItem, 0, len(names))
+	for _, name := range names {
+		extra := ""
+		if name == active {
+			extra = "(active)"
+		}
+		items = append(items, pickerItem{
+			ID:     name,
+			Label:  name,
+			Detail: m.app.AgentWorkspace(name),
+			Extra:  extra,
+		})
+	}
+	m.openPicker(brandedTitle("Switch Agent"), "agent", items)
 	return m, nil
 }
 
@@ -1399,6 +1434,97 @@ func (m *Model) slashTelegram(args string) (tea.Model, tea.Cmd) {
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Pairing code: %s. Send /pair %s in Telegram.", code, code)})
 	default:
 		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /telegram [status|on|off|setup|pair]"})
+	}
+	m.refresh()
+	return m, nil
+}
+
+func (m *Model) slashWhatsApp(args string) (tea.Model, tea.Cmd) {
+	sub := strings.ToLower(strings.TrimSpace(args))
+	account := config.FinalAgentName
+	if fields := strings.Fields(sub); len(fields) > 1 {
+		sub = fields[0]
+		account = fields[1]
+	}
+	switch sub {
+	case "", "status":
+		statuses := m.app.ChannelStatuses()
+		var lines []string
+		for _, st := range statuses {
+			if st.Channel == config.ChannelWhatsApp {
+				lines = append(lines, fmt.Sprintf("  %-10s agent=%-10s state=%s", st.Account, st.Agent, st.State))
+			}
+		}
+		if len(lines) == 0 {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "WhatsApp: no account configured. Add one with: termixgo channel add whatsapp"})
+		} else {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "WhatsApp accounts:\n" + strings.Join(lines, "\n")})
+		}
+	case "on", "start":
+		if err := m.app.StartChannel(config.ChannelWhatsApp, account); err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		} else {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("WhatsApp/%s started.", account)})
+		}
+	case "off", "stop":
+		m.app.StopChannel(config.ChannelWhatsApp, account)
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("WhatsApp/%s stopped.", account)})
+	default:
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /whatsapp [status|on|off] [account]"})
+	}
+	m.refresh()
+	return m, nil
+}
+
+func (m *Model) slashChannels(args string) (tea.Model, tea.Cmd) {
+	sub := strings.ToLower(strings.TrimSpace(args))
+	switch sub {
+	case "", "status":
+		statuses := m.app.ChannelStatuses()
+		if len(statuses) == 0 {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "No channels configured. Add with: termixgo channel add <telegram|whatsapp>"})
+		} else {
+			lines := []string{"Configured channels:"}
+			for _, st := range statuses {
+				lines = append(lines, fmt.Sprintf("  %-10s %-10s agent=%-10s state=%s", st.Channel, st.Account, st.Agent, st.State))
+			}
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: strings.Join(lines, "\n")})
+		}
+	case "start":
+		if err := m.app.StartChannels(); err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		} else {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: "All enabled channels started."})
+		}
+	case "stop":
+		m.app.StopChannels()
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: "All channels stopped."})
+	default:
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /channels [status|start|stop]"})
+	}
+	m.refresh()
+	return m, nil
+}
+
+func (m *Model) slashTheme(args string) (tea.Model, tea.Cmd) {
+	sub := strings.ToLower(strings.TrimSpace(args))
+	switch sub {
+	case "":
+		current := m.app.Config().Theme
+		if current == "" {
+			current = config.ThemeDark
+		}
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Current theme: %s. Switch with /theme [dark|light].", current)})
+	case config.ThemeDark, config.ThemeLight:
+		_ = m.app.UpdateConfig(func(c *config.Config) {
+			c.Theme = sub
+		})
+		m.styles = NewStyles(PaletteFor(sub))
+		m.applyComposerStyle()
+		m.refresh()
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Theme switched to %s.", sub)})
+	default:
+		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /theme [dark|light]"})
 	}
 	m.refresh()
 	return m, nil

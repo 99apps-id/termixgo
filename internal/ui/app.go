@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -1025,6 +1027,25 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.refresh()
 		return m, nil
+	case "ctrl+l":
+		return m.slashModel("")
+	case "ctrl+p":
+		return m.slashSessions("")
+	case "ctrl+g":
+		return m.openAgentPicker()
+	case "ctrl+t":
+		cfg := m.app.Config()
+		cfg.ShowReasoning = !cfg.ShowReasoning
+		_ = m.app.UpdateConfig(func(c *config.Config) {
+			c.ShowReasoning = cfg.ShowReasoning
+		})
+		if cfg.ShowReasoning {
+			m.notice = "Thinking visible (Ctrl+T to hide)"
+		} else {
+			m.notice = "Thinking hidden (Ctrl+T to show)"
+		}
+		m.refresh()
+		return m, nil
 	case "esc":
 		// A mouse report whose lone ESC byte arrived in its own read is
 		// delivered as a bare Escape. Every Escape is therefore ambiguous with
@@ -1039,6 +1060,14 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		value := strings.TrimSpace(raw)
 		if value == "" {
 			return m, nil
+		}
+		// A leading exclamation mark runs a local workspace shell command directly,
+		// matching OpenClaw and CommandCode (!cmd). A lone "!" is treated as text.
+		if strings.HasPrefix(value, "!") && len(value) > 1 {
+			m.composer.SetValue("")
+			m.slashMatches = nil
+			m.mentionMatches = nil
+			return m.runLocalCommand(strings.TrimSpace(strings.TrimPrefix(value, "!")))
 		}
 		// A bare slash committed with Enter opens the command palette. A slash
 		// anywhere else is ordinary text, so typing a path such as c:/project
@@ -1518,6 +1547,48 @@ var liveSlashCommands = map[string]bool{
 
 // liveSlashCommand reports whether a command may run during a turn.
 func liveSlashCommand(name string) bool { return liveSlashCommands[name] }
+
+func localShellCommand(command string) (string, []string) {
+	if runtime.GOOS == "windows" {
+		return "powershell.exe", []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command}
+	}
+	return "/bin/sh", []string{"-c", command}
+}
+
+// runLocalCommand executes a shell command directly in the workspace, matching
+// OpenClaw and CommandCode local execution (!cmd).
+func (m *Model) runLocalCommand(cmdline string) (tea.Model, tea.Cmd) {
+	cmdline = strings.TrimSpace(cmdline)
+	if cmdline == "" {
+		return m, nil
+	}
+	m.blocks = append(m.blocks, block{
+		kind: blockUser,
+		text: "! " + cmdline,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	shell, args := localShellCommand(cmdline)
+	proc := exec.CommandContext(ctx, shell, args...)
+	proc.Dir = m.app.Workspace()
+	out, err := proc.CombinedOutput()
+	output := strings.TrimSpace(string(out))
+	if err != nil {
+		if output != "" {
+			output = fmt.Sprintf("%s\n(command failed: %v)", output, err)
+		} else {
+			output = fmt.Sprintf("command failed: %v", err)
+		}
+		m.blocks = append(m.blocks, block{kind: blockError, text: output})
+	} else {
+		if output == "" {
+			output = "(command completed with no output)"
+		}
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: output})
+	}
+	m.refresh()
+	return m, nil
+}
 
 // submit dispatches either a slash command or an agent turn.
 func (m *Model) submit(value string) (tea.Model, tea.Cmd) {
@@ -2181,7 +2252,7 @@ func (m *Model) viewHints() string {
 			text = fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C copy | Ctrl+X quit", m.spin.View(), elapsed)
 		}
 	} else {
-		text = " Enter send | Ctrl+J newline | Drag select | Ctrl+A all | Ctrl+C copy | Ctrl+X quit | Ctrl+O details | PgUp/PgDn scroll"
+		text = " Enter send | !cmd exec | Ctrl+L model | Ctrl+P session | Ctrl+G agent | Ctrl+T think | Ctrl+O details | Ctrl+C copy | Ctrl+X quit"
 	}
 	// A hint longer than the terminal would wrap and push the frame down, so it
 	// is clipped rather than allowed to reflow the whole screen.

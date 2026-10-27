@@ -383,7 +383,7 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		Effort:        parent.Config.EffortFor(model.ID),
 		System:        def.SystemPrompt,
 	}
-	session := NewSession(parent.Workspace, model.ID)
+	session := NewSessionFor(parent.AgentName, parent.Workspace, model.ID)
 	if err := runner.Run(ctx, session, prompt); err != nil {
 		return "", spend, err
 	}
@@ -399,7 +399,7 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	// trust it when the second pass also opened nothing. Worker roles are
 	// exempt: a general task can legitimately be answered from the prompt.
 	if def.ReadOnly && calls == 0 {
-		retry := NewSession(parent.Workspace, model.ID)
+		retry := NewSessionFor(parent.AgentName, parent.Workspace, model.ID)
 		if err := runner.Run(ctx, retry, reviewMandate+prompt); err != nil {
 			return "", spend, err
 		}

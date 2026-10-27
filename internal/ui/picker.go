@@ -165,6 +165,13 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 			m.blocks = append(m.blocks, block{kind: blockNotice, text: "Model is now " + model.Label})
 		}
 		return m, m.enterChat()
+	case "agent":
+		if err := m.app.SetActiveAgent(item.ID); err != nil {
+			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})
+		} else {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: fmt.Sprintf("Agent is now %q. Workspace, persona and session switched.", item.ID)})
+		}
+		return m, m.enterChat()
 	case "session":
 		if m.running {
 			m.blocks = append(m.blocks, block{kind: blockError, text: "Wait for the current turn to finish before resuming a session."})

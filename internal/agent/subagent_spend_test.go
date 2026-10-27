@@ -27,6 +27,24 @@ func TestRunSubagentReturnsSpend(t *testing.T) {
 	}
 }
 
+// TestRunSubagentInheritsAgentName ensures subagent sessions inherit the parent's agent name.
+func TestRunSubagentInheritsAgentName(t *testing.T) {
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{usageChunk(100, 50), textChunk("done")},
+	}}
+	parent := testEnv(t)
+	parent.Config = config.Default()
+	parent.AgentName = "finance"
+
+	answer, _, err := RunSubagent(context.Background(), parent, client, provider.Model{ID: "test-model"}, string(SubagentGeneral), "verify", 4)
+	if err != nil {
+		t.Fatalf("RunSubagent: %v", err)
+	}
+	if answer != "done" {
+		t.Errorf("answer = %q, want done", answer)
+	}
+}
+
 // TestParentTurnFoldsDelegatedSpend drives a main turn that calls run_subagent
 // and asserts the delegated tokens and dollars land in the parent's turn total
 // and session cost rather than dying with the child's throwaway session.
