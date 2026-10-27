@@ -167,7 +167,7 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 	}
 	policy := b.policySnapshot()
 	decision := channel.Decide(policy, request)
-	if b.isSelf(request.SenderID) {
+	if b.isSelf(request.SenderID) || (request.SenderAlt != "" && b.isSelf(request.SenderAlt)) {
 		// The account's own number is the operator.
 		decision = channel.Decision{Allow: true, Admin: true, Reason: "operator"}
 	}
@@ -213,12 +213,21 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 // requestFrom normalizes one WhatsApp message into the shared request.
 func (b *Bot) requestFrom(evt *events.Message) channel.Request {
 	info := evt.Info
+	senderAlt := ""
+	if !info.SenderAlt.IsEmpty() {
+		senderAlt = info.SenderAlt.String()
+	} else if b.client != nil && b.client.Store != nil {
+		if alt, err := b.client.Store.GetAltJID(context.Background(), info.Sender); err == nil && !alt.IsEmpty() {
+			senderAlt = alt.String()
+		}
+	}
 	request := channel.Request{
 		Channel:    config.ChannelWhatsApp,
 		Account:    b.accountName(),
 		ChatID:     info.Chat.String(),
 		IsGroup:    info.IsGroup || info.Chat.Server == types.GroupServer,
 		SenderID:   info.Sender.String(),
+		SenderAlt:  senderAlt,
 		SenderName: strings.TrimSpace(info.PushName),
 		Text:       messageText(evt.Message),
 	}

@@ -28,7 +28,9 @@ func TestDecideAppliesAccountPolicy(t *testing.T) {
 		reason string
 	}{
 		{"admin always speaks", enabled, Request{SenderID: "999"}, true, true, "admin"},
+		{"admin matched via sender alt lid", enabled, Request{SenderID: "lid_user_123", SenderAlt: "999"}, true, true, "admin"},
 		{"allowlisted dm", enabled, Request{SenderID: "+62 812-34"}, true, false, "allowlisted"},
+		{"allowlist matched via sender alt lid", enabled, Request{SenderID: "lid_user_456", SenderAlt: "+62 812-34"}, true, false, "allowlisted"},
 		{"stranger dm", enabled, Request{SenderID: "555"}, false, false, "sender is not on the allowlist"},
 		{"group mention", enabled, Request{IsGroup: true, ChatID: "-100", SenderID: "555", MentionsBot: true}, true, false, "group"},
 		{"group without mention", enabled, Request{IsGroup: true, ChatID: "-100", SenderID: "555"}, false, false, "group message without a mention"},

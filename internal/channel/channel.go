@@ -22,6 +22,7 @@ type Request struct {
 	ChatName string
 	// SenderID identifies the person: a Telegram user id or a WhatsApp JID.
 	SenderID   string
+	SenderAlt  string
 	SenderName string
 	IsGroup    bool
 	// MentionsBot is true when the message names this account, which is what a

@@ -26,7 +26,7 @@ func Decide(policy config.ChannelAccount, in Request) Decision {
 	if !policy.Enabled {
 		return Decision{Reason: "account disabled"}
 	}
-	if matchesAny(policy.Admins, in.SenderID) {
+	if matchesAny(policy.Admins, in.SenderID) || (in.SenderAlt != "" && matchesAny(policy.Admins, in.SenderAlt)) {
 		return Decision{Allow: true, Admin: true, Reason: "admin"}
 	}
 	if in.IsGroup {
@@ -53,7 +53,7 @@ func Decide(policy config.ChannelAccount, in Request) Decision {
 	case config.DMPolicyPairing:
 		return Decision{Reason: "waiting for pairing approval"}
 	default:
-		if matchesAny(policy.AllowFrom, in.SenderID) {
+		if matchesAny(policy.AllowFrom, in.SenderID) || (in.SenderAlt != "" && matchesAny(policy.AllowFrom, in.SenderAlt)) {
 			return Decision{Allow: true, Reason: "allowlisted"}
 		}
 		return Decision{Reason: "sender is not on the allowlist"}
