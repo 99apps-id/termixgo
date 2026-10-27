@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/search"
 )
 
@@ -204,6 +205,25 @@ func TestRunPipelineRespectsDependenciesAndFailures(t *testing.T) {
 		if strings.Contains(prompt, "after") {
 			t.Errorf("a dependent step must not run after its dependency failed")
 		}
+	}
+}
+
+func TestRunPipelineFoldsDelegatedEditSpend(t *testing.T) {
+	env := testEnv(t)
+	env.RunSubagent = func(ctx context.Context, subType, prompt string) (string, SubagentSpend, error) {
+		return "edited", SubagentSpend{EditedCode: true, Usage: provider.Usage{TotalTokens: 1}}, nil
+	}
+
+	pipeline := OrchestrationPipeline{ID: "p", Steps: []OrchestrationStep{
+		{ID: "a", Prompt: "do it"},
+		{ID: "b", Prompt: "depends on {{a}}", DependsOn: []string{"a"}},
+	}}
+	result := runPipeline(context.Background(), env, pipeline, nil)
+	if !result.Spend.EditedCode {
+		t.Fatalf("pipeline spend must carry delegated edited code: %+v", result.Spend)
+	}
+	if result.Spend.Usage.TotalTokens != 2 {
+		t.Fatalf("pipeline spend must fold child tokens: %+v", result.Spend.Usage)
 	}
 }
 
