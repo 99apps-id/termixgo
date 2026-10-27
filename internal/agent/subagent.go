@@ -48,6 +48,11 @@ type SubagentSpend struct {
 	// reassigned to the parent's model.
 	Provider string
 	Model    string
+	// EditedCode is true when the nested run edited verifiable code. The
+	// parent sees only the child's final text, so this flag is the one signal
+	// that survives: it tells the parent's verify ledger and critic gate to
+	// demand fresh verification instead of trusting delegated prose.
+	EditedCode bool
 	// Unpriced counts delegated components inside this run whose model had no
 	// price, so their tokens are known but their dollars are not. It is the
 	// explicit ledger that replaces the old CostKnown AND-collapse: a priced
@@ -62,6 +67,7 @@ func (s *SubagentSpend) Fold(other SubagentSpend) {
 	s.Cost += other.Cost
 	s.CostKnown = s.CostKnown && other.CostKnown
 	s.Unpriced += other.Unpriced
+	s.EditedCode = s.EditedCode || other.EditedCode
 	if s.Model == "" {
 		s.Provider = other.Provider
 		s.Model = other.Model
@@ -353,6 +359,10 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	if err := runner.Run(ctx, session, prompt); err != nil {
 		return "", spend, err
 	}
+	// The child's ledger is the only record of whether it edited code: its
+	// final text never says so. Capture it before any retry overwrites the
+	// runner's last-ledger slot.
+	spend.EditedCode = runner.LastLedger.codeEdited()
 	answer, calls := subagentReport(session)
 	// A read-tier verdict with nothing opened behind it is prose, not a
 	// review: the code-review role answering "Looks good." after zero tool
@@ -365,6 +375,8 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		if err := runner.Run(ctx, retry, reviewMandate+prompt); err != nil {
 			return "", spend, err
 		}
+		// OR, not overwrite: an edit in either pass demands verification.
+		spend.EditedCode = spend.EditedCode || runner.LastLedger.codeEdited()
 		answer, calls = subagentReport(retry)
 		if calls == 0 {
 			return "", spend, fmt.Errorf("the %s subagent answered twice without a single tool call; its verdict is unsupported and was discarded", def.Type)

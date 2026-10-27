@@ -13,6 +13,10 @@ import (
 type VerifyLedger struct {
 	ChangedCodePaths      []string
 	VerifiedAfterLastEdit bool
+	// DelegatedEdit is true when a nested subagent run edited code. The
+	// parent sees only the child's final text, never its per-file ledger,
+	// so the paths stay unknown while the verification demand survives.
+	DelegatedEdit bool
 }
 
 // NewVerifyLedger starts an empty ledger for one task.
@@ -87,6 +91,15 @@ func (l VerifyLedger) RecordEdit(path string) VerifyLedger {
 	return l
 }
 
+// RecordDelegatedEdit folds a nested run's code edits into the ledger when
+// the child's per-file paths are unknown to the parent. It demands the same
+// fresh verification as a local edit without inventing paths.
+func (l VerifyLedger) RecordDelegatedEdit() VerifyLedger {
+	l.DelegatedEdit = true
+	l.VerifiedAfterLastEdit = false
+	return l
+}
+
 // RecordVerification marks fresh passing evidence.
 func (l VerifyLedger) RecordVerification() VerifyLedger {
 	if l.VerifiedAfterLastEdit {
@@ -102,8 +115,12 @@ func LooksLikeCheckCommand(command string) bool {
 	return checkCommandPattern.MatchString(command)
 }
 
-// codeEdited reports whether any tracked path is verifiable code.
+// codeEdited reports whether any tracked path is verifiable code, or a
+// nested run edited code whose paths the parent never saw.
 func (l VerifyLedger) codeEdited() bool {
+	if l.DelegatedEdit {
+		return true
+	}
 	for _, path := range l.ChangedCodePaths {
 		if path != "" && !IsNonCodePath(path) {
 			return true
@@ -134,8 +151,11 @@ func (l VerifyLedger) BuildVerifyNudge(attempts int, claimedVerification bool) s
 		}
 	}
 	if len(paths) == 0 {
-		if !claimedVerification {
+		if !claimedVerification && !l.DelegatedEdit {
 			return ""
+		}
+		if l.DelegatedEdit && !claimedVerification {
+			return VerifyNudgePrefix + " A delegated subagent edited code in this task, but there is no fresh passing verification evidence since that edit (the child's per-file paths are not visible to this turn). Run the relevant verification now (the run_checks tool, or the project test, lint or build command), read any failure, repair the code, and summarize what passed. If verification is not possible, explain the concrete blocker instead of claiming the work is fully verified."
 		}
 		return VerifyNudgePrefix + " Your reply claims the work is verified, but this run recorded no passing verification evidence (no run_checks success, and no test, lint or build command that succeeded). Run the relevant verification now and report the real result, or state plainly what you did NOT verify."
 	}

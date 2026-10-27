@@ -69,6 +69,10 @@ type Runner struct {
 	// TurnImages are attached to the turn's first user message, which is how an
 	// uploaded image reaches a vision model.
 	TurnImages []provider.Image
+	// LastLedger is the verification ledger of the most recent Run. A parent
+	// reads it off the child's runner after RunSubagent to learn whether the
+	// nested run edited code, which the child's final text alone never says.
+	LastLedger VerifyLedger
 }
 
 // Run executes one operator turn to completion.
@@ -97,8 +101,16 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	}
 
 	ledger := NewVerifyLedger()
+	// Publish the ledger when the turn ends, on every return path, so a
+	// parent can ask whether a nested run edited code.
+	defer func() { r.LastLedger = ledger }()
 	guard := &loopGuard{}
 	nudges := 0
+	criticNudges := 0
+	// failedTools tracks the tools that errored this turn, so the critic
+	// gate can attach their recorded journal remedies to its nudge.
+	failedTools := map[string]bool{}
+	planNudges := 0
 
 	turnText := input + "\n\n" + FormatEnvironmentBlock(r.Env.Workspace, TrustLabel(r.Env.Trusted))
 	if len(r.TurnImages) > 0 {
@@ -255,7 +267,14 @@ runLoop:
 				continue
 			}
 			guard.noteProgress()
-			if ledger.ShouldNudgeVerification(ClaimsVerification(answer.String())) && nudges < MaxVerifyNudges {
+			claimed := ClaimsVerification(answer.String())
+			if critic := ReviewFinishWithHints(r.todoSnapshot(), ledger, claimed, criticNudges, r.criticHints(failedTools)); critic.BlockFinish {
+				criticNudges++
+				session.AddUser(critic.Nudge)
+				emit(Event{Kind: EventNotice, Text: CriticSummary(critic)})
+				continue
+			}
+			if ledger.ShouldNudgeVerification(claimed) && nudges < MaxVerifyNudges {
 				nudge := ledger.BuildVerifyNudge(nudges, ClaimsVerification(answer.String()))
 				if strings.TrimSpace(nudge) != "" {
 					nudges++
@@ -299,13 +318,23 @@ runLoop:
 				emit(Event{Kind: EventNotice, Text: reason})
 			}
 			before := r.todoSnapshot()
+			editsBefore := len(ledger.ChangedCodePaths)
 			result := r.execute(ctx, call)
 			if result.IsError && ctx.Err() != nil {
 				result.Output = "stopped: " + ctx.Err().Error()
 			}
 			r.observeToolResult(&ledger, call.Name, call.Arguments, result)
+			if diagnose == "" && !result.IsError && len(ledger.ChangedCodePaths) > editsBefore && NeedsPlanReminder(r.todoSnapshot(), true, planNudges) {
+				// A code mutation with no active plan: remind once per turn to
+				// record it. The todo_write call itself updates the snapshot,
+				// so the reminder naturally stays silent afterwards.
+				planNudges++
+				diagnose = BuildPlanNudge(planNudges - 1)
+				emit(Event{Kind: EventNotice, Text: "No active plan for this edit. Asked for one."})
+			}
 			if result.IsError && r.Journal != nil {
 				r.Journal.Record(call.Name, call.Arguments, result.Output)
+				failedTools[strings.ToLower(strings.TrimSpace(call.Name))] = true
 			}
 			session.AddToolResult(call.ID, call.Name, result.Output)
 			if len(result.Images) > 0 {
@@ -459,6 +488,29 @@ func (r *Runner) withJournalHints(tool, reason string) string {
 	return reason + "\nKnown fixes for " + tool + " from earlier runs:\n" + strings.Join(joined, "\n")
 }
 
+// criticHints collects the recorded journal remedies for the tools that
+// failed this turn, keyed by tool name. Empty when the journal is unavailable
+// or nothing failed, so the critic nudge stays lean.
+func (r *Runner) criticHints(failedTools map[string]bool) map[string][]string {
+	if r.Journal == nil || len(failedTools) == 0 {
+		return nil
+	}
+	out := map[string][]string{}
+	for tool := range failedTools {
+		tool = strings.TrimSpace(tool)
+		if tool == "" {
+			continue
+		}
+		if hints := r.Journal.SelfCorrectionHints(tool); len(hints) > 0 {
+			out[tool] = hints
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // todoSnapshot reads the plan before a tool call, so the loop can tell when a
 // task moved to completed.
 func (r *Runner) todoSnapshot() []Todo {
@@ -529,6 +581,13 @@ func (r *Runner) systemParts() []string {
 
 // observeToolResult folds one finished tool call into the verify ledger.
 func (r *Runner) observeToolResult(ledger *VerifyLedger, name, rawArgs string, result Result) {
+	// A delegated run's edits never appear as local file paths: the parent
+	// sees only the child's final text. Fold the child's edit flag first, on
+	// every path including errors, so delegated edits always demand fresh
+	// verification instead of sailing through as prose.
+	if result.SubagentEditedCode {
+		*ledger = ledger.RecordDelegatedEdit()
+	}
 	lowered := strings.ToLower(strings.TrimSpace(name))
 	switch lowered {
 	case "apply_patch", "patch":

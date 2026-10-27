@@ -689,26 +689,28 @@ func (t *subagentTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	report, spend, err := env.RunSubagent(ctx, subType, prompt)
 	if err != nil {
 		return Result{
-			Output:            err.Error(),
-			IsError:           true,
-			SubagentUsage:     spend.Usage,
-			SubagentCost:      spend.Cost,
-			SubagentCostKnown: spend.CostKnown,
-			SubagentUnpriced:  spend.Unpriced,
-			SubagentProvider:  spend.Provider,
-			SubagentModel:     spend.Model,
-			SubagentSpent:     true,
+			Output:             err.Error(),
+			IsError:            true,
+			SubagentUsage:      spend.Usage,
+			SubagentCost:       spend.Cost,
+			SubagentCostKnown:  spend.CostKnown,
+			SubagentUnpriced:   spend.Unpriced,
+			SubagentProvider:   spend.Provider,
+			SubagentModel:      spend.Model,
+			SubagentEditedCode: spend.EditedCode,
+			SubagentSpent:      true,
 		}, nil
 	}
 	return Result{
-		Output:            report,
-		SubagentUsage:     spend.Usage,
-		SubagentCost:      spend.Cost,
-		SubagentCostKnown: spend.CostKnown,
-		SubagentUnpriced:  spend.Unpriced,
-		SubagentProvider:  spend.Provider,
-		SubagentModel:     spend.Model,
-		SubagentSpent:     true,
+		Output:             report,
+		SubagentUsage:      spend.Usage,
+		SubagentCost:       spend.Cost,
+		SubagentCostKnown:  spend.CostKnown,
+		SubagentUnpriced:   spend.Unpriced,
+		SubagentProvider:   spend.Provider,
+		SubagentModel:      spend.Model,
+		SubagentEditedCode: spend.EditedCode,
+		SubagentSpent:      true,
 	}, nil
 }
 

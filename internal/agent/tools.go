@@ -43,7 +43,11 @@ type Result struct {
 	// model had no price, so their dollars could not be folded. It is added to
 	// the parent's own unpriced counter rather than collapsing CostKnown.
 	SubagentUnpriced int
-	SubagentSpent    bool
+	// SubagentEditedCode says the delegated run edited verifiable code. The
+	// loop folds it into the parent verify ledger so delegated edits demand
+	// the same fresh verification as local ones.
+	SubagentEditedCode bool
+	SubagentSpent      bool
 }
 
 // Tool is one capability offered to the model.

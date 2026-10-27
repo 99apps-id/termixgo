@@ -57,15 +57,16 @@ func (t *orchestrateTool) Run(ctx context.Context, env *Env, args map[string]any
 		output = clipBytes(output, 16000) + "\n... [truncated]"
 	}
 	return Result{
-		Output:            output,
-		IsError:           len(result.Failed) > 0,
-		SubagentUsage:     result.Spend.Usage,
-		SubagentCost:      result.Spend.Cost,
-		SubagentCostKnown: result.Spend.CostKnown,
-		SubagentUnpriced:  result.Spend.Unpriced,
-		SubagentProvider:  result.Spend.Provider,
-		SubagentModel:     result.Spend.Model,
-		SubagentSpent:     true,
+		Output:             output,
+		IsError:            len(result.Failed) > 0,
+		SubagentUsage:      result.Spend.Usage,
+		SubagentCost:       result.Spend.Cost,
+		SubagentCostKnown:  result.Spend.CostKnown,
+		SubagentUnpriced:   result.Spend.Unpriced,
+		SubagentProvider:   result.Spend.Provider,
+		SubagentModel:      result.Spend.Model,
+		SubagentEditedCode: result.Spend.EditedCode,
+		SubagentSpent:      true,
 	}, nil
 }
 
