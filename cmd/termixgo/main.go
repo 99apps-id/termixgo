@@ -254,13 +254,28 @@ func runModels(args []string, stdout io.Writer) error {
 			return fmt.Errorf("unknown models option %q", args[index])
 		}
 	}
+	cfg, _ := config.Load()
 	for _, info := range provider.Providers() {
 		if providerFilter != "" && info.ID != providerFilter {
 			continue
 		}
 		fmt.Fprintf(stdout, "%s (%s)\n", info.Label, info.ID)
+		seen := map[string]bool{}
 		for _, model := range provider.ModelsFor(info.ID) {
+			seen[model.ID] = true
 			fmt.Fprintf(stdout, "  %-32s %s\n", model.ID, model.Description)
+		}
+		detail := "Custom model"
+		if u := strings.TrimSpace(cfg.BaseURLs[info.ID]); u != "" {
+			detail = u
+		}
+		for _, id := range cfg.CustomModels[info.ID] {
+			id = strings.TrimSpace(id)
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			fmt.Fprintf(stdout, "  %-32s %s\n", id, detail)
 		}
 	}
 	return nil

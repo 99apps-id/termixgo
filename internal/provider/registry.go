@@ -621,12 +621,12 @@ func Models() []Model {
 		{ID: "qwen2.5-coder:latest", Provider: "ollama", Label: "Qwen2.5 Coder", Description: "Older local coding model, still widely pulled.", Tags: []string{"local", "coding"}},
 		{ID: "llama3.2:latest", Provider: "ollama", Label: "Llama 3.2", Description: "Older local general model.", Tags: []string{"local"}},
 
-		{ID: "glm-5.3-flash", Provider: "ollama", Label: "GLM 5.3 Flash", Description: "Ollama cloud model.", Tags: []string{"cloud"}},
-		{ID: "deepseek-v4.1-flash", Provider: "ollama", Label: "DeepSeek V4.1 Flash", Description: "Ollama cloud model.", Tags: []string{"cloud"}},
-		{ID: "minimax-m3.1-flash", Provider: "ollama", Label: "MiniMax M3.1 Flash", Description: "Ollama cloud model.", Tags: []string{"cloud"}},
-		{ID: "minimax-m3", Provider: "ollama", Label: "MiniMax M3", Description: "Ollama cloud model.", Tags: []string{"cloud"}},
-		{ID: "kimi-k2.7-code", Provider: "ollama", Label: "Kimi K2.7 Code", Description: "Ollama cloud model.", Tags: []string{"cloud", "coding"}},
-		{ID: "nemotron-3-ultra", Provider: "ollama", Label: "Nemotron 3 Ultra", Description: "Ollama cloud model.", Tags: []string{"cloud"}},
+		{ID: "ollama/glm-5.3-flash", Provider: "ollama", Label: "GLM 5.3 Flash", APIID: "glm-5.3-flash", Description: "Ollama cloud model.", Tags: []string{"cloud"}},
+		{ID: "ollama/deepseek-v4.1-flash", Provider: "ollama", Label: "DeepSeek V4.1 Flash", APIID: "deepseek-v4.1-flash", Description: "Ollama cloud model.", Tags: []string{"cloud"}},
+		{ID: "ollama/minimax-m3.1-flash", Provider: "ollama", Label: "MiniMax M3.1 Flash", APIID: "minimax-m3.1-flash", Description: "Ollama cloud model.", Tags: []string{"cloud"}},
+		{ID: "ollama/minimax-m3", Provider: "ollama", Label: "MiniMax M3", APIID: "minimax-m3", Description: "Ollama cloud model.", Tags: []string{"cloud"}},
+		{ID: "ollama/kimi-k2.7-code", Provider: "ollama", Label: "Kimi K2.7 Code", APIID: "kimi-k2.7-code", Description: "Ollama cloud model.", Tags: []string{"cloud", "coding"}},
+		{ID: "ollama/nemotron-3-ultra", Provider: "ollama", Label: "Nemotron 3 Ultra", APIID: "nemotron-3-ultra", Description: "Ollama cloud model.", Tags: []string{"cloud"}},
 
 		{ID: "qwen3.8-27b-lmstudio", Provider: "lmstudio", Label: "Qwen3.8 27B (LM Studio)", APIID: "qwen3.8-27b", Description: "Loaded in LM Studio.", Tags: []string{"local", "tools"}},
 		{ID: "qwen3.8-27b-mlx", Provider: "mlx", Label: "Qwen3.8 27B (MLX)", APIID: "qwen3.8-27b", Description: "Loaded in MLX on Apple silicon.", Tags: []string{"local", "tools"}},
