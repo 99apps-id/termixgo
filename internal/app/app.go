@@ -1233,9 +1233,15 @@ func (a *App) historyBudget() int {
 // so the plain trim is cheaper and just as correct.
 func (a *App) PendingWindow() int {
 	a.mu.Lock()
+	session := a.session
+	a.mu.Unlock()
+	return a.pendingWindowFor(session)
+}
+
+func (a *App) pendingWindowFor(session *agent.Session) int {
+	a.mu.Lock()
 	window := a.model.Window()
 	cfg := a.cfg
-	session := a.session
 	a.mu.Unlock()
 	if session == nil {
 		return 0
@@ -1262,7 +1268,7 @@ func (a *App) PendingWindow() int {
 // charge, which is exactly what happened before this existed, so a provider
 // hiccup degrades the session instead of stopping it.
 func (a *App) maybeCompactHistory(ctx context.Context, session *agent.Session) {
-	window := a.PendingWindow()
+	window := a.pendingWindowFor(session)
 	if window == 0 {
 		return
 	}
@@ -1297,14 +1303,19 @@ func (a *App) maybeCompactHistory(ctx context.Context, session *agent.Session) {
 
 // ForceCompact manually condenses earlier session turns into a brief, reducing context size.
 func (a *App) ForceCompact(ctx context.Context) (bool, error) {
+	a.mu.Lock()
+	session := a.session
+	a.mu.Unlock()
+	return a.ForceCompactSession(ctx, session)
+}
+
+// ForceCompactSession manually condenses earlier turns of the given session into a brief.
+func (a *App) ForceCompactSession(ctx context.Context, session *agent.Session) (bool, error) {
 	if !a.runMu.TryLock() {
 		return false, fmt.Errorf("cannot compact while a turn is in flight")
 	}
 	defer a.runMu.Unlock()
 
-	a.mu.Lock()
-	session := a.session
-	a.mu.Unlock()
 	if session == nil {
 		return false, fmt.Errorf("no active session")
 	}
@@ -1333,6 +1344,7 @@ func (a *App) ForceCompact(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("compaction returned empty brief")
 	}
 	if session.InsertSummary(brief) {
+		_ = session.Save()
 		a.emit(agent.Event{Kind: agent.EventNotice, Text: "Manually condensed earlier turns into a brief."})
 		return true, nil
 	}

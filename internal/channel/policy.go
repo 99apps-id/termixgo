@@ -79,6 +79,11 @@ func CanonicalID(raw string) string {
 	return trimmed
 }
 
+// MatchesAny reports whether id matches any entry in list using CanonicalID.
+func MatchesAny(list []string, id string) bool {
+	return matchesAny(list, id)
+}
+
 func matchesAny(list []string, id string) bool {
 	target := CanonicalID(id)
 	if target == "" {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -430,14 +431,14 @@ func TestMediaHandlersGracefulNilClient(t *testing.T) {
 	policy := config.ChannelAccount{Enabled: true}
 
 	imgMsg := &waE2E.ImageMessage{Caption: proto.String("cek foto")}
-	bot.runImage(ctx, req, imgMsg, "id", policy)
+	bot.runImage(ctx, req, imgMsg, "", "id", policy)
 	if len(replies) == 0 {
 		t.Errorf("expected error reply for runImage with nil client")
 	}
 
 	replies = nil
 	docMsg := &waE2E.DocumentMessage{FileName: proto.String("laporan.pdf")}
-	bot.runDocument(ctx, req, docMsg, "id", policy)
+	bot.runDocument(ctx, req, docMsg, "", "id", policy)
 	if len(replies) == 0 {
 		t.Errorf("expected error reply for runDocument with nil client")
 	}
@@ -460,5 +461,125 @@ func TestSendToAndPairingStore(t *testing.T) {
 	prompt := bot.pairingPrompt(req)
 	if !strings.Contains(prompt, "Sandi pairing") {
 		t.Errorf("pairing prompt missing code instructions: %q", prompt)
+	}
+}
+
+type voiceAndInspectorAgent struct {
+	fakeAgent
+	transcript string
+	cost       string
+	plan       string
+	compact    string
+}
+
+func (a *voiceAndInspectorAgent) TranscribeAudio(ctx context.Context, data []byte, filename string) (string, error) {
+	return a.transcript, nil
+}
+
+func (a *voiceAndInspectorAgent) RunVoicePrompt(ctx context.Context, req channel.Request, prompt string, progress func(string)) (string, error) {
+	a.prompts = append(a.prompts, prompt)
+	return "voice-reply", nil
+}
+
+func (a *voiceAndInspectorAgent) CostInfo(req channel.Request, lang string) string {
+	return a.cost
+}
+
+func (a *voiceAndInspectorAgent) PlanInfo(req channel.Request, lang string) string {
+	return a.plan
+}
+
+func (a *voiceAndInspectorAgent) CompactSession(ctx context.Context, req channel.Request, lang string) string {
+	return a.compact
+}
+
+func TestEphemeralGroupMentionCommandAndQuotedContext(t *testing.T) {
+	agent := &voiceAndInspectorAgent{
+		fakeAgent:  fakeAgent{model: "step-3.5-flash", status: "ok-status"},
+		transcript: "halo dari voice note",
+		cost:       "Total token: 120",
+		plan:       "Rencana (1/1 selesai)",
+		compact:    "Riwayat percakapan berhasil diringkas",
+	}
+	var replies []string
+	bot := New(nil, agent)
+	bot.sendHook = func(chatID, text string) {
+		replies = append(replies, text)
+	}
+	bot.downloadHook = func(ctx context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error) {
+		return []byte("fake-audio"), nil
+	}
+	bot.selfIDs = map[string]bool{channel.CanonicalID("628111@s.whatsapp.net"): true}
+	bot.SetAccount("default", config.ChannelAccount{
+		Enabled:     true,
+		Admins:      []string{"628999@s.whatsapp.net"},
+		GroupPolicy: config.GroupPolicyMention,
+	}, nil)
+
+	// 1. Ephemeral message in group with @bot /cost command
+	ephemCmd := &events.Message{
+		Info: types.MessageInfo{
+			MessageSource: types.MessageSource{
+				Chat:    types.NewJID("12345", types.GroupServer),
+				Sender:  types.NewJID("628999", types.DefaultUserServer),
+				IsGroup: true,
+			},
+		},
+		Message: &waE2E.Message{
+			EphemeralMessage: &waE2E.FutureProofMessage{
+				Message: &waE2E.Message{
+					ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+						Text: proto.String("@628111 /cost"),
+						ContextInfo: &waE2E.ContextInfo{
+							MentionedJID: []string{"628111@s.whatsapp.net"},
+						},
+					},
+				},
+			},
+		},
+	}
+	bot.handleMessage(context.Background(), ephemCmd)
+	if len(replies) == 0 || !strings.Contains(replies[len(replies)-1], "Total token: 120") {
+		t.Fatalf("expected /cost reply from ephemeral group mention, got %v", replies)
+	}
+
+	// 2. Quoted message reply context + /plan and /compact
+	req := channel.Request{ChatID: "628999@s.whatsapp.net", SenderID: "628999@s.whatsapp.net", Text: "/plan", Admin: true}
+	bot.handleCommand(context.Background(), req)
+	if !strings.Contains(replies[len(replies)-1], "Rencana (1/1 selesai)") {
+		t.Errorf("unexpected /plan reply: %v", replies[len(replies)-1])
+	}
+	req.Text = "/compact"
+	bot.handleCommand(context.Background(), req)
+	if !strings.Contains(replies[len(replies)-1], "berhasil diringkas") {
+		t.Errorf("unexpected /compact reply: %v", replies[len(replies)-1])
+	}
+
+	// 3. Voice note with quoted message context
+	audioEvt := &events.Message{
+		Info: types.MessageInfo{
+			MessageSource: types.MessageSource{
+				Chat:   types.NewJID("628999", types.DefaultUserServer),
+				Sender: types.NewJID("628999", types.DefaultUserServer),
+			},
+		},
+		Message: &waE2E.Message{
+			AudioMessage: &waE2E.AudioMessage{
+				Mimetype: proto.String("audio/ogg; codecs=opus"),
+				PTT:      proto.Bool(true),
+				ContextInfo: &waE2E.ContextInfo{
+					QuotedMessage: &waE2E.Message{
+						Conversation: proto.String("pesan sebelumnya"),
+					},
+				},
+			},
+		},
+	}
+	bot.handleMessage(context.Background(), audioEvt)
+	if len(agent.prompts) == 0 || !strings.Contains(agent.prompts[len(agent.prompts)-1], "pesan sebelumnya") || !strings.Contains(agent.prompts[len(agent.prompts)-1], "halo dari voice note") {
+		t.Fatalf("expected voice note prompt with quoted context, got %v", agent.prompts)
+	}
+	if replies[len(replies)-1] != "voice-reply" {
+		t.Errorf("expected voice-reply, got %q", replies[len(replies)-1])
 	}
 }

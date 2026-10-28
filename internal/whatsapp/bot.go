@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -31,6 +30,23 @@ type ImageAgent interface {
 	RunPromptWithImage(ctx context.Context, request channel.Request, prompt, mediaType, data string, progress func(string)) (string, error)
 }
 
+// AudioTranscriber is an agent that can transcribe voice/audio bytes to text.
+type AudioTranscriber interface {
+	TranscribeAudio(ctx context.Context, data []byte, filename string) (string, error)
+}
+
+// VoicePromptRunner is an agent that can run a voice-originated prompt with a fallback model.
+type VoicePromptRunner interface {
+	RunVoicePrompt(ctx context.Context, request channel.Request, prompt string, progress func(string)) (string, error)
+}
+
+// SessionInspector is an optional interface that exposes per-chat session cost, plan, and compaction.
+type SessionInspector interface {
+	CostInfo(request channel.Request, lang string) string
+	PlanInfo(request channel.Request, lang string) string
+	CompactSession(ctx context.Context, request channel.Request, lang string) string
+}
+
 // WorkspaceProvider gives access to the workspace directory path.
 type WorkspaceProvider interface {
 	Workspace() string
@@ -45,14 +61,15 @@ type Bot struct {
 	client *whatsmeow.Client
 	agent  channel.Agent
 
-	mu       sync.RWMutex
-	account  string
-	policy   config.ChannelAccount
-	pairing  *channel.PairingStore
-	selfIDs  map[string]bool
-	limiter  *channel.RateLimiter
-	logf     func(string)
-	sendHook func(chatID, text string)
+	mu           sync.RWMutex
+	account      string
+	policy       config.ChannelAccount
+	pairing      *channel.PairingStore
+	selfIDs      map[string]bool
+	limiter      *channel.RateLimiter
+	logf         func(string)
+	sendHook     func(chatID, text string)
+	downloadHook func(ctx context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error)
 }
 
 // New builds the bot for one client and bridge.
@@ -182,6 +199,8 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 	}
 	imageMsg := rawMsg.GetImageMessage()
 	docMsg := rawMsg.GetDocumentMessage()
+	audioMsg := rawMsg.GetAudioMessage()
+	quoted := quotedText(rawMsg)
 
 	request := b.requestFrom(evt)
 	if imageMsg != nil {
@@ -190,7 +209,7 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 		request.Text = strings.TrimSpace(docMsg.GetCaption())
 	}
 
-	if imageMsg == nil && docMsg == nil && strings.TrimSpace(request.Text) == "" {
+	if imageMsg == nil && docMsg == nil && audioMsg == nil && strings.TrimSpace(request.Text) == "" {
 		return
 	}
 
@@ -224,16 +243,30 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 		}
 	}
 
-	if imageMsg != nil {
-		b.runImage(ctx, request, imageMsg, lang, policy)
-		return
-	}
-	if docMsg != nil {
-		b.runDocument(ctx, request, docMsg, lang, policy)
-		return
+	if imageMsg != nil || docMsg != nil || audioMsg != nil {
+		if !decision.Admin {
+			if lang == "id" {
+				b.reply(ctx, request.ChatID, "Maaf, pengiriman media dan dokumen hanya untuk operator.")
+			} else {
+				b.reply(ctx, request.ChatID, "Sorry, sending media and documents is restricted to the operator.")
+			}
+			return
+		}
+		if imageMsg != nil {
+			b.runImage(ctx, request, imageMsg, quoted, lang, policy)
+			return
+		}
+		if docMsg != nil {
+			b.runDocument(ctx, request, docMsg, quoted, lang, policy)
+			return
+		}
+		if audioMsg != nil {
+			b.runAudio(ctx, request, audioMsg, quoted, lang, policy)
+			return
+		}
 	}
 
-	if strings.HasPrefix(strings.TrimSpace(request.Text), "/") {
+	if cmdText, isCmd := channel.ExtractCommandText(request.Text); isCmd {
 		if !decision.Admin {
 			if lang == "id" {
 				b.reply(ctx, request.ChatID, "Maaf, perintah itu hanya untuk operator.")
@@ -242,13 +275,15 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 			}
 			return
 		}
+		request.Text = cmdText
 		b.handleCommand(ctx, request)
 		return
 	}
 
+	prompt := channel.FormatQuotedPrompt(quoted, request.Text)
 	done := make(chan struct{})
 	go b.keepTyping(ctx, request.ChatID, done)
-	answer, err := b.agent.RunPrompt(ctx, request, request.Text, nil)
+	answer, err := b.agent.RunPrompt(ctx, request, prompt, nil)
 	close(done)
 	if err != nil {
 		b.reply(ctx, request.ChatID, naturalError(err, lang))
@@ -262,12 +297,21 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 	}
 }
 
-// runImage downloads an image and runs vision inference through the agent.
-func (b *Bot) runImage(ctx context.Context, request channel.Request, imageMsg *waE2E.ImageMessage, lang string, policy config.ChannelAccount) {
-	if b.client == nil {
-		b.reply(ctx, request.ChatID, naturalError(errors.New("no whatsapp client available"), lang))
-		return
+func (b *Bot) downloadMedia(ctx context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error) {
+	b.mu.RLock()
+	hook := b.downloadHook
+	b.mu.RUnlock()
+	if hook != nil {
+		return hook(ctx, msg)
 	}
+	if b.client == nil {
+		return nil, errors.New("no whatsapp client available")
+	}
+	return b.client.Download(ctx, msg)
+}
+
+// runImage downloads an image and runs vision inference through the agent.
+func (b *Bot) runImage(ctx context.Context, request channel.Request, imageMsg *waE2E.ImageMessage, quoted, lang string, policy config.ChannelAccount) {
 	prompt := strings.TrimSpace(imageMsg.GetCaption())
 	if prompt == "" {
 		if lang == "id" {
@@ -276,7 +320,8 @@ func (b *Bot) runImage(ctx context.Context, request channel.Request, imageMsg *w
 			prompt = "Describe this image and act on anything notable in it."
 		}
 	}
-	data, err := b.client.Download(ctx, imageMsg)
+	prompt = channel.FormatQuotedPrompt(quoted, prompt)
+	data, err := b.downloadMedia(ctx, imageMsg)
 	if err != nil {
 		if lang == "id" {
 			b.reply(ctx, request.ChatID, "Gagal mengunduh gambar: "+err.Error())
@@ -296,10 +341,7 @@ func (b *Bot) runImage(ctx context.Context, request channel.Request, imageMsg *w
 		fileName = fmt.Sprintf("wa_%d.png", time.Now().UnixNano())
 	}
 	if wp, ok := b.agent.(WorkspaceProvider); ok && wp.Workspace() != "" {
-		uploadDir := filepath.Join(wp.Workspace(), ".termixgo", "uploads")
-		if err := os.MkdirAll(uploadDir, 0o755); err == nil {
-			_ = os.WriteFile(filepath.Join(uploadDir, fileName), data, 0o644)
-		}
+		_, _, _ = channel.SaveUpload(wp.Workspace(), fileName, data)
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(data)
@@ -327,11 +369,7 @@ func (b *Bot) runImage(ctx context.Context, request channel.Request, imageMsg *w
 }
 
 // runDocument downloads a document file and inspects it via vision or workspace tools.
-func (b *Bot) runDocument(ctx context.Context, request channel.Request, docMsg *waE2E.DocumentMessage, lang string, policy config.ChannelAccount) {
-	if b.client == nil {
-		b.reply(ctx, request.ChatID, naturalError(errors.New("no whatsapp client available"), lang))
-		return
-	}
+func (b *Bot) runDocument(ctx context.Context, request channel.Request, docMsg *waE2E.DocumentMessage, quoted, lang string, policy config.ChannelAccount) {
 	prompt := strings.TrimSpace(docMsg.GetCaption())
 	mimeType := strings.ToLower(docMsg.GetMimetype())
 	fileName := filepath.Base(docMsg.GetFileName())
@@ -339,7 +377,7 @@ func (b *Bot) runDocument(ctx context.Context, request channel.Request, docMsg *
 		fileName = "uploaded_document"
 	}
 
-	data, err := b.client.Download(ctx, docMsg)
+	data, err := b.downloadMedia(ctx, docMsg)
 	if err != nil {
 		if lang == "id" {
 			b.reply(ctx, request.ChatID, "Gagal mengunduh dokumen: "+err.Error())
@@ -357,6 +395,7 @@ func (b *Bot) runDocument(ctx context.Context, request channel.Request, docMsg *
 				prompt = "Describe this image and act on anything notable in it."
 			}
 		}
+		prompt = channel.FormatQuotedPrompt(quoted, prompt)
 		encoded := base64.StdEncoding.EncodeToString(data)
 		mediaType := mimeType
 		if mediaType == "" {
@@ -385,21 +424,19 @@ func (b *Bot) runDocument(ctx context.Context, request channel.Request, docMsg *
 		return
 	}
 
-	uploadRelPath := filepath.Join(".termixgo", "uploads", fileName)
+	uploadRelPath := filepath.ToSlash(filepath.Join(".termixgo", "uploads", fileName))
 	savedToWorkspace := false
 	if wp, ok := b.agent.(WorkspaceProvider); ok && wp.Workspace() != "" {
-		uploadDir := filepath.Join(wp.Workspace(), ".termixgo", "uploads")
-		if err := os.MkdirAll(uploadDir, 0o755); err == nil {
-			fullPath := filepath.Join(uploadDir, fileName)
-			if err := os.WriteFile(fullPath, data, 0o644); err == nil {
-				savedToWorkspace = true
-			}
+		if savedName, rel, saved := channel.SaveUpload(wp.Workspace(), fileName, data); saved {
+			fileName = savedName
+			uploadRelPath = rel
+			savedToWorkspace = true
 		}
 	}
 
 	var builder strings.Builder
 	if savedToWorkspace {
-		fmt.Fprintf(&builder, "[Document uploaded: %s saved to %s]\n\n", fileName, filepath.ToSlash(uploadRelPath))
+		fmt.Fprintf(&builder, "[Document uploaded: %s saved to %s]\n\n", fileName, uploadRelPath)
 	} else {
 		fmt.Fprintf(&builder, "[Document uploaded: %s (%d bytes)]\n\n", fileName, len(data))
 	}
@@ -407,13 +444,13 @@ func (b *Bot) runDocument(ctx context.Context, request channel.Request, docMsg *
 	isPDF := mimeType == "application/pdf" || strings.HasSuffix(strings.ToLower(fileName), ".pdf")
 	if isPDF && isPDFVisionModel(b.agent.Model()) {
 		if prompt != "" {
-			builder.WriteString(prompt)
+			builder.WriteString(channel.FormatQuotedPrompt(quoted, prompt))
 		} else {
+			defaultPrompt := "Please inspect and analyze this uploaded PDF document."
 			if lang == "id" {
-				builder.WriteString("Tolong periksa dan analisa dokumen PDF yang diunggah ini.")
-			} else {
-				builder.WriteString("Please inspect and analyze this uploaded PDF document.")
+				defaultPrompt = "Tolong periksa dan analisa dokumen PDF yang diunggah ini."
 			}
+			builder.WriteString(channel.FormatQuotedPrompt(quoted, defaultPrompt))
 		}
 		encoded := base64.StdEncoding.EncodeToString(data)
 		done := make(chan struct{})
@@ -446,13 +483,13 @@ func (b *Bot) runDocument(ctx context.Context, request channel.Request, docMsg *
 	}
 
 	if prompt != "" {
-		builder.WriteString(prompt)
+		builder.WriteString(channel.FormatQuotedPrompt(quoted, prompt))
 	} else {
+		defaultPrompt := "Please inspect the uploaded document and proceed."
 		if lang == "id" {
-			builder.WriteString("Silakan periksa dokumen yang diunggah dan lanjutkan.")
-		} else {
-			builder.WriteString("Please inspect the uploaded document and proceed.")
+			defaultPrompt = "Silakan periksa dokumen yang diunggah dan lanjutkan."
 		}
+		builder.WriteString(channel.FormatQuotedPrompt(quoted, defaultPrompt))
 	}
 
 	done := make(chan struct{})
@@ -461,6 +498,81 @@ func (b *Bot) runDocument(ctx context.Context, request channel.Request, docMsg *
 	close(done)
 	if err != nil {
 		b.reply(ctx, request.ChatID, naturalError(err, lang))
+		return
+	}
+	if channel.Silent(answer) {
+		return
+	}
+	for _, chunk := range channel.Chunk(answer, policy.EffectiveTextChunkLimit()) {
+		b.reply(ctx, request.ChatID, chunk)
+	}
+}
+
+// runAudio downloads a WhatsApp voice note or audio clip, transcribes it, and runs the turn.
+func (b *Bot) runAudio(ctx context.Context, request channel.Request, audioMsg *waE2E.AudioMessage, quoted, lang string, policy config.ChannelAccount) {
+	transcriber, ok := b.agent.(AudioTranscriber)
+	if !ok {
+		if lang == "id" {
+			b.reply(ctx, request.ChatID, "Transkripsi pesan suara belum didukung oleh agent ini.")
+		} else {
+			b.reply(ctx, request.ChatID, "Voice transcription is not supported by this agent.")
+		}
+		return
+	}
+	data, err := b.downloadMedia(ctx, audioMsg)
+	if err != nil {
+		if lang == "id" {
+			b.reply(ctx, request.ChatID, "Gagal mengunduh pesan suara: "+err.Error())
+		} else {
+			b.reply(ctx, request.ChatID, "Could not download voice note: "+err.Error())
+		}
+		return
+	}
+	ext := ".ogg"
+	mimeType := strings.ToLower(audioMsg.GetMimetype())
+	switch {
+	case strings.Contains(mimeType, "mp4"), strings.Contains(mimeType, "m4a"), strings.Contains(mimeType, "aac"):
+		ext = ".m4a"
+	case strings.Contains(mimeType, "mpeg"), strings.Contains(mimeType, "mp3"):
+		ext = ".mp3"
+	case strings.Contains(mimeType, "wav"):
+		ext = ".wav"
+	}
+	fileName := fmt.Sprintf("voice_%d%s", time.Now().UnixNano(), ext)
+
+	done := make(chan struct{})
+	go b.keepTyping(ctx, request.ChatID, done)
+	transcript, err := transcriber.TranscribeAudio(ctx, data, fileName)
+	if err != nil {
+		close(done)
+		if lang == "id" {
+			b.reply(ctx, request.ChatID, "Gagal menerjemahkan pesan suara: "+err.Error())
+		} else {
+			b.reply(ctx, request.ChatID, "Voice transcription failed: "+err.Error())
+		}
+		return
+	}
+	transcript = strings.TrimSpace(transcript)
+	if transcript == "" {
+		close(done)
+		if lang == "id" {
+			b.reply(ctx, request.ChatID, "Tidak ada ucapan yang terdeteksi pada pesan suara.")
+		} else {
+			b.reply(ctx, request.ChatID, "No speech detected in the voice note.")
+		}
+		return
+	}
+	prompt := channel.FormatQuotedPrompt(quoted, transcript)
+	var answer string
+	var runErr error
+	if vr, ok := b.agent.(VoicePromptRunner); ok {
+		answer, runErr = vr.RunVoicePrompt(ctx, request, prompt, nil)
+	} else {
+		answer, runErr = b.agent.RunPrompt(ctx, request, prompt, nil)
+	}
+	close(done)
+	if runErr != nil {
+		b.reply(ctx, request.ChatID, naturalError(runErr, lang))
 		return
 	}
 	if channel.Silent(answer) {
@@ -482,6 +594,7 @@ func (b *Bot) requestFrom(evt *events.Message) channel.Request {
 			senderAlt = alt.String()
 		}
 	}
+	rawMsg := unwrapMessage(evt.Message)
 	request := channel.Request{
 		Channel:    config.ChannelWhatsApp,
 		Account:    b.accountName(),
@@ -490,16 +603,16 @@ func (b *Bot) requestFrom(evt *events.Message) channel.Request {
 		SenderID:   info.Sender.String(),
 		SenderAlt:  senderAlt,
 		SenderName: strings.TrimSpace(info.PushName),
-		Text:       messageText(evt.Message),
+		Text:       messageText(rawMsg),
 	}
-	request.MentionsBot = b.mentionsSelf(evt.Message)
+	request.MentionsBot = b.mentionsSelf(rawMsg)
 	return request
 }
 
 // mentionsSelf reports whether the message names this account, in either the
 // phone-number or the LID form.
 func (b *Bot) mentionsSelf(msg *waE2E.Message) bool {
-	contextInfo := mentionContext(msg)
+	contextInfo := mentionContext(unwrapMessage(msg))
 	if contextInfo == nil {
 		return false
 	}
@@ -515,6 +628,7 @@ func (b *Bot) mentionsSelf(msg *waE2E.Message) bool {
 }
 
 func mentionContext(msg *waE2E.Message) *waE2E.ContextInfo {
+	msg = unwrapMessage(msg)
 	if msg == nil {
 		return nil
 	}
@@ -527,11 +641,34 @@ func mentionContext(msg *waE2E.Message) *waE2E.ContextInfo {
 	if document := msg.GetDocumentMessage(); document != nil {
 		return document.GetContextInfo()
 	}
+	if audio := msg.GetAudioMessage(); audio != nil {
+		return audio.GetContextInfo()
+	}
 	return nil
+}
+
+// quotedText extracts the text or caption of a replied-to WhatsApp message.
+func quotedText(msg *waE2E.Message) string {
+	ctxInfo := mentionContext(msg)
+	if ctxInfo == nil || ctxInfo.GetQuotedMessage() == nil {
+		return ""
+	}
+	quoted := unwrapMessage(ctxInfo.GetQuotedMessage())
+	if text := messageText(quoted); text != "" {
+		return text
+	}
+	if image := quoted.GetImageMessage(); image != nil {
+		return strings.TrimSpace(image.GetCaption())
+	}
+	if document := quoted.GetDocumentMessage(); document != nil {
+		return strings.TrimSpace(document.GetCaption())
+	}
+	return ""
 }
 
 // messageText is the text a message carries, or "" when it carries none.
 func messageText(msg *waE2E.Message) string {
+	msg = unwrapMessage(msg)
 	if msg == nil {
 		return ""
 	}
@@ -680,32 +817,7 @@ func (b *Bot) keepTyping(ctx context.Context, chatID string, done <-chan struct{
 // naturalError turns a failure into one human sentence. Tool names, paths and
 // internal errors never reach a chat.
 func naturalError(err error, lang ...string) string {
-	l := "id"
-	if len(lang) > 0 {
-		l = lang[0]
-	}
-	if l == "id" {
-		switch {
-		case errors.Is(err, channel.ErrBusy):
-			return "Sebentar ya, aku masih menyelesaikan permintaan sebelumnya. Coba lagi sesaat lagi."
-		case errors.Is(err, context.Canceled):
-			return "Permintaan dibatalkan."
-		case isAuthError(err):
-			return "Model mengalami kendala autentikasi (kredensial atau token perlu diperbarui). Silakan ganti model dengan /model stepfun atau hubungi operator."
-		default:
-			return "Maaf, ada gangguan sebentar. Coba lagi ya."
-		}
-	}
-	switch {
-	case errors.Is(err, channel.ErrBusy):
-		return "Please wait a moment, I am still finishing the previous request. Please try again shortly."
-	case errors.Is(err, context.Canceled):
-		return "Request was canceled."
-	case isAuthError(err):
-		return "The model encountered an authentication issue (credentials or token need renewal). Please switch model using /model stepfun or contact the operator."
-	default:
-		return "Sorry, an error occurred. Please try again."
-	}
+	return channel.NaturalError(err, lang...)
 }
 
 func unwrapMessage(msg *waE2E.Message) *waE2E.Message {
@@ -731,32 +843,15 @@ func unwrapMessage(msg *waE2E.Message) *waE2E.Message {
 }
 
 func isImageExtension(name string) bool {
-	ext := strings.ToLower(filepath.Ext(name))
-	switch ext {
-	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp":
-		return true
-	}
-	return false
+	return channel.IsImageExtension(name)
 }
 
 func isPDFVisionModel(modelID string) bool {
-	lower := strings.ToLower(modelID)
-	return strings.Contains(lower, "gemini") ||
-		strings.Contains(lower, "antigravity") ||
-		strings.Contains(lower, "claude")
+	return channel.IsPDFVisionModel(modelID)
 }
 
 func isAuthError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "401") ||
-		strings.Contains(msg, "unauthorized") ||
-		strings.Contains(msg, "invalid authentication") ||
-		strings.Contains(msg, "oauth 2 access token") ||
-		strings.Contains(msg, "invalid api key") ||
-		strings.Contains(msg, "authentication failed")
+	return channel.IsAuthError(err)
 }
 
 // DiffProvider is an optional interface that an agent may implement to provide workspace diffs.
@@ -802,6 +897,32 @@ func (b *Bot) handleCommand(ctx context.Context, request channel.Request) {
 		}
 	case "status":
 		b.sendReply(ctx, request.ChatID, b.agent.Status())
+	case "cost":
+		if inspector, ok := b.agent.(SessionInspector); ok {
+			b.sendReply(ctx, request.ChatID, inspector.CostInfo(request, lang))
+			return
+		}
+		b.sendReply(ctx, request.ChatID, b.agent.Status())
+	case "plan":
+		if inspector, ok := b.agent.(SessionInspector); ok {
+			b.sendReply(ctx, request.ChatID, inspector.PlanInfo(request, lang))
+			return
+		}
+		if lang == "id" {
+			b.sendReply(ctx, request.ChatID, "Belum ada rencana (plan) aktif pada sesi ini.")
+		} else {
+			b.sendReply(ctx, request.ChatID, "No active plan in this session.")
+		}
+	case "compact":
+		if inspector, ok := b.agent.(SessionInspector); ok {
+			b.sendReply(ctx, request.ChatID, inspector.CompactSession(ctx, request, lang))
+			return
+		}
+		if lang == "id" {
+			b.sendReply(ctx, request.ChatID, "Fitur ringkas sesi tidak didukung oleh agent ini.")
+		} else {
+			b.sendReply(ctx, request.ChatID, "Session compaction is not supported by this agent.")
+		}
 	case "new", "reset", "clear":
 		b.agent.NewSession(request)
 		if lang == "id" {
@@ -879,6 +1000,9 @@ func (b *Bot) helpText(lang ...string) string {
 			"/models - Lihat daftar model yang terdaftar dan siap digunakan",
 			"/model <nama> - Ganti model aktif (misal: /model stepfun, /model muse, /model antigravity)",
 			"/status - Status runtime dan resource agent",
+			"/cost - Lihat pemakaian token dan estimasi biaya sesi",
+			"/plan - Lihat daftar rencana tugas (plan) pada sesi aktif",
+			"/compact - Ringkas riwayat percakapan untuk menghemat konteks",
 			"/new atau /reset - Mulai percakapan sesi baru",
 			"/stop - Hentikan proses yang sedang berjalan",
 			"/diff - Lihat perubahan git di workspace",
@@ -891,6 +1015,9 @@ func (b *Bot) helpText(lang ...string) string {
 		"/models - List registered and ready-to-use models",
 		"/model <name> - Switch active model (e.g. /model stepfun, /model muse, /model antigravity)",
 		"/status - Agent runtime and resource status",
+		"/cost - View session token usage and estimated cost",
+		"/plan - View the active task plan in this session",
+		"/compact - Condense earlier conversation turns to save context",
 		"/new or /reset - Start a fresh conversation session",
 		"/stop - Stop currently running process",
 		"/diff - View git changes in workspace",
@@ -899,15 +1026,5 @@ func (b *Bot) helpText(lang ...string) string {
 }
 
 func splitCommand(text string) (string, string) {
-	trimmed := strings.TrimPrefix(strings.TrimSpace(text), "/")
-	command := trimmed
-	rest := ""
-	if index := strings.IndexAny(trimmed, " \n\t"); index >= 0 {
-		command = trimmed[:index]
-		rest = strings.TrimSpace(trimmed[index+1:])
-	}
-	if index := strings.Index(command, "@"); index > 0 {
-		command = command[:index]
-	}
-	return strings.ToLower(command), rest
+	return channel.SplitCommand(text)
 }

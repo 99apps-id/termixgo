@@ -1,8 +1,13 @@
 package channel
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/99apps-id/termixgo/internal/config"
@@ -161,5 +166,62 @@ func TestPairingStoreLifecycle(t *testing.T) {
 	}
 	if _, ok := reopened.Deny("000000"); ok {
 		t.Errorf("denying an unknown code must report nothing")
+	}
+}
+
+func TestExtractCommandTextAndSplitCommand(t *testing.T) {
+	if cmd, ok := ExtractCommandText("/status"); !ok || cmd != "/status" {
+		t.Errorf("ExtractCommandText(/status) = (%q, %v)", cmd, ok)
+	}
+	if cmd, ok := ExtractCommandText("@628111 /model stepfun"); !ok || cmd != "/model stepfun" {
+		t.Errorf("ExtractCommandText(@628111 /model stepfun) = (%q, %v)", cmd, ok)
+	}
+	if _, ok := ExtractCommandText("hello /status"); ok {
+		t.Errorf("mid-sentence slash must not be treated as a command")
+	}
+	name, arg := SplitCommand("/model@bot_name gpt-5.4")
+	if name != "model" || arg != "gpt-5.4" {
+		t.Errorf("SplitCommand = (%q, %q)", name, arg)
+	}
+}
+
+func TestFormatQuotedPromptAndNaturalError(t *testing.T) {
+	got := FormatQuotedPrompt("baris asli", "tolong jelaskan")
+	if !strings.Contains(got, "[Quoted message context]:") || !strings.Contains(got, "baris asli") || !strings.HasSuffix(got, "tolong jelaskan") {
+		t.Errorf("FormatQuotedPrompt = %q", got)
+	}
+	if plain := FormatQuotedPrompt("", "halo"); plain != "halo" {
+		t.Errorf("FormatQuotedPrompt empty quote = %q", plain)
+	}
+	if !IsAuthError(errors.New("HTTP 401 Unauthorized")) || IsAuthError(errors.New("timeout")) {
+		t.Errorf("IsAuthError classification failed")
+	}
+	if msg := NaturalError(ErrBusy, "en"); !strings.Contains(msg, "Please wait") {
+		t.Errorf("NaturalError en busy = %q", msg)
+	}
+	if msg := NaturalError(context.Canceled, "id"); !strings.Contains(msg, "dibatalkan") {
+		t.Errorf("NaturalError id canceled = %q", msg)
+	}
+}
+
+func TestSaveUploadAndCleanupOldUploads(t *testing.T) {
+	workspace := t.TempDir()
+	uploadDir := filepath.Join(workspace, ".termixgo", "uploads")
+	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	staleFile := filepath.Join(uploadDir, "old.txt")
+	if err := os.WriteFile(staleFile, []byte("old"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	past := time.Now().Add(-8 * 24 * time.Hour)
+	_ = os.Chtimes(staleFile, past, past)
+
+	name, rel, saved := SaveUpload(workspace, "report.pdf", []byte("pdf-bytes"))
+	if !saved || name == "" || !strings.HasPrefix(rel, ".termixgo/uploads/") {
+		t.Fatalf("SaveUpload = (%q, %q, %v)", name, rel, saved)
+	}
+	if _, err := os.Stat(staleFile); !os.IsNotExist(err) {
+		t.Errorf("stale upload should have been cleaned up")
 	}
 }

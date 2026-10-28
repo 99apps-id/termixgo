@@ -110,16 +110,17 @@ type MessageEntity struct {
 
 // Message is an incoming or outgoing message.
 type Message struct {
-	MessageID int64           `json:"message_id"`
-	From      *User           `json:"from"`
-	Chat      Chat            `json:"chat"`
-	Text      string          `json:"text"`
-	Caption   string          `json:"caption"`
-	Photo     []PhotoSize     `json:"photo"`
-	Document  *Document       `json:"document"`
-	Voice     *Voice          `json:"voice"`
-	Audio     *Audio          `json:"audio"`
-	Entities  []MessageEntity `json:"entities"`
+	MessageID       int64           `json:"message_id"`
+	From            *User           `json:"from"`
+	Chat            Chat            `json:"chat"`
+	Text            string          `json:"text"`
+	Caption         string          `json:"caption"`
+	Photo           []PhotoSize     `json:"photo"`
+	Document        *Document       `json:"document"`
+	Voice           *Voice          `json:"voice"`
+	Audio           *Audio          `json:"audio"`
+	Entities        []MessageEntity `json:"entities"`
+	CaptionEntities []MessageEntity `json:"caption_entities"`
 	// ReplyToMessage carries the quoted message, which is one of the two ways
 	// a group message counts as addressing the bot.
 	ReplyToMessage *Message `json:"reply_to_message"`

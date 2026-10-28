@@ -68,6 +68,13 @@ type ProviderLister interface {
 	ActiveProviders() []provider.Provider
 }
 
+// SessionInspector is an optional interface that exposes per-chat session cost, plan, and compaction.
+type SessionInspector interface {
+	CostInfo(request channel.Request, lang string) string
+	PlanInfo(request channel.Request, lang string) string
+	CompactSession(ctx context.Context, request channel.Request, lang string) string
+}
+
 // PendingApproval tracks one in-flight approval request waiting for a callback query.
 type PendingApproval struct {
 	ID       string
@@ -320,6 +327,9 @@ func (b *Bot) Run(ctx context.Context) error {
 	commands := []BotCommand{
 		{Command: "run", Description: "Run a prompt with live progress"},
 		{Command: "diff", Description: "Show current git diff or file changes"},
+		{Command: "cost", Description: "Show session token usage and cost"},
+		{Command: "plan", Description: "Show active task plan"},
+		{Command: "compact", Description: "Condense conversation history"},
 		{Command: "stop", Description: "Stop the running turn"},
 		{Command: "new", Description: "Start a new session"},
 		{Command: "status", Description: "Show status"},
@@ -444,11 +454,15 @@ func (b *Bot) handleCallback(ctx context.Context, query *CallbackQuery) {
 		chat = query.Message.Chat
 	}
 	pairedChat, owner := b.Pairing()
-	if pairedChat == 0 || owner == 0 || query.From == nil || query.From.ID != owner {
-		_ = b.client.AnswerCallbackQuery(ctx, query.ID, "Not allowed.")
-		return
+	allowed := false
+	if query.From != nil {
+		if pairedChat != 0 && owner != 0 && query.From.ID == owner && (chat.ID == 0 || chat.ID == pairedChat) {
+			allowed = true
+		} else if channel.MatchesAny(b.Policy().Admins, strconv.FormatInt(query.From.ID, 10)) {
+			allowed = true
+		}
 	}
-	if chat.ID != 0 && chat.ID != pairedChat {
+	if !allowed {
 		_ = b.client.AnswerCallbackQuery(ctx, query.ID, "Not allowed.")
 		return
 	}
@@ -566,27 +580,34 @@ func (b *Bot) handleApprovalCallback(ctx context.Context, query *CallbackQuery) 
 func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 	chatID := message.Chat.ID
 	text := strings.TrimSpace(message.Text)
-	// A command is only a command when a slash introduces it. splitCommand
-	// happily reads the first word of any message, so without this guard a
-	// plain sentence beginning with "run", "new" or "stop" was routed as that
-	// command and either lost its first word or reset the session.
-	isCommand := strings.HasPrefix(text, "/")
+	// A command is only a command when a slash introduces it (optionally preceded
+	// by a group @mention). splitCommand happily reads the first word of any
+	// message, so without this guard a plain sentence beginning with "run",
+	// "new" or "stop" was routed as that command and either lost its first word
+	// or reset the session.
+	cmdText, isCommand := channel.ExtractCommandText(text)
+	if isCommand {
+		text = cmdText
+	}
 
+	request := b.requestFrom(message)
+	policy := b.Policy()
 	if !b.Paired() {
-		// Unpaired: only /pair is accepted, which is what stops a stranger
-		// who finds the bot from running the agent.
+		// Unpaired: /pair is always accepted first, and if no explicit access
+		// policy (admins, allowlist, open DM, or pairing DM store) is configured,
+		// all other messages are refused with the pairing instruction.
 		if isCommand {
 			if command, argument := splitCommand(text); command == "pair" {
 				b.tryPair(ctx, message, argument)
 				return
 			}
 		}
-		b.reply(ctx, chatID, "This bot is not paired yet. Send /pair <code> with the code shown in Termixgo.")
-		return
+		if !b.hasExplicitPolicy(policy, request) {
+			b.reply(ctx, chatID, "This bot is not paired yet. Send /pair <code> with the code shown in Termixgo.")
+			return
+		}
 	}
 
-	request := b.requestFrom(message)
-	policy := b.Policy()
 	decision := channel.Decide(policy, request)
 	if b.isOperator(request) {
 		// The paired owner is the account's implicit admin.
@@ -604,13 +625,19 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		return
 	}
 
+	lang := userLanguage(message)
+	quoted := quotedText(message)
 	request.Admin = decision.Admin
 	if !decision.Admin {
 		b.identityMu.RLock()
 		limiter := b.limiter
 		b.identityMu.RUnlock()
 		if limiter != nil && !limiter.Allow(request.SenderID, time.Now()) {
-			b.reply(ctx, chatID, "Terlalu banyak pesan. Coba lagi sebentar ya.")
+			if message.From != nil && message.From.LanguageCode != "" && !strings.HasPrefix(strings.ToLower(message.From.LanguageCode), "id") {
+				b.reply(ctx, chatID, "Too many messages. Please try again in a moment.")
+			} else {
+				b.reply(ctx, chatID, "Terlalu banyak pesan. Coba lagi sebentar ya.")
+			}
 			return
 		}
 		b.handleGuestMessage(ctx, request, message, text, isCommand)
@@ -627,7 +654,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 
 	// Voice notes and audio tracks are transcribed and run as prompts.
 	if message.Voice != nil {
-		b.runVoice(ctx, chatID, request, message.Voice.FileID, "voice.ogg", message.Caption)
+		b.runVoice(ctx, chatID, request, message.Voice.FileID, "voice.ogg", channel.FormatQuotedPrompt(quoted, message.Caption))
 		return
 	}
 	if message.Audio != nil {
@@ -635,7 +662,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		if name == "" {
 			name = "audio.mp3"
 		}
-		b.runVoice(ctx, chatID, request, message.Audio.FileID, name, message.Caption)
+		b.runVoice(ctx, chatID, request, message.Audio.FileID, name, channel.FormatQuotedPrompt(quoted, message.Caption))
 		return
 	}
 
@@ -652,16 +679,42 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 
 	if !isCommand {
 		// Plain text is a prompt, which is the natural way to use the bot.
-		b.runPrompt(ctx, chatID, request, text)
+		b.runPrompt(ctx, chatID, request, channel.FormatQuotedPrompt(quoted, text))
 		return
 	}
 
 	command, argument := splitCommand(text)
 	switch command {
-	case "help", "start":
+	case "help", "start", "menu":
 		b.reply(ctx, chatID, helpText())
 	case "status":
 		b.reply(ctx, chatID, b.agent.Status())
+	case "cost":
+		if inspector, ok := b.agent.(SessionInspector); ok {
+			b.reply(ctx, chatID, inspector.CostInfo(request, lang))
+			return
+		}
+		b.reply(ctx, chatID, b.agent.Status())
+	case "plan":
+		if inspector, ok := b.agent.(SessionInspector); ok {
+			b.reply(ctx, chatID, inspector.PlanInfo(request, lang))
+			return
+		}
+		if lang == "id" {
+			b.reply(ctx, chatID, "Belum ada rencana (plan) aktif pada sesi ini.")
+		} else {
+			b.reply(ctx, chatID, "No active plan in this session.")
+		}
+	case "compact":
+		if inspector, ok := b.agent.(SessionInspector); ok {
+			b.reply(ctx, chatID, inspector.CompactSession(ctx, request, lang))
+			return
+		}
+		if lang == "id" {
+			b.reply(ctx, chatID, "Fitur ringkas sesi tidak didukung oleh agent ini.")
+		} else {
+			b.reply(ctx, chatID, "Session compaction is not supported by this agent.")
+		}
 	case "pair":
 		b.reply(ctx, chatID, "Already paired. Use /unpair first to move to another chat.")
 	case "unpair":
@@ -670,7 +723,7 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 			b.OnPaired(0, 0)
 		}
 		b.reply(ctx, chatID, "Unpaired.")
-	case "new":
+	case "new", "reset", "clear":
 		b.agent.NewSession(request)
 		b.reply(ctx, chatID, "Started a new session.")
 	case "stop":
@@ -691,10 +744,6 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		b.reply(ctx, chatID, "Model is now "+updated+".")
 	case "models":
 		if lister, ok := b.agent.(interface{ ModelsFor(string) string }); ok {
-			lang := "en"
-			if message.From != nil && strings.HasPrefix(strings.ToLower(message.From.LanguageCode), "id") {
-				lang = "id"
-			}
 			b.reply(ctx, chatID, lister.ModelsFor(lang))
 		} else {
 			b.reply(ctx, chatID, b.agent.Models())
@@ -729,10 +778,41 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 			b.reply(ctx, chatID, "Usage: /run <prompt>")
 			return
 		}
-		b.runPrompt(ctx, chatID, request, prompt)
+		b.runPrompt(ctx, chatID, request, channel.FormatQuotedPrompt(quoted, prompt))
 	default:
 		b.reply(ctx, chatID, "Unknown command. Send /help.")
 	}
+}
+
+func userLanguage(message *Message) string {
+	if message != nil && message.From != nil && strings.HasPrefix(strings.ToLower(strings.TrimSpace(message.From.LanguageCode)), "id") {
+		return "id"
+	}
+	return "en"
+}
+
+func quotedText(message *Message) string {
+	if message == nil || message.ReplyToMessage == nil {
+		return ""
+	}
+	if text := strings.TrimSpace(message.ReplyToMessage.Text); text != "" {
+		return text
+	}
+	return strings.TrimSpace(message.ReplyToMessage.Caption)
+}
+
+func (b *Bot) hasExplicitPolicy(policy config.ChannelAccount, request channel.Request) bool {
+	if len(policy.Admins) > 0 || len(policy.AllowFrom) > 0 {
+		return true
+	}
+	dm := config.NormalizeDMPolicy(policy.DMPolicy)
+	if dm == config.DMPolicyOpen {
+		return true
+	}
+	if dm == config.DMPolicyPairing && b.mayPair(policy, request) {
+		return true
+	}
+	return false
 }
 
 // runPrompt runs one text turn and mirrors progress into a single edited card.
@@ -749,6 +829,7 @@ func (b *Bot) runPhoto(ctx context.Context, chatID int64, request channel.Reques
 	if prompt == "" {
 		prompt = "Describe this image and act on anything notable in it."
 	}
+	prompt = channel.FormatQuotedPrompt(quotedText(message), prompt)
 	// Telegram sends several sizes; the last is the largest.
 	photo := message.Photo[len(message.Photo)-1]
 	file, err := b.client.GetFile(ctx, photo.FileID)
@@ -761,6 +842,13 @@ func (b *Bot) runPhoto(ctx context.Context, chatID int64, request channel.Reques
 		b.reply(ctx, chatID, "Could not download the image: "+err.Error())
 		return
 	}
+	if wp, ok := b.agent.(WorkspaceProvider); ok && wp.Workspace() != "" {
+		ext := filepath.Ext(file.FilePath)
+		if ext == "" {
+			ext = ".jpg"
+		}
+		_, _, _ = channel.SaveUpload(wp.Workspace(), fmt.Sprintf("tg_%d%s", time.Now().UnixNano(), ext), data)
+	}
 	encoded := base64.StdEncoding.EncodeToString(data)
 	mediaType := imageMediaType(file.FilePath)
 	b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
@@ -769,19 +857,11 @@ func (b *Bot) runPhoto(ctx context.Context, chatID int64, request channel.Reques
 }
 
 func isImageExtension(name string) bool {
-	ext := strings.ToLower(filepath.Ext(name))
-	switch ext {
-	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp":
-		return true
-	}
-	return false
+	return channel.IsImageExtension(name)
 }
 
 func isPDFVisionModel(modelID string) bool {
-	lower := strings.ToLower(modelID)
-	return strings.Contains(lower, "gemini") ||
-		strings.Contains(lower, "antigravity") ||
-		strings.Contains(lower, "claude")
+	return channel.IsPDFVisionModel(modelID)
 }
 
 // runDocument downloads a document file. If it is an image, it is passed to
@@ -793,6 +873,7 @@ func (b *Bot) runDocument(ctx context.Context, chatID int64, request channel.Req
 		return
 	}
 	prompt := strings.TrimSpace(message.Caption)
+	quoted := quotedText(message)
 
 	file, err := b.client.GetFile(ctx, doc.FileID)
 	if err != nil {
@@ -809,6 +890,7 @@ func (b *Bot) runDocument(ctx context.Context, chatID int64, request channel.Req
 		if prompt == "" {
 			prompt = "Describe this image and act on anything notable in it."
 		}
+		prompt = channel.FormatQuotedPrompt(quoted, prompt)
 		encoded := base64.StdEncoding.EncodeToString(data)
 		mediaType := doc.MimeType
 		if mediaType == "" {
@@ -825,21 +907,19 @@ func (b *Bot) runDocument(ctx context.Context, chatID int64, request channel.Req
 		fileName = "uploaded_document"
 	}
 
-	uploadRelPath := filepath.Join(".termixgo", "uploads", fileName)
+	uploadRelPath := filepath.ToSlash(filepath.Join(".termixgo", "uploads", fileName))
 	savedToWorkspace := false
 	if wp, ok := b.agent.(WorkspaceProvider); ok && wp.Workspace() != "" {
-		uploadDir := filepath.Join(wp.Workspace(), ".termixgo", "uploads")
-		if err := os.MkdirAll(uploadDir, 0o755); err == nil {
-			fullPath := filepath.Join(uploadDir, fileName)
-			if err := os.WriteFile(fullPath, data, 0o644); err == nil {
-				savedToWorkspace = true
-			}
+		if savedName, rel, saved := channel.SaveUpload(wp.Workspace(), fileName, data); saved {
+			fileName = savedName
+			uploadRelPath = rel
+			savedToWorkspace = true
 		}
 	}
 
 	var builder strings.Builder
 	if savedToWorkspace {
-		fmt.Fprintf(&builder, "[Document uploaded: %s saved to %s]\n\n", fileName, filepath.ToSlash(uploadRelPath))
+		fmt.Fprintf(&builder, "[Document uploaded: %s saved to %s]\n\n", fileName, uploadRelPath)
 	} else {
 		fmt.Fprintf(&builder, "[Document uploaded: %s (%d bytes)]\n\n", fileName, len(data))
 	}
@@ -847,9 +927,9 @@ func (b *Bot) runDocument(ctx context.Context, chatID int64, request channel.Req
 	isPDF := strings.ToLower(doc.MimeType) == "application/pdf" || strings.HasSuffix(strings.ToLower(doc.FileName), ".pdf")
 	if isPDF && isPDFVisionModel(b.agent.Model()) {
 		if prompt != "" {
-			builder.WriteString(prompt)
+			builder.WriteString(channel.FormatQuotedPrompt(quoted, prompt))
 		} else {
-			builder.WriteString("Please inspect and analyze this uploaded PDF document.")
+			builder.WriteString(channel.FormatQuotedPrompt(quoted, "Please inspect and analyze this uploaded PDF document."))
 		}
 		encoded := base64.StdEncoding.EncodeToString(data)
 		b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
@@ -865,9 +945,9 @@ func (b *Bot) runDocument(ctx context.Context, chatID int64, request channel.Req
 	}
 
 	if prompt != "" {
-		builder.WriteString(prompt)
+		builder.WriteString(channel.FormatQuotedPrompt(quoted, prompt))
 	} else {
-		builder.WriteString("Please inspect the uploaded document and proceed.")
+		builder.WriteString(channel.FormatQuotedPrompt(quoted, "Please inspect the uploaded document and proceed."))
 	}
 
 	b.runPrompt(ctx, chatID, request, builder.String())
@@ -946,6 +1026,13 @@ func (b *Bot) keepTyping(ctx context.Context, chatID int64, done <-chan struct{}
 	}
 }
 
+func formatRunFailure(err error) string {
+	if channel.IsAuthError(err) || errors.Is(err, channel.ErrBusy) || errors.Is(err, context.Canceled) {
+		return "Run failed: " + channel.NaturalError(err, "en") + " (" + err.Error() + ")"
+	}
+	return "Run failed: " + err.Error()
+}
+
 // runWithCard runs one turn behind the single-run gate and mirrors progress
 // into one message that is edited in place instead of flooding the chat.
 func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Context, func(string)) (string, error)) {
@@ -983,7 +1070,13 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 			return
 		}
 		lastEdit = time.Now()
-		_ = b.client.EditMarkdown(ctx, chatID, statusMessage.MessageID, strings.Join(lines, "\n"), nil)
+		editCtx := ctx
+		if editCtx == nil || editCtx.Err() != nil {
+			var cancel context.CancelFunc
+			editCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+		}
+		_ = b.client.EditMarkdown(editCtx, chatID, statusMessage.MessageID, strings.Join(lines, "\n"), nil)
 	}
 	progress := func(line string) {
 		line = strings.TrimSpace(line)
@@ -1003,7 +1096,7 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 	if statusMessage.MessageID == 0 {
 		// No card to edit: deliver the failure or the answer directly.
 		if runErr != nil {
-			b.replyMarkdown(ctx, chatID, "Run failed: "+runErr.Error())
+			b.replyMarkdown(ctx, chatID, formatRunFailure(runErr))
 			return
 		}
 		if strings.TrimSpace(answer) != "" && channel.Silent(answer) {
@@ -1017,7 +1110,7 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 	}
 
 	if runErr != nil {
-		progress("Run failed: " + runErr.Error())
+		progress(formatRunFailure(runErr))
 		flush(true)
 		return
 	}
@@ -1054,10 +1147,16 @@ const telegramChunkLimit = 3800
 // replyMarkdown sends Markdown text, split into Telegram-sized messages so a
 // long answer arrives whole instead of being truncated at the cap.
 func (b *Bot) replyMarkdown(ctx context.Context, chatID int64, text string) {
+	sendCtx := ctx
+	if sendCtx == nil || sendCtx.Err() != nil {
+		var cancel context.CancelFunc
+		sendCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+	}
 	for len(text) > 0 {
 		part, rest := nextChunk(text, telegramChunkLimit)
 		text = rest
-		if _, err := b.client.SendMarkdown(ctx, chatID, part, nil); err != nil {
+		if _, err := b.client.SendMarkdown(sendCtx, chatID, part, nil); err != nil {
 			b.logf("send failed: %v", err)
 		}
 	}
@@ -1160,9 +1259,8 @@ func (b *Bot) requestFrom(message *Message) channel.Request {
 //
 // Telegram marks a mention as a text entity (the "@name" form) or, for a user
 // with no username, as a text_mention entity carrying the id; a reply to one
-// of the bot's own messages counts too. The "@name" form is confirmed against
-// the message text instead of slicing by the entity's UTF-16 offsets, which
-// would cut multi-byte text in the wrong place.
+// of the bot's own messages counts too. Both message text/entities and media
+// caption/caption_entities are checked.
 func (b *Bot) mentionsBot(message *Message) bool {
 	if message == nil {
 		return false
@@ -1174,8 +1272,18 @@ func (b *Bot) mentionsBot(message *Message) bool {
 	if reply := message.ReplyToMessage; reply != nil && reply.From != nil && selfID != 0 && reply.From.ID == selfID {
 		return true
 	}
-	lowered := strings.ToLower(message.Text)
-	for _, entity := range message.Entities {
+	if entitiesMentionBot(message.Text, message.Entities, selfID, username) {
+		return true
+	}
+	if entitiesMentionBot(message.Caption, message.CaptionEntities, selfID, username) {
+		return true
+	}
+	return false
+}
+
+func entitiesMentionBot(raw string, entities []MessageEntity, selfID int64, username string) bool {
+	lowered := strings.ToLower(raw)
+	for _, entity := range entities {
 		switch entity.Type {
 		case "mention":
 			if username != "" && strings.Contains(lowered, "@"+strings.ToLower(username)) {
@@ -1248,17 +1356,18 @@ func (b *Bot) handleGuestMessage(ctx context.Context, request channel.Request, m
 	if text == "" {
 		return
 	}
+	quoted := quotedText(message)
 	if !isCommand {
-		b.runPrompt(ctx, chatID, request, text)
+		b.runPrompt(ctx, chatID, request, channel.FormatQuotedPrompt(quoted, text))
 		return
 	}
 	command, rest := splitCommand(text)
 	switch command {
-	case "help", "start":
+	case "help", "start", "menu":
 		b.reply(ctx, chatID, helpText())
 	case "status":
 		b.reply(ctx, chatID, "Sesi ini aktif. Silakan kirim pertanyaan.")
-	case "new":
+	case "new", "reset", "clear":
 		b.agent.NewSession(request)
 		b.reply(ctx, chatID, "Mulai sesi baru ya.")
 	case "run", "query":
@@ -1267,14 +1376,20 @@ func (b *Bot) handleGuestMessage(ctx context.Context, request channel.Request, m
 			b.reply(ctx, chatID, "Usage: /run <prompt>")
 			return
 		}
-		b.runPrompt(ctx, chatID, request, prompt)
+		b.runPrompt(ctx, chatID, request, channel.FormatQuotedPrompt(quoted, prompt))
 	default:
 		b.reply(ctx, chatID, "Maaf, perintah itu hanya untuk operator.")
 	}
 }
 
 func (b *Bot) reply(ctx context.Context, chatID int64, text string) {
-	if _, err := b.client.SendMessage(ctx, chatID, text, nil); err != nil {
+	sendCtx := ctx
+	if sendCtx == nil || sendCtx.Err() != nil {
+		var cancel context.CancelFunc
+		sendCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+	}
+	if _, err := b.client.SendMessage(sendCtx, chatID, text, nil); err != nil {
 		b.logf("send failed: %v", err)
 	}
 }
@@ -1298,24 +1413,13 @@ func (b *Bot) Send(ctx context.Context, text string) error {
 	if chatID == 0 {
 		return errors.New("the bot is not paired")
 	}
-	_, err := b.client.SendMarkdown(ctx, chatID, text, nil)
-	return err
+	return b.SendTo(ctx, chatID, text)
 }
 
 // splitCommand parses "/name argument" or "name argument", tolerating the
 // "@botname" suffix Telegram adds to group commands.
 func splitCommand(text string) (string, string) {
-	trimmed := strings.TrimPrefix(strings.TrimSpace(text), "/")
-	command := trimmed
-	rest := ""
-	if index := strings.IndexAny(trimmed, " \n\t"); index >= 0 {
-		command = trimmed[:index]
-		rest = strings.TrimSpace(trimmed[index+1:])
-	}
-	if index := strings.Index(command, "@"); index > 0 {
-		command = command[:index]
-	}
-	return strings.ToLower(command), rest
+	return channel.SplitCommand(text)
 }
 
 func helpText() string {
@@ -1326,6 +1430,9 @@ func helpText() string {
 		"Send a photo (with a caption) to ask about an image.",
 		"/run <prompt>  run with a live progress card",
 		"/diff          show current git diff",
+		"/cost          show session token usage and cost",
+		"/plan          show active task plan",
+		"/compact       condense conversation history",
 		"/stop          stop the running turn",
 		"/new           start a new session",
 		"/model [id]    choose a model, or switch by id",

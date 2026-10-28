@@ -490,6 +490,9 @@ func (b *telegramBridge) RunPrompt(ctx context.Context, request channel.Request,
 	}
 	guest, maxSteps, budget := b.limits(request)
 	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactor(), b.promptFor(request, prompt), nil, guest, maxSteps, budget, progress)
+	if errors.Is(err, ErrBusy) {
+		return "", channel.ErrBusy
+	}
 	if err != nil {
 		return "", err
 	}
@@ -514,10 +517,64 @@ func (b *telegramBridge) RunPromptWithImage(ctx context.Context, request channel
 	images := []provider.Image{{MediaType: mediaType, Data: data}}
 	guest, maxSteps, budget := b.limits(request)
 	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactor(), b.promptFor(request, prompt), images, guest, maxSteps, budget, progress)
+	if errors.Is(err, ErrBusy) {
+		return "", channel.ErrBusy
+	}
 	if err != nil {
 		return "", err
 	}
 	return b.app.RedactForChannel(answer), nil
+}
+
+// TranscribeAudio forwards voice/audio bytes to the app's configured STT engine.
+func (b *telegramBridge) TranscribeAudio(ctx context.Context, data []byte, filename string) (string, error) {
+	return b.app.TranscribeAudio(ctx, data, filename)
+}
+
+// RunVoicePrompt runs a voice-originated turn for one chat, falling back to the
+// configured voice model when the primary model fails.
+func (b *telegramBridge) RunVoicePrompt(ctx context.Context, request channel.Request, prompt string, progress func(string)) (string, error) {
+	answer, err := b.RunPrompt(ctx, request, prompt, progress)
+	if err == nil {
+		return answer, nil
+	}
+	session, sessErr := b.session(request)
+	if sessErr != nil {
+		return "", err
+	}
+	return b.app.runChannelVoiceFallback(ctx, b.account.AgentName(b.name), session, b.promptFor(request, prompt), err, progress)
+}
+
+// ActiveProviders lists the providers configured and ready to use right now.
+func (b *telegramBridge) ActiveProviders() []provider.Provider {
+	return b.app.ActiveProviders()
+}
+
+// CostInfo renders the token and dollar spend for the chat's session.
+func (b *telegramBridge) CostInfo(request channel.Request, lang string) string {
+	session, err := b.session(request)
+	if err != nil {
+		return b.app.sessionCostInfo(nil, lang)
+	}
+	return b.app.sessionCostInfo(session, lang)
+}
+
+// PlanInfo renders the active plan/todos for the chat's session.
+func (b *telegramBridge) PlanInfo(request channel.Request, lang string) string {
+	session, err := b.session(request)
+	if err != nil {
+		return b.app.sessionPlanInfo(nil, lang)
+	}
+	return b.app.sessionPlanInfo(session, lang)
+}
+
+// CompactSession condenses earlier turns of the chat's session into a brief.
+func (b *telegramBridge) CompactSession(ctx context.Context, request channel.Request, lang string) string {
+	session, err := b.session(request)
+	if err != nil {
+		return b.app.compactChannelSession(ctx, nil, lang)
+	}
+	return b.app.compactChannelSession(ctx, session, lang)
 }
 
 // limits bounds a guest turn: an operator's run uses the configured ceilings,
@@ -551,7 +608,13 @@ func (b *telegramBridge) Models() string { return b.app.AvailableModelsText("en"
 
 func (b *telegramBridge) ModelsFor(lang string) string { return b.app.AvailableModelsText(lang) }
 
-func (b *telegramBridge) GitDiff(ctx context.Context) (string, error) { return b.app.GitDiff(ctx) }
+func (b *telegramBridge) GitDiff(ctx context.Context) (string, error) {
+	diff, err := b.app.GitDiff(ctx)
+	if err != nil {
+		return "", err
+	}
+	return b.app.RedactForChannel(diff), nil
+}
 
 func (b *telegramBridge) Status() string { return b.app.Status() }
 
@@ -625,4 +688,138 @@ func sanitizeSessionPart(value string) string {
 		out = "chat"
 	}
 	return out
+}
+
+// runChannelVoiceFallback retries a failed voice-originated turn with the
+// configured voice fallback model on the chat's own session.
+func (a *App) runChannelVoiceFallback(ctx context.Context, agentName string, session *agent.Session, prompt string, primaryErr error, progress func(string)) (string, error) {
+	a.mu.Lock()
+	voiceModelID := strings.TrimSpace(a.cfg.VoiceModel)
+	maxSteps := a.cfg.MaxSteps
+	a.mu.Unlock()
+
+	if voiceModelID == "" {
+		return "", primaryErr
+	}
+	if progress != nil {
+		progress(fmt.Sprintf("Falling back to voice model (%s)...", voiceModelID))
+	}
+	roleClient, roleModel, clientErr := a.subagentClient(voiceModelID)
+	if clientErr != nil {
+		return "", fmt.Errorf("active turn failed (%v), and voice fallback model error: %w", primaryErr, clientErr)
+	}
+	report, spend, subErr := agent.RunSubagent(ctx, a.envFor(agentName), roleClient, roleModel, string(agent.SubagentGeneral), prompt, maxSteps)
+	if subErr != nil {
+		return "", fmt.Errorf("active turn failed (%v), and voice fallback turn error: %w", primaryErr, subErr)
+	}
+	if session != nil {
+		session.AddUser(prompt)
+		session.AddAssistant(report, "", nil)
+		session.AddUsage(spend.Usage)
+		_ = session.Save()
+	}
+	a.AddUsage(spend.Usage)
+	return a.RedactForChannel(report), nil
+}
+
+// sessionCostInfo formats token and dollar spend for one channel session.
+func (a *App) sessionCostInfo(session *agent.Session, lang string) string {
+	if session == nil {
+		if lang == "id" {
+			return "Belum ada sesi aktif."
+		}
+		return "No active session."
+	}
+	usage := session.Usage()
+	cost := session.Cost()
+	turns := session.Turns()
+	model := a.CurrentModel()
+	modelName := a.ModelLabel()
+	if modelName == "" {
+		modelName = model.ID
+	}
+	if lang == "id" {
+		lines := []string{
+			fmt.Sprintf("Sesi: %s (%d giliran)", session.ID(), turns),
+			fmt.Sprintf("Model aktif: %s", orNone(modelName)),
+			fmt.Sprintf("Token masuk: %d", usage.PromptTokens),
+			fmt.Sprintf("Token keluar: %d", usage.CompletionTokens),
+			fmt.Sprintf("Total token: %d", usage.TotalTokens),
+		}
+		if cost > 0 {
+			lines = append(lines, fmt.Sprintf("Estimasi biaya: $%.4f USD", cost))
+		} else {
+			lines = append(lines, "Estimasi biaya: $0.0000 USD (atau paket langganan)")
+		}
+		return strings.Join(lines, "\n")
+	}
+	lines := []string{
+		fmt.Sprintf("Session: %s (%d turn(s))", session.ID(), turns),
+		fmt.Sprintf("Active model: %s", orNone(modelName)),
+		fmt.Sprintf("Prompt tokens: %d", usage.PromptTokens),
+		fmt.Sprintf("Completion tokens: %d", usage.CompletionTokens),
+		fmt.Sprintf("Total tokens: %d", usage.TotalTokens),
+	}
+	if cost > 0 {
+		lines = append(lines, fmt.Sprintf("Estimated cost: $%.4f USD", cost))
+	} else {
+		lines = append(lines, "Estimated cost: $0.0000 USD (or subscription plan)")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// sessionPlanInfo formats the active plan/todos for one channel session.
+func (a *App) sessionPlanInfo(session *agent.Session, lang string) string {
+	var todos []agent.Todo
+	if session != nil {
+		todos = session.Todos()
+	}
+	if len(todos) == 0 && a.Todos() != nil {
+		todos = a.Todos().Items()
+	}
+	if len(todos) == 0 {
+		if lang == "id" {
+			return "Belum ada rencana (plan) aktif pada sesi ini."
+		}
+		return "No active plan in this session."
+	}
+	done := 0
+	lines := make([]string, 0, len(todos)+1)
+	for index, item := range todos {
+		mark := "[ ]"
+		switch item.Status {
+		case "completed":
+			mark = "[x]"
+			done++
+		case "in_progress":
+			mark = "[>]"
+		}
+		lines = append(lines, fmt.Sprintf("%d. %s %s", index+1, mark, item.Title))
+	}
+	header := fmt.Sprintf("Plan (%d/%d complete):", done, len(todos))
+	if lang == "id" {
+		header = fmt.Sprintf("Rencana (%d/%d selesai):", done, len(todos))
+	}
+	return header + "\n" + strings.Join(lines, "\n")
+}
+
+// compactChannelSession manually condenses a channel session's history.
+func (a *App) compactChannelSession(ctx context.Context, session *agent.Session, lang string) string {
+	ok, err := a.ForceCompactSession(ctx, session)
+	if err != nil {
+		if lang == "id" {
+			return "Gagal meringkas riwayat percakapan: " + err.Error()
+		}
+		return "Could not compact session history: " + err.Error()
+	}
+	if !ok {
+		if lang == "id" {
+			return "Riwayat percakapan belum perlu diringkas."
+		}
+		return "Session history did not need compaction."
+	}
+	if lang == "id" {
+		return "Riwayat percakapan berhasil diringkas untuk menghemat ruang konteks."
+	}
+	return "Condensed earlier turns into a brief to free up context space."
 }

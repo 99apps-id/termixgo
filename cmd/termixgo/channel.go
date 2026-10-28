@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
@@ -283,6 +285,11 @@ func loginChannel(args []string, stdout io.Writer) error {
 		if strings.TrimSpace(entry.BotName) == "" {
 			entry.BotName = user.Username
 		}
+		if entry.ChatID == 0 && strings.TrimSpace(entry.PairingCode) == "" {
+			if code, err := newPairingCode(); err == nil {
+				entry.PairingCode = code
+			}
+		}
 		cfg = cfg.WithTelegramAccount(name, entry)
 		if err := config.Save(cfg); err != nil {
 			return err
@@ -296,6 +303,14 @@ func loginChannel(args []string, stdout io.Writer) error {
 		return nil
 	}
 	return nil
+}
+
+func newPairingCode() (string, error) {
+	value, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%06d", value.Int64()), nil
 }
 
 // loginWhatsApp links one device by QR or by pairing code. The session file is

@@ -776,3 +776,54 @@ func TestGuestCanRunPromptWithRunCommand(t *testing.T) {
 		t.Errorf("sendMessage should have been called")
 	}
 }
+
+func (a *scriptedAgent) CostInfo(request channel.Request, lang string) string {
+	return "Total tokens: 321"
+}
+
+func (a *scriptedAgent) PlanInfo(request channel.Request, lang string) string {
+	return "Plan (1/2 complete)"
+}
+
+func (a *scriptedAgent) CompactSession(ctx context.Context, request channel.Request, lang string) string {
+	return "Condensed earlier turns"
+}
+
+func TestCaptionMentionsQuotedReplyAndNewCommands(t *testing.T) {
+	agent := &scriptedAgent{answer: "done", model: "test-model"}
+	bot, api := pairedBot(t, agent)
+	bot.setIdentity(User{ID: 99, Username: "termixgo_bot"})
+
+	// 1. Caption mention detection on photo/document in group
+	photoCaptionMention := &Message{
+		Caption:         "please check @termixgo_bot",
+		CaptionEntities: []MessageEntity{{Type: "mention", Offset: 13, Length: 13}},
+	}
+	if !bot.mentionsBot(photoCaptionMention) {
+		t.Errorf("expected caption mention to count as mentioning the bot")
+	}
+
+	// 2. /cost, /plan, /compact commands
+	for cmd, want := range map[string]string{
+		"/cost":    "Total tokens: 321",
+		"/plan":    "Plan (1/2 complete)",
+		"/compact": "Condensed earlier turns",
+	} {
+		bot.handleMessage(context.Background(), message(cmd))
+		if got := lastText(t, api, "sendMessage"); !strings.Contains(got, want) {
+			t.Errorf("%s reply = %q, want %q", cmd, got, want)
+		}
+	}
+
+	// 3. Quoted message context forwarded into prompt
+	quotedMsg := &Message{
+		Chat:           Chat{ID: 7, Type: "private"},
+		From:           &User{ID: 9},
+		Text:           "what does this error mean?",
+		ReplyToMessage: &Message{Text: "panic: nil pointer dereference"},
+	}
+	bot.handleMessage(context.Background(), quotedMsg)
+	if got := agent.firstPrompt(); !strings.Contains(got, "panic: nil pointer dereference") || !strings.Contains(got, "what does this error mean?") {
+		t.Errorf("expected quoted message in prompt, got %q", got)
+	}
+}
