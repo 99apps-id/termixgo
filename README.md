@@ -22,7 +22,8 @@ everything the agent does printed as terminal output.
   machine except to call the provider you chose.
 - Streams what the agent is doing: thinking, reasoning, each tool call, and the
   command output behind it.
-- Optional Telegram companion, so you can keep a run going from your phone.
+- Optional WhatsApp and Telegram companions, so you can steer tasks, inspect code,
+  and send photos or PDF documents from your phone.
 
 ## Screenshot
 
@@ -49,7 +50,7 @@ the first request. The wordmark here is the same paint the README banner and
 - [Trust and approval](#trust-and-approval)
 - [Memory and skills](#memory-and-skills)
 - [MCP servers](#mcp-servers)
-- [Telegram companion](#telegram-companion)
+- [WhatsApp and Telegram companions](#whatsapp-and-telegram-companions)
 - [Run as a 24/7 assistant](#run-as-a-247-assistant)
 - [Scheduled jobs and heartbeat](#scheduled-jobs-and-heartbeat)
 - [Cost, budgets and plans](#cost-budgets-and-plans)
@@ -61,6 +62,7 @@ the first request. The wordmark here is the same paint the README banner and
 - [Architecture](#architecture)
 - [Releasing](#releasing)
 - [Documentation map](#documentation-map)
+- [Agents and channels](#agents-and-channels-whatsapp--telegram)
 - [License](#license)
 
 ## Features
@@ -717,7 +719,64 @@ stderr is kept and shown in the failure message.
 Only stdio transport is implemented, and only `initialize`, `tools/list` and
 `tools/call`.
 
-## Telegram companion
+## WhatsApp and Telegram companions
+
+Termixgo provides companion bots for both WhatsApp and Telegram, enabling you to
+steer coding tasks, approve actions, run slash commands, and send photos or PDF
+documents directly from your phone.
+
+For the complete architectural walkthrough, multi-agent bindings, allowlists,
+and VPS daemon setup, see [`CHANNELS.md`](CHANNELS.md).
+
+### WhatsApp companion
+
+The WhatsApp companion uses native multi-device socket encryption in pure Go
+via `whatsmeow`. It runs directly inside the Termixgo daemon without requiring
+headless Chrome, Puppeteer, or Selenium.
+
+```sh
+# 1. Register a WhatsApp channel account tied to an agent
+termixgo channel add whatsapp default
+
+# 2. Authenticate device via terminal QR code
+termixgo channel login whatsapp default
+
+# Or use an 8-digit pairing code on a headless VPS without a camera:
+termixgo channel login whatsapp default --pair 628xxxxxxxxxx
+
+# 3. Designate your personal phone as operator admin
+termixgo channel admin add whatsapp default 628xxxxxxxxxx
+
+# 4. Configure inbound DM policy (open, pairing, or allowlist)
+termixgo channel dm whatsapp default open
+
+# 5. Enable the account and start the daemon
+termixgo channel on whatsapp default
+termixgo serve
+```
+
+WhatsApp features:
+
+- **Enriched WhatsApp Markdown:** Formats output with clean WhatsApp typography:
+  clean bold (`*text*` without raw double asterisks), bold-italic (`_*text*_`),
+  clean bullet dot lists, and clear headings.
+- **Multimodal vision (images & PDFs):** Send screenshots, bug photos, architectural
+  diagrams, or PDF documentation with optional captions. Vision models (Gemini,
+  Antigravity, Claude, OpenAI) inspect images and PDFs directly. For non-vision
+  models, PDF files are saved to `.termixgo/uploads/` in the workspace so the
+  agent can inspect them with CLI tools.
+- **Resilient anti-silent drop:** Detached background timeout contexts ensure
+  that upstream model rate limits, timeouts, or expired OAuth credentials always
+  deliver an immediate actionable error notice with guidance rather than
+  silently dropping messages.
+- **Direct slash commands:** `/models`, `/model <name>`, `/status`, `/new`,
+  `/stop`, `/diff`, `/help` (or `/menu`) work directly in chat, automatically
+  adapting output language to caller country code (+62 Indonesian, international
+  English).
+- **Group and DM governance:** Granular inbound DM policies (`open`, `pairing`,
+  `allowlist`, `deny`) and group policies (`mention`, `all`, `disabled`).
+
+### Telegram companion
 
 ```
 /telegram setup     # paste a token, get a pairing code
@@ -734,15 +793,16 @@ headings and links, converted to Telegram's HTML subset, with a plain-text
 fallback if Telegram ever rejects an entity so a formatting bug cannot swallow a
 reply. Pipe tables are rendered as aligned preformatted blocks, and fenced code
 blocks whose info string ends with `linenos` are emitted with numbered lines.
-`/model` opens a provider-and-model picker. Send a photo, optionally with a
-caption as the instruction, and the agent sees it with a vision model.
+`/model` opens a provider-and-model picker. Send a photo or PDF document,
+optionally with a caption as the instruction, and the agent sees it with a
+vision model.
 
 `termixgo serve` verifies that a usable model is configured before it starts and
 names the exact reason (a missing key, an unknown provider) if it is not. The CLI
 keeps its own settings, so a custom endpoint set in another application is not
 shared with it; use `termixgo endpoint` and `termixgo secret` to configure it.
 
-To run the bot as an always-on assistant, see
+To run the companions as an always-on assistant, see
 [Run as a 24/7 assistant](#run-as-a-247-assistant).
 
 ## Run as a 24/7 assistant
@@ -917,13 +977,14 @@ termixgo mcp                    # list MCP servers and their tools
 termixgo secret <provider> [key] # store a provider API key
 termixgo login <provider>       # OAuth login: xai-oauth, openai-codex, claude-oauth, antigravity, github-copilot, muse
 termixgo logout <provider>      # drop a stored OAuth login
+termixgo channel [list|add|login|on|off|status|rm|allow|admin|dm|groups|guest|pairing]
 termixgo telegram [status|on|off]
 termixgo cron [list|add|remove|on|off|run]
 termixgo heartbeat [status|on|off|interval <duration>]
 termixgo audit [count]          # metadata-only action ledger
 termixgo audit code [--category <cat>] [--json] # static code and security audit
 termixgo worker [list]          # background coding workers
-termixgo serve                  # run the Telegram assistant 24/7
+termixgo serve                  # run the messaging assistant (WhatsApp & Telegram) 24/7
 termixgo service [install|uninstall|status]
 termixgo completion [shell]     # bash, zsh, fish or powershell
 termixgo doctor                 # inspect configuration and provider keys
@@ -1004,8 +1065,9 @@ The packages:
 
 ```
 cmd/termixgo        entry point and subcommands
-internal/app        shared state: config, provider client, session, Telegram
+internal/app        shared state: config, provider client, session
 internal/agent      the run loop, tools, prompt, compaction, memory
+internal/channel    channel policies, account state, and pairing
 internal/provider   BYOK clients: OpenAI-compatible, Anthropic, Google
 internal/config     ~/.termixgo config, defaults and folder trust
 internal/mcp        MCP client: stdio JSON-RPC, tool listing and dispatch
@@ -1014,13 +1076,14 @@ internal/search     SQLite full-text index over memory, journal and workspace
 internal/skill      SKILL.md discovery and parsing
 internal/telegram   Bot API client and the long-polling companion bot
 internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
+internal/whatsapp   native multi-device companion with whatsmeow, vision & enriched markdown
 ```
 
 ## Releasing
 
 ```sh
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.2
+git push origin v0.2.2
 ```
 
 The release workflow runs the full gate, then goreleaser builds six targets,
@@ -1100,11 +1163,18 @@ Inside the terminal UI, `/agent` switches agents and `/channel` shows the
 accounts. A guest chat gets the read tools and approval-gated writes only:
 shell, background processes, workers, subagents, outbound requests and secrets
 are operator-only, and every mutating tool asks the operator first. WhatsApp
-replies are plain conversation, with a typing indicator while the turn runs.
+replies stream enriched markdown with clean bold, bold-italic, bullet dots,
+and headings (free of raw double asterisks), with a typing indicator while
+the turn runs.
+
+Both WhatsApp and Telegram companions support direct multimodal image and PDF
+inspection for vision models, and route error messages through detached
+background contexts to prevent silent drop of messages.
 
 Interactive in-chat slash commands (`/models`, `/model <name>`, `/status`,
 `/new`, `/stop`, `/diff`, `/help`) work directly in WhatsApp and Telegram,
-automatically adjusting output language based on caller country code.
+automatically adjusting output language based on caller country code (+62
+Indonesian, international English).
 
 ## License
 

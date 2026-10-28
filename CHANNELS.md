@@ -20,6 +20,13 @@ Termixgo connects messaging platforms directly to autonomous agents:
 
 - **Native Protocol:** WhatsApp uses native multi-device socket encryption via pure Go
   without requiring headless browsers, Selenium, or Puppeteer.
+- **Enriched Formatting:** Messages are converted to native WhatsApp syntax with
+  clean bold (`*text*`), bold-italic (`_*text*_`), unicode bullet dots, and clear headings.
+- **Multimodal Vision:** Send photos, diagrams, and PDF documents directly in chat.
+  Vision models inspect visual input directly, while documents on non-vision models
+  are safely stored in `.termixgo/uploads/` for tool examination.
+- **Anti-Silent Drop:** Errors and rate limits are dispatched through a detached
+  timeout context, guaranteeing immediate notification instead of dropped messages.
 - **Agent Binding:** Each channel account is attached to a specific agent (`default`,
   `sales`, `devops`, or custom). Each agent possesses its own isolated workspace,
   `SOUL.md` persona, and `USER.md` operator profile.
@@ -136,6 +143,18 @@ termixgo service status
 Open WhatsApp on your phone and send a message to the linked number (for example, "Halo"
 or "/status"). The agent will stream its response using the personality defined in
 your agent's `SOUL.md`.
+
+### Step 8: Send Images, PDFs, and Use In-Chat Commands
+
+- **Send Photos & Screenshots:** Attach an image with an optional caption asking the
+  agent to inspect the error screenshot, UI mock, or diagram.
+- **Send PDF Documents:** Upload a PDF document. Vision models parse the pages directly.
+  Non-vision models store the file in `.termixgo/uploads/` so the agent can read and
+  process the document with CLI tools.
+- **Enriched Formatting:** Code snippets, bullet dots, bold terms, and headings are
+  formatted cleanly using native WhatsApp text modifiers.
+- **In-Chat Commands:** Type `/models` to view active models, `/model <name>` to switch
+  the active model, `/status` for agent metrics, or `/diff` to inspect recent edits.
 
 ---
 
