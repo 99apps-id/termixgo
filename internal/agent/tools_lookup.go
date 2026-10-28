@@ -51,18 +51,22 @@ func (t *lookupTool) Schema() map[string]any {
 
 func (t *lookupTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	kind := strings.ToLower(strings.TrimSpace(argString(args, "kind")))
+	// A model often sends location, place, city or topic instead of query.
+	// Accept them as aliases so a weather/crypto/wiki call does not fail on
+	// a naming mismatch the schema did not spell out.
+	query := argString(args, "query", "location", "place", "city", "topic", "coin", "q")
 	switch kind {
 	case "weather":
-		text, err := lookupWeather(ctx, argString(args, "query"))
+		text, err := lookupWeather(ctx, query)
 		return lookupResult(text, err), nil
 	case "fx", "exchange", "rate":
 		text, err := lookupFX(ctx, argString(args, "from"), argString(args, "to"), argFloat(args, "amount", 1))
 		return lookupResult(text, err), nil
 	case "crypto":
-		text, err := lookupCrypto(ctx, argString(args, "query"))
+		text, err := lookupCrypto(ctx, query)
 		return lookupResult(text, err), nil
 	case "wiki", "wikipedia":
-		text, err := lookupWiki(ctx, argString(args, "query"))
+		text, err := lookupWiki(ctx, query)
 		return lookupResult(text, err), nil
 	default:
 		return Result{Output: "kind must be one of weather, fx, crypto or wiki", IsError: true}, nil

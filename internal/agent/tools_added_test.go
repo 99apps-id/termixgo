@@ -282,8 +282,10 @@ func TestFindToolsLoadsMatches(t *testing.T) {
 		t.Errorf("discovered = %v", discovered)
 	}
 
-	if empty, _ := (&findToolsTool{}).Run(context.Background(), env, map[string]any{}); !empty.IsError {
-		t.Errorf("an empty query must be an error")
+	if empty, _ := (&findToolsTool{}).Run(context.Background(), env, map[string]any{}); empty.IsError {
+		t.Errorf("an empty query must list the catalog, got error %q", empty.Output)
+	} else if !strings.Contains(empty.Output, "github_create_pr") {
+		t.Errorf("an empty query must list loadable tools, got %q", empty.Output)
 	}
 }
 

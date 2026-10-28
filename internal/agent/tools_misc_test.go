@@ -509,6 +509,22 @@ func TestWebFetchReaderUsesTheReaderHost(t *testing.T) {
 	}
 }
 
+// TestWebFetchRefusesSearchEngineURLToReader proves a Google search results
+// page is refused instead of routed to the reader, which always answers 403
+// for it. The model must use web_search for the query.
+func TestWebFetchRefusesSearchEngineURLToReader(t *testing.T) {
+	result, err := (&webFetchTool{}).Run(context.Background(), testEnv(t), map[string]any{
+		"url":    "https://www.google.com/search?q=termixgo",
+		"reader": true,
+	})
+	if err != nil {
+		t.Fatalf("Run: err=%v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Output, "web_search") {
+		t.Errorf("output = %q, want a refusal pointing at web_search", result.Output)
+	}
+}
+
 // TestWebFetchTruncatesALargePage keeps one page from filling the context
 // window, which would be reported later as an unexplained trim.
 func TestWebFetchTruncatesALargePage(t *testing.T) {

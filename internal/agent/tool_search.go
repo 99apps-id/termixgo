@@ -270,13 +270,28 @@ func (t *findToolsTool) Schema() map[string]any {
 
 func (t *findToolsTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	query := strings.TrimSpace(argString(args, "query"))
-	if query == "" {
-		return Result{Output: "query is required", IsError: true}, nil
-	}
 	if env == nil || len(env.ToolIndex) == 0 {
 		return Result{Output: "Tool discovery is not available in this session; every tool is already loaded."}, nil
 	}
 	limit := argInt(args, "limit", 8, 1, 20)
+	if query == "" {
+		// An empty query is a catalog request, not an error: list the
+		// loadable tools so the model can discover rather than guess.
+		names := make([]string, 0, len(env.ToolIndex))
+		var builder strings.Builder
+		builder.WriteString("Loadable tools (call find_tools with a keyword to load one):\n")
+		for i, entry := range env.ToolIndex {
+			if i >= limit {
+				break
+			}
+			names = append(names, entry.Name)
+			fmt.Fprintf(&builder, "- %s: %s\n", entry.Name, entry.Summary)
+		}
+		if env.DiscoverTools != nil {
+			env.DiscoverTools(names)
+		}
+		return Result{Output: strings.TrimRight(builder.String(), "\n")}, nil
+	}
 	matches := searchToolIndex(env.ToolIndex, query, limit)
 	if len(matches) == 0 {
 		return Result{Output: fmt.Sprintf("No tool matches %q. Try another keyword or an exact tool name.", query)}, nil

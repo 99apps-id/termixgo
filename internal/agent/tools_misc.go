@@ -791,6 +791,28 @@ func isPrivateHost(host string) bool {
 	return false
 }
 
+// isSearchEngineURL reports a search-engine results page. Routing one
+// through the r.jina.ai reader always answers 403, so the fetch tool refuses
+// it early and points the model at web_search instead of burning the call.
+func isSearchEngineURL(parsed *url.URL) bool {
+	if parsed == nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	path := strings.ToLower(parsed.Path)
+	switch {
+	case strings.Contains(host, "google.") && strings.HasPrefix(path, "/search"):
+		return true
+	case host == "bing.com" && strings.HasPrefix(path, "/search"):
+		return true
+	case host == "search.yahoo.com" && strings.HasPrefix(path, "/search"):
+		return true
+	case host == "yandex.com" && strings.HasPrefix(path, "/search"):
+		return true
+	}
+	return false
+}
+
 // fetchClient is the client web_fetch uses.
 //
 // The direct URL is checked before the request in Run; the redirect is checked
@@ -835,14 +857,22 @@ func (t *webFetchTool) Run(ctx context.Context, env *Env, args map[string]any) (
 		return Result{Output: "That host is a private or loopback address. The agent fetches public URLs; set TERMIXGO_ALLOW_PRIVATE_FETCH=1 to let it read a private host you run.", IsError: true}, nil
 	}
 	forcedReader := argBool(args, "reader", false)
+	if forcedReader && isSearchEngineURL(parsed) {
+		return Result{Output: "That is a search-engine results page, which the reader cannot render (403). Use web_search with the query instead of fetching the search URL.", IsError: true}, nil
+	}
 
 	result, status, transportErr := fetchOnce(ctx, raw, forcedReader)
 	if transportErr == nil {
 		// A direct fetch that came back empty or bot-blocked (403/429) is what
 		// the reader fixes, so it is retried automatically rather than asking
-		// the model to know about the flag.
+		// the model to know about the flag. A search-engine results page is
+		// the exception: the reader answers 403 for it too, so retrying
+		// only burns the call; point the model at web_search instead.
 		blocked := status == http.StatusForbidden || status == http.StatusTooManyRequests
 		if !forcedReader && (blocked || strings.TrimSpace(result.Output) == "") {
+			if isSearchEngineURL(parsed) {
+				return Result{Output: "That is a search-engine results page, which the reader cannot render (403). Use web_search with the query instead of fetching the search URL.", IsError: true}, nil
+			}
 			if viaReader, _, readerErr := fetchOnce(ctx, raw, true); readerErr == nil {
 				return viaReader, nil
 			}

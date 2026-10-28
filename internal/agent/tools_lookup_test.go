@@ -138,3 +138,28 @@ func TestLookupUnknownKind(t *testing.T) {
 		t.Errorf("an unknown kind must fail")
 	}
 }
+
+func TestLookupWeatherAcceptsLocationAlias(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if strings.Contains(request.URL.Path, "geocode") {
+			fmt.Fprint(writer, `{"results":[{"name":"Bojonggede","country":"Indonesia","latitude":-6.4,"longitude":106.8}]}`)
+			return
+		}
+		fmt.Fprint(writer, `{"current":{"temperature_2m":30.1,"apparent_temperature":33,"relative_humidity_2m":72,"precipitation":0,"weather_code":1,"wind_speed_10m":9},"daily":{"temperature_2m_max":[30],"temperature_2m_min":[24],"precipitation_probability_max":[20],"weather_code":[1]},"timezone":"Asia/Jakarta"}`)
+	}))
+	t.Cleanup(func() {
+		server.Close()
+		restoreLookupEndpoints()
+	})
+	lookupGeocodeEndpoint = server.URL + "/geocode"
+	lookupForecastEndpoint = server.URL + "/forecast"
+
+	result, err := (&lookupTool{}).Run(context.Background(), &Env{}, map[string]any{"kind": "weather", "location": "bojonggede"})
+	if err != nil || result.IsError {
+		t.Fatalf("a location alias must work like query: err=%v result=%+v", err, result)
+	}
+	if !strings.Contains(result.Output, "Bojonggede") {
+		t.Errorf("output = %q", result.Output)
+	}
+}
