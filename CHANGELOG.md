@@ -4,6 +4,20 @@ All notable changes to Termixgo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.2 - 2026-10-28
+
+### Added
+- WhatsApp enriched markdown formatting: standard markdown bold (*text*) without double asterisks, bold-italic (_*text*_), headings as bold, clean bullet dots, and link formatting.
+- WhatsApp image and PDF document support: parses and downloads attachments via whatsmeow, attaches vision multimodal input for vision-enabled models (Gemini, Antigravity, Claude), and saves documents to the workspace uploads directory for tool-based inspection.
+- Telegram enriched markdown: support for strikethrough (<s>), bold-italic (<b><i>), italic (<i>), blockquotes (<blockquote>), bullet dots, and syntax-highlighted code blocks (<pre><code class="language-...">).
+- Telegram PDF document handling: routes PDF attachments directly to vision for multimodal models and saves to the workspace uploads directory.
+- Anthropic document blocks: mapped MIME type application/pdf to the native Anthropic document block type.
+
+### Fixed
+- WhatsApp channel reliability: replies now use a detached background timeout context so error notifications are never dropped silently when an upstream turn times out or cancels.
+- Clear error guidance on expired provider OAuth credentials, prompting the operator or user to switch models or renew credentials.
+- Verified automatic Google OAuth token refresh in Antigravity provider using link-time stamped client credentials.
+
 ## 0.2.1 - 2026-10-28
 
 ### Added
