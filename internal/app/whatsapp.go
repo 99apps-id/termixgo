@@ -52,14 +52,21 @@ func (a *App) startWhatsAppAccount(name string) error {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	runtime := &channelRuntime{id: key, cancel: cancel, status: "connecting"}
-	runtime.send = bot.SendTo
+	runtime := &channelRuntime{
+		id:       key,
+		cancel:   cancel,
+		waBot:    bot,
+		status:   "connecting",
+		send:     bot.SendTo,
+		sendFile: bot.SendFileTo,
+	}
 	a.mu.Lock()
 	if a.channels == nil {
 		a.channels = map[channel.AccountID]*channelRuntime{}
 	}
 	a.channels[key] = runtime
 	a.mu.Unlock()
+	a.ensureOutboxWatcher()
 
 	go func() {
 		defer closeStore()

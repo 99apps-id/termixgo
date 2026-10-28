@@ -3,10 +3,13 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/99apps-id/termixgo/internal/agent"
+	"github.com/99apps-id/termixgo/internal/channel"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/secrets"
@@ -327,5 +330,83 @@ func TestOpenAICompatibleProviderAppearsInActiveProvidersAndModels(t *testing.T)
 	text := application.AvailableModelsText("id")
 	if !strings.Contains(text, "OpenAI Compatible (openai-compatible)") || !strings.Contains(text, "qwen3-coder:480b-cloud") {
 		t.Errorf("AvailableModelsText missing openai-compatible model:\n%s", text)
+	}
+}
+
+func TestSendChannelDeliversAttachmentToTelegramAndWhatsApp(t *testing.T) {
+	application := newTestApp(t)
+
+	// Create a dummy uploaded file in the workspace
+	uploadDir := filepath.Join(application.Workspace(), ".termixgo", "uploads")
+	if err := os.MkdirAll(uploadDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	filePath := filepath.Join(uploadDir, "invoice.pdf")
+	if err := os.WriteFile(filePath, []byte("pdf-invoice-bytes"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Configure default Telegram ChatID and WhatsApp Admin
+	_ = application.UpdateConfig(func(cfg *config.Config) {
+		cfg.Telegram.ChatID = 450913223
+		if cfg.Channels.WhatsApp.Accounts == nil {
+			cfg.Channels.WhatsApp.Accounts = map[string]config.ChannelAccount{}
+		}
+		cfg.Channels.WhatsApp.Accounts["default"] = config.ChannelAccount{
+			Enabled: true,
+			Admins:  []string{"6282113487323"},
+		}
+	})
+
+	var tgChat, tgName, tgCaption string
+	var tgData []byte
+	var waChat, waName, waCaption string
+	var waData []byte
+
+	application.mu.Lock()
+	application.channels[channel.AccountID{Channel: config.ChannelTelegram, Account: "default"}] = &channelRuntime{
+		sendFile: func(_ context.Context, chatID, filename string, data []byte, caption string) error {
+			tgChat = chatID
+			tgName = filename
+			tgData = data
+			tgCaption = caption
+			return nil
+		},
+	}
+	application.channels[channel.AccountID{Channel: config.ChannelWhatsApp, Account: "default"}] = &channelRuntime{
+		sendFile: func(_ context.Context, chatID, filename string, data []byte, caption string) error {
+			waChat = chatID
+			waName = filename
+			waData = data
+			waCaption = caption
+			return nil
+		},
+	}
+	application.mu.Unlock()
+
+	// 1. Send from workspace to Telegram (without specifying recipient)
+	outTG, err := application.SendChannel(context.Background(), agent.ChannelSendRequest{
+		Channel:  "telegram",
+		FilePath: ".termixgo/uploads/invoice.pdf",
+		Message:  "Lampiran dari WhatsApp",
+	})
+	if err != nil {
+		t.Fatalf("SendChannel(telegram): %v", err)
+	}
+	if tgChat != "450913223" || tgName != "invoice.pdf" || string(tgData) != "pdf-invoice-bytes" || tgCaption != "Lampiran dari WhatsApp" {
+		t.Fatalf("unexpected telegram delivery: chat=%q name=%q data=%q caption=%q out=%q", tgChat, tgName, string(tgData), tgCaption, outTG)
+	}
+
+	// 2. Send from workspace to WhatsApp (without specifying recipient -> resolves admin 6282113487323@s.whatsapp.net)
+	outWA, err := application.SendChannel(context.Background(), agent.ChannelSendRequest{
+		Channel:  "whatsapp",
+		FilePath: ".termixgo/uploads/invoice.pdf",
+		Message:  "Lampiran dari TUI",
+	})
+	if err != nil {
+		t.Fatalf("SendChannel(whatsapp): %v", err)
+	}
+	if waChat != "6282113487323@s.whatsapp.net" || waName != "invoice.pdf" || string(waData) != "pdf-invoice-bytes" || waCaption != "Lampiran dari TUI" {
+		t.Fatalf("unexpected whatsapp delivery: chat=%q name=%q data=%q caption=%q out=%q", waChat, waName, string(waData), waCaption, outWA)
 	}
 }

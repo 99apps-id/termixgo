@@ -88,6 +88,18 @@ func TestMentionsSelfUsesTheLinkedJIDs(t *testing.T) {
 	if bot.mentionsSelf(testEvent("halo").Message) {
 		t.Errorf("a plain message must not count")
 	}
+	replyToBot := &waE2E.Message{
+		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+			Text: proto.String("setuju"),
+			ContextInfo: &waE2E.ContextInfo{
+				Participant:   proto.String("628111@s.whatsapp.net"),
+				QuotedMessage: &waE2E.Message{Conversation: proto.String("jawaban bot")},
+			},
+		},
+	}
+	if !bot.mentionsSelf(replyToBot) {
+		t.Errorf("a reply quoting the bot must count as a mention")
+	}
 }
 
 func TestNaturalErrorHidesInternals(t *testing.T) {
@@ -581,5 +593,34 @@ func TestEphemeralGroupMentionCommandAndQuotedContext(t *testing.T) {
 	}
 	if replies[len(replies)-1] != "voice-reply" {
 		t.Errorf("expected voice-reply, got %q", replies[len(replies)-1])
+	}
+}
+
+func TestNormalizeJIDAndSendFileTo(t *testing.T) {
+	if got := NormalizeJID("0821-1348-7323"); got != "6282113487323@s.whatsapp.net" {
+		t.Fatalf("NormalizeJID(0821-1348-7323) = %q, want 6282113487323@s.whatsapp.net", got)
+	}
+	if got := NormalizeJID("6282113487323"); got != "6282113487323@s.whatsapp.net" {
+		t.Fatalf("NormalizeJID(6282113487323) = %q, want 6282113487323@s.whatsapp.net", got)
+	}
+
+	bot := New(nil, &fakeAgent{})
+	var gotChat, gotName, gotCaption string
+	var gotBytes []byte
+	bot.sendFileHook = func(chatID, filename string, data []byte, caption string) {
+		gotChat = chatID
+		gotName = filename
+		gotBytes = data
+		gotCaption = caption
+	}
+	if !bot.Connected() {
+		t.Fatal("expected bot with sendFileHook to report Connected() == true")
+	}
+	err := bot.SendFileTo(context.Background(), "082113487323", "dir/laporan.pdf", []byte("pdf-data"), "**Laporan** penting")
+	if err != nil {
+		t.Fatalf("SendFileTo: %v", err)
+	}
+	if gotChat != "6282113487323@s.whatsapp.net" || gotName != "laporan.pdf" || string(gotBytes) != "pdf-data" || gotCaption != "*Laporan* penting" {
+		t.Fatalf("unexpected SendFileTo capture: chat=%q name=%q data=%q caption=%q", gotChat, gotName, string(gotBytes), gotCaption)
 	}
 }

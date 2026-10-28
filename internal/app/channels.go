@@ -2,12 +2,15 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/agenthome"
@@ -36,10 +39,12 @@ type channelRuntime struct {
 	id     channel.AccountID
 	cancel context.CancelFunc
 	bot    *telegram.Bot
+	waBot  *whatsapp.Bot
 	status string
 	// send posts one message to one chat on this account, which is what a
 	// scheduled job's explicit target uses.
-	send func(ctx context.Context, chatID, text string) error
+	send     func(ctx context.Context, chatID, text string) error
+	sendFile func(ctx context.Context, chatID, filename string, data []byte, caption string) error
 }
 
 // StartChannels starts every enabled account of every configured channel.
@@ -129,7 +134,12 @@ func (a *App) StopChannels() {
 	for key := range a.channels {
 		keys = append(keys, key)
 	}
+	outboxCancel := a.outboxCancel
+	a.outboxCancel = nil
 	a.mu.Unlock()
+	if outboxCancel != nil {
+		outboxCancel()
+	}
 	for _, key := range keys {
 		a.StopChannel(key.Channel, key.Account)
 	}
@@ -436,6 +446,13 @@ func (a *App) startTelegramAccount(name string) error {
 		}
 		return bot.SendTo(ctx, id, text)
 	}
+	runtime.sendFile = func(ctx context.Context, chatID, filename string, data []byte, caption string) error {
+		id, err := strconv.ParseInt(strings.TrimSpace(chatID), 10, 64)
+		if err != nil {
+			return fmt.Errorf("telegram chat id %q is not a number", chatID)
+		}
+		return bot.SendFileTo(ctx, id, filename, data, caption)
+	}
 	a.mu.Lock()
 	if a.channels == nil {
 		a.channels = map[channel.AccountID]*channelRuntime{}
@@ -447,6 +464,7 @@ func (a *App) startTelegramAccount(name string) error {
 		a.botStatus = "connecting"
 	}
 	a.mu.Unlock()
+	a.ensureOutboxWatcher()
 
 	go func() {
 		if _, err := bot.Verify(ctx); err != nil {
@@ -827,4 +845,454 @@ func (a *App) compactChannelSession(ctx context.Context, session *agent.Session,
 		return "Riwayat percakapan berhasil diringkas untuk menghemat ruang konteks."
 	}
 	return "Condensed earlier turns into a brief to free up context space."
+}
+
+// maxChannelAttachmentBytes caps outgoing channel attachments at 50 MB.
+const maxChannelAttachmentBytes = 50 * 1024 * 1024
+
+// SendChannel delivers a message and/or file attachment from the active workspace
+// to Telegram or WhatsApp.
+func (a *App) SendChannel(ctx context.Context, req agent.ChannelSendRequest) (string, error) {
+	return a.sendChannelFrom(ctx, a.Workspace(), req)
+}
+
+func (a *App) sendChannelFrom(ctx context.Context, workspace string, req agent.ChannelSendRequest) (string, error) {
+	kind := normalizeChannelKind(req.Channel)
+	if kind == "" {
+		return "", fmt.Errorf("unknown channel %q; use \"telegram\" or \"whatsapp\"", req.Channel)
+	}
+	message := a.RedactForChannel(strings.TrimSpace(req.Message))
+	filePath := strings.TrimSpace(req.FilePath)
+	if filePath == "" && message == "" {
+		return "", errors.New("provide at least one of file_path or message")
+	}
+
+	var fileData []byte
+	var filename string
+	if filePath != "" {
+		resolvedPath := filePath
+		if !filepath.IsAbs(resolvedPath) {
+			base := strings.TrimSpace(workspace)
+			if base == "" {
+				base = a.Workspace()
+			}
+			resolvedPath = filepath.Join(base, resolvedPath)
+		}
+		info, err := os.Stat(resolvedPath)
+		if err != nil {
+			return "", fmt.Errorf("attachment file %q: %w", req.FilePath, err)
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("attachment path %q is a directory, not a file", req.FilePath)
+		}
+		if info.Size() > maxChannelAttachmentBytes {
+			return "", fmt.Errorf("attachment %q is %d bytes (limit %d bytes)", req.FilePath, info.Size(), maxChannelAttachmentBytes)
+		}
+		data, err := os.ReadFile(resolvedPath)
+		if err != nil {
+			return "", fmt.Errorf("read attachment %q: %w", req.FilePath, err)
+		}
+		fileData = data
+		filename = filepath.Base(resolvedPath)
+	}
+
+	switch kind {
+	case config.ChannelTelegram:
+		return a.sendTelegramChannel(ctx, req.Account, req.Recipient, filename, fileData, message)
+	case config.ChannelWhatsApp:
+		return a.sendWhatsAppChannel(ctx, req.Account, req.Recipient, filename, fileData, message)
+	default:
+		return "", fmt.Errorf("unsupported channel %q", kind)
+	}
+}
+
+func normalizeChannelKind(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "telegram", "tg":
+		return config.ChannelTelegram
+	case "whatsapp", "wa":
+		return config.ChannelWhatsApp
+	default:
+		return ""
+	}
+}
+
+func (a *App) sendTelegramChannel(ctx context.Context, rawAccount, rawRecipient, filename string, fileData []byte, message string) (string, error) {
+	cfg := a.Config()
+	account := strings.TrimSpace(rawAccount)
+	if account == "" {
+		account = config.FinalAgentName
+	}
+	entry, ok := cfg.TelegramAccount(account)
+	if !ok {
+		for name, acc := range cfg.Channels.Telegram.Accounts {
+			account = name
+			entry = acc
+			ok = true
+			if acc.Enabled {
+				break
+			}
+		}
+	}
+
+	key := channel.AccountID{Channel: config.ChannelTelegram, Account: account}
+	a.mu.Lock()
+	runtime := a.channels[key]
+	a.mu.Unlock()
+
+	var chatID int64
+	if strings.TrimSpace(rawRecipient) != "" {
+		parsed, err := strconv.ParseInt(strings.TrimSpace(rawRecipient), 10, 64)
+		if err != nil {
+			return "", fmt.Errorf("telegram recipient %q must be a numeric chat ID", rawRecipient)
+		}
+		chatID = parsed
+	} else {
+		if ok && entry.ChatID != 0 {
+			chatID = entry.ChatID
+		} else if cfg.Telegram.ChatID != 0 {
+			chatID = cfg.Telegram.ChatID
+		} else if ok && entry.OwnerUserID != 0 {
+			chatID = entry.OwnerUserID
+		} else if cfg.Telegram.OwnerUserID != 0 {
+			chatID = cfg.Telegram.OwnerUserID
+		} else if runtime != nil && runtime.bot != nil {
+			chatID, _ = runtime.bot.Pairing()
+		}
+	}
+	if chatID == 0 {
+		return "", fmt.Errorf("no Telegram chat ID is configured for telegram/%s; pass recipient or pair the Telegram bot first", account)
+	}
+
+	chatIDStr := strconv.FormatInt(chatID, 10)
+	if len(fileData) > 0 {
+		if runtime != nil && runtime.sendFile != nil {
+			if err := runtime.sendFile(ctx, chatIDStr, filename, fileData, message); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Sent attachment %q (%d bytes) to telegram/%s (chat %d).", filename, len(fileData), account, chatID), nil
+		}
+		token := a.telegramTokenFor(account)
+		if token == "" {
+			return "", fmt.Errorf("no token stored for telegram/%s", account)
+		}
+		client := telegram.NewClient(token)
+		if _, err := client.SendDocument(ctx, chatID, filename, fileData, message); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Sent attachment %q (%d bytes) to telegram/%s (chat %d).", filename, len(fileData), account, chatID), nil
+	}
+
+	if runtime != nil && runtime.send != nil {
+		if err := runtime.send(ctx, chatIDStr, message); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Sent message to telegram/%s (chat %d).", account, chatID), nil
+	}
+	token := a.telegramTokenFor(account)
+	if token == "" {
+		return "", fmt.Errorf("no token stored for telegram/%s", account)
+	}
+	client := telegram.NewClient(token)
+	limit := entry.EffectiveTextChunkLimit()
+	for _, chunk := range channel.Chunk(message, limit) {
+		if _, err := client.SendMarkdown(ctx, chatID, chunk, nil); err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf("Sent message to telegram/%s (chat %d).", account, chatID), nil
+}
+
+func (a *App) telegramTokenFor(account string) string {
+	if a.store == nil {
+		return ""
+	}
+	if tok := strings.TrimSpace(a.store.Get(secrets.TelegramAccountTokenKey(account))); tok != "" {
+		return tok
+	}
+	return strings.TrimSpace(a.store.Get(secrets.TelegramTokenKey()))
+}
+
+func (a *App) sendWhatsAppChannel(ctx context.Context, rawAccount, rawRecipient, filename string, fileData []byte, message string) (string, error) {
+	cfg := a.Config()
+	account := strings.TrimSpace(rawAccount)
+	if account == "" {
+		account = config.FinalAgentName
+	}
+	entry, ok := cfg.WhatsAppAccount(account)
+	if !ok {
+		for name, acc := range cfg.Channels.WhatsApp.Accounts {
+			account = name
+			entry = acc
+			ok = true
+			if acc.Enabled {
+				break
+			}
+		}
+	}
+
+	recipient := whatsapp.NormalizeJID(rawRecipient)
+	if recipient == "" && ok {
+		recipient = defaultWhatsAppRecipient(entry)
+	}
+
+	key := channel.AccountID{Channel: config.ChannelWhatsApp, Account: account}
+	a.mu.Lock()
+	runtime := a.channels[key]
+	a.mu.Unlock()
+
+	if recipient == "" && runtime != nil && runtime.waBot != nil {
+		if self := strings.TrimSpace(runtime.waBot.SelfID()); self != "" {
+			recipient = whatsapp.NormalizeJID(whatsapp.PhoneFromJID(self))
+		}
+	}
+	if recipient == "" {
+		return "", fmt.Errorf("no WhatsApp recipient configured for whatsapp/%s; pass recipient phone number (for example \"628123456789\") or configure an admin on the account", account)
+	}
+
+	// 1. If the WhatsApp bot is running and connected in this process, send directly.
+	if runtime != nil && (runtime.waBot == nil || runtime.waBot.Connected()) {
+		if len(fileData) > 0 && runtime.sendFile != nil {
+			if err := runtime.sendFile(ctx, recipient, filename, fileData, message); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Sent attachment %q (%d bytes) to whatsapp/%s (%s).", filename, len(fileData), account, recipient), nil
+		}
+		if len(fileData) == 0 && runtime.send != nil {
+			if err := runtime.send(ctx, recipient, message); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Sent message to whatsapp/%s (%s).", account, recipient), nil
+		}
+	}
+
+	// 2. If another process (such as `termixgo serve`) owns the live WhatsApp
+	// connection, hand the delivery to it through the local outbox directory.
+	if handled, err := a.deliverViaOutbox(ctx, config.ChannelWhatsApp, account, recipient, filename, fileData, message); handled {
+		if err != nil {
+			return "", err
+		}
+		if len(fileData) > 0 {
+			return fmt.Sprintf("Sent attachment %q (%d bytes) to whatsapp/%s (%s).", filename, len(fileData), account, recipient), nil
+		}
+		return fmt.Sprintf("Sent message to whatsapp/%s (%s).", account, recipient), nil
+	}
+
+	// 3. Otherwise, start the WhatsApp account in this process and wait briefly
+	// for the connection to come up.
+	if runtime == nil {
+		if err := a.StartChannel(config.ChannelWhatsApp, account); err != nil {
+			return "", err
+		}
+	}
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		a.mu.Lock()
+		runtime = a.channels[key]
+		a.mu.Unlock()
+		if runtime != nil && (runtime.waBot == nil || runtime.waBot.Connected()) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	if runtime == nil {
+		return "", fmt.Errorf("whatsapp/%s is not running", account)
+	}
+	if len(fileData) > 0 {
+		if runtime.sendFile == nil {
+			return "", fmt.Errorf("whatsapp/%s does not support file attachments", account)
+		}
+		if err := runtime.sendFile(ctx, recipient, filename, fileData, message); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Sent attachment %q (%d bytes) to whatsapp/%s (%s).", filename, len(fileData), account, recipient), nil
+	}
+	if runtime.send == nil {
+		return "", fmt.Errorf("whatsapp/%s is not ready to send", account)
+	}
+	if err := runtime.send(ctx, recipient, message); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Sent message to whatsapp/%s (%s).", account, recipient), nil
+}
+
+func defaultWhatsAppRecipient(entry config.ChannelAccount) string {
+	candidates := append([]string(nil), entry.Admins...)
+	candidates = append(candidates, entry.AllowFrom...)
+	// Prefer a standard phone number (such as 628...) or @s.whatsapp.net JID
+	// over an opaque 15-digit LID when selecting the default recipient.
+	for _, raw := range candidates {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" || strings.HasSuffix(trimmed, "@lid") {
+			continue
+		}
+		if strings.HasSuffix(trimmed, "@s.whatsapp.net") {
+			return trimmed
+		}
+		if len(trimmed) <= 14 {
+			return whatsapp.NormalizeJID(trimmed)
+		}
+	}
+	if len(candidates) > 0 {
+		return whatsapp.NormalizeJID(candidates[0])
+	}
+	return ""
+}
+
+type channelOutboxRequest struct {
+	ID        string `json:"id"`
+	Channel   string `json:"channel"`
+	Account   string `json:"account"`
+	Recipient string `json:"recipient"`
+	Filename  string `json:"filename,omitempty"`
+	Data      []byte `json:"data,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+type channelOutboxResponse struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+func outboxDir() (string, error) {
+	dir, err := config.HomePath("channel-outbox")
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func (a *App) ensureOutboxWatcher() {
+	a.mu.Lock()
+	if a.outboxCancel != nil {
+		a.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.outboxCancel = cancel
+	a.mu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(350 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				a.processOutboxFiles(ctx)
+			}
+		}
+	}()
+}
+
+func (a *App) processOutboxFiles(ctx context.Context) {
+	dir, err := outboxDir()
+	if err != nil {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "req-") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		reqPath := filepath.Join(dir, name)
+		raw, err := os.ReadFile(reqPath)
+		if err != nil {
+			continue
+		}
+		var req channelOutboxRequest
+		if err := json.Unmarshal(raw, &req); err != nil || req.ID == "" {
+			_ = os.Remove(reqPath)
+			continue
+		}
+		key := channel.AccountID{Channel: req.Channel, Account: req.Account}
+		a.mu.Lock()
+		runtime := a.channels[key]
+		a.mu.Unlock()
+		if runtime == nil || (runtime.waBot != nil && !runtime.waBot.Connected()) {
+			continue
+		}
+		_ = os.Remove(reqPath)
+		var sendErr error
+		if len(req.Data) > 0 {
+			if runtime.sendFile != nil {
+				sendErr = runtime.sendFile(ctx, req.Recipient, req.Filename, req.Data, req.Message)
+			} else {
+				sendErr = fmt.Errorf("%s/%s does not support file delivery", req.Channel, req.Account)
+			}
+		} else if runtime.send != nil {
+			sendErr = runtime.send(ctx, req.Recipient, req.Message)
+		} else {
+			sendErr = fmt.Errorf("%s/%s is not ready", req.Channel, req.Account)
+		}
+		res := channelOutboxResponse{OK: sendErr == nil}
+		if sendErr != nil {
+			res.Error = sendErr.Error()
+		}
+		if encoded, err := json.Marshal(res); err == nil {
+			resPath := filepath.Join(dir, "res-"+req.ID+".json")
+			_ = os.WriteFile(resPath, encoded, 0o600)
+		}
+	}
+}
+
+func (a *App) deliverViaOutbox(ctx context.Context, ch, account, recipient, filename string, fileData []byte, message string) (bool, error) {
+	dir, err := outboxDir()
+	if err != nil {
+		return false, nil
+	}
+	id := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	req := channelOutboxRequest{
+		ID:        id,
+		Channel:   ch,
+		Account:   account,
+		Recipient: recipient,
+		Filename:  filename,
+		Data:      fileData,
+		Message:   message,
+	}
+	encoded, err := json.Marshal(req)
+	if err != nil {
+		return false, nil
+	}
+	reqPath := filepath.Join(dir, "req-"+id+".json")
+	resPath := filepath.Join(dir, "res-"+id+".json")
+	if err := os.WriteFile(reqPath, encoded, 0o600); err != nil {
+		return false, nil
+	}
+	defer func() {
+		_ = os.Remove(reqPath)
+		_ = os.Remove(resPath)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if raw, err := os.ReadFile(resPath); err == nil {
+			var res channelOutboxResponse
+			if err := json.Unmarshal(raw, &res); err == nil {
+				if !res.OK {
+					return true, errors.New(res.Error)
+				}
+				return true, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return true, ctx.Err()
+		case <-time.After(150 * time.Millisecond):
+		}
+	}
+	return false, nil
 }

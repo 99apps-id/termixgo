@@ -109,7 +109,17 @@ func checkProtectedPath(env *Env, path string) error {
 	if env == nil || strings.TrimSpace(env.Workspace) == "" {
 		return nil
 	}
-	rel, err := filepath.Rel(env.Workspace, path)
+	// The guard judges the resolved path, not the spelling: a symlink inside
+	// the workspace that points at .git/config reads as a plain sibling
+	// before resolution, and the write lands in git's own metadata anyway.
+	workspace := env.Workspace
+	if resolved, resolveErr := resolveExistingPath(env.Workspace); resolveErr == nil {
+		workspace = resolved
+	}
+	if resolved, resolveErr := resolveExistingPath(path); resolveErr == nil {
+		path = resolved
+	}
+	rel, err := filepath.Rel(workspace, path)
 	if err != nil {
 		if runtime.GOOS == "windows" {
 			relLower, errLower := filepath.Rel(strings.ToLower(env.Workspace), strings.ToLower(path))

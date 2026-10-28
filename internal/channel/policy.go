@@ -26,24 +26,28 @@ func Decide(policy config.ChannelAccount, in Request) Decision {
 	if !policy.Enabled {
 		return Decision{Reason: "account disabled"}
 	}
-	if matchesAny(policy.Admins, in.SenderID) || (in.SenderAlt != "" && matchesAny(policy.Admins, in.SenderAlt)) {
-		return Decision{Allow: true, Admin: true, Reason: "admin"}
-	}
+	isAdmin := matchesAny(policy.Admins, in.SenderID) || (in.SenderAlt != "" && matchesAny(policy.Admins, in.SenderAlt))
 	if in.IsGroup {
 		switch config.NormalizeGroupPolicy(policy.GroupPolicy) {
 		case config.GroupPolicyDisabled:
-			return Decision{Reason: "group replies are disabled"}
+			return Decision{Admin: isAdmin, Reason: "group replies are disabled"}
 		case config.GroupPolicyAll:
 			// Every group message is answered; the allowlist below still applies.
 		default:
 			if !in.MentionsBot {
-				return Decision{Reason: "group message without a mention"}
+				return Decision{Admin: isAdmin, Reason: "group message without a mention"}
 			}
 		}
 		if len(policy.GroupAllowFrom) > 0 && !matchesAny(policy.GroupAllowFrom, in.ChatID) {
-			return Decision{Reason: "group is not on the allowlist"}
+			return Decision{Admin: isAdmin, Reason: "group is not on the allowlist"}
+		}
+		if isAdmin {
+			return Decision{Allow: true, Admin: true, Reason: "admin"}
 		}
 		return Decision{Allow: true, Reason: "group"}
+	}
+	if isAdmin {
+		return Decision{Allow: true, Admin: true, Reason: "admin"}
 	}
 	switch config.NormalizeDMPolicy(policy.DMPolicy) {
 	case config.DMPolicyOpen:

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -215,6 +216,16 @@ func (t *browserScreenshotTool) Run(ctx context.Context, env *Env, args map[stri
 		if err := checkWorkspacePath(env, filePath); err != nil {
 			return Result{Output: fmt.Sprintf("cannot access local file outside workspace: %v", err), IsError: true}, nil
 		}
+	} else {
+		// Chromium's argv is a switch list: an argument that starts with a
+		// dash would be parsed as a switch, and --gpu-launcher or
+		// --remote-debugging-port turns a screenshot argument into a
+		// program-control surface. Only http, https and workspace-local file
+		// pages reach the headless browser.
+		parsed, parseErr := url.Parse(targetURL)
+		if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return Result{Output: "url must be an absolute http or https URL", IsError: true}, nil
+		}
 	}
 
 	browserBin, err := findBrowserExecutable()
@@ -316,6 +327,13 @@ func (t *browserDumpDOMTool) Run(ctx context.Context, env *Env, args map[string]
 		}
 		if err := checkWorkspacePath(env, filePath); err != nil {
 			return Result{Output: fmt.Sprintf("cannot access local file outside workspace: %v", err), IsError: true}, nil
+		}
+	} else {
+		// The argv guard: same rule as the screenshot tool, a dash-headed
+		// argument is a Chromium switch, not a page.
+		parsed, parseErr := url.Parse(targetURL)
+		if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return Result{Output: "url must be an absolute http or https URL", IsError: true}, nil
 		}
 	}
 

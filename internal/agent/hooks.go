@@ -62,13 +62,32 @@ func (r *Runner) hooksFor(event, tool string) []config.Hook {
 		}
 		if hook.Matcher != "" {
 			pattern, err := regexp.Compile(hook.Matcher)
-			if err != nil || !pattern.MatchString(tool) {
+			if err != nil {
+				// A broken matcher is dropped the same as a non-matching
+				// one, but not in silence: the operator believes that policy
+				// is enforced, and every other hook failure earns a notice.
+				r.warnHookMatcher(event, hook, err)
+				continue
+			}
+			if !pattern.MatchString(tool) {
 				continue
 			}
 		}
 		matched = append(matched, hook)
 	}
 	return matched
+}
+
+// warnedHookMatchers keeps one notice per broken matcher. It never fires
+// again, so a typo cannot flood the transcript on every tool call while the
+// hook it belongs to silently stops matching.
+var warnedHookMatchers sync.Map
+
+func (r *Runner) warnHookMatcher(event string, hook config.Hook, cause error) {
+	if _, loaded := warnedHookMatchers.LoadOrStore(event+"\x00"+hook.Matcher, struct{}{}); loaded {
+		return
+	}
+	r.emit(Event{Kind: EventNotice, Text: fmt.Sprintf("Hook matcher %s (%q) not enforced: invalid pattern: %v", event, clipBytes(hook.Matcher, 60), cause)})
 }
 
 // runPreHooks runs the pre_tool hooks for a call and reports the first block.
@@ -215,6 +234,22 @@ func runHookCommand(ctx context.Context, hook config.Hook, dir string, payload [
 	}
 	if runErr == nil {
 		return hookOutcome{}
+	}
+	if errors.Is(runErr, exec.ErrWaitDelay) {
+		// WaitDelay closes late pipes, not the exit itself: ProcessState
+		// carries the hook's real status. A blocking hook must still block
+		// even when a grandchild it started held the pipe, and the same case
+		// previously read "could not run", which masks the decision.
+		if state := process.ProcessState; state != nil {
+			if state.ExitCode() == hookBlockExit {
+				message := hookMessage(stderr.String(), stdout.String())
+				if message == "" {
+					message = "no reason given"
+				}
+				return hookOutcome{blocked: true, message: message}
+			}
+			return hookOutcome{}
+		}
 	}
 	var exitErr *exec.ExitError
 	if !errors.As(runErr, &exitErr) {

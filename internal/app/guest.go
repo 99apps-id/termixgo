@@ -28,6 +28,7 @@ var guestDeniedTools = []string{
 	"github_create_pr", "github_get_pr", "github_list_prs", "github_review_pr",
 	"github_comment_pr", "github_merge_pr",
 	"ask_user", "remember", "install_skill", "propose_skill",
+	"send_channel",
 }
 
 // denyList is the effective tool deny-list of one run: the agent's own list,
@@ -90,6 +91,7 @@ func (a *App) envForRun(agentName string, guest bool) *agent.Env {
 		// unsupported answer in a public chat is a promise nobody verified.
 		runEnv.Grounding = config.GroundingStrict
 		runEnv.Secrets = nil
+		runEnv.SendChannel = nil
 		runEnv.AlwaysAllowed = map[string]bool{}
 		runEnv.SessionAllowed = map[string]bool{}
 	}

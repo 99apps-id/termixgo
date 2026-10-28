@@ -309,7 +309,10 @@ func AuditWorkspace(workspace, targetPath string, opts AuditOptions) (*AuditRepo
 
 					snippet := strings.TrimSpace(lineText)
 					if len(snippet) > 120 {
-						snippet = snippet[:117] + "..."
+						// The cut moves back to a rune boundary: a fixed byte
+						// offset inside CJK or emoji prose is not valid UTF-8
+						// and paints a replacement glyph in the report.
+						snippet = clipBytes(snippet, 117) + "..."
 					}
 
 					findings = append(findings, AuditFinding{

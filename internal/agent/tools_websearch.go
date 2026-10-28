@@ -686,6 +686,11 @@ func doWithRetry(ctx context.Context, fn func() error) error {
 		}
 		if err := fn(); err == nil {
 			return nil
+		} else if isDNSFailure(err) {
+			// The same rule fetchURL applies: a blocked or nonexistent name
+			// will not resolve on the next attempt, so the remaining backoff
+			// sleeps would only delay the fallback to the next source.
+			return err
 		} else if !isNetworkUnreachable(err) {
 			return err
 		} else {
@@ -748,8 +753,13 @@ func dialWithDoHFallback(ctx context.Context, network, addr string) (net.Conn, e
 	if dialErr == nil {
 		return conn, nil
 	}
-	// Fall back to DoH on any dial failure (DNS failure, unreachable route,
-	// or connection timeout). DoH resolves clean IPv4 addresses.
+	// The fallback runs on a resolution failure only. A connect failure with
+	// a resolved route (split-horizon DNS, a dead internal host) is the
+	// answer: going to DoH there would dial the public view of a name the
+	// system resolution deliberately pointed elsewhere.
+	if !isDNSFailure(dialErr) {
+		return nil, dialErr
+	}
 	ips, resolveErr := dohResolve(ctx, host)
 	if resolveErr != nil || len(ips) == 0 {
 		return nil, dialErr

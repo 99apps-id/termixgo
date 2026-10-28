@@ -129,6 +129,10 @@ type Env struct {
 	// which the loop folds into the parent turn's accounting.
 	RunSubagent func(ctx context.Context, subType, prompt string) (string, SubagentSpend, error)
 
+	// SendChannel delivers a text message and/or file attachment to a
+	// configured messaging channel (Telegram or WhatsApp).
+	SendChannel func(ctx context.Context, req ChannelSendRequest) (string, error)
+
 	// ToolIndex lists every tool a run may load, so find_tools can search them
 	// by keyword. It is set by the runner for the duration of one turn.
 	ToolIndex []ToolIndexEntry
@@ -253,6 +257,7 @@ func DefaultRegistry() *Registry {
 		&parallelBatchTool{},
 		&checkpointTool{},
 		&rewindTool{},
+		&sendChannelTool{},
 	)
 }
 

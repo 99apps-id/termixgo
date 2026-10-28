@@ -103,6 +103,9 @@ func planPatch(env *Env, ops []patchOp) (map[string]*patchPlan, []string, error)
 		if err := checkWorkspacePath(env, path); err != nil {
 			return nil, nil, err
 		}
+		if err := checkProtectedPath(env, path); err != nil {
+			return nil, nil, err
+		}
 		plan, seen := plans[path]
 		if !seen {
 			plan = &patchPlan{path: path, display: op.path}

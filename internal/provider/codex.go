@@ -154,8 +154,8 @@ func decodeResponsesStream(label string, body io.Reader, emit func(StreamEvent) 
 					return err
 				}
 			}
-		case "response.completed":
-			if event.Response != nil && event.Response.Usage != nil {
+			case "response.completed", "response.incomplete":
+		if event.Response != nil && event.Response.Usage != nil {
 				raw := event.Response.Usage
 				var cached, reasoning int
 				if raw.InputTokensDetails != nil {
@@ -290,11 +290,15 @@ func applyResponsesLite(payload map[string]any, input []map[string]any, tools []
 	payload["parallel_tool_calls"] = false
 	// The lite models reject a top-level reasoning_effort, so the level has to
 	// travel inside the reasoning object; medium is the reference default when
-	// the operator set none.
-	if effort := openAIEffortValues(effort); effort == "" {
-		effort = "medium"
+	// the operator set none. The mapped value is used directly: assigning to
+	// a shadowing variable declared in the if header assigned to a copy that
+	// died at the end of the block, and the raw operator level (including an
+	// empty one) went on the wire untouched.
+	mapped := openAIEffortValues(effort)
+	if mapped == "" {
+		mapped = "medium"
 	}
-	payload["reasoning"] = map[string]any{"effort": effort, "context": "all_turns"}
+	payload["reasoning"] = map[string]any{"effort": mapped, "context": "all_turns"}
 	payload["include"] = []string{"reasoning.encrypted_content"}
 }
 

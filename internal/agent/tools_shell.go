@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -179,9 +178,13 @@ func execute(ctx context.Context, env *Env, command, dir string, timeout time.Du
 	// scrubbed inheritance as a background one: builds and tests need PATH
 	// and HOME, never the operator's provider keys.
 	process.Env = mergeProcessEnv(os.Environ(), nil)
-	var buffer bytes.Buffer
-	process.Stdout = &buffer
-	process.Stderr = &buffer
+	// A capped ring keeps the tail the way the background manager's buffer
+	// does: with a plain bytes.Buffer every line a chatty or runaway command
+	// printed stayed resident until Wait returned, and the final truncate
+	// then cut what had already cost the memory budget.
+	buffer := newRingBuffer(processBufferBytes)
+	process.Stdout = buffer
+	process.Stderr = buffer
 	process.Stdin = strings.NewReader("")
 
 	// Group the command with everything it starts, so a cancel or a timeout
@@ -218,8 +221,22 @@ func execute(ctx context.Context, env *Env, command, dir string, timeout time.Du
 	}
 
 	runErr := process.Wait()
-	output := truncateOutput(buffer.String(), maxOutputChars)
+	text, _, _ := buffer.ReadSince(0)
+	output := truncateOutput(text, maxOutputChars)
 	label := displayPath(env, dir)
+
+	if errors.Is(runErr, exec.ErrWaitDelay) {
+		// WaitDelay closes pipes a surviving grandchild still held, not the
+		// exit itself: ProcessState carries the child's real status, so a
+		// successful build that left a daemon is not read as a hard failure
+		// and a failed exit keeps its code instead of becoming -1.
+		if state := process.ProcessState; state != nil {
+			if code := state.ExitCode(); code != 0 {
+				return Result{Output: fmt.Sprintf("Command exited with code %d in %s (a surviving child held the output pipes, which were closed after %s)\n%s", code, label, processWaitDelay, output), IsError: true}, nil
+			}
+			runErr = nil
+		}
+	}
 
 	if runCtx.Err() == context.DeadlineExceeded {
 		message := fmt.Sprintf("Command timed out after %s in %s\n%s", timeout, label, output)

@@ -134,9 +134,21 @@ func readFileWindowed(env *Env, path string, offset, limit int) (Result, error) 
 				flush()
 				continue
 			}
-			if len(current) < maxReadLineBytes {
+			if !lineCapped && len(current) < maxReadLineBytes {
 				current = append(current, b)
-			} else {
+			} else if !lineCapped {
+				// Cap once, on a rune boundary: stopping mid-byte leaves
+				// the trailing halves of a multi-byte character in the
+				// window body, which reads as a replacement glyph.
+				keep := len(current)
+				if keep > 0 && current[keep-1]&0xC0 == 0x80 {
+					walk := keep - 1
+					for walk > 0 && current[walk]&0xC0 == 0x80 {
+						walk--
+					}
+					keep = walk
+				}
+				current = current[:keep]
 				lineCapped = true
 			}
 		}

@@ -42,6 +42,16 @@ func runGit(ctx context.Context, env *Env, args ...string) (string, error) {
 	command.WaitDelay = processWaitDelay
 
 	err := command.Run()
+	if errors.Is(err, exec.ErrWaitDelay) && command.ProcessState != nil {
+		// WaitDelay closes pipes a grandchild still held, not the exit: the
+		// status in ProcessState is the real one, and the previous handling
+		// read a successful git call as "could not run git".
+		if code := command.ProcessState.ExitCode(); code == 0 {
+			err = nil
+		} else {
+			err = fmt.Errorf("git exited with code %d; its output pipes were closed after %s", code, processWaitDelay)
+		}
+	}
 	output := strings.TrimRight(buffer.String(), "\n")
 	if len(output) > maxGitOutputChars {
 		output = clipBytes(output, maxGitOutputChars) + "\n... [output truncated]"
@@ -77,7 +87,12 @@ func isGitRepository(workspace string) bool {
 	if strings.TrimSpace(workspace) == "" {
 		return false
 	}
-	command := exec.Command("git", "rev-parse", "--show-toplevel")
+	// A stuck credential helper makes this rev-parse hang. The check itself
+	// runs several times per turn and must answer, so it carries its own
+	// bound instead of the caller's possibly unbounded context.
+	ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
 	command.Dir = workspace
 	output, err := command.Output()
 	if err != nil {

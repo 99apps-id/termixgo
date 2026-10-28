@@ -124,6 +124,15 @@ func ReviewDiff(ctx context.Context, env *Env, opts DiffReviewOptions) (*DiffRev
 	var currentFile string
 	var currentExt string
 	var newLineNum int
+	// inHunk separates the file prologue (headers the old prefix checks read
+	// as content) from line bodies: a deleted line whose content is "--" is
+	// the diff line "---", which was dropped, and every later issue in that
+	// hunk pointed at a line number short by those occurrences.
+	var inHunk bool
+	// sawConflict gates the "=======" check: a separator row is ordinary
+	// content in almost every format, while in a git conflict it is the
+	// middle of a block that starts with "<<<<<<<".
+	var sawConflict bool
 
 	scanner := bufio.NewScanner(strings.NewReader(diffText))
 	for scanner.Scan() {
@@ -131,6 +140,8 @@ func ReviewDiff(ctx context.Context, env *Env, opts DiffReviewOptions) (*DiffRev
 
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
+			inHunk = false
+			sawConflict = false
 			parts := strings.Fields(line)
 			if len(parts) >= 4 {
 				bPath := parts[3]
@@ -143,19 +154,35 @@ func ReviewDiff(ctx context.Context, env *Env, opts DiffReviewOptions) (*DiffRev
 			currentExt = strings.ToLower(filepath.Ext(currentFile))
 			filesMap[currentFile] = true
 		case strings.HasPrefix(line, "@@ "):
+			inHunk = true
+			sawConflict = false
 			if matches := hunkHeaderPattern.FindStringSubmatch(line); len(matches) > 1 {
 				if n, err := strconv.Atoi(matches[1]); err == nil {
 					newLineNum = n - 1
 				}
 			}
-		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+		case !inHunk:
+			// File mode, similarity, rename, index and deleted-side header
+			// lines carry no position in the new file.
+		case strings.HasPrefix(line, "+"):
+			// Inside a hunk the prefix is one byte, whatever follows: an added
+			// line whose content starts with "+" used to fall through the
+			// "+++"-header guard and drift the numbering like a deletion did.
 			newLineNum++
 			report.Additions++
-			addedContent := strings.TrimPrefix(line, "+")
+			addedContent := line[1:]
 			trimmed := strings.TrimSpace(addedContent)
 
-			// 1. Check for merge conflict markers
-			if strings.HasPrefix(trimmed, "<<<<<<<") || strings.HasPrefix(trimmed, "=======") || strings.HasPrefix(trimmed, ">>>>>>>") {
+			// 1. Check for merge conflict markers. "=======" alone is a
+			// content separator in half the formats; it only reads as a
+			// conflict row when a "<<<<<<<" opened the block above it.
+			if strings.HasPrefix(trimmed, "<<<<<<<") {
+				sawConflict = true
+			}
+			if strings.HasPrefix(trimmed, "<<<<<<<") || (trimmed == "=======" && sawConflict) || strings.HasPrefix(trimmed, ">>>>>>>") {
+				if strings.HasPrefix(trimmed, ">>>>>>>") {
+					sawConflict = false
+				}
 				report.StaticIssues = append(report.StaticIssues, DiffIssue{
 					Kind:        DiffIssueConflict,
 					Severity:    SeverityCritical,
@@ -207,9 +234,11 @@ func ReviewDiff(ctx context.Context, env *Env, opts DiffReviewOptions) (*DiffRev
 				}
 			}
 
-		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+		case strings.HasPrefix(line, "-"):
 			report.Deletions++
-		case !strings.HasPrefix(line, "-"):
+		case line == "" || strings.HasPrefix(line, " "):
+			// A context line carries its position over; an empty line is a
+			// context row some diff writers emit without the space.
 			newLineNum++
 		}
 	}

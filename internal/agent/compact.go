@@ -35,6 +35,14 @@ func estimateMessageTokens(message provider.Message) int {
 	for _, call := range message.ToolCalls {
 		total += EstimateTokens(call.Name) + EstimateTokens(call.Arguments)
 	}
+	// Image payloads travel as base64 in the request body, so an attachment
+	// the text estimate ignores would let compaction report "fits" for a
+	// request the provider then refuses, which is the one outcome the
+	// compaction contract forbids. Over-estimating keeps with the
+	// charsPerToken convention: trimming early is cheap, refusal is fatal.
+	for _, image := range message.Images {
+		total += EstimateTokens(image.Data)
+	}
 	// Per-message overhead the provider adds for role and framing.
 	return total + 8
 }
@@ -164,6 +172,18 @@ func hardFit(messages []provider.Message, budgetTokens int) []provider.Message {
 			message.Content = clipBytes(message.Content, limit) + truncatedMark
 		}
 		messages[index] = message
+	}
+	// The share pass cuts text only, and an attachment the estimate cannot
+	// shrink still stands in the request. Old attachments go first, oldest
+	// first, and the live turn's images stay because they carry what the
+	// model is answering to.
+	if EstimateMessages(messages) > budgetTokens {
+		start := currentTurnStart(messages)
+		for index := 0; index < start && EstimateMessages(messages) > budgetTokens; index++ {
+			if len(messages[index].Images) > 0 {
+				messages[index].Images = nil
+			}
+		}
 	}
 	return messages
 }

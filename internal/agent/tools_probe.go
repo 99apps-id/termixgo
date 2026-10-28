@@ -129,6 +129,13 @@ func (t *probeURLTool) Run(ctx context.Context, env *Env, args map[string]any) (
 		if lastErr == nil {
 			break
 		}
+		// A refused redirect (or any other error response) still carries the
+		// response body: leaving it open leaks one descriptor per retried
+		// attempt and the final failure path never closes it at all.
+		if resp != nil {
+			_ = resp.Body.Close()
+			resp = nil
+		}
 	}
 
 	if lastErr != nil {

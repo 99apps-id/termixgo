@@ -338,26 +338,48 @@ func fuzzyPattern(needle string) string {
 // fuzzySpellings returns the exact file regions whose whitespace-collapsed,
 // lower-cased form equals pattern. When pattern is empty or there is no
 // tolerant hit, it returns nil.
+//
+// The scan works in rune space with the simple case map. A strings.ToLower
+// copy of the text can change byte lengths (the Turkish dotted I becomes two
+// runes, the long s becomes one), so an offset measured in that folded copy
+// may point past the original text, and the region slice then panicked the
+// whole process instead of failing this one edit.
 func fuzzySpellings(text, pattern string, fuzzy bool) []string {
 	if !fuzzy || pattern == "" {
 		return nil
 	}
-	lower := strings.ToLower(text)
-	start := 0
+	source := []rune(text)
+	folded := make([]rune, len(source))
+	for index, r := range source {
+		folded[index] = unicode.ToLower(r)
+	}
+	want := []rune(pattern)
 	var found []string
 	seen := map[string]bool{}
-	for {
-		index := strings.Index(lower[start:], pattern)
-		if index < 0 {
-			break
+	for offset := 0; offset+len(want) <= len(folded); offset++ {
+		match := true
+		for index := range want {
+			if folded[offset+index] != want[index] {
+				match = false
+				break
+			}
 		}
-		absolute := start + index
-		region := fuzzyRegion(text, pattern, absolute)
-		if region != "" && !seen[region] && fuzzyPattern(region) == pattern {
+		if !match {
+			continue
+		}
+		left := offset
+		for left > 0 && !unicode.IsSpace(source[left-1]) {
+			left--
+		}
+		right := offset + len(want)
+		for right < len(source) && !unicode.IsSpace(source[right]) {
+			right++
+		}
+		region := string(source[left:right])
+		if region != "" && !seen[region] && fuzzyPatternSimple(region) == pattern {
 			seen[region] = true
 			found = append(found, region)
 		}
-		start = absolute + len(pattern)
 		if len(found) >= 20 {
 			break
 		}
@@ -365,16 +387,12 @@ func fuzzySpellings(text, pattern string, fuzzy bool) []string {
 	return found
 }
 
-// fuzzyRegion expands from a match start to the whitespace boundaries that
-// contain it, keeping the original case/terminators.
-func fuzzyRegion(text, pattern string, start int) string {
-	left := start
-	for left > 0 && !unicode.IsSpace(rune(text[left-1])) {
-		left--
-	}
-	right := start + len(pattern)
-	for right < len(text) && !unicode.IsSpace(rune(text[right])) {
-		right++
-	}
-	return text[left:right]
+// fuzzyPatternSimple normalises a candidate region the way fuzzyPattern
+// normalises the needle: trimmed, whitespace collapsed, lower cased. It maps
+// runes instead of calling strings.ToLower so both sides fold with the same
+// rule and the comparison stays meaningful.
+func fuzzyPatternSimple(text string) string {
+	text = strings.TrimSpace(text)
+	text = strings.Join(strings.Fields(text), " ")
+	return strings.Map(func(r rune) rune { return unicode.ToLower(r) }, text)
 }

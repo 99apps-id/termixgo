@@ -81,6 +81,9 @@ func (t *parallelBatchTool) Run(ctx context.Context, env *Env, args map[string]a
 			return Result{Output: fmt.Sprintf("task %d is empty", index+1), IsError: true}, nil
 		}
 		if name := strings.TrimSpace(task.Name); name != "" {
+			if err := validateWorktreeName(name); err != nil {
+				return Result{Output: fmt.Sprintf("task %d: %v", index+1, err), IsError: true}, nil
+			}
 			if names[name] {
 				return Result{Output: fmt.Sprintf("task %d reuses the worktree name %q; each worker needs its own checkout", index+1, name), IsError: true}, nil
 			}
@@ -139,6 +142,11 @@ func (t *parallelBatchTool) Run(ctx context.Context, env *Env, args map[string]a
 			process, err := env.Processes.StartWorkerEnv(ctx, dir, argv, worker+" worker "+name, true, childEnv)
 			if err != nil {
 				errs[index] = err
+				// The checkout and its registry entry exist: a start that
+				// failed after them (the process cap, for instance) would
+				// otherwise leave an orphan worktree that prune keeps for days.
+				_, _ = runGit(ctx, env, "worktree", "remove", "--force", dir)
+				_ = forgetWorktree(env.Workspace, dir)
 				return
 			}
 			results[index] = started{name: name, dir: dir, id: process.ID}

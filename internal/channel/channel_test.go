@@ -39,6 +39,8 @@ func TestDecideAppliesAccountPolicy(t *testing.T) {
 		{"stranger dm", enabled, Request{SenderID: "555"}, false, false, "sender is not on the allowlist"},
 		{"group mention", enabled, Request{IsGroup: true, ChatID: "-100", SenderID: "555", MentionsBot: true}, true, false, "group"},
 		{"group without mention", enabled, Request{IsGroup: true, ChatID: "-100", SenderID: "555"}, false, false, "group message without a mention"},
+		{"admin group mention", enabled, Request{IsGroup: true, ChatID: "-100", SenderID: "999", MentionsBot: true}, true, true, "admin"},
+		{"admin group without mention", enabled, Request{IsGroup: true, ChatID: "-100", SenderID: "999"}, false, true, "group message without a mention"},
 		{"open dm", config.ChannelAccount{Enabled: true, DMPolicy: config.DMPolicyOpen}, Request{SenderID: "555"}, true, false, "open DMs"},
 		{"denied dm", config.ChannelAccount{Enabled: true, DMPolicy: config.DMPolicyDeny}, Request{SenderID: "555"}, false, false, "DMs are denied"},
 		{"pairing waits", config.ChannelAccount{Enabled: true, DMPolicy: config.DMPolicyPairing}, Request{SenderID: "555"}, false, false, "waiting for pairing approval"},

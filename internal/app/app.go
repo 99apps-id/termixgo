@@ -158,8 +158,9 @@ type App struct {
 
 	// channels is the runtime registry of every started account, and pairing
 	// is the file of unknown DM senders waiting for the operator's answer.
-	channels map[channel.AccountID]*channelRuntime
-	pairing  *channel.PairingStore
+	channels     map[channel.AccountID]*channelRuntime
+	pairing      *channel.PairingStore
+	outboxCancel context.CancelFunc
 
 	// cronStore is the scheduled-job list. It is opened lazily so a terminal
 	// session with no scheduler still pays nothing for it.
@@ -1460,6 +1461,9 @@ func (a *App) envFor(agentName string) *agent.Env {
 		AlwaysAllowed:  stringSet(cfg.AlwaysAllowedTools),
 		Ask:            a.ask,
 		RunSubagent:    a.runSubagent,
+		SendChannel: func(callCtx context.Context, req agent.ChannelSendRequest) (string, error) {
+			return a.sendChannelFrom(callCtx, ctx.workspace, req)
+		},
 	}
 }
 

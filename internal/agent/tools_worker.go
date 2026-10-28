@@ -139,6 +139,11 @@ func (t *codeWorkerTool) Run(ctx context.Context, env *Env, args map[string]any)
 	if name == "" {
 		name = "worker-" + shortToken()
 	}
+	// The name is model-authored and worktreePath accepts absolute and
+	// traversal spellings, so it is checked before anything is created.
+	if err := validateWorktreeName(name); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	// One worktree per task, so a worker never edits the main tree.
 	if created, err := worktreeAdd(ctx, env, map[string]any{"path": name, "branch": "termixgo/" + name}); err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
@@ -152,6 +157,10 @@ func (t *codeWorkerTool) Run(ctx context.Context, env *Env, args map[string]any)
 	}
 	process, err := env.Processes.StartWorkerEnv(ctx, dir, argv, kind+" worker "+name, true, childEnv)
 	if err != nil {
+		// The checkout and its registry entry exist; a failed start would
+		// otherwise leave the orphan worktree behind until prune reclaims it.
+		_, _ = runGit(ctx, env, "worktree", "remove", "--force", dir)
+		_ = forgetWorktree(env.Workspace, dir)
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
 	return Result{Output: fmt.Sprintf("Started %s worker %s in %s. It runs in the background; you will be told here when it finishes.", kind, process.ID, dir)}, nil

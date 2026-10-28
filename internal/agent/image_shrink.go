@@ -16,6 +16,12 @@ import (
 // one, accepts a side of 8192 and rejects 8193.
 const maxImageDimension = 8192
 
+// maxImagePixels bounds the decoded canvas of a source that still needs
+// shrinking. A 20000x30000 image is a few hundred kilobytes on disk and 2.4
+// gigabytes as RGBA, which the memory budget does not allow the process to
+// charge on one attachment.
+const maxImagePixels = 33554432
+
 // ShrinkImage scales an image down so neither side exceeds maxImageDimension,
 // re-encoding it as PNG. It returns the original bytes and false when the image
 // already fits, when it cannot be decoded (an unregistered format such as webp
@@ -27,6 +33,15 @@ func ShrinkImage(data []byte) ([]byte, bool) {
 		return data, false
 	}
 	if config.Width <= maxImageDimension && config.Height <= maxImageDimension {
+		return data, false
+	}
+	// Decoding is what costs memory: the whole RGBA canvas is allocated
+	// before scaleToFit shrinks anything, so a flat-colour PNG with extreme
+	// dimensions and a small file size would otherwise charge megabytes to
+	// the process budget for a canvas it is about to throw away. Beyond the
+	// pixel budget the image passes through unshrunk, exactly like one the
+	// guard cannot read: the provider, not this process, then draws the line.
+	if pixels := config.Width * config.Height; pixels > maxImagePixels {
 		return data, false
 	}
 	source, _, err := image.Decode(bytes.NewReader(data))

@@ -52,28 +52,30 @@ func (t *undoEditTool) Run(ctx context.Context, env *Env, args map[string]any) (
 		return Result{Output: fmt.Sprintf("%s holds %d backup(s), which is fewer than the %d requested step(s)", displayPath(env, path), len(names), steps), IsError: true}, nil
 	}
 	// The restore bytes are read before the entries are consumed: the
-	// target entry is deleted with the rest, so reading after would fail.
+	// entries are removed only after their restore succeeded, so a failed
+	// write cannot leave the file with its bad content and no backup.
 	target := names[steps-1]
+	consumed := names[:steps]
 	absent := strings.HasSuffix(target, absentMarkerExt)
-	var data []byte
-	if !absent {
-		data, err = os.ReadFile(filepath.Join(root, target))
-		if err != nil {
-			return Result{Output: fmt.Sprintf("read backup: %v", err), IsError: true}, nil
-		}
-	}
-	for _, name := range names[:steps] {
-		_ = os.Remove(filepath.Join(root, name))
-	}
 	if absent {
 		// The file did not exist before the write, so undoing removes it.
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return Result{Output: fmt.Sprintf("remove %s: %v", displayPath(env, path), err), IsError: true}, nil
 		}
+		for _, name := range consumed {
+			_ = os.Remove(filepath.Join(root, name))
+		}
 		return Result{Output: fmt.Sprintf("Undid %d write(s) in %s: the file did not exist before, so it was removed", steps, displayPath(env, path))}, nil
+	}
+	data, err := os.ReadFile(filepath.Join(root, target))
+	if err != nil {
+		return Result{Output: fmt.Sprintf("read backup: %v", err), IsError: true}, nil
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return Result{Output: fmt.Sprintf("restore %s: %v", displayPath(env, path), err), IsError: true}, nil
+	}
+	for _, name := range consumed {
+		_ = os.Remove(filepath.Join(root, name))
 	}
 	return Result{Output: fmt.Sprintf("Undid %d write(s) in %s", steps, displayPath(env, path))}, nil
 }

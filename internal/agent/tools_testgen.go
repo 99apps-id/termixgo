@@ -10,6 +10,8 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -105,11 +107,19 @@ func runGoTestGen(ctx context.Context, env *Env, filePath, targetSymbol string, 
 	if testData, err := os.ReadFile(testFilePath); err == nil {
 		existingContent = string(testData)
 		testFset := token.NewFileSet()
-		if testNode, err := parser.ParseFile(testFset, testFilePath, testData, 0); err == nil {
+		if testNode, parseErr := parser.ParseFile(testFset, testFilePath, testData, 0); parseErr == nil {
 			for _, decl := range testNode.Decls {
 				if fn, ok := decl.(*ast.FuncDecl); ok {
 					existingTests[fn.Name.Name] = true
 				}
+			}
+		} else {
+			// The existing file does not parse (a hand-written block with a
+			// stray token). The name scan keeps the duplicate guard alive:
+			// silently appending past a broken parse produced a second
+			// TestFoo in one package with no report of either.
+			for name := range scanTestNames(existingContent) {
+				existingTests[name] = true
 			}
 		}
 	}
@@ -159,7 +169,24 @@ func runGoTestGen(ctx context.Context, env *Env, filePath, targetSymbol string, 
 	var finalTestContent string
 	if existingContent == "" {
 		var header strings.Builder
-		fmt.Fprintf(&header, "package %s\n\nimport (\n\t\"testing\"\n)\n\n", pkgName)
+		fmt.Fprintf(&header, "package %s\n\n", pkgName)
+		// The mocks carry package-qualified values such as
+		// context.Background(); an import list fixed at "testing" alone made
+		// every generated test for a function that takes a ctx fail to
+		// compile, and failed at go test time instead of here.
+		imports := []string{"testing"}
+		for _, block := range newTestBlocks {
+			if strings.Contains(block, "context.") {
+				imports = append(imports, "context")
+				break
+			}
+		}
+		sort.Strings(imports)
+		header.WriteString("import (\n")
+		for _, importPath := range imports {
+			fmt.Fprintf(&header, "\t%q\n", importPath)
+		}
+		header.WriteString(")\n\n")
 		header.WriteString(strings.Join(newTestBlocks, "\n\n"))
 		header.WriteString("\n")
 		finalTestContent = header.String()
@@ -182,6 +209,13 @@ func runGoTestGen(ctx context.Context, env *Env, filePath, targetSymbol string, 
 
 	// Run diagnostics on test file
 	if diag := DiagnoseFile(env, testFilePath); diag != "" {
+		// A non-compiling generated test must not stay in the package, because
+		// the build was green before this call. Put the previous bytes back.
+		if existingContent == "" {
+			_ = os.Remove(testFilePath)
+		} else {
+			_ = os.WriteFile(testFilePath, []byte(existingContent), 0o644)
+		}
 		return Result{Output: fmt.Sprintf("Generated tests have syntax issues:\n%s", diag), IsError: true}, nil
 	}
 
@@ -197,6 +231,18 @@ func runGoTestGen(ctx context.Context, env *Env, filePath, targetSymbol string, 
 	status := "PASSED"
 	if execRes.IsError {
 		status = "ATTENTION REQUIRED (some assertions need tuning)"
+		if strings.Contains(execRes.Output, "[build failed]") {
+			// Type errors are the one failure mode the syntax diagnostics
+			// cannot see; a generated test that does not compile stays
+			// neither: restore the previous file and report the details.
+			if existingContent == "" {
+				_ = os.Remove(testFilePath)
+			} else {
+				_ = os.WriteFile(testFilePath, []byte(existingContent), 0o644)
+			}
+			execRes.Output = "The generated test file did not compile, so it was not kept." + "\n" + execRes.Output
+			return Result{Output: fmt.Sprintf("Generated tests failed verification:\n%s", execRes.Output), IsError: true}, nil
+		}
 	}
 
 	var summary strings.Builder
@@ -207,6 +253,22 @@ func runGoTestGen(ctx context.Context, env *Env, filePath, targetSymbol string, 
 	fmt.Fprintf(&summary, "\nVerification: %s\n%s", status, execRes.Output)
 
 	return Result{Output: strings.TrimRight(summary.String(), "\n")}, nil
+}
+
+// scanTestNames reads test function names out of content that does not
+// parse. It is the duplicate-name fallback for generate_tests, not a parser:
+// a regex on the line start is enough to keep the second TestFoo out.
+func scanTestNames(content string) map[string]bool {
+	names := make(map[string]bool)
+	lineRe := regexp.MustCompile(`^func\s+(Test\w+)\(`)
+	scanner := bufio.NewScanner(strings.NewReader(content))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if matches := lineRe.FindStringSubmatch(line); len(matches) > 1 {
+			names[matches[1]] = true
+		}
+	}
+	return names
 }
 
 func generateGoTestFunc(fset *token.FileSet, fn *ast.FuncDecl, testFnName, recvTypeName string) string {
@@ -373,8 +435,19 @@ func runPythonTestGen(ctx context.Context, env *Env, filePath, targetSymbol stri
 	var funcs []string
 	scanner := bufio.NewScanner(bytes.NewReader(src))
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if matches := pyFuncPattern.FindStringSubmatch(line); len(matches) > 1 {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		// Only module-level defs are importable by name: the regex matches
+		// an indented method the same way, but `from module import name`
+		// would be an ImportError for it, and the python verifier below
+		// never runs, so the broken suite shipped silently.
+		if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+			continue
+		}
+		if matches := pyFuncPattern.FindStringSubmatch(trimmed); len(matches) > 1 {
 			fn := matches[1]
 			if !strings.HasPrefix(fn, "_") && !strings.HasPrefix(fn, "test_") {
 				if targetSymbol == "" || fn == targetSymbol {

@@ -847,7 +847,9 @@ func (b *Bot) runPhoto(ctx context.Context, chatID int64, request channel.Reques
 		if ext == "" {
 			ext = ".jpg"
 		}
-		_, _, _ = channel.SaveUpload(wp.Workspace(), fmt.Sprintf("tg_%d%s", time.Now().UnixNano(), ext), data)
+		if savedName, rel, saved := channel.SaveUpload(wp.Workspace(), fmt.Sprintf("tg_%d%s", time.Now().UnixNano(), ext), data); saved {
+			prompt = fmt.Sprintf("[Image uploaded: %s saved to %s]\n\n%s", savedName, rel, prompt)
+		}
 	}
 	encoded := base64.StdEncoding.EncodeToString(data)
 	mediaType := imageMediaType(file.FilePath)
@@ -891,6 +893,15 @@ func (b *Bot) runDocument(ctx context.Context, chatID int64, request channel.Req
 			prompt = "Describe this image and act on anything notable in it."
 		}
 		prompt = channel.FormatQuotedPrompt(quoted, prompt)
+		if wp, ok := b.agent.(WorkspaceProvider); ok && wp.Workspace() != "" {
+			imgName := filepath.Base(doc.FileName)
+			if imgName == "." || imgName == "/" || imgName == "" {
+				imgName = fmt.Sprintf("tg_%d.jpg", time.Now().UnixNano())
+			}
+			if savedName, rel, saved := channel.SaveUpload(wp.Workspace(), imgName, data); saved {
+				prompt = fmt.Sprintf("[Image uploaded: %s saved to %s]\n\n%s", savedName, rel, prompt)
+			}
+		}
 		encoded := base64.StdEncoding.EncodeToString(data)
 		mediaType := doc.MimeType
 		if mediaType == "" {
@@ -1404,6 +1415,12 @@ func (b *Bot) SendTo(ctx context.Context, chatID int64, text string) error {
 		}
 	}
 	return nil
+}
+
+// SendFileTo uploads a document or image to one Telegram chat.
+func (b *Bot) SendFileTo(ctx context.Context, chatID int64, filename string, data []byte, caption string) error {
+	_, err := b.client.SendDocument(ctx, chatID, filename, data, caption)
+	return err
 }
 
 // Send posts a message to the paired chat, whether or not the bot is polling.

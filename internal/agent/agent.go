@@ -346,26 +346,23 @@ runLoop:
 				// session ledger and the cost budget all include the child's
 				// spend rather than losing it with the throwaway session.
 				//
-				// Only a delegated run that actually spent tokens can pull the
-				// combined figure toward unknown: a subagent that failed before
-				// running returns zero tokens, and zero tokens should not cast
-				// doubt on the parent's own priced cost.
 				// A delegated run whose model had no price spent real tokens
-				// that this fold cannot put a dollar figure on. SubagentUnpriced
-				// already counts the run itself plus any nested children, so it
-				// is added as-is rather than AND-collapsing CostKnown. Zero-
-				// token failed runs carry a zero count: they spent nothing, so
-				// they cast no doubt.
+				// that this fold cannot put a dollar figure on: SubagentUnpriced
+				// counts the run itself plus any nested children, so it is added
+				// as-is rather than AND-collapsing CostKnown. A run that failed
+				// before any model call returns zero tokens: no record and no
+				// event, because a zero-token entry in the per-call ledger reads
+				// as spend that never happened.
 				if result.SubagentUsage.TotalTokens > 0 {
 					unpriced += result.SubagentUnpriced
+					turnUsage = turnUsage.Add(result.SubagentUsage)
+					sessionCost += result.SubagentCost
+					// The child's own usage events were dropped inside RunSubagent
+					// (they would have streamed its transcript), so this one event
+					// is their only route into the app total, the session and the
+					// audit ledger.
+					emit(Event{Kind: EventUsage, Usage: result.SubagentUsage, CostUSD: sessionCost, CostKnown: costKnown, CostUnpriced: unpriced, UsageProvider: result.SubagentProvider, UsageModel: result.SubagentModel})
 				}
-				turnUsage = turnUsage.Add(result.SubagentUsage)
-				sessionCost += result.SubagentCost
-				// The child's own usage events were dropped inside RunSubagent
-				// (they would have streamed its transcript), so this one event
-				// is their only route into the app total, the session and the
-				// audit ledger.
-				emit(Event{Kind: EventUsage, Usage: result.SubagentUsage, CostUSD: sessionCost, CostKnown: costKnown, CostUnpriced: unpriced, UsageProvider: result.SubagentProvider, UsageModel: result.SubagentModel})
 			}
 			if !result.IsError {
 				// A call that moved the work forward clears the repetition state:

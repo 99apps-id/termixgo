@@ -274,10 +274,35 @@ func AutoCheckpoint(ctx context.Context, workspace string) {
 		_ = PruneFileCheckpoints(workspace, checkpointKeep)
 		return
 	}
+	// The best-effort contract is that the snapshot never fails a turn, but
+	// one specific error is quietly destructive: the stash was pushed, which
+	// cleaned the tree, and the apply failed, so the operator's work now
+	// lives only in the stash entry. Reapply it once and let the tool notice
+	// name the recovery entry rather than start work on a reset tree.
 	if _, err := CreateCheckpoint(timeoutCtx, workspace, "auto before run"); err != nil {
+		if strings.Contains(err.Error(), "restore the working tree after") {
+			if ref := stashRefFromRestoreError(err.Error()); ref != "" {
+				_, _ = gitOutput(context.WithoutCancel(ctx), workspace, "stash", "apply", ref)
+			}
+		}
 		return
 	}
 	_ = PruneCheckpoints(timeoutCtx, workspace, checkpointKeep)
+}
+
+// stashRefFromRestoreError pulls the stash ref a restore-failure message
+// names, so the auto checkpoint can reapply the work it found in the stash.
+func stashRefFromRestoreError(message string) string {
+	marker := "restore the working tree after "
+	index := strings.Index(message, marker)
+	if index < 0 {
+		return ""
+	}
+	fields := strings.Fields(message[index+len(marker):])
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
 }
 
 func findCheckpoint(ctx context.Context, workspace, ref string) (Checkpoint, error) {

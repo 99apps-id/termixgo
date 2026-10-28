@@ -399,6 +399,12 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	// trust it when the second pass also opened nothing. Worker roles are
 	// exempt: a general task can legitimately be answered from the prompt.
 	if def.ReadOnly && calls == 0 {
+		// The empty pass can be a stopped turn: retrying a cancelled context
+		// produces a second empty pass and reads back as an unsupported
+		// verdict, which says the wrong thing to the caller.
+		if err := ctx.Err(); err != nil {
+			return "", spend, err
+		}
 		retry := NewSessionFor(parent.AgentName, parent.Workspace, model.ID)
 		if err := runner.Run(ctx, retry, reviewMandate+prompt); err != nil {
 			return "", spend, err

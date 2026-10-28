@@ -166,6 +166,23 @@ func worktreePath(env *Env, raw string) string {
 	return filepath.Join(filepath.Dir(env.Workspace), filepath.FromSlash(raw))
 }
 
+// validWorktreeName refuses a model-authored name that would turn the sibling
+// layout into an arbitrary path: `../pwn` and `/tmp/evil` are both accepted
+// spellings of worktreePath today, and the registry entry keeps whatever they
+// created alive for days. Sibling checkouts are the design, so nested and
+// absolute spellings have no legitimate user, and a leading dash (a git
+// option), `~` (the operator's home) and `:` (a git ref) are rejected with them.
+func validateWorktreeName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("the worktree name is empty")
+	}
+	if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") ||
+		strings.HasPrefix(name, "-") || strings.ContainsAny(name, "~:") || strings.Contains(name, "\t") {
+		return fmt.Errorf("the worktree name %q must be a plain name: no path separators, traversal, leading dash, ~ or colon", name)
+	}
+	return nil
+}
+
 func worktreeAdd(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	raw := strings.TrimSpace(argString(args, "path"))
 	if raw == "" {

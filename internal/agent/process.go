@@ -176,6 +176,13 @@ func (p *Process) exitCodeLocked() int {
 	if errors.As(p.exitErr, &exitErr) {
 		return exitErr.ExitCode()
 	}
+	// WaitDelay makes Wait report ErrWaitDelay in place of the exit status
+	// when a grandchild held the pipes. The child itself had exited, and
+	// ProcessState carries the real status; reporting -1 told run_wait a
+	// successful build had failed.
+	if errors.Is(p.exitErr, exec.ErrWaitDelay) && p.cmd != nil && p.cmd.ProcessState != nil {
+		return p.cmd.ProcessState.ExitCode()
+	}
 	if p.exitErr != nil {
 		return -1
 	}
@@ -214,6 +221,13 @@ type ProcessManager struct {
 	order     []string
 	nextID    int
 	emit      Emitter
+	// pending counts and buffers are the start path's reservation. The cap
+	// check and the insertion sit on either side of cmd.Start, and
+	// parallel_batch starts several workers at once: without a reservation
+	// every concurrent starter saw the same free slots and the caps were
+	// exceeded by up to the batch size.
+	pendingStarts  int
+	pendingBuffers int
 }
 
 // NewProcessManager builds an empty manager.
@@ -295,19 +309,30 @@ func (m *ProcessManager) start(ctx context.Context, dir, shell string, args []st
 	// Only a process that has not exited counts against the cap: a finished
 	// handle is kept so its output is still readable, and counting it made the
 	// manager refuse new work once eight commands had completed, which is a
-	// failure with nothing running to stop.
-	if m.runningLocked() >= maxBackgroundProcesses {
+	// failure with nothing running to stop. Slots that are still starting
+	// count too, through the reservation placed here and released either
+	// into the map or back.
+	if m.runningLocked()+m.pendingStarts >= maxBackgroundProcesses {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("already running %d background processes; stop one with run_kill first", maxBackgroundProcesses)
 	}
-	if m.bufferUsageLocked()+processBufferBytes > maxBackgroundBufferBytes {
+	if m.bufferUsageLocked()+m.pendingBuffers*processBufferBytes+processBufferBytes > maxBackgroundBufferBytes {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("starting another background process would exceed the aggregate output buffer limit; stop one with run_kill first")
 	}
 	m.nextID++
 	id := fmt.Sprintf("proc-%d", m.nextID)
 	emit := m.emit
+	m.pendingStarts++
+	m.pendingBuffers++
 	m.mu.Unlock()
+
+	release := func() {
+		m.mu.Lock()
+		m.pendingStarts--
+		m.pendingBuffers--
+		m.mu.Unlock()
+	}
 
 	processCtx, cancel := context.WithCancel(context.Background())
 	process := &Process{
@@ -351,6 +376,7 @@ func (m *ProcessManager) start(ctx context.Context, dir, shell string, args []st
 		if tree != nil {
 			tree.release()
 		}
+		release()
 		return nil, fmt.Errorf("could not start the command: %w", err)
 	}
 	if tree != nil {
@@ -367,6 +393,8 @@ func (m *ProcessManager) start(ctx context.Context, dir, shell string, args []st
 	m.mu.Lock()
 	m.processes[id] = process
 	m.order = append(m.order, id)
+	m.pendingStarts--
+	m.pendingBuffers--
 	m.pruneFinishedLocked()
 	m.mu.Unlock()
 

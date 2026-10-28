@@ -92,6 +92,10 @@ func (t *httpRequestTool) Run(ctx context.Context, env *Env, args map[string]any
 
 	client := &http.Client{
 		Timeout: time.Duration(timeoutSec) * time.Second,
+		// The dial-time guard travels with the shared transport: the name
+		// checks above resolve once, and a DNS-rebinding answer at connect
+		// time would otherwise slip past them to the metadata endpoint.
+		Transport: webSearchClient.Transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if !followRedirects {
 				return http.ErrUseLastResponse

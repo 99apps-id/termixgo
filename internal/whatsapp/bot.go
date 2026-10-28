@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"mime"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -69,6 +71,7 @@ type Bot struct {
 	limiter      *channel.RateLimiter
 	logf         func(string)
 	sendHook     func(chatID, text string)
+	sendFileHook func(chatID, filename string, data []byte, caption string)
 	downloadHook func(ctx context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error)
 }
 
@@ -217,7 +220,11 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 	decision := channel.Decide(policy, request)
 	if b.isSelf(request.SenderID) || (request.SenderAlt != "" && b.isSelf(request.SenderAlt)) {
 		// The account's own number is the operator.
-		decision = channel.Decision{Allow: true, Admin: true, Reason: "operator"}
+		if !request.IsGroup {
+			decision = channel.Decision{Allow: true, Admin: true, Reason: "operator"}
+		} else {
+			decision.Admin = true
+		}
 	}
 	if !decision.Allow {
 		if b.mayPair(policy, request) {
@@ -341,7 +348,9 @@ func (b *Bot) runImage(ctx context.Context, request channel.Request, imageMsg *w
 		fileName = fmt.Sprintf("wa_%d.png", time.Now().UnixNano())
 	}
 	if wp, ok := b.agent.(WorkspaceProvider); ok && wp.Workspace() != "" {
-		_, _, _ = channel.SaveUpload(wp.Workspace(), fileName, data)
+		if savedName, rel, saved := channel.SaveUpload(wp.Workspace(), fileName, data); saved {
+			prompt = fmt.Sprintf("[Image uploaded: %s saved to %s]\n\n%s", savedName, rel, prompt)
+		}
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(data)
@@ -396,6 +405,11 @@ func (b *Bot) runDocument(ctx context.Context, request channel.Request, docMsg *
 			}
 		}
 		prompt = channel.FormatQuotedPrompt(quoted, prompt)
+		if wp, ok := b.agent.(WorkspaceProvider); ok && wp.Workspace() != "" {
+			if savedName, rel, saved := channel.SaveUpload(wp.Workspace(), fileName, data); saved {
+				prompt = fmt.Sprintf("[Image uploaded: %s saved to %s]\n\n%s", savedName, rel, prompt)
+			}
+		}
 		encoded := base64.StdEncoding.EncodeToString(data)
 		mediaType := mimeType
 		if mediaType == "" {
@@ -624,6 +638,9 @@ func (b *Bot) mentionsSelf(msg *waE2E.Message) bool {
 			return true
 		}
 	}
+	if contextInfo.GetQuotedMessage() != nil && self[channel.CanonicalID(contextInfo.GetParticipant())] {
+		return true
+	}
 	return false
 }
 
@@ -741,20 +758,154 @@ func (b *Bot) pairingPrompt(request channel.Request) string {
 		"\nAsk the operator to approve with: termixgo channel pairing approve " + pending.Code
 }
 
+// Connected reports whether the underlying WhatsApp client is connected
+// or a test hook is installed.
+func (b *Bot) Connected() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.RLock()
+	hasHook := b.sendHook != nil || b.sendFileHook != nil
+	b.mu.RUnlock()
+	if hasHook {
+		return true
+	}
+	return b.client != nil && b.client.IsConnected()
+}
+
+// NormalizeJID converts a phone number or JID string into a standard WhatsApp JID.
+func NormalizeJID(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || strings.Contains(trimmed, "@") {
+		return trimmed
+	}
+	var digits strings.Builder
+	for _, r := range trimmed {
+		if r >= '0' && r <= '9' {
+			digits.WriteRune(r)
+		}
+	}
+	num := digits.String()
+	if strings.HasPrefix(num, "08") {
+		num = "62" + num[1:]
+	}
+	if num == "" {
+		return trimmed
+	}
+	return num + "@s.whatsapp.net"
+}
+
 // SendTo posts one message to one chat, chunked to the account's limit. It is
 // how a scheduled job reaches a chat outside the normal turn.
 func (b *Bot) SendTo(ctx context.Context, chatID, text string) error {
+	chatID = NormalizeJID(chatID)
+	b.mu.RLock()
+	hook := b.sendHook
+	b.mu.RUnlock()
+	formatted := formatWhatsApp(text)
+	if hook != nil {
+		for _, chunk := range channel.Chunk(formatted, b.policySnapshot().EffectiveTextChunkLimit()) {
+			hook(chatID, chunk)
+		}
+		return nil
+	}
+	if b.client == nil {
+		return errors.New("no WhatsApp client available")
+	}
 	jid, err := types.ParseJID(chatID)
 	if err != nil {
 		return fmt.Errorf("bad chat id %q: %w", chatID, err)
 	}
-	formatted := formatWhatsApp(text)
 	for _, chunk := range channel.Chunk(formatted, b.policySnapshot().EffectiveTextChunkLimit()) {
 		if _, err := b.client.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(chunk)}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// SendFileTo uploads and sends an image or document to one WhatsApp chat.
+func (b *Bot) SendFileTo(ctx context.Context, chatID, filename string, data []byte, caption string) error {
+	chatID = NormalizeJID(chatID)
+	filename = filepath.Base(strings.TrimSpace(filename))
+	if filename == "" || filename == "." || filename == "/" {
+		filename = "attachment"
+	}
+	formattedCaption := formatWhatsApp(strings.TrimSpace(caption))
+	b.mu.RLock()
+	hook := b.sendFileHook
+	b.mu.RUnlock()
+	if hook != nil {
+		hook(chatID, filename, data, formattedCaption)
+		return nil
+	}
+	if b.client == nil {
+		return errors.New("no WhatsApp client available")
+	}
+	jid, err := types.ParseJID(chatID)
+	if err != nil {
+		return fmt.Errorf("bad chat id %q: %w", chatID, err)
+	}
+	mimeType := detectMimeType(filename, data)
+	if isImageExtension(filename) {
+		up, err := b.client.Upload(ctx, data, whatsmeow.MediaImage)
+		if err != nil {
+			return fmt.Errorf("upload WhatsApp image: %w", err)
+		}
+		imgMsg := &waE2E.ImageMessage{
+			URL:           proto.String(up.URL),
+			DirectPath:    proto.String(up.DirectPath),
+			MediaKey:      up.MediaKey,
+			FileEncSHA256: up.FileEncSHA256,
+			FileSHA256:    up.FileSHA256,
+			FileLength:    proto.Uint64(up.FileLength),
+			Mimetype:      proto.String(mimeType),
+		}
+		if formattedCaption != "" {
+			imgMsg.Caption = proto.String(formattedCaption)
+		}
+		_, err = b.client.SendMessage(ctx, jid, &waE2E.Message{ImageMessage: imgMsg})
+		return err
+	}
+	up, err := b.client.Upload(ctx, data, whatsmeow.MediaDocument)
+	if err != nil {
+		return fmt.Errorf("upload WhatsApp document: %w", err)
+	}
+	docMsg := &waE2E.DocumentMessage{
+		URL:           proto.String(up.URL),
+		DirectPath:    proto.String(up.DirectPath),
+		MediaKey:      up.MediaKey,
+		FileEncSHA256: up.FileEncSHA256,
+		FileSHA256:    up.FileSHA256,
+		FileLength:    proto.Uint64(up.FileLength),
+		Mimetype:      proto.String(mimeType),
+		FileName:      proto.String(filename),
+		Title:         proto.String(filename),
+	}
+	if formattedCaption != "" {
+		docMsg.Caption = proto.String(formattedCaption)
+	}
+	_, err = b.client.SendMessage(ctx, jid, &waE2E.Message{DocumentMessage: docMsg})
+	return err
+}
+
+func detectMimeType(filename string, data []byte) string {
+	if ext := strings.ToLower(filepath.Ext(filename)); ext != "" {
+		if m := mime.TypeByExtension(ext); m != "" {
+			if semi := strings.Index(m, ";"); semi > 0 {
+				return strings.TrimSpace(m[:semi])
+			}
+			return m
+		}
+	}
+	if len(data) > 0 {
+		m := http.DetectContentType(data)
+		if semi := strings.Index(m, ";"); semi > 0 {
+			return strings.TrimSpace(m[:semi])
+		}
+		return m
+	}
+	return "application/octet-stream"
 }
 
 // reply sends one message. A failure is logged, never surfaced to the chat.

@@ -4,6 +4,7 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"fmt"
@@ -53,6 +54,13 @@ func NewErrorJournal(workspace string) (*ErrorJournal, error) {
 	return &ErrorJournal{path: path, limit: 2000}, nil
 }
 
+// journalArgLimit clips the recorded arguments of one failure. Arguments are
+// model-authored and a write or patch can carry hundreds of kilobytes; without
+// a clip one oversized entry made the reader's line cap permanent: the
+// journal stopped being readable, the trim never fired again and the file
+// grew with every failed call for the rest of the session.
+const journalArgLimit = 4096
+
 // Path reports the journal file, so the full-text index can index it as one
 // document without duplicating the naming convention here.
 func (j *ErrorJournal) Path() string {
@@ -72,8 +80,8 @@ func (j *ErrorJournal) Record(tool, args, errStr string) {
 	entry := journalEntry{
 		Timestamp: time.Now().UTC(),
 		Tool:      tool,
-		Error:     errStr,
-		Args:      args,
+		Error:     clipBytes(errStr, journalArgLimit),
+		Args:      clipBytes(args, journalArgLimit),
 	}
 	_ = j.append(entry)
 }
@@ -195,6 +203,11 @@ func (j *ErrorJournal) append(entry journalEntry) error {
 }
 
 // readAllLocked assumes j.mu is held.
+//
+// A plain reader loop is used rather than Scanner: Scanner stops for good on
+// one line past its cap, which left the journal permanently unreadable after
+// a single oversized legacy entry. This loop drains an oversized line and
+// carries on, and the clip in Record keeps new entries short.
 func (j *ErrorJournal) readAllLocked() ([]journalEntry, error) {
 	f, err := os.Open(j.path)
 	if err != nil {
@@ -205,21 +218,37 @@ func (j *ErrorJournal) readAllLocked() ([]journalEntry, error) {
 	}
 	defer f.Close()
 	var entries []journalEntry
-	scanner := bufio.NewScanner(f)
-	// allow long lines
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+	reader := bufio.NewReaderSize(f, 64*1024)
+	overflow := false
+	for {
+		line, readErr := reader.ReadSlice('\n')
+		if readErr == bufio.ErrBufferFull {
+			// Line longer than the buffer: drain the rest of it and skip.
+			overflow = true
+			for readErr == bufio.ErrBufferFull {
+				_, readErr = reader.ReadSlice('\n')
+			}
 			continue
 		}
-		var e journalEntry
-		if err := json.Unmarshal([]byte(line), &e); err != nil {
+		if overflow {
+			overflow = false
+			if readErr != nil {
+				break
+			}
 			continue
 		}
-		entries = append(entries, e)
+		line = bytes.TrimSpace(line)
+		if len(line) > 0 {
+			var e journalEntry
+			if json.Unmarshal(line, &e) == nil {
+				entries = append(entries, e)
+			}
+		}
+		if readErr != nil {
+			break
+		}
 	}
-	return entries, scanner.Err()
+	return entries, nil
 }
 
 // normalizeError collapses an error message to a canonical form for grouping.
