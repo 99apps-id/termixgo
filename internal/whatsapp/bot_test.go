@@ -329,6 +329,17 @@ func (a *fakeImageAgent) RunPromptWithImage(ctx context.Context, req channel.Req
 	return "vision analyzed: **success**", nil
 }
 
+func TestFakeImageAgent(t *testing.T) {
+	agent := &fakeImageAgent{}
+	ans, err := agent.RunPromptWithImage(context.Background(), channel.Request{}, "desc", "image/png", "abc", nil)
+	if err != nil || !strings.Contains(ans, "vision analyzed") {
+		t.Fatalf("unexpected fakeImageAgent output: %v, %v", ans, err)
+	}
+	if agent.imagePrompt != "desc" || agent.imageMediaType != "image/png" || agent.imageData != "abc" {
+		t.Fatalf("unexpected recorded image params: %+v", agent)
+	}
+}
+
 func TestNaturalErrorAuthFailure(t *testing.T) {
 	authErr := errors.New("loadCodeAssist returned 401: Request had invalid authentication credentials")
 	idMsg := naturalError(authErr, "id")
