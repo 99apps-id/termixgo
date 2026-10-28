@@ -410,6 +410,13 @@ must be pointed at a server through `baseUrls`: `cloudflare`, `azure` and
 `openai-compatible`. Local servers need no key and no network: `ollama`,
 `lmstudio` and `mlx`.
 
+`ollama` also works as an OpenAI-compatible cloud provider. Set `OLLAMA_API_KEY`
+and point it at `https://ollama.com/v1`:
+
+```sh
+termixgo endpoint ollama https://ollama.com/v1
+```
+
 ```sh
 termixgo models --provider qwen-token-plan   # list one provider's catalogue
 termixgo endpoint                            # show the custom endpoints

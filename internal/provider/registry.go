@@ -353,7 +353,7 @@ func Providers() []Provider {
 
 		// Local model servers. No key, no network: the model runs on the same
 		// machine as the agent.
-		{ID: "ollama", Label: "Ollama", Kind: KindOpenAI, DefaultBaseURL: "http://localhost:11434/v1", ConsoleURL: "https://ollama.com/download"},
+		{ID: "ollama", Label: "Ollama", Kind: KindOpenAI, DefaultBaseURL: "http://localhost:11434/v1", ConsoleURL: "https://ollama.com/download", EnvKeys: []string{"OLLAMA_API_KEY"}},
 		{ID: "lmstudio", Label: "LM Studio", Kind: KindOpenAI, DefaultBaseURL: "http://localhost:1234/v1", ConsoleURL: "https://lmstudio.ai/docs/basics/server"},
 		{ID: "mlx", Label: "MLX", Kind: KindOpenAI, DefaultBaseURL: "http://localhost:8080/v1", ConsoleURL: "https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/SERVER.md"},
 	}
