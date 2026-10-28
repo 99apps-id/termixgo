@@ -358,3 +358,96 @@ func TestReplyFormatsEnrichedMarkdown(t *testing.T) {
 		t.Errorf("reply missing expected formatted markdown: %q", lastReply)
 	}
 }
+
+func TestUnwrapMessageAndExtensions(t *testing.T) {
+	if unwrapMessage(nil) != nil {
+		t.Errorf("nil message unwrap should be nil")
+	}
+
+	inner := &waE2E.Message{Conversation: proto.String("wrapped")}
+	ephem := &waE2E.Message{EphemeralMessage: &waE2E.FutureProofMessage{Message: inner}}
+	if got := unwrapMessage(ephem); got.GetConversation() != "wrapped" {
+		t.Errorf("ephemeral message unwrap failed: %v", got)
+	}
+
+	vo := &waE2E.Message{ViewOnceMessage: &waE2E.FutureProofMessage{Message: inner}}
+	if got := unwrapMessage(vo); got.GetConversation() != "wrapped" {
+		t.Errorf("viewOnce message unwrap failed: %v", got)
+	}
+
+	vo2 := &waE2E.Message{ViewOnceMessageV2: &waE2E.FutureProofMessage{Message: inner}}
+	if got := unwrapMessage(vo2); got.GetConversation() != "wrapped" {
+		t.Errorf("viewOnceV2 message unwrap failed: %v", got)
+	}
+
+	docCap := &waE2E.Message{DocumentWithCaptionMessage: &waE2E.FutureProofMessage{Message: inner}}
+	if got := unwrapMessage(docCap); got.GetConversation() != "wrapped" {
+		t.Errorf("docWithCaption message unwrap failed: %v", got)
+	}
+
+	if !isImageExtension("foto.png") || !isImageExtension("pic.jpg") || !isImageExtension("img.WEBP") {
+		t.Errorf("image extension check failed for valid images")
+	}
+	if isImageExtension("doc.pdf") || isImageExtension("text.txt") {
+		t.Errorf("image extension check incorrectly matched non-images")
+	}
+
+	if !isPDFVisionModel("antigravity-gemini-3.8-flash") || !isPDFVisionModel("gemini-2.5-pro") || !isPDFVisionModel("claude-3-7-sonnet") {
+		t.Errorf("isPDFVisionModel should match gemini and claude models")
+	}
+	if isPDFVisionModel("step-3.7-flash") || isPDFVisionModel("deepseek-v3") {
+		t.Errorf("isPDFVisionModel should not match stepfun or deepseek")
+	}
+
+	if !isAuthError(errors.New("401 Unauthorized")) || !isAuthError(errors.New("invalid authentication token")) {
+		t.Errorf("isAuthError should match 401 or invalid auth")
+	}
+	if isAuthError(errors.New("connection timeout")) || isAuthError(nil) {
+		t.Errorf("isAuthError should not match connection timeout")
+	}
+}
+
+func TestMediaHandlersGracefulNilClient(t *testing.T) {
+	var replies []string
+	bot := &Bot{}
+	bot.sendHook = func(chatID, text string) {
+		replies = append(replies, text)
+	}
+
+	ctx := context.Background()
+	req := channel.Request{ChatID: "628123@s.whatsapp.net", SenderID: "628123@s.whatsapp.net"}
+	policy := config.ChannelAccount{Enabled: true}
+
+	imgMsg := &waE2E.ImageMessage{Caption: proto.String("cek foto")}
+	bot.runImage(ctx, req, imgMsg, "id", policy)
+	if len(replies) == 0 {
+		t.Errorf("expected error reply for runImage with nil client")
+	}
+
+	replies = nil
+	docMsg := &waE2E.DocumentMessage{FileName: proto.String("laporan.pdf")}
+	bot.runDocument(ctx, req, docMsg, "id", policy)
+	if len(replies) == 0 {
+		t.Errorf("expected error reply for runDocument with nil client")
+	}
+}
+
+func TestSendToAndPairingStore(t *testing.T) {
+	bot := &Bot{}
+	if err := bot.SendTo(context.Background(), "invalid-jid", "halo"); err == nil {
+		t.Errorf("SendTo should fail for invalid jid")
+	}
+
+	pairing, _ := channel.OpenPairingStore(t.TempDir() + "/pair.json")
+	policy := config.ChannelAccount{Enabled: true, DMPolicy: config.DMPolicyPairing}
+	bot.SetAccount("test", policy, pairing)
+
+	req := channel.Request{Account: "test", SenderID: "628999@s.whatsapp.net", SenderName: "User"}
+	if !bot.mayPair(policy, req) {
+		t.Errorf("mayPair should be true for DM with DMPolicyPairing")
+	}
+	prompt := bot.pairingPrompt(req)
+	if !strings.Contains(prompt, "Sandi pairing") {
+		t.Errorf("pairing prompt missing code instructions: %q", prompt)
+	}
+}
