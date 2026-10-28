@@ -468,7 +468,15 @@ func (a *App) restoreModel() error {
 		return errors.New("no default model is configured")
 	}
 	resolved := a.resolveModelAlias(id)
-	model, ok := provider.ModelByID(resolved)
+	var model provider.Model
+	var ok bool
+	if provID := a.customModelProviderLocked(resolved); provID != "" {
+		model = provider.Model{ID: resolved, Label: resolved, APIID: resolved, Provider: provID}
+		ok = true
+	}
+	if !ok {
+		model, ok = provider.ModelByID(resolved)
+	}
 	if !ok {
 		if m, found := provider.ModelFromQuery(resolved); found {
 			model = m
@@ -478,14 +486,23 @@ func (a *App) restoreModel() error {
 	if !ok {
 		// A custom endpoint or a model added by hand keeps its provider from
 		// the config, or falls back to the first key-based provider.
-		model = provider.Model{ID: resolved, Label: resolved, Provider: a.guessProvider(resolved)}
+		model = provider.Model{ID: resolved, Label: resolved, APIID: resolved, Provider: a.guessProvider(resolved)}
 	}
-	return a.applyModel(model)
+	if err := a.applyModel(model); err != nil {
+		return err
+	}
+	a.recordCustomModelLocked(model.Provider, model.ID)
+	return nil
 }
 
 func (a *App) guessProvider(modelID string) string {
 	if index := strings.Index(modelID, ":"); index > 0 {
-		return modelID[:index]
+		if _, ok := provider.ByID(modelID[:index]); ok {
+			return modelID[:index]
+		}
+	}
+	if provID := a.customModelProviderLocked(modelID); provID != "" {
+		return provID
 	}
 	// A custom endpoint is configured by base URL, not by a catalog entry or a
 	// key, so an unknown model id belongs to it when one is set. Without this
@@ -494,12 +511,48 @@ func (a *App) guessProvider(modelID string) string {
 	if endpoint := strings.TrimSpace(a.cfg.BaseURLs["openai-compatible"]); endpoint != "" {
 		return "openai-compatible"
 	}
+	if a.store != nil && provider.KeySource(a.store, "openai-compatible") != "" {
+		return "openai-compatible"
+	}
 	for _, candidate := range provider.Providers() {
 		if candidate.NeedsKey && provider.HasKey(a.store, candidate.ID) {
 			return candidate.ID
 		}
 	}
 	return "openai"
+}
+
+func (a *App) customModelProviderLocked(modelID string) string {
+	if a.cfg.CustomModels == nil {
+		return ""
+	}
+	for provID, list := range a.cfg.CustomModels {
+		if containsString(list, modelID) {
+			return provID
+		}
+	}
+	return ""
+}
+
+func (a *App) recordCustomModelLocked(providerID, modelID string) bool {
+	providerID = strings.TrimSpace(providerID)
+	modelID = strings.TrimSpace(modelID)
+	if providerID == "" || modelID == "" {
+		return false
+	}
+	for _, catalogModel := range provider.ModelsFor(providerID) {
+		if catalogModel.ID == modelID {
+			return false
+		}
+	}
+	if a.cfg.CustomModels == nil {
+		a.cfg.CustomModels = map[string][]string{}
+	}
+	if containsString(a.cfg.CustomModels[providerID], modelID) {
+		return false
+	}
+	a.cfg.CustomModels[providerID] = append(a.cfg.CustomModels[providerID], modelID)
+	return true
 }
 
 // applyModel validates a model, builds the client and records it.
@@ -869,6 +922,11 @@ func (a *App) resolveModelAlias(query string) string {
 		return "deepseek-chat"
 	case "qwen":
 		return "qwen-max"
+	case "openai-compatible", "compatible", "openai_compatible":
+		if models := a.ModelsForProvider("openai-compatible"); len(models) > 0 {
+			return "openai-compatible:" + models[len(models)-1].ID
+		}
+		return query
 	default:
 		return query
 	}
@@ -940,7 +998,7 @@ func (a *App) AvailableModelsText(lang ...string) string {
 	}
 	current := a.CurrentModel()
 	for _, prov := range providers {
-		models := provider.ModelsFor(prov.ID)
+		models := a.ModelsForProvider(prov.ID)
 		var filtered []provider.Model
 		for _, m := range models {
 			if isPrimaryModel(m, current.ID) {
@@ -953,7 +1011,7 @@ func (a *App) AvailableModelsText(lang ...string) string {
 		sb.WriteString("- " + prov.Label + " (" + prov.ID + "):\n")
 		for _, m := range filtered {
 			marker := "  - "
-			if m.ID == current.ID || (m.Provider == current.Provider && m.APIID == current.APIID) {
+			if (m.Provider == current.Provider && m.ID == current.ID) || (m.Provider == current.Provider && m.APIID != "" && m.APIID == current.APIID) {
 				if language == "id" {
 					marker = "  * [AKTIF] "
 				} else {
@@ -985,7 +1043,12 @@ func (a *App) SetModelByQuery(query string) (provider.Model, error) {
 	}
 	resolved := a.resolveModelAlias(trimmed)
 	var model provider.Model
-	if found, ok := provider.ModelFromQuery(resolved); ok {
+	a.mu.Lock()
+	customProv := a.customModelProviderLocked(resolved)
+	a.mu.Unlock()
+	if customProv != "" {
+		model = provider.Model{ID: resolved, Provider: customProv, Label: resolved, APIID: resolved}
+	} else if found, ok := provider.ModelFromQuery(resolved); ok {
 		model = found
 	}
 	if model.ID == "" {
@@ -1003,6 +1066,7 @@ func (a *App) SetModelByQuery(query string) (provider.Model, error) {
 	err := a.applyModel(model)
 	if err == nil {
 		a.cfg.DefaultModel = model.ID
+		a.recordCustomModelLocked(model.Provider, model.ID)
 	}
 	cfg := a.cfg
 	a.mu.Unlock()
@@ -2370,28 +2434,80 @@ func (a *App) SetImageModel(model string) error {
 	return config.Save(cfg)
 }
 
+// ModelsForProvider returns the provider's catalogue models plus any custom
+// models the operator has configured or is currently running on that provider.
+func (a *App) ModelsForProvider(providerID string) []provider.Model {
+	models := provider.ModelsFor(providerID)
+	seen := make(map[string]bool, len(models)+4)
+	for _, m := range models {
+		seen[m.ID] = true
+	}
+
+	a.mu.Lock()
+	customList := append([]string(nil), a.cfg.CustomModels[providerID]...)
+	current := a.model
+	baseURL := strings.TrimSpace(a.cfg.BaseURLs[providerID])
+	a.mu.Unlock()
+
+	detail := "Custom model"
+	if baseURL != "" {
+		detail = baseURL
+	}
+	for _, id := range customList {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		models = append(models, provider.Model{
+			ID:          id,
+			Provider:    providerID,
+			Label:       id,
+			APIID:       id,
+			Description: detail,
+		})
+	}
+	if current.Provider == providerID && strings.TrimSpace(current.ID) != "" && !seen[current.ID] {
+		label := current.Label
+		if label == "" {
+			label = current.ID
+		}
+		models = append(models, provider.Model{
+			ID:          current.ID,
+			Provider:    providerID,
+			Label:       label,
+			APIID:       current.WireID(),
+			Description: detail,
+		})
+	}
+	return models
+}
+
 // ActiveProviders lists the providers the operator can use right now: the
 // current provider, providers with a stored key or login, or providers with a
-// custom base URL configured.
+// custom base URL or custom models configured.
 func (a *App) ActiveProviders() []provider.Provider {
 	a.mu.Lock()
 	current := a.model.Provider
 	store := a.store
 	baseURLs := a.cfg.BaseURLs
+	customModels := a.cfg.CustomModels
 	a.mu.Unlock()
 
 	var active []provider.Provider
 	for _, info := range provider.Providers() {
-		if len(provider.ModelsFor(info.ID)) == 0 {
+		hasCatalog := len(provider.ModelsFor(info.ID)) > 0
+		hasCustomModels := len(customModels[info.ID]) > 0
+		hasKey := provider.KeySource(store, info.ID) != ""
+		hasCustomURL := strings.TrimSpace(baseURLs[info.ID]) != ""
+		if !hasCatalog && !hasCustomModels && info.ID != current && info.ID != "openai-compatible" {
 			continue
 		}
 		if info.ID == current {
 			active = append(active, info)
 			continue
 		}
-		hasKey := info.NeedsKey && provider.KeySource(store, info.ID) != ""
-		hasCustomURL := strings.TrimSpace(baseURLs[info.ID]) != ""
-		if hasKey || hasCustomURL {
+		if hasKey || hasCustomURL || hasCustomModels {
 			active = append(active, info)
 		}
 	}

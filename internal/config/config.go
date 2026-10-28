@@ -193,6 +193,10 @@ type Config struct {
 	// providers (ollama, lmstudio) read it too.
 	BaseURLs map[string]string `json:"baseUrls,omitempty"`
 
+	// CustomModels stores user-entered model ids keyed by provider id (for
+	// example, models configured under openai-compatible).
+	CustomModels map[string][]string `json:"customModels,omitempty"`
+
 	// ModelOverrides maps a registry model id to the id sent on the wire,
 	// which is how a renamed vendor model keeps a stable local id.
 	ModelOverrides map[string]string `json:"modelOverrides,omitempty"`
