@@ -777,6 +777,13 @@ func isImageExtension(name string) bool {
 	return false
 }
 
+func isPDFVisionModel(modelID string) bool {
+	lower := strings.ToLower(modelID)
+	return strings.Contains(lower, "gemini") ||
+		strings.Contains(lower, "antigravity") ||
+		strings.Contains(lower, "claude")
+}
+
 // runDocument downloads a document file. If it is an image, it is passed to
 // vision; otherwise text files are displayed inline and all files are saved
 // to the workspace uploads directory when available.
@@ -835,6 +842,20 @@ func (b *Bot) runDocument(ctx context.Context, chatID int64, request channel.Req
 		fmt.Fprintf(&builder, "[Document uploaded: %s saved to %s]\n\n", fileName, filepath.ToSlash(uploadRelPath))
 	} else {
 		fmt.Fprintf(&builder, "[Document uploaded: %s (%d bytes)]\n\n", fileName, len(data))
+	}
+
+	isPDF := strings.ToLower(doc.MimeType) == "application/pdf" || strings.HasSuffix(strings.ToLower(doc.FileName), ".pdf")
+	if isPDF && isPDFVisionModel(b.agent.Model()) {
+		if prompt != "" {
+			builder.WriteString(prompt)
+		} else {
+			builder.WriteString("Please inspect and analyze this uploaded PDF document.")
+		}
+		encoded := base64.StdEncoding.EncodeToString(data)
+		b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
+			return b.agent.RunPromptWithImage(runCtx, request, builder.String(), "application/pdf", encoded, progress)
+		})
+		return
 	}
 
 	if utf8.Valid(data) && len(data) <= 64*1024 {

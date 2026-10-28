@@ -314,3 +314,47 @@ func TestWhatsAppSlashCommandsForeignLanguage(t *testing.T) {
 		t.Fatalf("expected English operator restriction for foreign user, got: %v", replies)
 	}
 }
+
+type fakeImageAgent struct {
+	fakeAgent
+	imagePrompt    string
+	imageMediaType string
+	imageData      string
+}
+
+func (a *fakeImageAgent) RunPromptWithImage(ctx context.Context, req channel.Request, prompt, mediaType, data string, progress func(string)) (string, error) {
+	a.imagePrompt = prompt
+	a.imageMediaType = mediaType
+	a.imageData = data
+	return "vision analyzed: **success**", nil
+}
+
+func TestNaturalErrorAuthFailure(t *testing.T) {
+	authErr := errors.New("loadCodeAssist returned 401: Request had invalid authentication credentials")
+	idMsg := naturalError(authErr, "id")
+	if !strings.Contains(idMsg, "autentikasi") {
+		t.Errorf("expected Indonesian auth failure message, got: %q", idMsg)
+	}
+
+	enMsg := naturalError(authErr, "en")
+	if !strings.Contains(enMsg, "authentication issue") {
+		t.Errorf("expected English auth failure message, got: %q", enMsg)
+	}
+}
+
+func TestReplyFormatsEnrichedMarkdown(t *testing.T) {
+	bot := &Bot{}
+	var lastReply string
+	bot.sendHook = func(chatID, text string) {
+		lastReply = text
+	}
+
+	ctx := context.Background()
+	bot.reply(ctx, "628123@s.whatsapp.net", "# Ringkasan\nBerikut adalah **hasil penting**.")
+	if strings.Contains(lastReply, "**") {
+		t.Errorf("reply must not contain double asterisks, got: %q", lastReply)
+	}
+	if !strings.Contains(lastReply, "*Ringkasan*") || !strings.Contains(lastReply, "*hasil penting*") {
+		t.Errorf("reply missing expected formatted markdown: %q", lastReply)
+	}
+}

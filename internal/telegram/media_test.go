@@ -39,6 +39,31 @@ func TestMarkdownToTelegramHTML(t *testing.T) {
 	if !strings.Contains(linenos, "<pre>") || !strings.Contains(linenos, "1: x = 1") || !strings.Contains(linenos, "</pre>") {
 		t.Errorf("linenos code = %q", linenos)
 	}
+
+	pyCode := markdownToTelegramHTML("```python\nx = 1\n```")
+	if !strings.Contains(pyCode, `<pre><code class="language-python">`) || !strings.Contains(pyCode, "</code></pre>") {
+		t.Errorf("language code block = %q", pyCode)
+	}
+
+	quote := markdownToTelegramHTML("> This is quoted")
+	if quote != "<blockquote>This is quoted</blockquote>" {
+		t.Errorf("quote = %q, want blockquote", quote)
+	}
+
+	strike := markdownToTelegramHTML("~~obsolete~~")
+	if strike != "<s>obsolete</s>" {
+		t.Errorf("strike = %q, want <s>obsolete</s>", strike)
+	}
+
+	boldItalic := markdownToTelegramHTML("***very important***")
+	if boldItalic != "<b><i>very important</i></b>" {
+		t.Errorf("boldItalic = %q, want <b><i>very important</i></b>", boldItalic)
+	}
+
+	bullets := markdownToTelegramHTML("- Item A\n- Item B")
+	if bullets != "• Item A\n• Item B" {
+		t.Errorf("bullets = %q", bullets)
+	}
 }
 
 func TestSendMarkdownUsesHTML(t *testing.T) {

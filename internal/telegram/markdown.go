@@ -8,23 +8,27 @@ import (
 
 var (
 	codeSpanPattern   = regexp.MustCompile("`([^`\n]+)`")
+	boldItalicPattern = regexp.MustCompile(`\*\*\*([^*\n]+)\*\*\*`)
 	boldPattern       = regexp.MustCompile(`\*\*([^*\n]+)\*\*`)
+	italicUnderscore  = regexp.MustCompile(`\b_([^_]+)_\b`)
+	strikePattern     = regexp.MustCompile(`~~([^~\n]+)~~`)
 	linkPattern       = regexp.MustCompile(`\[([^\]\n]+)\]\(([^)\s]+)\)`)
 	tableRowPattern   = regexp.MustCompile(`^\|?[ \t]*([^|\r\n]+(?:[ \t]*\|[ \t]*[^|\r\n]+)*)\|?[ \t]*$`)
 	tableCellSplitter = regexp.MustCompile(`[ \t]*\|[ \t]*`)
 )
 
 // markdownToTelegramHTML renders a small, deliberate subset of Markdown as the
-// HTML that Telegram accepts: fenced code, inline code, bold, links and
-// headings. It also converts pipe tables and fenced code blocks whose info
-// string ends with `linenos` into numbered code blocks. Everything else passes
-// through escaped, so a stray '<' or '&' in model output cannot break the
-// message.
+// HTML that Telegram accepts: fenced code, inline code, bold, links, strikethrough,
+// blockquotes and headings. It also converts pipe tables and fenced code blocks
+// whose info string ends with `linenos` into numbered code blocks. Everything
+// else passes through escaped, so a stray '<' or '&' in model output cannot
+// break the message.
 func markdownToTelegramHTML(text string) string {
 	lines := strings.Split(text, "\n")
 	var out strings.Builder
 	inCode := false
 	codeLinenos := false
+	codeLang := ""
 	var codeLines []string
 	inTable := false
 	flushCode := func() {
@@ -32,7 +36,11 @@ func markdownToTelegramHTML(text string) string {
 			return
 		}
 		inCode = false
-		out.WriteString("<pre>")
+		if codeLang != "" {
+			out.WriteString(`<pre><code class="language-` + escapeHTML(codeLang) + `">`)
+		} else {
+			out.WriteString("<pre>")
+		}
 		for index, line := range codeLines {
 			if codeLinenos {
 				out.WriteString(strconv.Itoa(index + 1))
@@ -41,8 +49,13 @@ func markdownToTelegramHTML(text string) string {
 			out.WriteString(escapeHTML(line))
 			out.WriteString("\n")
 		}
-		out.WriteString("</pre>")
+		if codeLang != "" {
+			out.WriteString("</code></pre>")
+		} else {
+			out.WriteString("</pre>")
+		}
 		codeLines = nil
+		codeLang = ""
 	}
 	closeTable := func() {
 		if inTable {
@@ -74,7 +87,12 @@ func markdownToTelegramHTML(text string) string {
 		}
 		if !inCode && strings.HasPrefix(strings.TrimSpace(line), "```") {
 			inCode = true
-			codeLinenos = strings.HasSuffix(strings.TrimSpace(line), "linenos")
+			codeInfo := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "```"))
+			codeLinenos = strings.HasSuffix(codeInfo, "linenos")
+			codeLang = ""
+			if !codeLinenos && codeInfo != "" {
+				codeLang = strings.Fields(codeInfo)[0]
+			}
 			codeLines = nil
 			continue
 		}
@@ -94,7 +112,8 @@ func markdownToTelegramHTML(text string) string {
 	return strings.TrimRight(out.String(), "\n")
 }
 
-// inlineToHTML styles one non-code line: headings, inline code, bold and links.
+// inlineToHTML styles one non-code line: headings, inline code, bold, links,
+// quotes, and bullet lists.
 func inlineToHTML(line string) string {
 	escaped := escapeHTML(line)
 	trimmed := strings.TrimLeft(escaped, " \t")
@@ -103,9 +122,28 @@ func inlineToHTML(line string) string {
 			return "<b>" + heading + "</b>"
 		}
 	}
+	if strings.HasPrefix(trimmed, "&gt; ") {
+		quote := strings.TrimPrefix(trimmed, "&gt; ")
+		return "<blockquote>" + inlineSpansToHTML(quote) + "</blockquote>"
+	}
+	if strings.HasPrefix(trimmed, "- ") {
+		leading := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		return leading + "• " + inlineSpansToHTML(trimmed[2:])
+	}
+	if strings.HasPrefix(trimmed, "* ") && !strings.HasPrefix(trimmed, "* *") {
+		leading := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		return leading + "• " + inlineSpansToHTML(trimmed[2:])
+	}
+	return inlineSpansToHTML(escaped)
+}
+
+func inlineSpansToHTML(escaped string) string {
 	// Inline code first, so markers inside it are not read as emphasis.
 	escaped = codeSpanPattern.ReplaceAllString(escaped, "<code>$1</code>")
+	escaped = boldItalicPattern.ReplaceAllString(escaped, "<b><i>$1</i></b>")
 	escaped = boldPattern.ReplaceAllString(escaped, "<b>$1</b>")
+	escaped = italicUnderscore.ReplaceAllString(escaped, "<i>$1</i>")
+	escaped = strikePattern.ReplaceAllString(escaped, "<s>$1</s>")
 	escaped = linkPattern.ReplaceAllString(escaped, `<a href="$2">$1</a>`)
 	return escaped
 }

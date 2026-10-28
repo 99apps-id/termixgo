@@ -2,11 +2,15 @@ package whatsapp
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -21,6 +25,16 @@ import (
 // typingRefresh is how often the composing presence is renewed. WhatsApp drops
 // the indicator quickly, so a long turn would otherwise look stopped.
 const typingRefresh = 4 * time.Second
+
+// ImageAgent is an agent that can receive an image or document prompt for a vision model.
+type ImageAgent interface {
+	RunPromptWithImage(ctx context.Context, request channel.Request, prompt, mediaType, data string, progress func(string)) (string, error)
+}
+
+// WorkspaceProvider gives access to the workspace directory path.
+type WorkspaceProvider interface {
+	Workspace() string
+}
 
 // Bot serves one WhatsApp account: it normalizes inbound messages, applies the
 // account policy, runs the turn through the bridge, and sends the answer.
@@ -161,11 +175,25 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 			return
 		}
 	}
-	request := b.requestFrom(evt)
-	if strings.TrimSpace(request.Text) == "" {
-		// Media is a later phase; a caption-free image has nothing to run.
+
+	rawMsg := unwrapMessage(evt.Message)
+	if rawMsg == nil {
 		return
 	}
+	imageMsg := rawMsg.GetImageMessage()
+	docMsg := rawMsg.GetDocumentMessage()
+
+	request := b.requestFrom(evt)
+	if imageMsg != nil {
+		request.Text = strings.TrimSpace(imageMsg.GetCaption())
+	} else if docMsg != nil {
+		request.Text = strings.TrimSpace(docMsg.GetCaption())
+	}
+
+	if imageMsg == nil && docMsg == nil && strings.TrimSpace(request.Text) == "" {
+		return
+	}
+
 	policy := b.policySnapshot()
 	decision := channel.Decide(policy, request)
 	if b.isSelf(request.SenderID) || (request.SenderAlt != "" && b.isSelf(request.SenderAlt)) {
@@ -195,6 +223,16 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 			return
 		}
 	}
+
+	if imageMsg != nil {
+		b.runImage(ctx, request, imageMsg, lang, policy)
+		return
+	}
+	if docMsg != nil {
+		b.runDocument(ctx, request, docMsg, lang, policy)
+		return
+	}
+
 	if strings.HasPrefix(strings.TrimSpace(request.Text), "/") {
 		if !decision.Admin {
 			if lang == "id" {
@@ -211,6 +249,215 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 	done := make(chan struct{})
 	go b.keepTyping(ctx, request.ChatID, done)
 	answer, err := b.agent.RunPrompt(ctx, request, request.Text, nil)
+	close(done)
+	if err != nil {
+		b.reply(ctx, request.ChatID, naturalError(err, lang))
+		return
+	}
+	if channel.Silent(answer) {
+		return
+	}
+	for _, chunk := range channel.Chunk(answer, policy.EffectiveTextChunkLimit()) {
+		b.reply(ctx, request.ChatID, chunk)
+	}
+}
+
+// runImage downloads an image and runs vision inference through the agent.
+func (b *Bot) runImage(ctx context.Context, request channel.Request, imageMsg *waE2E.ImageMessage, lang string, policy config.ChannelAccount) {
+	if b.client == nil {
+		b.reply(ctx, request.ChatID, naturalError(errors.New("no whatsapp client available"), lang))
+		return
+	}
+	prompt := strings.TrimSpace(imageMsg.GetCaption())
+	if prompt == "" {
+		if lang == "id" {
+			prompt = "Jelaskan gambar ini dan berikan informasi atau tindakan penting terkait gambar tersebut."
+		} else {
+			prompt = "Describe this image and act on anything notable in it."
+		}
+	}
+	data, err := b.client.Download(ctx, imageMsg)
+	if err != nil {
+		if lang == "id" {
+			b.reply(ctx, request.ChatID, "Gagal mengunduh gambar: "+err.Error())
+		} else {
+			b.reply(ctx, request.ChatID, "Could not download image: "+err.Error())
+		}
+		return
+	}
+
+	mediaType := imageMsg.GetMimetype()
+	if mediaType == "" {
+		mediaType = "image/jpeg"
+	}
+
+	fileName := fmt.Sprintf("wa_%d.jpg", time.Now().UnixNano())
+	if strings.Contains(mediaType, "png") {
+		fileName = fmt.Sprintf("wa_%d.png", time.Now().UnixNano())
+	}
+	if wp, ok := b.agent.(WorkspaceProvider); ok && wp.Workspace() != "" {
+		uploadDir := filepath.Join(wp.Workspace(), ".termixgo", "uploads")
+		if err := os.MkdirAll(uploadDir, 0o755); err == nil {
+			_ = os.WriteFile(filepath.Join(uploadDir, fileName), data, 0o644)
+		}
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(data)
+	done := make(chan struct{})
+	go b.keepTyping(ctx, request.ChatID, done)
+	var answer string
+	var runErr error
+	if imgAgent, ok := b.agent.(ImageAgent); ok {
+		answer, runErr = imgAgent.RunPromptWithImage(ctx, request, prompt, mediaType, encoded, nil)
+	} else {
+		answer, runErr = b.agent.RunPrompt(ctx, request, prompt, nil)
+	}
+	close(done)
+
+	if runErr != nil {
+		b.reply(ctx, request.ChatID, naturalError(runErr, lang))
+		return
+	}
+	if channel.Silent(answer) {
+		return
+	}
+	for _, chunk := range channel.Chunk(answer, policy.EffectiveTextChunkLimit()) {
+		b.reply(ctx, request.ChatID, chunk)
+	}
+}
+
+// runDocument downloads a document file and inspects it via vision or workspace tools.
+func (b *Bot) runDocument(ctx context.Context, request channel.Request, docMsg *waE2E.DocumentMessage, lang string, policy config.ChannelAccount) {
+	if b.client == nil {
+		b.reply(ctx, request.ChatID, naturalError(errors.New("no whatsapp client available"), lang))
+		return
+	}
+	prompt := strings.TrimSpace(docMsg.GetCaption())
+	mimeType := strings.ToLower(docMsg.GetMimetype())
+	fileName := filepath.Base(docMsg.GetFileName())
+	if fileName == "." || fileName == "/" || fileName == "" {
+		fileName = "uploaded_document"
+	}
+
+	data, err := b.client.Download(ctx, docMsg)
+	if err != nil {
+		if lang == "id" {
+			b.reply(ctx, request.ChatID, "Gagal mengunduh dokumen: "+err.Error())
+		} else {
+			b.reply(ctx, request.ChatID, "Could not download document: "+err.Error())
+		}
+		return
+	}
+
+	if strings.HasPrefix(mimeType, "image/") || isImageExtension(fileName) {
+		if prompt == "" {
+			if lang == "id" {
+				prompt = "Jelaskan gambar ini dan berikan informasi atau tindakan penting terkait gambar tersebut."
+			} else {
+				prompt = "Describe this image and act on anything notable in it."
+			}
+		}
+		encoded := base64.StdEncoding.EncodeToString(data)
+		mediaType := mimeType
+		if mediaType == "" {
+			mediaType = "image/jpeg"
+		}
+		done := make(chan struct{})
+		go b.keepTyping(ctx, request.ChatID, done)
+		var answer string
+		var runErr error
+		if imgAgent, ok := b.agent.(ImageAgent); ok {
+			answer, runErr = imgAgent.RunPromptWithImage(ctx, request, prompt, mediaType, encoded, nil)
+		} else {
+			answer, runErr = b.agent.RunPrompt(ctx, request, prompt, nil)
+		}
+		close(done)
+		if runErr != nil {
+			b.reply(ctx, request.ChatID, naturalError(runErr, lang))
+			return
+		}
+		if channel.Silent(answer) {
+			return
+		}
+		for _, chunk := range channel.Chunk(answer, policy.EffectiveTextChunkLimit()) {
+			b.reply(ctx, request.ChatID, chunk)
+		}
+		return
+	}
+
+	uploadRelPath := filepath.Join(".termixgo", "uploads", fileName)
+	savedToWorkspace := false
+	if wp, ok := b.agent.(WorkspaceProvider); ok && wp.Workspace() != "" {
+		uploadDir := filepath.Join(wp.Workspace(), ".termixgo", "uploads")
+		if err := os.MkdirAll(uploadDir, 0o755); err == nil {
+			fullPath := filepath.Join(uploadDir, fileName)
+			if err := os.WriteFile(fullPath, data, 0o644); err == nil {
+				savedToWorkspace = true
+			}
+		}
+	}
+
+	var builder strings.Builder
+	if savedToWorkspace {
+		fmt.Fprintf(&builder, "[Document uploaded: %s saved to %s]\n\n", fileName, filepath.ToSlash(uploadRelPath))
+	} else {
+		fmt.Fprintf(&builder, "[Document uploaded: %s (%d bytes)]\n\n", fileName, len(data))
+	}
+
+	isPDF := mimeType == "application/pdf" || strings.HasSuffix(strings.ToLower(fileName), ".pdf")
+	if isPDF && isPDFVisionModel(b.agent.Model()) {
+		if prompt != "" {
+			builder.WriteString(prompt)
+		} else {
+			if lang == "id" {
+				builder.WriteString("Tolong periksa dan analisa dokumen PDF yang diunggah ini.")
+			} else {
+				builder.WriteString("Please inspect and analyze this uploaded PDF document.")
+			}
+		}
+		encoded := base64.StdEncoding.EncodeToString(data)
+		done := make(chan struct{})
+		go b.keepTyping(ctx, request.ChatID, done)
+		var answer string
+		var runErr error
+		if imgAgent, ok := b.agent.(ImageAgent); ok {
+			answer, runErr = imgAgent.RunPromptWithImage(ctx, request, builder.String(), "application/pdf", encoded, nil)
+		} else {
+			answer, runErr = b.agent.RunPrompt(ctx, request, builder.String(), nil)
+		}
+		close(done)
+		if runErr != nil {
+			b.reply(ctx, request.ChatID, naturalError(runErr, lang))
+			return
+		}
+		if channel.Silent(answer) {
+			return
+		}
+		for _, chunk := range channel.Chunk(answer, policy.EffectiveTextChunkLimit()) {
+			b.reply(ctx, request.ChatID, chunk)
+		}
+		return
+	}
+
+	if utf8.Valid(data) && len(data) <= 64*1024 {
+		builder.WriteString("File content:\n```\n")
+		builder.WriteString(string(data))
+		builder.WriteString("\n```\n\n")
+	}
+
+	if prompt != "" {
+		builder.WriteString(prompt)
+	} else {
+		if lang == "id" {
+			builder.WriteString("Silakan periksa dokumen yang diunggah dan lanjutkan.")
+		} else {
+			builder.WriteString("Please inspect the uploaded document and proceed.")
+		}
+	}
+
+	done := make(chan struct{})
+	go b.keepTyping(ctx, request.ChatID, done)
+	answer, err := b.agent.RunPrompt(ctx, request, builder.String(), nil)
 	close(done)
 	if err != nil {
 		b.reply(ctx, request.ChatID, naturalError(err, lang))
@@ -364,7 +611,8 @@ func (b *Bot) SendTo(ctx context.Context, chatID, text string) error {
 	if err != nil {
 		return fmt.Errorf("bad chat id %q: %w", chatID, err)
 	}
-	for _, chunk := range channel.Chunk(text, b.policySnapshot().EffectiveTextChunkLimit()) {
+	formatted := formatWhatsApp(text)
+	for _, chunk := range channel.Chunk(formatted, b.policySnapshot().EffectiveTextChunkLimit()) {
 		if _, err := b.client.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(chunk)}); err != nil {
 			return err
 		}
@@ -377,12 +625,13 @@ func (b *Bot) reply(ctx context.Context, chatID, text string) {
 	b.mu.RLock()
 	hook := b.sendHook
 	b.mu.RUnlock()
+	formatted := formatWhatsApp(text)
 	if hook != nil {
-		hook(chatID, text)
+		hook(chatID, formatted)
 		return
 	}
 	if b.client == nil {
-		b.logfLine("no client to reply: " + text)
+		b.logfLine("no client to reply: " + formatted)
 		return
 	}
 	jid, err := types.ParseJID(chatID)
@@ -390,7 +639,13 @@ func (b *Bot) reply(ctx context.Context, chatID, text string) {
 		b.logfLine("bad chat id " + chatID + ": " + err.Error())
 		return
 	}
-	_, err = b.client.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(text)})
+	sendCtx := ctx
+	if sendCtx == nil || sendCtx.Err() != nil {
+		var cancel context.CancelFunc
+		sendCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+	}
+	_, err = b.client.SendMessage(sendCtx, jid, &waE2E.Message{Conversation: proto.String(formatted)})
 	if err != nil {
 		b.logfLine("send failed: " + err.Error())
 	}
@@ -435,6 +690,8 @@ func naturalError(err error, lang ...string) string {
 			return "Sebentar ya, aku masih menyelesaikan permintaan sebelumnya. Coba lagi sesaat lagi."
 		case errors.Is(err, context.Canceled):
 			return "Permintaan dibatalkan."
+		case isAuthError(err):
+			return "Model mengalami kendala autentikasi (kredensial atau token perlu diperbarui). Silakan ganti model dengan /model stepfun atau hubungi operator."
 		default:
 			return "Maaf, ada gangguan sebentar. Coba lagi ya."
 		}
@@ -444,9 +701,62 @@ func naturalError(err error, lang ...string) string {
 		return "Please wait a moment, I am still finishing the previous request. Please try again shortly."
 	case errors.Is(err, context.Canceled):
 		return "Request was canceled."
+	case isAuthError(err):
+		return "The model encountered an authentication issue (credentials or token need renewal). Please switch model using /model stepfun or contact the operator."
 	default:
 		return "Sorry, an error occurred. Please try again."
 	}
+}
+
+func unwrapMessage(msg *waE2E.Message) *waE2E.Message {
+	if msg == nil {
+		return nil
+	}
+	if ephem := msg.GetEphemeralMessage(); ephem != nil && ephem.GetMessage() != nil {
+		return unwrapMessage(ephem.GetMessage())
+	}
+	if vo := msg.GetViewOnceMessage(); vo != nil && vo.GetMessage() != nil {
+		return unwrapMessage(vo.GetMessage())
+	}
+	if vo2 := msg.GetViewOnceMessageV2(); vo2 != nil && vo2.GetMessage() != nil {
+		return unwrapMessage(vo2.GetMessage())
+	}
+	if vo2ext := msg.GetViewOnceMessageV2Extension(); vo2ext != nil && vo2ext.GetMessage() != nil {
+		return unwrapMessage(vo2ext.GetMessage())
+	}
+	if docCap := msg.GetDocumentWithCaptionMessage(); docCap != nil && docCap.GetMessage() != nil {
+		return unwrapMessage(docCap.GetMessage())
+	}
+	return msg
+}
+
+func isImageExtension(name string) bool {
+	ext := strings.ToLower(filepath.Ext(name))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp":
+		return true
+	}
+	return false
+}
+
+func isPDFVisionModel(modelID string) bool {
+	lower := strings.ToLower(modelID)
+	return strings.Contains(lower, "gemini") ||
+		strings.Contains(lower, "antigravity") ||
+		strings.Contains(lower, "claude")
+}
+
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "401") ||
+		strings.Contains(msg, "unauthorized") ||
+		strings.Contains(msg, "invalid authentication") ||
+		strings.Contains(msg, "oauth 2 access token") ||
+		strings.Contains(msg, "invalid api key") ||
+		strings.Contains(msg, "authentication failed")
 }
 
 // DiffProvider is an optional interface that an agent may implement to provide workspace diffs.

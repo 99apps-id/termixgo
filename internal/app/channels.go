@@ -555,6 +555,10 @@ func (b *telegramBridge) GitDiff(ctx context.Context) (string, error) { return b
 
 func (b *telegramBridge) Status() string { return b.app.Status() }
 
+func (b *telegramBridge) Workspace() string {
+	return b.app.AgentWorkspace(b.account.AgentName(b.name))
+}
+
 func (b *telegramBridge) interactor() Interactor {
 	if b.bot == nil {
 		return nil

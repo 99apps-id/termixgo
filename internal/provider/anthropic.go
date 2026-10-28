@@ -354,8 +354,12 @@ func anthropicUserContent(message Message) any {
 		blocks = append(blocks, map[string]any{"type": "text", "text": message.Content})
 	}
 	for _, image := range message.Images {
+		blockType := "image"
+		if image.MediaType == "application/pdf" {
+			blockType = "document"
+		}
 		blocks = append(blocks, map[string]any{
-			"type": "image",
+			"type": blockType,
 			"source": map[string]any{
 				"type":       "base64",
 				"media_type": image.MediaType,

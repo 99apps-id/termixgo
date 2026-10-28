@@ -154,6 +154,10 @@ func (b *whatsappBridge) GitDiff(ctx context.Context) (string, error) { return b
 
 func (b *whatsappBridge) Status() string { return b.app.Status() }
 
+func (b *whatsappBridge) Workspace() string {
+	return b.app.AgentWorkspace(b.account.AgentName(b.name))
+}
+
 func (b *whatsappBridge) session(request channel.Request) (*agent.Session, error) {
 	agentName := b.account.AgentName(b.name)
 	dir, err := agenthome.SessionsDirFor(agentName)
