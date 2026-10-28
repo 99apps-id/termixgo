@@ -87,9 +87,16 @@ func (b *Bot) showProviderModels(ctx context.Context, query *CallbackQuery, prov
 	if query.Message == nil {
 		return
 	}
-	models := provider.ModelsFor(providerID)
+	var models []provider.Model
+	if lister, ok := b.agent.(interface {
+		ModelsForProvider(string) []provider.Model
+	}); ok {
+		models = lister.ModelsForProvider(providerID)
+	} else {
+		models = provider.ModelsFor(providerID)
+	}
 	if len(models) == 0 {
-		_ = b.client.AnswerCallbackQuery(ctx, query.ID, "No models for that provider.")
+		_ = b.client.AnswerCallbackQuery(ctx, query.ID, "No models for that provider. Use /model "+providerID+":<model-id>")
 		return
 	}
 	if len(models) > maxModelButtons {

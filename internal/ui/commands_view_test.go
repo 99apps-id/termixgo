@@ -198,6 +198,55 @@ func TestSlashModelReportsAnUnusableName(t *testing.T) {
 	}
 }
 
+func TestSlashModelListsOpenAICompatibleProviderAndCustomModels(t *testing.T) {
+	model := chatModel(t)
+	if err := model.app.SetBaseURL("openai-compatible", "https://ollama.com/v1"); err != nil {
+		t.Fatalf("SetBaseURL: %v", err)
+	}
+	if _, err := model.app.SetModelByQuery("openai-compatible:qwen3-coder:480b-cloud"); err != nil {
+		t.Fatalf("SetModelByQuery: %v", err)
+	}
+
+	_, _ = runSlash(t, model, "/model")
+	if model.current != modePicker || model.picker.action != "model-provider" {
+		t.Fatalf("expected model-provider picker, got mode=%d action=%q", model.current, model.picker.action)
+	}
+	var compatItem pickerItem
+	found := false
+	for _, item := range model.picker.items {
+		if item.ID == "openai-compatible" {
+			compatItem = item
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected openai-compatible in /model provider picker, got %+v", model.picker.items)
+	}
+	if compatItem.Detail != "https://ollama.com/v1" {
+		t.Errorf("compatItem.Detail = %q, want https://ollama.com/v1", compatItem.Detail)
+	}
+
+	updated, _ := model.applyPickerChoice("model-provider", compatItem)
+	after := updated.(*Model)
+	if after.current != modePicker || after.picker.action != "model" {
+		t.Fatalf("expected model picker for openai-compatible, got mode=%d action=%q", after.current, after.picker.action)
+	}
+	hasSavedModel := false
+	hasCustomOption := false
+	for _, item := range after.picker.items {
+		if item.Label == "qwen3-coder:480b-cloud" {
+			hasSavedModel = true
+		}
+		if item.ID == "custom:openai-compatible" {
+			hasCustomOption = true
+		}
+	}
+	if !hasSavedModel || !hasCustomOption {
+		t.Fatalf("expected saved model and custom option in picker items: %+v", after.picker.items)
+	}
+}
+
 // ------------------------------------------------- /sessions
 
 func TestSlashSessionsSaysWhenThereIsNothingSaved(t *testing.T) {

@@ -144,19 +144,51 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 	}
 	switch action {
 	case "model-provider":
-		models := provider.ModelsFor(item.ID)
-		if len(models) == 0 {
-			m.blocks = append(m.blocks, block{kind: blockError, text: "No models are listed for " + item.Label + "."})
-			return m, m.enterChat()
+		models := m.app.ModelsForProvider(item.ID)
+		staticModels := provider.ModelsFor(item.ID)
+		staticSet := make(map[string]bool, len(staticModels))
+		for _, sm := range staticModels {
+			staticSet[sm.ID] = true
 		}
-		items := make([]pickerItem, 0, len(models))
+		items := make([]pickerItem, 0, len(models)+1)
 		for _, model := range models {
-			items = append(items, pickerItem{ID: model.ID, Label: model.Label, Detail: model.Description})
+			pickID := model.ID
+			if item.ID == "openai-compatible" || !staticSet[model.ID] {
+				pickID = item.ID + ":" + model.ID
+			}
+			items = append(items, pickerItem{ID: pickID, Label: model.Label, Detail: model.Description})
+		}
+		if item.ID == "openai-compatible" || len(items) == 0 {
+			items = append(items, pickerItem{
+				ID:     "custom:" + item.ID,
+				Label:  "Custom Model",
+				Detail: "Type a custom model id for " + item.Label,
+			})
 		}
 		m.openPicker(brandedTitle("Choose a model"), "model", items)
 		m.picker.parent = "model-provider"
 		return m, nil
 	case "model":
+		if providerID, ok := strings.CutPrefix(item.ID, "custom:"); ok {
+			info, _ := provider.ByID(providerID)
+			label := info.Label
+			if label == "" {
+				label = providerID
+			}
+			m.setup = setupState{
+				step:       setupCustomModel,
+				providerID: providerID,
+				modelOnly:  true,
+				message:    fmt.Sprintf("Type the model id for %s.", label),
+			}
+			m.input.SetValue("")
+			m.input.Placeholder = "model-id"
+			m.input.EchoMode = textinput.EchoNormal
+			m.input.Focus()
+			m.current = modeSetup
+			m.refresh()
+			return m, textareaBlink()
+		}
 		model, err := m.app.SetModelByQuery(item.ID)
 		if err != nil {
 			m.blocks = append(m.blocks, block{kind: blockError, text: err.Error()})

@@ -53,6 +53,7 @@ var setupTitlePrefix = version.Name + " " + version.Version + " Setup"
 type setupState struct {
 	step        setupStep
 	providerID  string
+	modelOnly   bool
 	message     string
 	errText     string
 	pairingCode string
@@ -130,6 +131,9 @@ func (m *Model) handleSetupKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// wizard; on a provider sub-step it returns to the list so the operator can
 	// choose another provider instead of being stuck on an input or login step.
 	if key.String() == "esc" {
+		if m.setup.modelOnly {
+			return m, m.enterChat()
+		}
 		switch m.setup.step {
 		case setupProvider:
 			return m, m.enterChat()
@@ -395,9 +399,11 @@ func (m *Model) saveCustomModel() (tea.Model, tea.Cmd) {
 		m.setup.errText = "Type a model id."
 		return m, nil
 	}
-	qualified := value
-	if !strings.Contains(value, ":") {
-		qualified = m.setup.providerID + ":" + value
+	qualified := m.setup.providerID + ":" + value
+	if parts := strings.SplitN(value, ":", 2); len(parts) == 2 {
+		if _, ok := provider.ByID(parts[0]); ok {
+			qualified = value
+		}
 	}
 	model, err := m.app.SetModelByQuery(qualified)
 	if err != nil {
@@ -407,6 +413,10 @@ func (m *Model) saveCustomModel() (tea.Model, tea.Cmd) {
 	m.input.SetValue("")
 	m.input.Blur()
 	m.refreshWelcome()
+	if m.setup.modelOnly {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Model is now " + model.Label})
+		return m, m.enterChat()
+	}
 	m.setup.summary = append(m.setup.summary, "model: "+model.Label)
 	return m.advanceToVoiceModel()
 }

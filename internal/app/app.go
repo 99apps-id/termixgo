@@ -496,13 +496,11 @@ func (a *App) restoreModel() error {
 }
 
 func (a *App) guessProvider(modelID string) string {
-	if index := strings.Index(modelID, ":"); index > 0 {
-		if _, ok := provider.ByID(modelID[:index]); ok {
-			return modelID[:index]
-		}
-	}
 	if provID := a.customModelProviderLocked(modelID); provID != "" {
 		return provID
+	}
+	if index := strings.Index(modelID, ":"); index > 0 {
+		return modelID[:index]
 	}
 	// A custom endpoint is configured by base URL, not by a catalog entry or a
 	// key, so an unknown model id belongs to it when one is set. Without this

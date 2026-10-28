@@ -278,3 +278,54 @@ func TestModelAliasResolutionAndAvailableModels(t *testing.T) {
 		t.Errorf("AvailableModelsText should not be empty")
 	}
 }
+
+func TestOpenAICompatibleProviderAppearsInActiveProvidersAndModels(t *testing.T) {
+	application := newTestApp(t)
+	if err := application.SetBaseURL("openai-compatible", "https://ollama.com/v1"); err != nil {
+		t.Fatalf("SetBaseURL: %v", err)
+	}
+	if err := application.Secrets().Set(secrets.ProviderKey("openai-compatible"), "ollama-cloud-key"); err != nil {
+		t.Fatalf("Set secret: %v", err)
+	}
+	selected, err := application.SetModelByQuery("openai-compatible:qwen3-coder:480b-cloud")
+	if err != nil {
+		t.Fatalf("SetModelByQuery: %v", err)
+	}
+	if selected.Provider != "openai-compatible" || selected.ID != "qwen3-coder:480b-cloud" {
+		t.Fatalf("selected = %+v", selected)
+	}
+
+	// 1. Must appear in ActiveProviders even after switching to another provider
+	if _, err := application.SetModelByQuery("ollama:llama3.2:latest"); err != nil {
+		t.Fatalf("switch to ollama: %v", err)
+	}
+	foundProv := false
+	for _, p := range application.ActiveProviders() {
+		if p.ID == "openai-compatible" {
+			foundProv = true
+			break
+		}
+	}
+	if !foundProv {
+		t.Fatalf("openai-compatible must appear in ActiveProviders when configured")
+	}
+
+	// 2. ModelsForProvider("openai-compatible") must include the custom model
+	models := application.ModelsForProvider("openai-compatible")
+	foundModel := false
+	for _, m := range models {
+		if m.ID == "qwen3-coder:480b-cloud" {
+			foundModel = true
+			break
+		}
+	}
+	if !foundModel {
+		t.Fatalf("ModelsForProvider(openai-compatible) = %+v, missing qwen3-coder:480b-cloud", models)
+	}
+
+	// 3. AvailableModelsText (/models) must list OpenAI Compatible and the custom model
+	text := application.AvailableModelsText("id")
+	if !strings.Contains(text, "OpenAI Compatible (openai-compatible)") || !strings.Contains(text, "qwen3-coder:480b-cloud") {
+		t.Errorf("AvailableModelsText missing openai-compatible model:\n%s", text)
+	}
+}

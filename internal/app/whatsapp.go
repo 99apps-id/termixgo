@@ -153,6 +153,11 @@ func (b *whatsappBridge) ActiveProviders() []provider.Provider {
 	return b.app.ActiveProviders()
 }
 
+// ModelsForProvider lists catalogue and custom models for a provider.
+func (b *whatsappBridge) ModelsForProvider(providerID string) []provider.Model {
+	return b.app.ModelsForProvider(providerID)
+}
+
 // CostInfo renders the token and dollar spend for the chat's session.
 func (b *whatsappBridge) CostInfo(request channel.Request, lang string) string {
 	session, err := b.session(request)

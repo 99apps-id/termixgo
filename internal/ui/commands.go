@@ -446,18 +446,26 @@ func (m *Model) transcriptText() string {
 func (m *Model) activeProviderItems() []pickerItem {
 	current := m.app.CurrentModel().Provider
 	providers := m.app.ActiveProviders()
+	cfg := m.app.Config()
+	secretsStore := m.app.Secrets()
 	items := make([]pickerItem, 0, len(providers))
 	for _, info := range providers {
+		detail := info.DefaultBaseURL
+		if customURL := strings.TrimSpace(cfg.BaseURLs[info.ID]); customURL != "" {
+			detail = customURL
+		}
 		extra := "local"
 		switch {
 		case info.ID == current:
 			extra = "current"
 		case info.OAuth:
 			extra = "login"
-		case info.NeedsKey:
+		case info.NeedsKey || provider.KeySource(secretsStore, info.ID) != "":
 			extra = "API key"
+		case strings.TrimSpace(cfg.BaseURLs[info.ID]) != "":
+			extra = "endpoint"
 		}
-		items = append(items, pickerItem{ID: info.ID, Label: info.Label, Detail: info.DefaultBaseURL, Extra: extra})
+		items = append(items, pickerItem{ID: info.ID, Label: info.Label, Detail: detail, Extra: extra})
 	}
 	return items
 }
