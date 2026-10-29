@@ -834,12 +834,12 @@ func (b *Bot) runPhoto(ctx context.Context, chatID int64, request channel.Reques
 	photo := message.Photo[len(message.Photo)-1]
 	file, err := b.client.GetFile(ctx, photo.FileID)
 	if err != nil {
-		b.reply(ctx, chatID, "Could not fetch the image: "+err.Error())
+		b.reply(ctx, chatID, "Could not fetch the image.")
 		return
 	}
 	data, err := b.client.DownloadFile(ctx, file.FilePath)
 	if err != nil {
-		b.reply(ctx, chatID, "Could not download the image: "+err.Error())
+		b.reply(ctx, chatID, "Could not download the image.")
 		return
 	}
 	if wp, ok := b.agent.(WorkspaceProvider); ok && wp.Workspace() != "" {
@@ -879,12 +879,12 @@ func (b *Bot) runDocument(ctx context.Context, chatID int64, request channel.Req
 
 	file, err := b.client.GetFile(ctx, doc.FileID)
 	if err != nil {
-		b.reply(ctx, chatID, "Could not fetch document: "+err.Error())
+		b.reply(ctx, chatID, "Could not fetch document.")
 		return
 	}
 	data, err := b.client.DownloadFile(ctx, file.FilePath)
 	if err != nil {
-		b.reply(ctx, chatID, "Could not download document: "+err.Error())
+		b.reply(ctx, chatID, "Could not download document.")
 		return
 	}
 
@@ -1038,10 +1038,11 @@ func (b *Bot) keepTyping(ctx context.Context, chatID int64, done <-chan struct{}
 }
 
 func formatRunFailure(err error) string {
+	redacted := channel.Redact(err.Error(), nil)
 	if channel.IsAuthError(err) || errors.Is(err, channel.ErrBusy) || errors.Is(err, context.Canceled) {
-		return "Run failed: " + channel.NaturalError(err, "en")
+		return "Run failed: " + channel.NaturalError(err, "en") + " (" + redacted + ")"
 	}
-	return "Run failed: " + channel.NaturalError(err, "en")
+	return "Run failed: " + redacted
 }
 
 // runWithCard runs one turn behind the single-run gate and mirrors progress
@@ -1107,7 +1108,7 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 	if statusMessage.MessageID == 0 {
 		// No card to edit: deliver the failure or the answer directly.
 		if runErr != nil {
-			b.replyMarkdown(ctx, chatID, channel.RedactForChannel(formatRunFailure(runErr)))
+			b.replyMarkdown(ctx, chatID, channel.Redact(formatRunFailure(runErr), nil))
 			return
 		}
 		if strings.TrimSpace(answer) != "" && channel.Silent(answer) {
@@ -1155,95 +1156,66 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 // byte cap so a converted Markdown body never trips it.
 const telegramChunkLimit = 3800
 
-// telegramSendChunkLimit is the ceiling for converted HTML chunks. The old
-// raw-Markdown limit above assumed a couple of wrappers: after the escape
-// pass an ampersand-heavy chunk can grow thousands of bytes past it, and the
-// conversion-time clamp then cut the tail without a sound.
-const telegramSendChunkLimit = 3800
-
-// nextHTMLChunk splits converted HTML to fit the limit, preferring a tag
-// boundary (a '<' or a '>' followed by '<') so one chunk never leaves an
-// unclosed tag behind: an unclosed tag is exactly what the plain-text
-// fallback turns into a lost second send.
-func nextHTMLChunk(text string, limit int) (string, string) {
-	if len(text) <= limit {
-		return text, ""
-	}
-	cut := limit
-	// Never cut inside a multi-byte character.
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	// Walk back to a tag boundary so every chunk stays balanced HTML.
-	best := -1
-	for index := cut; index > 0 && index > cut-512; index-- {
-		if text[index] == '<' {
-			best = index
-			break
-		}
-		if text[index] != '<' && index+1 < len(text) && text[index+1] == '<' {
-			best = index + 1
-			break
-		}
-	}
-	if best > limit/2 {
-		cut = best
-	}
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	if cut <= 0 {
-		cut = limit
-		for cut > 0 && !utf8.RuneStart(text[cut]) {
-			cut--
-		}
-	}
-	return text[:cut], strings.TrimLeft(text[cut:], "\n")
-}
-
 // replyMarkdown sends Markdown text, split into Telegram-sized messages so a
 // long answer arrives whole instead of being truncated at the cap.
 //
-// The split runs on the converted HTML, not on the raw Markdown: the escape
-// pass expands (ampersands become five bytes each, every line gains tags),
-// so a chunk cut at 3800 raw bytes could convert past the 4096 ceiling and
-// the tail clamp then dropped the overflow without a sound. Entities are
-// never split: nextChunk only cuts at a rune boundary, and an HTML entity is
-// ASCII.
+// Each chunk is split on raw Markdown and sized so its converted Telegram HTML
+// never exceeds telegramChunkLimit, keeping tags and HTML entities balanced in
+// every message.
 func (b *Bot) replyMarkdown(ctx context.Context, chatID int64, text string) {
+	text = channel.Redact(text, nil)
 	sendCtx := ctx
 	if sendCtx == nil || sendCtx.Err() != nil {
 		var cancel context.CancelFunc
 		sendCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 	}
-	rest := strings.TrimSpace(markdownToTelegramHTML(text))
-	for len(rest) > 0 {
-		var part string
-		part, rest = nextHTMLChunk(rest, telegramSendChunkLimit)
-		if _, err := b.client.SendHTML(sendCtx, chatID, part, nil); err != nil {
+	for len(text) > 0 {
+		part, rest := nextChunk(text, telegramChunkLimit)
+		text = rest
+		if _, err := b.client.SendMarkdown(sendCtx, chatID, part, nil); err != nil {
 			b.logf("send failed: %v", err)
 		}
 	}
 }
 
-// nextChunk splits text into a part under limit bytes and the remainder. The
-// cut lands on a rune boundary, which Telegram requires, and prefers a line
-// boundary near the limit so a sentence is not split mid-line when a newline is
-// close. The newline itself stays with the next part: the renderer trims a
-// trailing newline, so keeping it here would drop it.
+// nextChunk splits text into a part under limit bytes (both raw and after
+// Telegram HTML conversion) and the remainder. The cut lands on a rune
+// boundary, which Telegram requires, and prefers a line boundary near the limit
+// so a sentence is not split mid-line when a newline is close. The newline
+// itself stays with the next part: the renderer trims a trailing newline, so
+// keeping it here would drop it.
 func nextChunk(text string, limit int) (string, string) {
-	if len(text) <= limit {
+	if len(text) <= limit && (limit < 64 || len(markdownToTelegramHTML(text)) <= limit) {
 		return text, ""
 	}
-	cut := limit
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
+	capBytes := limit
+	if capBytes > len(text) {
+		capBytes = len(text)
 	}
-	if index := strings.LastIndexByte(text[:cut], '\n'); index > 0 && index > cut/2 {
-		cut = index
+	for {
+		cut := capBytes
+		for cut > 0 && cut < len(text) && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+		if index := strings.LastIndexByte(text[:cut], '\n'); index > 0 && index > cut/2 {
+			cut = index
+		}
+		if cut <= 0 {
+			_, width := utf8.DecodeRuneInString(text)
+			if width <= 0 {
+				width = 1
+			}
+			return text[:width], text[width:]
+		}
+		if limit < 64 || len(markdownToTelegramHTML(text[:cut])) <= limit || cut <= 16 {
+			return text[:cut], text[cut:]
+		}
+		capBytes = (cut * 3) / 4
+		if capBytes < 16 {
+			capBytes = 16
+		}
 	}
-	return text[:cut], text[cut:]
 }
 
 // capCardLines keeps the newest lines within limit bytes, dropping the oldest so
@@ -1453,7 +1425,7 @@ func (b *Bot) reply(ctx context.Context, chatID int64, text string) {
 	// prefixes) could reach the chat unredacted: those strings never pass
 	// through the answer redaction, so every line crosses RedactForChannel
 	// on the way out.
-	text = channel.RedactForChannel(text)
+	text = channel.Redact(text, nil)
 	sendCtx := ctx
 	if sendCtx == nil || sendCtx.Err() != nil {
 		var cancel context.CancelFunc

@@ -149,3 +149,34 @@ func uppercase(value string) string {
 	}
 	return string(result)
 }
+
+func TestLoadAcceptsRetiredThemeKeyAndRejectsTypos(t *testing.T) {
+	t.Setenv(EnvHome, t.TempDir())
+	path, err := Path()
+	if err != nil {
+		t.Fatalf("Path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	// Retired "theme" alongside valid keys must load cleanly.
+	if err := os.WriteFile(path, []byte(`{"version":1,"defaultModel":"gpt-5.4","theme":"dark"}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load with retired theme key failed: %v", err)
+	}
+	if cfg.DefaultModel != "gpt-5.4" {
+		t.Errorf("DefaultModel = %q, want gpt-5.4", cfg.DefaultModel)
+	}
+
+	// Typo'd key ("max_steps" instead of "maxSteps") must fail closed.
+	if err := os.WriteFile(path, []byte(`{"version":1,"max_steps":20}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(); err == nil {
+		t.Errorf("expected Load to fail on unknown field max_steps")
+	}
+}

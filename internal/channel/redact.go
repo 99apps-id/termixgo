@@ -31,7 +31,7 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`xox[baprs]-[A-Za-z0-9-]{10,}`),
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 	regexp.MustCompile(`AIza[0-9A-Za-z_-]{30,}`),
-	regexp.MustCompile(`\b[0-9]{8,10}:[A-Za-z0-9_-]{30,}\b`),
+	regexp.MustCompile(`(?:\bbot|\b)[0-9]{8,10}:[A-Za-z0-9_-]{30,}\b`),
 	regexp.MustCompile(`eyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`),
 	regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`),
 }

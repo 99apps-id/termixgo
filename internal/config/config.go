@@ -287,26 +287,25 @@ var retiredConfigKeys = map[string]bool{
 	"theme":    true,
 }
 
-// rejectUnknownConfigKeys fails on a typo'd top-level key while still
-// accepting the retired shape: it decodes once strictly into the known
-// struct, and only when that fails checks whether every top-level key is a
-// retired field before returning the decode error.
+// rejectUnknownConfigKeys fails on a typo'd key while still accepting the
+// retired top-level keys ("theme", etc.): it strips any retired keys from a
+// shallow copy of the top-level object and then decodes strictly with
+// DisallowUnknownFields.
 func rejectUnknownConfigKeys(data []byte) error {
-	decoder := json.NewDecoder(strings.NewReader(string(data)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&Config{}); err != nil {
-		var raw map[string]json.RawMessage
-		if json.Unmarshal(data, &raw) != nil {
-			return err
-		}
-		for key := range raw {
-			if !retiredConfigKeys[key] {
-				return err
-			}
-		}
-		return nil
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
 	}
-	return nil
+	for key := range retiredConfigKeys {
+		delete(raw, key)
+	}
+	cleaned, err := json.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(cleaned)))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(&Config{})
 }
 
 // Default returns the configuration a fresh install starts from.
@@ -390,7 +389,7 @@ func Save(cfg Config) error {
 	}
 	defer unlockConfigFile(lockFile)
 	cfg.Version = 1
-	data, err := json.MarshalIndent(cfg, " ", " ")
+	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode config: %w", err)
 	}

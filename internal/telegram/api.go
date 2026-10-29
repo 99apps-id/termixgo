@@ -275,7 +275,11 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, key
 // The caller owns chunking: SendMarkdown truncates at the ceiling, which is
 // the right shape for a single capped send but not for a multi-part answer.
 func (c *Client) SendHTML(ctx context.Context, chatID int64, html string, keyboard *InlineKeyboard) (Message, error) {
-	return c.sendMessage(ctx, chatID, html, keyboard, "HTML")
+	message, err := c.sendMessage(ctx, chatID, html, keyboard, "HTML")
+	if err != nil && isParseError(err) {
+		return c.sendMessage(ctx, chatID, html, keyboard, "")
+	}
+	return message, err
 }
 
 func (c *Client) SendMarkdown(ctx context.Context, chatID int64, markdown string, keyboard *InlineKeyboard) (Message, error) {

@@ -321,3 +321,29 @@ func TestVoiceMessageTranscribesAndRunsPrompt(t *testing.T) {
 		t.Errorf("prompt = %q, want transcribed text", got)
 	}
 }
+
+func TestNextChunkBoundsExpandedHTMLAndReplyRedactsSecrets(t *testing.T) {
+	// 3000 ampersands would expand to 15000 bytes of "&amp;" in HTML if
+	// nextChunk only checked the raw byte length.
+	amps := strings.Repeat("a & b\n", 600)
+	part, rest := nextChunk(amps, telegramChunkLimit)
+	if rest == "" {
+		t.Fatalf("expected ampersand-heavy text to be split")
+	}
+	if htmlLen := len(markdownToTelegramHTML(part)); htmlLen > telegramChunkLimit {
+		t.Errorf("converted HTML chunk length = %d, want <= %d", htmlLen, telegramChunkLimit)
+	}
+
+	api := newRecordingAPI(t)
+	bot := New("123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw", &scriptedAgent{})
+	bot.client = api.client()
+	bot.reply(context.Background(), 7, "failed at https://api.telegram.org/bot123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/getFile")
+	sent := api.calls("sendMessage")
+	if len(sent) == 0 {
+		t.Fatalf("expected sendMessage call")
+	}
+	text, _ := sent[len(sent)-1]["text"].(string)
+	if strings.Contains(text, "AAHdqTcv") {
+		t.Errorf("bot token leaked into reply: %q", text)
+	}
+}
