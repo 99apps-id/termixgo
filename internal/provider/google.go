@@ -45,16 +45,24 @@ func (c *googleClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 	}
 	if supportsThoughts(req.Model) {
 		generation["thinkingConfig"] = map[string]any{"includeThoughts": true}
-		if level := googleEffort(req.Effort); level != "" {
-			// Gemini 3 takes a named level. Sending thinkingLevel and
-			// thinkingBudget together would be worse than sending neither: the
-			// API rejects the pair.
+		if level := googleEffort(req.Effort); level != "" && !isGemini25(req.Model) {
+			// Only Gemini 3 takes a named level: the 2.5 series answers one
+			// with an error, and on 2.5 a set effort travels as a token
+			// budget below instead. Sending thinkingLevel and thinkingBudget
+			// together would be worse than sending neither: the API rejects
+			// the pair.
 			thinking := generation["thinkingConfig"].(map[string]any)
 			thinking["thinkingLevel"] = level
 		}
-	} else if budget := googleThinkingBudget(req.Effort); budget > 0 {
+	}
+	if budget := googleThinkingBudget(req.Effort); budget > 0 && isGemini25(req.Model) {
 		// The 2.5 series predates thinkingLevel and answers a named level with
-		// an error, so a level becomes a token budget instead.
+		// an error, so a level becomes a token budget instead. Flash's
+		// documented ceiling is lower than Pro's, and a budget past it is a
+		// hard 400, not a hint.
+		if strings.Contains(req.Model, "flash") && budget > flashThinkingBudgetMax {
+			budget = flashThinkingBudgetMax
+		}
 		generation["thinkingConfig"] = map[string]any{"thinkingBudget": budget}
 	}
 	if req.MaxTokens > 0 {
@@ -89,6 +97,11 @@ func (c *googleClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 		var chunk googleChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
+		}
+		if chunk.Error != nil && strings.TrimSpace(chunk.Error.Message) != "" {
+			// A mid-feed error frame carried on a 200 response is a failure
+			// like every sibling provider reports it, not an empty answer.
+			return wrapStreamError("Google", fmt.Errorf("Google reported an error (code %d %s): %s", chunk.Error.Code, chunk.Error.Status, chunk.Error.Message))
 		}
 		if chunk.UsageMetadata != nil {
 			current := Usage{
@@ -154,8 +167,24 @@ func googleModelPath(model string) string {
 
 // supportsThoughts reports whether a model accepts the includeThoughts flag;
 // sending it to an older model is a hard request error.
+// flashThinkingBudgetMax is the documented ceiling for a 2.5 Flash model;
+// a larger budget is a hard request error, not a hint.
+const flashThinkingBudgetMax = 24576
+
+// supportsThoughts reports whether a model accepts includeThoughts. Both
+// the 3 series and the 2.5 series speak it. A named thinkingLevel is newer:
+// only Gemini 3 takes one, while on the 2.5 series a set effort travels as a
+// token budget instead.
 func supportsThoughts(model string) bool {
-	return strings.Contains(model, "2.5") || strings.Contains(model, "gemini-3") || strings.Contains(model, "3-pro") || strings.Contains(model, "3-flash")
+	return strings.Contains(model, "gemini-3") || strings.Contains(model, "-3-pro") ||
+		strings.Contains(model, "-3-flash") || strings.Contains(model, "-3-lite") ||
+		isGemini25(model)
+}
+
+// isGemini25 reports whether a model id names the Gemini 2.5 series, which
+// thinks in token budgets rather than named levels.
+func isGemini25(model string) bool {
+	return strings.Contains(model, "2.5")
 }
 
 func encodeGoogleTools(tools []ToolDef) []map[string]any {
@@ -272,6 +301,16 @@ type googleChunk struct {
 		} `json:"content"`
 		FinishReason string `json:"finishReason"`
 	} `json:"candidates"`
+	// Gemini's REST error shape: a stream that starts 200 can still carry an
+	// error frame mid-feed, which the old parser skipped as an ordinary
+	// frame and reported as a completed-but-empty turn.
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Status  string `json:"status"`
+	} `json:"error"`
+	// A stream reports usage either way: usageMetadata is present on
+	// every frame.
 	UsageMetadata *struct {
 		PromptTokenCount        int `json:"promptTokenCount"`
 		CandidatesTokenCount    int `json:"candidatesTokenCount"`

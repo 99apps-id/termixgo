@@ -144,6 +144,13 @@ func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers ma
 		}
 	}
 
+	// The withheld tag head reaches the end only when the tag never closes:
+	// what could have been a tag is then ordinary text, and it is reported
+	// as such instead of dropped.
+	if err := thinkFilter.flush(emit); err != nil {
+		return err
+	}
+
 	for _, call := range accumulator.finish() {
 		if err := emit(StreamEvent{Type: EventToolCall, ToolCall: &call}); err != nil {
 			return err
@@ -268,18 +275,61 @@ func extraHeaders(headers map[string]string, providerID string) {
 // and emits thinking tokens as EventReasoningDelta.
 type thinkTagFilter struct {
 	inThink bool
+	// carry holds a trailing run of bytes that could be the head of a tag
+	// once the next chunk lands. Tags are matched against the joined stream,
+	// so a split "<thi" | "nk>" no longer ships its tail as literal text,
+	// and the same holds for the closing tag: the rest of the turn is never
+	// misrouted into reasoning on a chunk boundary.
+	carry string
+}
+
+// thinkTagPartialMax is the longest suffix withheld for more bytes: the tag
+// head plus one byte of lookahead past the longest proper prefix.
+const thinkTagPartialMax = len("</think>") - 1
+
+// thinkTagHeadSuffix reports the longest suffix of text (up to
+// thinkTagPartialMax bytes) that is a proper prefix of one of the two tags.
+// Those bytes await the next chunk before anything can judge them.
+func thinkTagHeadSuffix(text string) string {
+	for _, tag := range []string{"<think>", "</think>"} {
+		max := thinkTagPartialMax
+		if len(text) < max {
+			max = len(text)
+		}
+		for size := max; size > 0; size-- {
+			if strings.HasPrefix(tag, text[len(text)-size:]) {
+				return text[len(text)-size:]
+			}
+		}
+	}
+	return ""
+}
+
+// thinkTagEmitHead emits everything except a withheld tag-head suffix and
+// stashes the suffix in the carry buffer.
+func (f *thinkTagFilter) thinkTagEmitHead(remaining string, emit func(StreamEvent) error, kind StreamEventType) error {
+	head := thinkTagHeadSuffix(remaining)
+	if head != "" {
+		f.carry = head
+		remaining = remaining[:len(remaining)-len(head)]
+	}
+	if remaining == "" {
+		return nil
+	}
+	return emit(StreamEvent{Type: kind, Text: remaining})
 }
 
 func (f *thinkTagFilter) process(text string, emit func(StreamEvent) error) error {
-	if text == "" {
+	if text == "" && f.carry == "" {
 		return nil
 	}
-	remaining := text
+	remaining := f.carry + text
+	f.carry = ""
 	for len(remaining) > 0 {
 		if !f.inThink {
 			idx := strings.Index(remaining, "<think>")
 			if idx == -1 {
-				return emit(StreamEvent{Type: EventTextDelta, Text: remaining})
+				return f.thinkTagEmitHead(remaining, emit, EventTextDelta)
 			}
 			if idx > 0 {
 				if err := emit(StreamEvent{Type: EventTextDelta, Text: remaining[:idx]}); err != nil {
@@ -291,7 +341,7 @@ func (f *thinkTagFilter) process(text string, emit func(StreamEvent) error) erro
 		} else {
 			idx := strings.Index(remaining, "</think>")
 			if idx == -1 {
-				return emit(StreamEvent{Type: EventReasoningDelta, Text: remaining})
+				return f.thinkTagEmitHead(remaining, emit, EventReasoningDelta)
 			}
 			if idx > 0 {
 				if err := emit(StreamEvent{Type: EventReasoningDelta, Text: remaining[:idx]}); err != nil {
@@ -303,6 +353,21 @@ func (f *thinkTagFilter) process(text string, emit func(StreamEvent) error) erro
 		}
 	}
 	return nil
+}
+
+// flush releases bytes withheld in the carry buffer. Without it the last
+// chunk's trailing head of a tag the stream never completed would have been
+// dropped without a sound instead of reported as the text it is.
+func (f *thinkTagFilter) flush(emit func(StreamEvent) error) error {
+	if f.carry == "" {
+		return nil
+	}
+	carry := f.carry
+	f.carry = ""
+	if f.inThink {
+		return emit(StreamEvent{Type: EventReasoningDelta, Text: carry})
+	}
+	return emit(StreamEvent{Type: EventTextDelta, Text: carry})
 }
 
 // openAIDelta is one streamed delta. reasoning_content is DeepSeek's field,

@@ -221,3 +221,13 @@ func TestRedactHidesShortSecretLength(t *testing.T) {
 		t.Errorf("short secrets must share one fixed mask, got %q and %q", got, Redact("abcdefgh"))
 	}
 }
+
+// TestRedactRevealsAtMostFourCharacters pins the masking contract: a long
+// secret shows exactly two leading and two trailing characters under a fixed
+// six-asterisk mask, which is also how a reviewer checks the right key is
+// the one being redacted.
+func TestRedactRevealsAtMostFourCharacters(t *testing.T) {
+	if got := Redact("sk-1234567890abcdef"); got != "sk******ef" {
+		t.Errorf("Redact = %q, want %q", got, "sk******ef")
+	}
+}

@@ -140,10 +140,26 @@ func TestRoutingModelsHaveNoListPrice(t *testing.T) {
 func TestLocalModelsAreFreeAndKnown(t *testing.T) {
 	// A local model costs nothing, but that is a fact about the model rather
 	// than a gap in the table, so a budget line must be able to say "free"
-	// rather than "unknown".
+	// rather than "unknown". The catalogue also carries cloud-hosted entries
+	// served from the same provider id (ollama's cloud models run on a paid
+	// remote plan, not on the operator's hardware), and those must never
+	// read as free: a zero price there disables the budget for real spend.
 	locals := 0
 	for _, model := range Models() {
 		if !IsLocal(model.Provider) {
+			continue
+		}
+		cloud := false
+		for _, tag := range model.Tags {
+			if tag == "cloud" {
+				cloud = true
+				break
+			}
+		}
+		if cloud {
+			if model.Free() {
+				t.Errorf("%s is a cloud model and must not report as free", model.ID)
+			}
 			continue
 		}
 		locals++

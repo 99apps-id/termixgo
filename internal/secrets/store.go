@@ -123,6 +123,30 @@ func (s *Store) Get(key string) string {
 // Has reports whether a non-empty secret is stored.
 func (s *Store) Has(key string) bool { return strings.TrimSpace(s.Get(key)) != "" }
 
+// Reload reads one key straight from the file, bypassing the in-memory map.
+// The file is shared by every Termixgo process on the machine: another
+// process may have rotated a token since this store loaded, and the merge in
+// save only protects writes. A caller that must distrust its own memory
+// (a permanent invalid_grant on a rotated refresh token) reads the disk.
+func (s *Store) Reload(key string) (string, bool) {
+	s.mu.Lock()
+	path := s.path
+	s.mu.Unlock()
+	if strings.TrimSpace(path) == "" {
+		return "", false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	merged := map[string]string{}
+	if err := json.Unmarshal(raw, &merged); err != nil {
+		return "", false
+	}
+	value, ok := merged[key]
+	return value, ok
+}
+
 // Set writes a secret and persists the file at 0600.
 func (s *Store) Set(key, value string) error {
 	s.mu.Lock()
@@ -297,9 +321,10 @@ func rejectPrototypePollution(data map[string]string) {
 	}
 }
 
-// Redact renders a secret for display: prefix, dots, suffix. It never reveals
-// more than four characters of the value, and the mask is a fixed width so
-// even the length of a short secret stays hidden.
+// Redact renders a secret for display: a two-character prefix and a
+// two-character suffix joined by a fixed-width mask. It reveals exactly what
+// its comment says (no more than four characters), and the fixed mask keeps
+// even the length of a short secret hidden.
 func Redact(value string) string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -308,7 +333,7 @@ func Redact(value string) string {
 	if len(trimmed) <= 8 {
 		return "********"
 	}
-	return trimmed[:4] + strings.Repeat("*", 6) + trimmed[len(trimmed)-2:]
+	return trimmed[:2] + strings.Repeat("*", 6) + trimmed[len(trimmed)-2:]
 }
 
 // appendNewline returns a copy of data with a trailing newline, allocated on a

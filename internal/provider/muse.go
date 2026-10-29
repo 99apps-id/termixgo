@@ -68,6 +68,12 @@ func (c *museClient) Stream(ctx context.Context, req ChatRequest, emit func(Stre
 	response, err := c.sendWithRetry(ctx, key, payload)
 	if err == nil {
 		defer response.Body.Close()
+		// The re-auth path reports headers, but this healthy path ignored
+		// them: the gauge's header signal only fired on a token refresh,
+		// which is the opposite of the turns that matter.
+		if rl := ParseGenericRateLimit(response.Header); rl != nil {
+			_ = emit(StreamEvent{Type: EventRateLimit, RateLimit: rl})
+		}
 		return decodeResponsesStream(c.info.Label, response.Body, emit)
 	}
 

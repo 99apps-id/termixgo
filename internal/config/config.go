@@ -278,6 +278,37 @@ type Config struct {
 	Hooks []Hook `json:"hooks,omitempty"`
 }
 
+// retiredConfigKeys are fields the loader accepts but no longer writes: the
+// load carries them forward through the struct round trip instead of failing
+// the install they documented. "channels" is the flat pre-registry shape,
+// "theme" is the terminal preference that moved into the UI state.
+var retiredConfigKeys = map[string]bool{
+	"channels": true,
+	"theme":    true,
+}
+
+// rejectUnknownConfigKeys fails on a typo'd top-level key while still
+// accepting the retired shape: it decodes once strictly into the known
+// struct, and only when that fails checks whether every top-level key is a
+// retired field before returning the decode error.
+func rejectUnknownConfigKeys(data []byte) error {
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&Config{}); err != nil {
+		var raw map[string]json.RawMessage
+		if json.Unmarshal(data, &raw) != nil {
+			return err
+		}
+		for key := range raw {
+			if !retiredConfigKeys[key] {
+				return err
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
 // Default returns the configuration a fresh install starts from.
 func Default() Config {
 	return Config{
@@ -319,6 +350,16 @@ func Load() (Config, error) {
 	// or sensitive credentials/pairing-codes left by older versions or loose umasks.
 	_ = os.Chmod(path, 0o600)
 	cfg := Default()
+	// Unknown fields are rejected rather than dropped: a hand edit with a
+	// typo'd key ("maxsteps") used to parse into the defaults and the next
+	// save silently rewrote the operator's value away, which is how the file
+	// showed one thing and the app ran another. The reject runs against a
+	// trimmed copy of the known shape so a removed field keeps loading
+	// while it is carried forward: persistence never destroys what it no
+	// longer names.
+	if err := rejectUnknownConfigKeys(data); err != nil {
+		return Default(), fmt.Errorf("parse config %s: %w", path, err)
+	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Default(), fmt.Errorf("parse config %s: %w", path, err)
 	}
@@ -335,8 +376,21 @@ func Save(cfg Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
+	// The save is serialised against sibling processes the way the secrets
+	// store is: the tmp name is shared, and without the lock two writers
+	// interleave (A writes, B writes, A renames, B renames) and the first
+	// writer's bytes lose silently while both calls report success.
+	lockFile, lockErr := openConfigLock(filepath.Dir(path))
+	if lockErr != nil {
+		return fmt.Errorf("lock config: %w", lockErr)
+	}
+	defer lockFile.Close()
+	if lockErr := lockConfigFile(lockFile); lockErr != nil {
+		return fmt.Errorf("lock config: %w", lockErr)
+	}
+	defer unlockConfigFile(lockFile)
 	cfg.Version = 1
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := json.MarshalIndent(cfg, " ", " ")
 	if err != nil {
 		return fmt.Errorf("encode config: %w", err)
 	}

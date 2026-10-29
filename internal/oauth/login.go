@@ -268,6 +268,15 @@ func ForceRefreshToken(ctx context.Context, store *Store, provider string) strin
 		if provider == "muse" && strings.TrimSpace(token.Access) != "" {
 			return token.Access
 		}
+		// An invalid_grant can be another process's stale refresh token, not
+		// this install's: secrets.json is shared across processes, so a CLI
+		// or cron run that rotated the token elsewhere first makes this
+		// process replay the old one. A delete here then removed the other
+		// process's valid login from the whole install. Only distrust what is
+		// still on disk.
+		if current, ok := store.Reload(provider); ok && current.Refresh != token.Refresh {
+			return current.Access
+		}
 		_ = store.Delete(provider)
 		return ""
 	}

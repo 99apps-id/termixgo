@@ -181,13 +181,22 @@ func parse(text string) (description, body string) {
 		return "", trimmed
 	}
 	rest := strings.TrimSpace(trimmed[len(delimiter):])
-	end := strings.Index(rest, delimiter)
+	// The divider is a whole line, like the skill parser reads it: a value
+	// such as `description: deploy---hotfix` used to close the frontmatter
+	// mid-value and the fallback then served the divider's tail as the body.
+	end := strings.Index(rest, "\n"+delimiter)
 	if end < 0 {
 		return "", trimmed
 	}
+	// The divider line is only dashes: a trailing run on the same line
+	// (five or more) is a longer rule, not the divider.
+	after := end + 1 + len(delimiter)
+	for after < len(rest) && rest[after] == '-' {
+		after++
+	}
 	var front Frontmatter
 	if err := yaml.Unmarshal([]byte(rest[:end]), &front); err != nil {
-		return "", strings.TrimSpace(rest[end+len(delimiter):])
+		return "", strings.TrimSpace(rest[after:])
 	}
-	return strings.TrimSpace(front.Description), strings.TrimSpace(rest[end+len(delimiter):])
+	return strings.TrimSpace(front.Description), strings.TrimSpace(rest[after:])
 }

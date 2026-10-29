@@ -99,6 +99,16 @@ var pricingTable = map[string]Pricing{
 	"glm-5.2":       {InputPerMillion: 0.40, OutputPerMillion: 2.00},
 	"glm-4.7":       {InputPerMillion: 0.60, OutputPerMillion: 2.20},
 
+	// Ollama cloud. The wire names match the vendors above: the ollama cloud
+	// copies (with an `ollama/` prefix) bill at the same list rates rather
+	// than inventing host-specific figures.
+	"ollama/glm-5.3-flash":       {InputPerMillion: 0.15, OutputPerMillion: 0.50},
+	"ollama/deepseek-v4.1-flash": {InputPerMillion: 0.30, OutputPerMillion: 1.20},
+	"ollama/minimax-m3.1-flash":  {InputPerMillion: 0.30, OutputPerMillion: 1.20},
+	"ollama/minimax-m3":          {InputPerMillion: 0.30, OutputPerMillion: 1.20},
+	"ollama/kimi-k2.7-code":      {InputPerMillion: 0.95, OutputPerMillion: 4.00},
+	"ollama/nemotron-3-ultra":    {InputPerMillion: 0.95, OutputPerMillion: 4.00},
+
 	// Alibaba Qwen.
 	"qwen3.8-max":   {InputPerMillion: 2.00, OutputPerMillion: 6.00},
 	"qwen3.8-27b":   {InputPerMillion: 0.50, OutputPerMillion: 3.00},
@@ -348,7 +358,21 @@ func (m Model) CostModel(overrides map[string]Pricing) (Pricing, bool) {
 
 // Free reports whether the model runs locally, where tokens cost nothing
 // beyond electricity.
-func (m Model) Free() bool { return localProviders[m.Provider] }
+//
+// The ollama catalogue carries cloud-hosted entries alongside the local
+// ones: inference for those runs on a paid remote plan, so they are priced
+// like any other remote model and a cost budget can still trip on them.
+func (m Model) Free() bool {
+	if !localProviders[m.Provider] {
+		return false
+	}
+	for _, tag := range m.Tags {
+		if strings.EqualFold(tag, "cloud") {
+			return false
+		}
+	}
+	return true
+}
 
 // OverridesFrom converts the configured price list into the shape the resolver
 // takes. A nil result means the operator has configured nothing, which keeps

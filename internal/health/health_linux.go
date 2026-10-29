@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,13 +124,44 @@ func Collect(dir string) Report {
 	return r
 }
 
+// logReadCap bounds how much of a rotating log one health check reads. The
+// auth and kernel logs on a public VPS grow by megabytes a day under scan
+// traffic, and the old whole-file reads charged every one of those bytes to a
+// machine the project budgets at two gigabytes.
+const logReadCap = 8 * 1024 * 1024
+
+// readLogTail reads at most the last logReadCap bytes of a file: anomalies
+// are recent by definition, and the head of a rotated log is the least
+// interesting part of it.
+func readLogTail(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	offset := int64(0)
+	if info.Size() > logReadCap {
+		offset = info.Size() - logReadCap
+	}
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(io.LimitReader(file, logReadCap))
+}
+
 func checkKernelLogs(r *Report) {
 	// Check dmesg or /var/log/dmesg for OOM kills (best effort)
 	cmd := exec.Command("dmesg", "-T")
 	out, err := cmd.Output()
 	if err != nil {
 		// Fall back to reading /var/log/dmesg if dmesg is restricted
-		out, _ = os.ReadFile("/var/log/dmesg")
+		out, _ = readLogTail("/var/log/dmesg")
+	} else if int64(len(out)) > logReadCap {
+		out = out[len(out)-logReadCap:]
 	}
 	if len(out) > 0 {
 		oomMatches := strings.Count(string(out), "Out of memory: Kill process")
@@ -139,7 +171,7 @@ func checkKernelLogs(r *Report) {
 
 	// Check auth.log for ssh protocol mismatch if readable
 	for _, logPath := range []string{"/var/log/auth.log", "/var/log/secure"} {
-		if data, err := os.ReadFile(filepath.Clean(logPath)); err == nil {
+		if data, err := readLogTail(filepath.Clean(logPath)); err == nil {
 			r.AuthAnomalies = strings.Count(string(data), "Did not receive identification string") +
 				strings.Count(string(data), "Bad protocol version identification")
 			break

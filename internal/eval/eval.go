@@ -237,8 +237,16 @@ func (r *Runner) runTask(ctx context.Context, task Task) TaskResult {
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Write fixture files.
+	// Write fixture files. The suite file is operator-authored data, so the
+	// rel paths are contained inside the temp dir: a shared suite whose
+	// fixture reads "../../.bashrc" would otherwise write outside the
+	// sandbox through the plain join.
 	for relPath, content := range task.Files {
+		if !validFixturePath(relPath) {
+			res.Error = fmt.Sprintf("fixture %q escapes the task workspace", relPath)
+			res.DurationMS = time.Since(start).Milliseconds()
+			return res
+		}
 		fullPath := filepath.Join(tempDir, relPath)
 		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
 			res.Error = fmt.Sprintf("mkdir %s: %v", relPath, err)
@@ -302,21 +310,43 @@ func (r *Runner) runTask(ctx context.Context, task Task) TaskResult {
 	res.CostUSD = cost
 	res.ToolsUsed = toolsUsed
 
-	// Run verification command.
-	verifyOut, verifyErr := runVerifyCommand(taskCtx, tempDir, task.VerifyCmd)
-	res.VerifyOutput = verifyOut
-	if verifyErr == nil {
-		if task.ExpectedOut == "" || strings.Contains(verifyOut, task.ExpectedOut) {
-			res.Passed = true
-		} else {
-			res.Error = fmt.Sprintf("verification output missing expected substring %q", task.ExpectedOut)
-		}
+	// Run verification command. A task that names nothing to check is not a
+	// task the runner can call verified: without the verify command one
+	// prompt-only task inflated the whole suite's pass rate by default.
+	if strings.TrimSpace(task.VerifyCmd) == "" {
+		res.Error = "the task has no verify_cmd, so it cannot pass"
 	} else {
-		res.Error = fmt.Sprintf("verification command failed: %v", verifyErr)
+		verifyOut, verifyErr := runVerifyCommand(taskCtx, tempDir, task.VerifyCmd)
+		res.VerifyOutput = verifyOut
+		if verifyErr == nil {
+			if task.ExpectedOut == "" || strings.Contains(verifyOut, task.ExpectedOut) {
+				res.Passed = true
+			} else {
+				res.Error = fmt.Sprintf("verification output missing expected substring %q", task.ExpectedOut)
+			}
+		} else {
+			res.Error = fmt.Sprintf("verification command failed: %v", verifyErr)
+		}
 	}
 
 	res.DurationMS = time.Since(start).Milliseconds()
 	return res
+}
+
+// validFixturePath keeps a suite fixture inside its temp workspace. An
+// absolute path or a parent segment would leave the sandbox the runner
+// promises, through nothing the temp dir removal later undoes.
+func validFixturePath(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" || filepath.IsAbs(trimmed) {
+		return false
+	}
+	for _, segment := range strings.Split(filepath.ToSlash(trimmed), "/") {
+		if segment == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func initGitRepo(dir string) {

@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
@@ -23,7 +24,12 @@ import (
 type httpClient struct {
 	info    Provider
 	baseURL string
-	apiKey  string
+	// keyMu guards apiKey: quota fetchers refresh it on a background
+	// goroutine (app fires RefreshQuota mid-turn) while the streaming turn
+	// holds a reference on the same client, and an unsynchronised
+	// write-back raced the reads every quota refresh.
+	keyMu  sync.Mutex
+	apiKey string
 	// accountID is the provider-side account a Codex token belongs to, sent in
 	// the ChatGPT-Account-ID header. Empty for every other provider.
 	accountID       string
@@ -50,10 +56,14 @@ func (c *httpClient) SetForceKeyResolver(fn KeyResolver) { c.forceResolveKey = f
 func (c *httpClient) currentKey() string {
 	if c.resolveKey != nil {
 		if fresh := strings.TrimSpace(c.resolveKey(c.info.ID)); fresh != "" {
+			c.keyMu.Lock()
 			c.apiKey = fresh
+			c.keyMu.Unlock()
 			return fresh
 		}
 	}
+	c.keyMu.Lock()
+	defer c.keyMu.Unlock()
 	return c.apiKey
 }
 
@@ -61,7 +71,9 @@ func (c *httpClient) currentKey() string {
 func (c *httpClient) refreshKey() string {
 	if c.forceResolveKey != nil {
 		if fresh := strings.TrimSpace(c.forceResolveKey(c.info.ID)); fresh != "" {
+			c.keyMu.Lock()
 			c.apiKey = fresh
+			c.keyMu.Unlock()
 			return fresh
 		}
 	}
@@ -162,8 +174,8 @@ func (e *providerStatusError) Error() string {
 	switch e.status {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		hint = " (check the API key with /setup)"
-	case http.StatusTooManyRequests:
-		hint = " (rate limited; retry shortly)"
+	case http.StatusTooManyRequests, 529:
+		hint = " (the provider is overloaded or rate limited; retry shortly)"
 	case http.StatusNotFound:
 		hint = " (check the model id and base URL)"
 	}

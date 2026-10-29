@@ -118,9 +118,14 @@ func (c *httpClient) postWithStall(ctx context.Context, url string, headers map[
 }
 
 // retryableStatus reports whether a status is worth another attempt.
+//
+// 529 is Anthropic's documented overload status: the same transient class
+// as 503, which already retries, and one attempt for the only signal the
+// provider gives under load is not a policy. It is listed as a bare number
+// because no named constant exists for it.
 func retryableStatus(status int) bool {
 	switch status {
-	case http.StatusRequestTimeout, http.StatusTooManyRequests,
+	case http.StatusRequestTimeout, http.StatusTooManyRequests, 529,
 		http.StatusInternalServerError, http.StatusBadGateway,
 		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		return true

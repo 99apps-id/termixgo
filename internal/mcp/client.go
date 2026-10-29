@@ -372,6 +372,11 @@ func (c *Client) initialize(ctx context.Context) error {
 	return c.notify("notifications/initialized", map[string]any{})
 }
 
+// mcpToolPageCap bounds the tools/list walk: a server that mints a fresh
+// cursor on every page would otherwise hold the session start open and
+// accumulate tools without a limit on a machine with a memory budget.
+const mcpToolPageCap = 64
+
 // Tools lists the server's tools, following pagination to the end.
 func (c *Client) Tools(ctx context.Context) ([]Tool, error) {
 	if len(c.tools) > 0 {
@@ -379,6 +384,7 @@ func (c *Client) Tools(ctx context.Context) ([]Tool, error) {
 	}
 	var all []Tool
 	cursor := ""
+	pages := 0
 	for {
 		callCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
 		params := map[string]any{}
@@ -397,6 +403,10 @@ func (c *Client) Tools(ctx context.Context) ([]Tool, error) {
 		all = append(all, listing.Tools...)
 		if listing.NextCursor == "" {
 			break
+		}
+		pages++
+		if pages >= mcpToolPageCap {
+			return nil, fmt.Errorf("%s sent more than %d tools/list pages: the listing is treated as a failure, not an open-ended walk", c.name, mcpToolPageCap)
 		}
 		cursor = listing.NextCursor
 	}
@@ -502,9 +512,14 @@ func mergeProcessEnvShim(inherited []string, extra map[string]string) []string {
 			continue
 		}
 		upper := strings.ToUpper(strings.TrimSpace(key))
-		if strings.HasSuffix(upper, "_API_KEY") || strings.HasSuffix(upper, "_API_TOKEN") ||
-			strings.HasSuffix(upper, "_AUTH_TOKEN") || strings.HasSuffix(upper, "_SECRET") ||
-			strings.HasSuffix(upper, "_PRIVATE_KEY") || strings.HasSuffix(upper, "_BOT_TOKEN") {
+		// The suffix table is the only thing between an exported credential
+		// and a third-party binary: GH_TOKEN, GITHUB_TOKEN, AWS keys and
+		// database tokens never matched the narrow list, so they travelled
+		// with the inherited environment. The extra entries in Env re-add
+		// whatever one server legitimately needs, which makes over-scrubbing
+		// here harmless and under-scrubbing a leak.
+		if strings.HasSuffix(upper, "_KEY") || strings.HasSuffix(upper, "_TOKEN") ||
+			strings.HasSuffix(upper, "_SECRET") || strings.HasSuffix(upper, "_PASSWORD") {
 			continue
 		}
 		scrubbed = append(scrubbed, entry)

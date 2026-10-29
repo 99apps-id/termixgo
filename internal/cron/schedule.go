@@ -170,8 +170,9 @@ func parseCronExpr(expr string) (cronExpr, error) {
 		return cronExpr{}, fmt.Errorf("weekday field: %w", err)
 	}
 	// Sunday is accepted as both 0 and 7, which is the convention cron uses.
+	// weekday 0 folds with the 0 bit too: dayMatch reads Sunday on bit 0.
 	if dow&(1<<7) != 0 {
-		dow = (dow &^ (1 << 7)) | 1
+		dow = (dow &^ (1 << 7)) | (1 << 0)
 	}
 	return cronExpr{
 		minute:    minute,

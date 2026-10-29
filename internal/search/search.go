@@ -265,7 +265,14 @@ func (s *Store) SearchScopePath(query, scope, pathPrefix string, limit int) ([]R
 	// The workspace documents are refreshed before the query, so a hit reflects
 	// the files as they are now rather than as they were at startup. Memory and
 	// journal documents are kept fresh by the writer, so they need no walk.
+	// A cold or expired index is walked synchronously: kicking off the walk
+	// and querying immediately asked the old index for what the operator
+	// just wrote, and the first search of a session came back empty while
+	// the walk was still in flight.
 	s.refreshWorkspace()
+	if s.needsSyncWalk() {
+		s.SyncRefreshWorkspace()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cacheKey := expression + "\x00" + scope + "\x00" + prefix + "\x00" + string(rune(limit))
@@ -402,6 +409,19 @@ func (s *Store) refreshWorkspace() {
 		s.queryCache = nil
 		s.mu.Unlock()
 	}()
+}
+
+// needsSyncWalk reports whether the workspace walk the refresh kicked off (or
+// found already running) still has to finish before a query against it means
+// anything: a cold store, an expired TTL, or a walk in flight. A fresh index
+// keeps the old asynchronous path, so a burst of searches still walks once.
+func (s *Store) needsSyncWalk() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	return s.indexing || time.Since(s.indexedAt) >= workspaceIndexTTL
 }
 
 // SyncRefreshWorkspace forces a synchronous workspace refresh and waits for it

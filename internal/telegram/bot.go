@@ -1039,9 +1039,9 @@ func (b *Bot) keepTyping(ctx context.Context, chatID int64, done <-chan struct{}
 
 func formatRunFailure(err error) string {
 	if channel.IsAuthError(err) || errors.Is(err, channel.ErrBusy) || errors.Is(err, context.Canceled) {
-		return "Run failed: " + channel.NaturalError(err, "en") + " (" + err.Error() + ")"
+		return "Run failed: " + channel.NaturalError(err, "en")
 	}
-	return "Run failed: " + err.Error()
+	return "Run failed: " + channel.NaturalError(err, "en")
 }
 
 // runWithCard runs one turn behind the single-run gate and mirrors progress
@@ -1107,7 +1107,7 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 	if statusMessage.MessageID == 0 {
 		// No card to edit: deliver the failure or the answer directly.
 		if runErr != nil {
-			b.replyMarkdown(ctx, chatID, formatRunFailure(runErr))
+			b.replyMarkdown(ctx, chatID, channel.RedactForChannel(formatRunFailure(runErr)))
 			return
 		}
 		if strings.TrimSpace(answer) != "" && channel.Silent(answer) {
@@ -1155,8 +1155,61 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 // byte cap so a converted Markdown body never trips it.
 const telegramChunkLimit = 3800
 
+// telegramSendChunkLimit is the ceiling for converted HTML chunks. The old
+// raw-Markdown limit above assumed a couple of wrappers: after the escape
+// pass an ampersand-heavy chunk can grow thousands of bytes past it, and the
+// conversion-time clamp then cut the tail without a sound.
+const telegramSendChunkLimit = 3800
+
+// nextHTMLChunk splits converted HTML to fit the limit, preferring a tag
+// boundary (a '<' or a '>' followed by '<') so one chunk never leaves an
+// unclosed tag behind: an unclosed tag is exactly what the plain-text
+// fallback turns into a lost second send.
+func nextHTMLChunk(text string, limit int) (string, string) {
+	if len(text) <= limit {
+		return text, ""
+	}
+	cut := limit
+	// Never cut inside a multi-byte character.
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	// Walk back to a tag boundary so every chunk stays balanced HTML.
+	best := -1
+	for index := cut; index > 0 && index > cut-512; index-- {
+		if text[index] == '<' {
+			best = index
+			break
+		}
+		if text[index] != '<' && index+1 < len(text) && text[index+1] == '<' {
+			best = index + 1
+			break
+		}
+	}
+	if best > limit/2 {
+		cut = best
+	}
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	if cut <= 0 {
+		cut = limit
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+	}
+	return text[:cut], strings.TrimLeft(text[cut:], "\n")
+}
+
 // replyMarkdown sends Markdown text, split into Telegram-sized messages so a
 // long answer arrives whole instead of being truncated at the cap.
+//
+// The split runs on the converted HTML, not on the raw Markdown: the escape
+// pass expands (ampersands become five bytes each, every line gains tags),
+// so a chunk cut at 3800 raw bytes could convert past the 4096 ceiling and
+// the tail clamp then dropped the overflow without a sound. Entities are
+// never split: nextChunk only cuts at a rune boundary, and an HTML entity is
+// ASCII.
 func (b *Bot) replyMarkdown(ctx context.Context, chatID int64, text string) {
 	sendCtx := ctx
 	if sendCtx == nil || sendCtx.Err() != nil {
@@ -1164,10 +1217,11 @@ func (b *Bot) replyMarkdown(ctx context.Context, chatID int64, text string) {
 		sendCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 	}
-	for len(text) > 0 {
-		part, rest := nextChunk(text, telegramChunkLimit)
-		text = rest
-		if _, err := b.client.SendMarkdown(sendCtx, chatID, part, nil); err != nil {
+	rest := strings.TrimSpace(markdownToTelegramHTML(text))
+	for len(rest) > 0 {
+		var part string
+		part, rest = nextHTMLChunk(rest, telegramSendChunkLimit)
+		if _, err := b.client.SendHTML(sendCtx, chatID, part, nil); err != nil {
 			b.logf("send failed: %v", err)
 		}
 	}
@@ -1394,6 +1448,12 @@ func (b *Bot) handleGuestMessage(ctx context.Context, request channel.Request, m
 }
 
 func (b *Bot) reply(ctx context.Context, chatID int64, text string) {
+	// Error text is the one path where a raw URL (the Bot API client builds
+	// URLs that carry the token) or a provider body (which echoes key
+	// prefixes) could reach the chat unredacted: those strings never pass
+	// through the answer redaction, so every line crosses RedactForChannel
+	// on the way out.
+	text = channel.RedactForChannel(text)
 	sendCtx := ctx
 	if sendCtx == nil || sendCtx.Err() != nil {
 		var cancel context.CancelFunc

@@ -154,8 +154,8 @@ func decodeResponsesStream(label string, body io.Reader, emit func(StreamEvent) 
 					return err
 				}
 			}
-			case "response.completed", "response.incomplete":
-		if event.Response != nil && event.Response.Usage != nil {
+		case "response.completed", "response.incomplete":
+			if event.Response != nil && event.Response.Usage != nil {
 				raw := event.Response.Usage
 				var cached, reasoning int
 				if raw.InputTokensDetails != nil {

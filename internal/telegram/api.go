@@ -191,6 +191,16 @@ func (e *APIError) Error() string {
 
 // call performs one Bot API method.
 func (c *Client) call(ctx context.Context, method string, payload any, result any) error {
+	// Sends never run on a bare caller's context alone: a black-holed route
+	// makes the POST block for kernel TCP retries, and one stuck handler
+	// goroutine per chat update is how the long-poll loop ended up starving
+	// behind a dead network. The ceiling is only a backstop next to the poll
+	// loop's own deadlines, never the behaviour.
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -261,6 +271,13 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, key
 // character that is not turned into a tag. If the API still rejects the entities
 // the message is resent as plain text, so a formatting bug can never swallow an
 // answer.
+// SendHTML posts one message whose body is already converted Telegram HTML.
+// The caller owns chunking: SendMarkdown truncates at the ceiling, which is
+// the right shape for a single capped send but not for a multi-part answer.
+func (c *Client) SendHTML(ctx context.Context, chatID int64, html string, keyboard *InlineKeyboard) (Message, error) {
+	return c.sendMessage(ctx, chatID, html, keyboard, "HTML")
+}
+
 func (c *Client) SendMarkdown(ctx context.Context, chatID int64, markdown string, keyboard *InlineKeyboard) (Message, error) {
 	message, err := c.sendMessage(ctx, chatID, markdownToTelegramHTML(markdown), keyboard, "HTML")
 	if err != nil && isParseError(err) {

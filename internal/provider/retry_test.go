@@ -148,7 +148,9 @@ func TestParseRetryAfter(t *testing.T) {
 }
 
 func TestRetryableStatus(t *testing.T) {
-	retryable := []int{408, 429, 500, 502, 503, 504}
+	// 529 is Anthropic's documented overload status: one attempt for the only
+	// signal the provider gives under load is the intended policy.
+	retryable := []int{408, 429, 500, 502, 503, 504, 529}
 	for _, status := range retryable {
 		if !retryableStatus(status) {
 			t.Errorf("%d should be retryable", status)

@@ -17,16 +17,23 @@ const BlockedBase64Placeholder = "[payload base64 mencurigakan diblokir]"
 
 // secretPatterns are the token shapes a model might echo from a file or a tool
 // result. They are deliberately narrow: a false positive costs one edited
-// sentence, while a missed key costs the operator a credential.
+// sentence, while a missed key costs the operator a credential. This is the
+// last line of defence before the wire, so the shapes mirror what the
+// scanner already knows rather than a smaller copy of it.
 var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`sk-[A-Za-z0-9_-]{20,}`),
+	regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}`),
+	regexp.MustCompile(`\bsk_(live|test|proj)_[A-Za-z0-9_-]{8,}`),
 	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{20,}`),
+	regexp.MustCompile(`\bglpat-[A-Za-z0-9_-]{16,}`),
+	regexp.MustCompile(`\bnpm_[A-Za-z0-9]{20,}`),
+	regexp.MustCompile(`\bhf_[A-Za-z0-9]{20,}`),
 	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{20,}`),
 	regexp.MustCompile(`xox[baprs]-[A-Za-z0-9-]{10,}`),
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 	regexp.MustCompile(`AIza[0-9A-Za-z_-]{30,}`),
 	regexp.MustCompile(`\b[0-9]{8,10}:[A-Za-z0-9_-]{30,}\b`),
 	regexp.MustCompile(`eyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`),
+	regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`),
 }
 
 var base64CandidatePattern = regexp.MustCompile(`[A-Za-z0-9+/=_-]{16,}`)

@@ -127,6 +127,24 @@ func (s *Store) Save(provider string, token Token) error {
 	return s.secrets.Set(KeyPrefix+provider, string(data))
 }
 
+// Reload re-reads a stored token straight from the secrets file, bypassing
+// the in-memory map. It is the cross-process read: Load sees what this
+// process last wrote, Reload sees what any process wrote last.
+func (s *Store) Reload(provider string) (Token, bool) {
+	if s == nil || s.secrets == nil {
+		return Token{}, false
+	}
+	raw, ok := s.secrets.Reload(KeyPrefix + provider)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return Token{}, false
+	}
+	var token Token
+	if err := json.Unmarshal([]byte(raw), &token); err != nil {
+		return Token{}, false
+	}
+	return token, true
+}
+
 // Delete removes a stored token.
 func (s *Store) Delete(provider string) error {
 	if s == nil || s.secrets == nil {
