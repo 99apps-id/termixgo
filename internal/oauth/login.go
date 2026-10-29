@@ -336,6 +336,7 @@ func refreshTokenOnce(ctx context.Context, store *Store, spec Spec, token Token)
 			// token until the operator logs in again.
 			return token, nil
 		}
+		persistClientCredentials(store, spec.Provider, flow)
 		refreshed, err = RefreshPKCE(ctx, flow, token.Refresh, clock)
 	default:
 		refreshed, err = RefreshDevice(ctx, DeviceFlow{ClientID: spec.ClientID, DeviceURL: spec.DeviceURL, TokenURL: spec.TokenURL}, token.Refresh, clock)

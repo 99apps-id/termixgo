@@ -79,10 +79,10 @@ check:
 
 cross:
 	mkdir -p dist
-	GOOS=linux GOARCH=amd64 go build -o dist/termixgo-linux-amd64 ./cmd/termixgo
-	GOOS=linux GOARCH=arm64 go build -o dist/termixgo-linux-arm64 ./cmd/termixgo
-	GOOS=darwin GOARCH=arm64 go build -o dist/termixgo-darwin-arm64 ./cmd/termixgo
-	GOOS=windows GOARCH=amd64 go build -o dist/termixgo-windows-amd64.exe ./cmd/termixgo
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o dist/termixgo-linux-amd64 ./cmd/termixgo
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o dist/termixgo-linux-arm64 ./cmd/termixgo
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o dist/termixgo-darwin-arm64 ./cmd/termixgo
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o dist/termixgo-windows-amd64.exe ./cmd/termixgo
 
 clean:
 	rm -rf bin dist
