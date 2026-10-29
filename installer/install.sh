@@ -210,6 +210,29 @@ fetch_url() {
   fi
 }
 
+# Helper function to build from source with version and .env.local OAuth stamps
+build_from_source() {
+  local out_bin="$1"
+  local ver commit build_date ldflags
+  ver="$(git -C "$ROOT_DIR" describe --tags --always --dirty 2>/dev/null || echo 0.1.0-dev)"
+  commit="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+  if [ -f "$ROOT_DIR/.env.local" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$ROOT_DIR/.env.local"
+    set +a
+  fi
+  ldflags="-s -w -X github.com/99apps-id/termixgo/internal/version.Version=${ver} -X github.com/99apps-id/termixgo/internal/version.Commit=${commit} -X github.com/99apps-id/termixgo/internal/version.BuildDate=${build_date}"
+  if [ -n "${TERMIXGO_ANTIGRAVITY_CLIENT_ID:-}" ]; then
+    ldflags="${ldflags} -X github.com/99apps-id/termixgo/internal/oauth.AntigravityClientID=${TERMIXGO_ANTIGRAVITY_CLIENT_ID}"
+  fi
+  if [ -n "${TERMIXGO_ANTIGRAVITY_CLIENT_SECRET:-}" ]; then
+    ldflags="${ldflags} -X github.com/99apps-id/termixgo/internal/oauth.AntigravityClientSecret=${TERMIXGO_ANTIGRAVITY_CLIENT_SECRET}"
+  fi
+  (cd "$ROOT_DIR" && CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "$ldflags" -o "$out_bin" ./cmd/termixgo)
+}
+
 # 1. Resolve or Build the Binary
 RESOLVED_BIN=""
 
@@ -225,7 +248,7 @@ elif [ "$FORCE_BUILD" -eq 1 ]; then
   if ! command -v go >/dev/null 2>&1; then
     error "Go compiler ('go') not found in PATH. Install Go or install without --build."
   fi
-  (cd "$ROOT_DIR" && go build -trimpath -ldflags "-s -w" -o "$TMP_DIR/termixgo" ./cmd/termixgo)
+  build_from_source "$TMP_DIR/termixgo"
   RESOLVED_BIN="$TMP_DIR/termixgo"
   success "Built successfully from source"
 elif [ "$FORCE_DOWNLOAD" -eq 0 ] && [ -f "$ROOT_DIR/bin/termixgo" ]; then
@@ -233,7 +256,7 @@ elif [ "$FORCE_DOWNLOAD" -eq 0 ] && [ -f "$ROOT_DIR/bin/termixgo" ]; then
   say "Found local built binary at $RESOLVED_BIN"
 elif [ "$FORCE_DOWNLOAD" -eq 0 ] && [ -f "$ROOT_DIR/cmd/termixgo/main.go" ] && command -v go >/dev/null 2>&1; then
   say "Go compiler detected. Building Termixgo from source..."
-  (cd "$ROOT_DIR" && go build -trimpath -ldflags "-s -w" -o "$TMP_DIR/termixgo" ./cmd/termixgo)
+  build_from_source "$TMP_DIR/termixgo"
   RESOLVED_BIN="$TMP_DIR/termixgo"
   success "Compiled cleanly from source tree"
 else

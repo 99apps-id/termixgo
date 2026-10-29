@@ -44,7 +44,7 @@ help:
 	@echo "The race detector needs a C compiler. Windows: scoop install mingw."
 
 build:
-	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/termixgo
+	CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/termixgo
 
 run: build
 	$(BINARY)
