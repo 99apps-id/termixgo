@@ -4,6 +4,23 @@ All notable changes to Termixgo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.3 - 2026-10-29
+
+### Added
+- Cross-channel message and attachment delivery (`send_channel` tool): enables the agent from the terminal UI, WhatsApp, or Telegram to send text messages, images, and document files across any configured WhatsApp or Telegram channel (`whatsapp:default:628xxx`, `telegram:default:123456`).
+- Outbound WhatsApp and Telegram media APIs: native `SendImage` and `SendDocument` over `whatsmeow`, and `SendPhoto` and `SendDocument` multipart uploads on Telegram Bot API.
+- Voice note transcription and media model configuration: `transcribe_audio` tool for voice messages alongside `termixgo model voice` (`voiceModel`) and `termixgo model image` (`imageModel`) CLI and TUI `/model` commands.
+- Multi-layer prompt injection and Base64 payload defense (`channel.SanitizeUntrusted`): detects and neutralizes single-layer and double-encoded Base64 shell scripts (`#!/bin/`, `curl | sh`, `eval`, `powershell -enc`, `os.system`, `child_process`) and Base64-encoded prompt-injection instructions before they reach the model context.
+- Untrusted XML boundary protection: escapes `<untrusted_channel_message>` and `</untrusted_channel_message>` breakout tags in inbound guest messages.
+- Non-admin attachment gate: blocks non-admin users in open DMs or group chats from uploading files, scripts, images, or voice notes before any media payload is downloaded to disk.
+- Outbound Base64 secret redaction: extends `channel.RedactSecrets` to scrub standard, raw, and URL-safe Base64 encodings of stored secrets and API keys from outbound replies.
+- Tool call resilience: automatic parameter alias normalization for `lookup`, `web_search`, and `web_fetch`, a `find_tools` discovery tool when tool search mode is active, and a search-engine URL guard in `web_fetch`.
+
+### Fixed
+- Antigravity OAuth token refresh persistence: `refreshTokenOnce` now persists link-time stamped client credentials to `secrets.json` (`oauth:antigravity:client`) during token refresh, preventing 401 errors when refreshing tokens on headless servers.
+- Build and installer OAuth stamping: aligned `Makefile` (`build` and `cross` targets) and `installer/install.sh` with `build-cli.mjs` so local and cross-compiled builds consistently stamp `AntigravityClientID` and `AntigravityClientSecret` from `.env.local`.
+- Staticcheck ST1005 compliance in Google stream error formatting (`internal/provider/google.go`).
+
 ## 0.2.2 - 2026-10-28
 
 ### Added

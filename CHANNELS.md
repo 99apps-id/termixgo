@@ -151,10 +151,44 @@ your agent's `SOUL.md`.
 - **Send PDF Documents:** Upload a PDF document. Vision models parse the pages directly.
   Non-vision models store the file in `.termixgo/uploads/` so the agent can read and
   process the document with CLI tools.
+- **Send Voice Notes:** Record a voice note in WhatsApp or Telegram. Operator voice notes
+  are transcribed with `transcribe_audio` (configurable via `termixgo model voice`).
+- **Cross-Channel Delivery (`send_channel`):** Ask the agent from the terminal UI, WhatsApp,
+  or Telegram to deliver a report, image, or document file to another channel target (for
+  example, sending a generated PDF from WhatsApp to a Telegram chat `telegram:default:123456`
+  or from the TUI to `whatsapp:default:628xxxxxxxxxx`).
 - **Enriched Formatting:** Code snippets, bullet dots, bold terms, and headings are
   formatted cleanly using native WhatsApp text modifiers.
 - **In-Chat Commands:** Type `/models` to view active models, `/model <name>` to switch
   the active model, `/status` for agent metrics, or `/diff` to inspect recent edits.
+
+---
+
+## 1B. Channel Security and Anti-Prompt-Injection Architecture
+
+Termixgo enforces defense-in-depth across WhatsApp and Telegram when `dmPolicy` is `open`
+or when the bot participates in group chats:
+
+1. **Registry-Level Guest Tool Isolation:** Non-admin senders (`Guest: true`) do not rely on
+   prompt instructions alone. Dangerous tools (`run_command`, `run_background`, `code_worker`,
+   `parallel_batch`, `delegate`, `write_file`, `edit`, `apply_patch`, `send_channel`,
+   `env_get`, and all `mcp_*` tools) are physically removed from the tool registry for that
+   turn (`internal/agent/guest.go`), and the secret store handle is set to `nil`.
+2. **Non-Admin Attachment Gate:** File, script, image, and voice note uploads from non-admin
+   users are rejected at the transport gate before any media bytes are downloaded to disk.
+3. **Base64 Script and Injection Sanitization (`channel.SanitizeUntrusted`):** Inbound guest
+   messages are scanned for single-layer and double-encoded Base64 payloads containing shell
+   scripts (`#!/bin/`, `curl | sh`, `eval`, `powershell -enc`, `os.system`, `child_process`)
+   or prompt-injection directives (`ignore previous instructions`, `reveal secrets.json`).
+   Suspicious encoded payloads are replaced with `[REDACTED_ENCODED_PAYLOAD]` before reaching
+   the model.
+4. **XML Boundary Protection:** Untrusted messages are wrapped in `<untrusted_channel_message>`
+   tags, and any tag-breakout attempt inside the message body is HTML-escaped.
+5. **Group Mention Gate:** By default (`groupPolicy: mention`), group messages are ignored
+   unless the bot is explicitly `@mentioned` or replied to.
+6. **Outbound Plaintext and Base64 Secret Redaction:** Every outbound channel message passes
+   through `channel.RedactSecrets`, scrubbing both plaintext API keys/tokens and their
+   standard, raw, or URL-safe Base64 encodings.
 
 ---
 

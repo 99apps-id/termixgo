@@ -776,6 +776,9 @@ WhatsApp features:
   that upstream model rate limits, timeouts, or expired OAuth credentials always
   deliver an immediate actionable error notice with guidance rather than
   silently dropping messages.
+- **Cross-channel media and message delivery:** Use the `send_channel` tool from the terminal UI, WhatsApp, or Telegram to send text messages, images, or document files across configured WhatsApp and Telegram channels (`whatsapp:default:628xxx`, `telegram:default:123456`).
+- **Voice note transcription:** Voice notes sent in WhatsApp or Telegram are automatically saved and transcribed via `transcribe_audio` (configurable via `termixgo model voice`).
+- **Multi-layer prompt injection and Base64 guardrails:** Non-admin chats cannot execute shell commands, spawn subagents, or upload attachments. Untrusted messages are sanitized against XML boundary breakouts and single/double-encoded Base64 scripts or prompt injections, and outbound replies redact both plaintext and Base64-encoded secrets.
 - **Direct slash commands:** `/models`, `/model <name>`, `/status`, `/new`,
   `/stop`, `/diff`, `/help` (or `/menu`) work directly in chat, automatically
   adapting output language to caller country code (+62 Indonesian, international
@@ -976,6 +979,8 @@ termixgo eval [run|list]        # benchmark harness for coding accuracy and pass
 termixgo map [--path <dir>] [--all] # print structural repository symbol map
 termixgo models [--provider id] # list the model catalogue
 termixgo model [id]             # show or set the default model
+termixgo model voice [id|off]   # show or set the voice transcription model
+termixgo model image [id|off]   # show or set the image generation model
 termixgo endpoint [provider url]# show or set a provider custom base URL
 termixgo trust [on|off]         # show or set folder trust
 termixgo approval [mode]        # ask, edits, all or plan
@@ -1089,8 +1094,8 @@ internal/whatsapp   native multi-device companion with whatsmeow, vision & enric
 ## Releasing
 
 ```sh
-git tag v0.2.2
-git push origin v0.2.2
+git tag v0.2.3
+git push origin v0.2.3
 ```
 
 The release workflow runs the full gate, then goreleaser builds six targets,

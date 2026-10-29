@@ -101,7 +101,7 @@ func (c *googleClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 		if chunk.Error != nil && strings.TrimSpace(chunk.Error.Message) != "" {
 			// A mid-feed error frame carried on a 200 response is a failure
 			// like every sibling provider reports it, not an empty answer.
-			return wrapStreamError("Google", fmt.Errorf("Google reported an error (code %d %s): %s", chunk.Error.Code, chunk.Error.Status, chunk.Error.Message))
+			return wrapStreamError("Google", fmt.Errorf("the Google stream reported an error (code %d %s): %s", chunk.Error.Code, chunk.Error.Status, chunk.Error.Message))
 		}
 		if chunk.UsageMetadata != nil {
 			current := Usage{

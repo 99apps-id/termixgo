@@ -23,7 +23,10 @@ otherwise. Development builds are not supported.
 | Asset | Protection |
 | --- | --- |
 | Provider API keys | `secrets.json` in the state directory, owner-only access enforced per platform, never logged, never written to config or a session |
-| Telegram bot token | Same store, same rules |
+| Telegram and WhatsApp credentials | Same store (`secrets.json` 0600) and owner-only device session store (`0700`/`0600`) |
+| Guest channel turns | Admin-only tools (`run_command`, `write_file`, `send_channel`, `delegate`, `mcp_*`, etc.) are removed from the registry, `Secrets` is nil, and non-admin media uploads are rejected before download |
+| Untrusted channel input | Wrapped in `<untrusted_channel_message>` with XML tag-breakout escaping and single/double Base64 script and prompt-injection payload neutralization |
+| Outbound channel replies | Redacted for known token prefixes, stored secret values, and standard/URL-safe Base64 encodings of stored secrets |
 | Command execution | The agent runs with your own permissions. There is no sandbox. The approval policy and folder trust are the only gates |
 | Model traffic | HTTPS to the provider you configured. No proxy, no telemetry, no analytics |
 
