@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -371,4 +372,55 @@ func testJWT(payload string) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
 	body := base64.RawURLEncoding.EncodeToString([]byte(payload))
 	return header + "." + body + ".sig"
+}
+
+func TestGrantError_Error(t *testing.T) {
+	e1 := &GrantError{Code: "invalid_grant"}
+	if !strings.Contains(e1.Error(), "invalid_grant") {
+		t.Errorf("unexpected error string: %s", e1.Error())
+	}
+
+	e2 := &GrantError{Code: "invalid_grant", Message: "token revoked"}
+	if !strings.Contains(e2.Error(), "token revoked") {
+		t.Errorf("unexpected error string: %s", e2.Error())
+	}
+}
+
+func TestVerifyURL(t *testing.T) {
+	flow := CodexFlow{Issuer: "https://auth.example.com"}
+	if got := flow.VerifyURL(); !strings.Contains(got, "https://auth.example.com") {
+		t.Errorf("VerifyURL() = %q, want issuer url", got)
+	}
+}
+
+func TestRefreshCodex(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(writer, `{"access_token":"codex-refreshed","expires_in":3600}`)
+	}))
+	defer server.Close()
+
+	flow := CodexFlow{ClientID: "cid", Issuer: server.URL}
+	token, err := RefreshCodex(context.Background(), flow, "old-ref", noWaitClock())
+	if err != nil {
+		t.Fatalf("RefreshCodex: %v", err)
+	}
+	if token.Access != "codex-refreshed" || token.Refresh != "old-ref" {
+		t.Fatalf("unexpected token: %+v", token)
+	}
+}
+
+func TestReadEnvLocalAntigravity(t *testing.T) {
+	tmp := t.TempDir()
+	origWd, _ := os.Getwd()
+	defer os.Chdir(origWd)
+	_ = os.Chdir(tmp)
+
+	content := "TERMIXGO_ANTIGRAVITY_CLIENT_ID=\"test-client-id\"\nTERMIXGO_ANTIGRAVITY_CLIENT_SECRET='test-secret'\n"
+	_ = os.WriteFile(".env.local", []byte(content), 0600)
+
+	id, secret := readEnvLocalAntigravity()
+	if id != "test-client-id" || secret != "test-secret" {
+		t.Errorf("readEnvLocalAntigravity() = (%q, %q), want (test-client-id, test-secret)", id, secret)
+	}
 }
