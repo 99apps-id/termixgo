@@ -67,7 +67,7 @@ func TestPendingWindowStaysQuietOnASmallHistory(t *testing.T) {
 	}
 	session := application.Session()
 	session.AddUser("a short question")
-	session.AddAssistant("a short answer", "", nil)
+	session.AddAssistant("a short answer", "", nil, nil)
 
 	if got := application.PendingWindow(); got != 0 {
 		t.Errorf("PendingWindow = %d on a small history, want 0", got)
@@ -118,6 +118,6 @@ func fillWindow(t *testing.T, session *agent.Session, budget int) {
 	}
 	for agent.EstimateMessages(session.Messages()) < target {
 		session.AddUser(string(chunk))
-		session.AddAssistant("acknowledged", "", nil)
+		session.AddAssistant("acknowledged", "", nil, nil)
 	}
 }

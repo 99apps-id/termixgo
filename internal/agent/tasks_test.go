@@ -153,7 +153,7 @@ func TestRenderTranscriptStopsAtTheLimit(t *testing.T) {
 func TestInsertSummaryReplacesOnlyEarlierTurns(t *testing.T) {
 	session := NewSession(t.TempDir(), "m")
 	session.AddUser("first request")
-	session.AddAssistant("first answer", "", nil)
+	session.AddAssistant("first answer", "", nil, nil)
 	session.AddUser("second request")
 	session.messages = append(session.messages, provider.Message{Role: provider.RoleAssistant, Content: "second answer"})
 	before := len(session.Messages())

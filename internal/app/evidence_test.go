@@ -65,8 +65,8 @@ func TestToolCallCountSince(t *testing.T) {
 	session := agent.NewSession(t.TempDir(), "")
 	session.AddUser("pertanyaan")
 	mark := session.MessageCount()
-	session.AddAssistant("", "", []provider.ToolCall{{ID: "1", Name: "read_file", Arguments: `{"path":"a"}`}})
-	session.AddAssistant("jawaban", "", nil)
+	session.AddAssistant("", "", []provider.ToolCall{{ID: "1", Name: "read_file", Arguments: `{"path":"a"}`}}, nil)
+	session.AddAssistant("jawaban", "", nil, nil)
 
 	if got := session.ToolCallCountSince(mark); got != 1 {
 		t.Errorf("ToolCallCountSince = %d, want 1", got)

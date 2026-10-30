@@ -180,6 +180,8 @@ runLoop:
 		var answer strings.Builder
 		var reasoning strings.Builder
 		var calls []provider.ToolCall
+		var reasoningItems []provider.ReasoningItem
+		var stepUsage provider.Usage
 		var reasoningStart time.Time
 
 		streamErr := r.Client.Stream(ctx, request, func(event provider.StreamEvent) error {
@@ -197,8 +199,13 @@ runLoop:
 				if event.ToolCall != nil {
 					calls = append(calls, *event.ToolCall)
 				}
+			case provider.EventReasoningItem:
+				if event.ReasoningItem != nil {
+					reasoningItems = append(reasoningItems, *event.ReasoningItem)
+				}
 			case provider.EventUsage:
 				if event.Usage != nil {
+					stepUsage = stepUsage.Add(*event.Usage)
 					turnUsage = turnUsage.Add(*event.Usage)
 					sessionCost += r.Pricing.Cost(*event.Usage)
 					emit(Event{Kind: EventUsage, Usage: *event.Usage, CostUSD: sessionCost, CostKnown: costKnown, CostUnpriced: unpriced})
@@ -241,12 +248,30 @@ runLoop:
 		// OpenAI-compatible model reads that as a malformed turn and can
 		// answer an earlier message instead of the operator's latest one.
 		// The guard below still counts the idle step, so the loop stops.
-		if strings.TrimSpace(answer.String()) != "" || len(calls) > 0 {
-			session.AddAssistant(answer.String(), reasoning.String(), calls)
+		// Reasoning items are the one exception: an entry carrying only
+		// them encodes to no message at all for other providers, and for a
+		// stateless Codex backend they are the step's thought, which the
+		// next request must hand back or lose.
+		if strings.TrimSpace(answer.String()) != "" || len(calls) > 0 || len(reasoningItems) > 0 {
+			session.AddAssistant(answer.String(), reasoning.String(), calls, reasoningItems)
 		}
 
 		if len(calls) == 0 {
 			if strings.TrimSpace(answer.String()) == "" {
+				// Reasoning is model output, not silence: a step that only
+				// thought (a reasoning model cut off before its answer, or
+				// working through a hard step) must not feed the idle guard,
+				// or a run that is demonstrably working gets filed as stuck
+				// after three such steps. The thought may be visible as
+				// summary text, as stored reasoning items, or only as
+				// reasoning tokens in the step's usage when the backend
+				// streamed no summary; all three are the model working.
+				// The step budget stays the outer bound, the same
+				// arrangement as the error streak.
+				if reasoning.Len() > 0 || len(reasoningItems) > 0 || stepUsage.ReasoningTokens > 0 {
+					guard.noteProgress()
+					continue
+				}
 				// Silence is not success: a model that returns no text
 				// and no calls is stuck, so ask again up to the guard
 				// instead of filing an empty turn as done.

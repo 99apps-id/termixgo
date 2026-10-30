@@ -141,9 +141,9 @@ func TestForceCompactRecordsCompactionUsage(t *testing.T) {
 
 	session := application.Session()
 	session.AddUser("first request")
-	session.AddAssistant("first answer", "", nil)
+	session.AddAssistant("first answer", "", nil, nil)
 	session.AddUser("second request")
-	session.AddAssistant("second answer", "", nil)
+	session.AddAssistant("second answer", "", nil, nil)
 
 	compacted, err := application.ForceCompact(context.Background())
 	if err != nil {

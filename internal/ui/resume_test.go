@@ -12,9 +12,9 @@ func TestRestoreSessionPopulatesTranscriptAndNotice(t *testing.T) {
 
 	session := agent.NewSession(t.TempDir(), "test-model")
 	session.AddUser("Hello Termixgo")
-	session.AddAssistant("I can help you build terminal tools.", "Thinking carefully about TUI...", nil)
+	session.AddAssistant("I can help you build terminal tools.", "Thinking carefully about TUI...", nil, nil)
 	session.AddUser("What is 2+2?")
-	session.AddAssistant("2+2 equals 4.", "", nil)
+	session.AddAssistant("2+2 equals 4.", "", nil, nil)
 	session.SetTodos([]agent.Todo{
 		{Title: "Step 1: check math", Status: "completed"},
 		{Title: "Step 2: celebrate", Status: "pending"},
@@ -43,7 +43,7 @@ func TestNewWithOptionsResumesSession(t *testing.T) {
 
 	session := agent.NewSession(app.Workspace(), app.Model())
 	session.AddUser("Unique prompt from old session")
-	session.AddAssistant("Unique answer from old session", "", nil)
+	session.AddAssistant("Unique answer from old session", "", nil, nil)
 	if err := session.Save(); err != nil {
 		t.Fatalf("session.Save: %v", err)
 	}

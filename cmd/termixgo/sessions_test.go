@@ -28,7 +28,7 @@ func TestRunSessionsCLI(t *testing.T) {
 	session := agent.NewSession("test-model", "test-workspace")
 	session.SetTitle("Feature Implementation")
 	session.AddUser("Please implement this")
-	session.AddAssistant("Here is the solution", "", nil)
+	session.AddAssistant("Here is the solution", "", nil, nil)
 	if err := session.Save(); err != nil {
 		t.Fatalf("save session: %v", err)
 	}

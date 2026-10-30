@@ -90,6 +90,15 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   turn pauses there while the loop guard and the cost cap stay the real stops
   for a run that goes nowhere. A subagent sets its own smaller `MaxSteps` and
   keeps a hard budget.
+- Reasoning is progress, and on the Codex route it is also cargo. The loop
+  guard counts a step as working when it produced answer text, a tool call,
+  streamed reasoning, stored reasoning items, or billed reasoning tokens;
+  only a step with none of those is idle. Codex requests ask for an auto
+  reasoning summary (without it a thinking step can stream nothing the loop
+  can see) and include the encrypted reasoning content; the decoder keeps
+  each completed reasoning item on the step's session message and the
+  encoder hands the items back on the next request, because the backend
+  runs with `store: false` and cannot recover its own reasoning otherwise.
 - A read-tier verdict with zero tool calls behind it is prose, not a review.
   `agent.RunSubagent` counts the nested run's assistant tool calls: an empty
   pass for a read-only role is retried once with an explicit mandate, and a

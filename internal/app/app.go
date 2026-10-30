@@ -2384,7 +2384,7 @@ func (a *App) RunVoicePrompt(ctx context.Context, prompt string, progress func(s
 
 	session := a.currentSession()
 	session.AddUser(prompt)
-	session.AddAssistant(report, "", nil)
+	session.AddAssistant(report, "", nil, nil)
 	// The voice fallback runs through RunSubagent, which emits through the
 	// parent's Env.Emit (a.emitInto). That path already folds the delegated
 	// usage, cost and ledger entries into the live session, so adding them

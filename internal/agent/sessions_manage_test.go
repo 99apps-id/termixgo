@@ -93,7 +93,7 @@ func TestExportSessionRendersMarkdown(t *testing.T) {
 	session := NewSession("/work", "model")
 	session.SetTitle("Export me")
 	session.AddUser("do the thing")
-	session.AddAssistant("done", "", nil)
+	session.AddAssistant("done", "", nil, nil)
 	if err := session.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestExportSessionJSONL(t *testing.T) {
 	session := NewSession("/work", "model")
 	session.SetTitle("JSONL export")
 	session.AddUser("ping")
-	session.AddAssistant("pong", "", nil)
+	session.AddAssistant("pong", "", nil, nil)
 	if err := session.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}

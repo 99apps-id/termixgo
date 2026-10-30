@@ -402,14 +402,15 @@ func (s *Session) AddUserWithImages(text string, images []provider.Image) {
 }
 
 // AddAssistant appends a completed assistant turn.
-func (s *Session) AddAssistant(text, reasoning string, calls []provider.ToolCall) {
+func (s *Session) AddAssistant(text, reasoning string, calls []provider.ToolCall, items []provider.ReasoningItem) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.messages = append(s.messages, provider.Message{
-		Role:      provider.RoleAssistant,
-		Content:   text,
-		Reasoning: reasoning,
-		ToolCalls: calls,
+		Role:           provider.RoleAssistant,
+		Content:        text,
+		Reasoning:      reasoning,
+		ReasoningItems: items,
+		ToolCalls:      calls,
 	})
 	s.updatedAt = time.Now()
 }
