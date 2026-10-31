@@ -145,6 +145,10 @@ const (
 	EventToolCall StreamEventType = "tool-call"
 	// EventUsage carries token accounting for the step.
 	EventUsage StreamEventType = "usage"
+	// EventIncomplete reports that the backend ended the response early
+	// at its own output ceiling (max_output_tokens). The step's partial
+	// output stays valid; the loop decides whether to continue from it.
+	EventIncomplete StreamEventType = "incomplete"
 )
 
 // StreamEvent is one chunk of a streaming completion.
@@ -155,6 +159,9 @@ type StreamEvent struct {
 	Usage         *Usage
 	RateLimit     *RateLimitInfo
 	ReasoningItem *ReasoningItem
+	// IncompleteReason carries the backend's reason on an EventIncomplete
+	// event (for example "max_output_tokens").
+	IncompleteReason string
 }
 
 // Client streams one provider.

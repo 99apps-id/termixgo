@@ -99,6 +99,11 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   each completed reasoning item on the step's session message and the
   encoder hands the items back on the next request, because the backend
   runs with `store: false` and cannot recover its own reasoning otherwise.
+  A response the backend ends incomplete at `max_output_tokens` ends the
+  step, not the run: the ceiling is the backend's own (no client here sets
+  it), so the decoder reports the cut as an event, the partial step is
+  stored like any other, and the loop continues from it; any other
+  incomplete reason still fails the step with a named error.
 - A read-tier verdict with zero tool calls behind it is prose, not a review.
   `agent.RunSubagent` counts the nested run's assistant tool calls: an empty
   pass for a read-only role is retried once with an explicit mandate, and a

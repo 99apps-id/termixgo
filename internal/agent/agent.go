@@ -183,6 +183,7 @@ runLoop:
 		var reasoningItems []provider.ReasoningItem
 		var stepUsage provider.Usage
 		var reasoningStart time.Time
+		var incompleteReason string
 
 		streamErr := r.Client.Stream(ctx, request, func(event provider.StreamEvent) error {
 			switch event.Type {
@@ -203,6 +204,8 @@ runLoop:
 				if event.ReasoningItem != nil {
 					reasoningItems = append(reasoningItems, *event.ReasoningItem)
 				}
+			case provider.EventIncomplete:
+				incompleteReason = event.IncompleteReason
 			case provider.EventUsage:
 				if event.Usage != nil {
 					stepUsage = stepUsage.Add(*event.Usage)
@@ -240,6 +243,15 @@ runLoop:
 			emit(Event{Kind: EventError, Err: streamErr})
 			stopReason = "error"
 			break runLoop
+		}
+
+		if incompleteReason != "" {
+			// The backend cut this step at its output ceiling. What
+			// arrived is stored below like any step's output and the loop
+			// continues, so the next request hands the partial step back
+			// and the model resumes, instead of the run dying on a limit
+			// the client never set.
+			emit(Event{Kind: EventNotice, Text: "The backend cut that step at its output limit; continuing from what arrived."})
 		}
 
 		// A step that produced no text and no tool call is not a turn worth
@@ -289,6 +301,14 @@ runLoop:
 						continue
 					}
 				}
+				continue
+			}
+			if incompleteReason != "" {
+				// A cut step's text is a partial answer, not a finished
+				// one: it is already stored above, so continue and let
+				// the next step finish it rather than presenting half an
+				// answer as the turn's result.
+				guard.noteProgress()
 				continue
 			}
 			guard.noteProgress()

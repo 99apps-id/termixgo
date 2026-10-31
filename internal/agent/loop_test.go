@@ -473,6 +473,53 @@ func TestRunReasoningTokenOnlyStepsAreNotIdle(t *testing.T) {
 	}
 }
 
+// A step cut at the backend's output ceiling is a truncated step, not the
+// turn's end: its partial text is stored, a notice names the cut, and the
+// loop continues so the next step finishes the answer instead of the run
+// dying or the partial text being presented as the finished answer.
+func TestRunContinuesAStepCutAtTheOutputCeiling(t *testing.T) {
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{
+			textChunk("Partial ans"),
+			{Type: provider.EventIncomplete, IncompleteReason: "max_output_tokens"},
+		},
+		{textChunk("wer, finished.")},
+	}}
+	runner, env, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	session := NewSession(env.Workspace, "test-model")
+
+	if err := runner.Run(context.Background(), session, "answer"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	client.mu.Lock()
+	calls := client.calls
+	client.mu.Unlock()
+	if calls != 2 {
+		t.Errorf("provider calls = %d, want the truncated step and its continuation", calls)
+	}
+	recorder.mu.Lock()
+	notices := 0
+	for _, event := range recorder.events {
+		if event.Kind == EventNotice && strings.Contains(event.Text, "output limit") {
+			notices++
+		}
+	}
+	recorder.mu.Unlock()
+	if notices != 1 {
+		t.Errorf("cut notices = %d, want 1", notices)
+	}
+	messages := session.Messages()
+	var assistants []string
+	for _, message := range messages {
+		if message.Role == provider.RoleAssistant {
+			assistants = append(assistants, message.Content)
+		}
+	}
+	if len(assistants) != 2 || assistants[0] != "Partial ans" || assistants[1] != "wer, finished." {
+		t.Errorf("assistant messages = %v, want the stored partial followed by the finished answer", assistants)
+	}
+}
+
 // The step's reasoning items are stored on its session message: they are
 // the only copy of the thought a stateless backend produced, and the next
 // request replays them from there.
