@@ -93,6 +93,17 @@ func (p *ApprovalPolicy) AllowSession(name string) {
 	p.SessionAllowed[name] = true
 }
 
+// AllowAlways records a permanent allowance on this policy instance.
+func (p *ApprovalPolicy) AllowAlways(name string) {
+	if p == nil {
+		return
+	}
+	if p.AlwaysAllowed == nil {
+		p.AlwaysAllowed = map[string]bool{}
+	}
+	p.AlwaysAllowed[name] = true
+}
+
 // Risk classifies what a mutating tool does.
 type Risk string
 

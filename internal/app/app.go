@@ -882,10 +882,7 @@ func (a *App) Policy() *agent.ApprovalPolicy {
 func (a *App) AllowTool(name string) {
 	a.mu.Lock()
 	a.policy.AllowSession(name)
-	if a.policy.AlwaysAllowed == nil {
-		a.policy.AlwaysAllowed = map[string]bool{}
-	}
-	a.policy.AlwaysAllowed[name] = true
+	a.policy.AllowAlways(name)
 	if !containsString(a.cfg.AlwaysAllowedTools, name) {
 		a.cfg.AlwaysAllowedTools = append(append([]string{}, a.cfg.AlwaysAllowedTools...), name)
 	}
