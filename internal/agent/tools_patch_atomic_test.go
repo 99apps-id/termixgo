@@ -120,7 +120,7 @@ func TestCompactStoredHistoryBoundsTheTranscript(t *testing.T) {
 		session.AddUser("please do the thing")
 		session.AddAssistant("working", "", []provider.ToolCall{
 			{ID: "call_1", Name: "read_file", Arguments: `{"path":"big.go"}`},
-		})
+		}, nil)
 		session.AddToolResult("call_1", "read_file", big)
 	}
 	budget := HistoryBudget(32000)
@@ -157,7 +157,7 @@ func TestCompactStoredHistoryBoundsTheTranscript(t *testing.T) {
 func TestCompactStoredHistoryLeavesAShortSessionAlone(t *testing.T) {
 	session := NewSession("/work", "test-model")
 	session.AddUser("one question")
-	session.AddAssistant("one answer", "", nil)
+	session.AddAssistant("one answer", "", nil, nil)
 	if session.CompactStoredHistory(10) {
 		t.Errorf("a transcript under the budget must not be rewritten")
 	}
@@ -168,7 +168,7 @@ func TestCompactStoredHistoryLeavesAShortSessionAlone(t *testing.T) {
 	// to condense, and naming a fresh session reads its turn count.
 	single := NewSession("/work", "test-model")
 	single.AddUser("one question")
-	single.AddAssistant("working", "", nil)
+	single.AddAssistant("working", "", nil, nil)
 	single.AddToolResult("call_1", "read_file", strings.Repeat("x", 40000))
 	if single.CompactStoredHistory(100) {
 		t.Errorf("a single-turn session must be left for naming to read")
@@ -184,7 +184,7 @@ func TestSessionCondensedSurvivesTheRoundTrip(t *testing.T) {
 	home := withState(t)
 	session := NewSession("/work", "test-model")
 	session.AddUser("question")
-	session.AddAssistant("answer", "", nil)
+	session.AddAssistant("answer", "", nil, nil)
 	session.condensed = true
 	id := session.ID()
 	if err := session.Save(); err != nil {

@@ -13,7 +13,7 @@ func TestLoadRepairsImpossibleUsage(t *testing.T) {
 	withState(t)
 	session := NewSession("/work", "stepfun-plan/step-3.7-flash")
 	session.AddUser("do the thing")
-	session.AddAssistant("done.", "", nil)
+	session.AddAssistant("done.", "", nil, nil)
 	session.AddUsage(provider.Usage{PromptTokens: 2_000_000_000, CompletionTokens: 1_000, TotalTokens: 2_000_001_000})
 	session.SetCost(123.45)
 	if err := session.Save(); err != nil {
@@ -38,7 +38,7 @@ func TestLoadKeepsAPlausibleUsage(t *testing.T) {
 	withState(t)
 	session := NewSession("/work", "stepfun-plan/step-3.7-flash")
 	session.AddUser("do the thing")
-	session.AddAssistant("done.", "", nil)
+	session.AddAssistant("done.", "", nil, nil)
 	session.AddUsage(provider.Usage{PromptTokens: 1200, CompletionTokens: 300, TotalTokens: 1500})
 	session.SetCost(0.0125)
 	if err := session.Save(); err != nil {

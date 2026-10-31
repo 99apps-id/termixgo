@@ -72,7 +72,7 @@ func TestSlashExportExportsCurrentSession(t *testing.T) {
 	session := model.app.Session()
 	session.SetTitle("My Export Test Session")
 	session.AddUser("Hello agent")
-	session.AddAssistant("Hello operator", "", nil)
+	session.AddAssistant("Hello operator", "", nil, nil)
 
 	// 1. Export without path (default exports to .termixgo/exports/session-<id>.md)
 	_, output := runSlash(t, model, "/export")
@@ -298,7 +298,7 @@ func TestSlashSessionsResumesTheChosenOne(t *testing.T) {
 
 	saved := agent.NewSession(model.app.Workspace(), "qwen2.5-coder:latest")
 	saved.AddUser("the earlier question")
-	saved.AddAssistant("the earlier answer", "", nil)
+	saved.AddAssistant("the earlier answer", "", nil, nil)
 	if err := saved.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}

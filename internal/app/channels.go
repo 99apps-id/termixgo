@@ -737,7 +737,7 @@ func (a *App) runChannelVoiceFallback(ctx context.Context, agentName string, ses
 	}
 	if session != nil {
 		session.AddUser(prompt)
-		session.AddAssistant(report, "", nil)
+		session.AddAssistant(report, "", nil, nil)
 		session.AddUsage(spend.Usage)
 		_ = session.Save()
 	}

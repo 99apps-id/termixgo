@@ -35,7 +35,7 @@ func TestSessionSaveAndLoadRoundTrip(t *testing.T) {
 	session.AddUser("add a health endpoint")
 	session.AddAssistant("Done.", "I checked the routes first.", []provider.ToolCall{
 		{ID: "call_1", Name: "read_file", Arguments: `{"path":"routes.go"}`},
-	})
+	}, nil)
 	session.AddToolResult("call_1", "read_file", "package routes")
 	session.AddUsage(provider.Usage{PromptTokens: 1200, CompletionTokens: 300, TotalTokens: 1500})
 	session.SetCost(0.0125)
@@ -287,9 +287,9 @@ func TestSessionLastAssistantText(t *testing.T) {
 	}
 
 	session.AddUser("hi")
-	session.AddAssistant("first answer", "", nil)
+	session.AddAssistant("first answer", "", nil, nil)
 	session.AddToolResult("c1", "read_file", "content")
-	session.AddAssistant("second answer", "", nil)
+	session.AddAssistant("second answer", "", nil, nil)
 
 	if got := session.LastAssistantText(); got != "second answer" {
 		t.Errorf("LastAssistantText = %q, want the newest answer", got)
@@ -297,8 +297,8 @@ func TestSessionLastAssistantText(t *testing.T) {
 
 	// A trailing assistant turn with only reasoning is not an answer.
 	withEmpty := NewSession("/w", "m")
-	withEmpty.AddAssistant("an answer", "", nil)
-	withEmpty.AddAssistant("", "thinking only", nil)
+	withEmpty.AddAssistant("an answer", "", nil, nil)
+	withEmpty.AddAssistant("", "thinking only", nil, nil)
 	if got := withEmpty.LastAssistantText(); got != "an answer" {
 		t.Errorf("LastAssistantText = %q, want it to skip an empty answer", got)
 	}
@@ -309,11 +309,11 @@ func TestSessionLastAssistantText(t *testing.T) {
 func TestSessionLastAssistantTextSince(t *testing.T) {
 	session := NewSession("/w", "m")
 	session.AddUser("first")
-	session.AddAssistant("first answer", "", nil)
+	session.AddAssistant("first answer", "", nil, nil)
 
 	mark := session.MessageCount()
 	session.AddUser("second")
-	session.AddAssistant("second answer", "", nil)
+	session.AddAssistant("second answer", "", nil, nil)
 	if got := session.LastAssistantTextSince(mark); got != "second answer" {
 		t.Errorf("LastAssistantTextSince = %q, want the new answer", got)
 	}
@@ -359,7 +359,7 @@ func TestSessionIsSafeUnderConcurrentUse(t *testing.T) {
 		defer wg.Done()
 		for index := 0; index < 200; index++ {
 			session.AddUser("turn")
-			session.AddAssistant("answer", "reasoning", nil)
+			session.AddAssistant("answer", "reasoning", nil, nil)
 			session.AddToolResult("c", "read_file", "output")
 			session.AddUsage(provider.Usage{PromptTokens: 1})
 			session.SetCost(float64(index) / 1000)

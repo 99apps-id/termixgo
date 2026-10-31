@@ -180,7 +180,10 @@ runLoop:
 		var answer strings.Builder
 		var reasoning strings.Builder
 		var calls []provider.ToolCall
+		var reasoningItems []provider.ReasoningItem
+		var stepUsage provider.Usage
 		var reasoningStart time.Time
+		var incompleteReason string
 
 		streamErr := r.Client.Stream(ctx, request, func(event provider.StreamEvent) error {
 			switch event.Type {
@@ -197,8 +200,15 @@ runLoop:
 				if event.ToolCall != nil {
 					calls = append(calls, *event.ToolCall)
 				}
+			case provider.EventReasoningItem:
+				if event.ReasoningItem != nil {
+					reasoningItems = append(reasoningItems, *event.ReasoningItem)
+				}
+			case provider.EventIncomplete:
+				incompleteReason = event.IncompleteReason
 			case provider.EventUsage:
 				if event.Usage != nil {
+					stepUsage = stepUsage.Add(*event.Usage)
 					turnUsage = turnUsage.Add(*event.Usage)
 					sessionCost += r.Pricing.Cost(*event.Usage)
 					emit(Event{Kind: EventUsage, Usage: *event.Usage, CostUSD: sessionCost, CostKnown: costKnown, CostUnpriced: unpriced})
@@ -235,18 +245,45 @@ runLoop:
 			break runLoop
 		}
 
+		if incompleteReason != "" {
+			// The backend cut this step at its output ceiling. What
+			// arrived is stored below like any step's output and the loop
+			// continues, so the next request hands the partial step back
+			// and the model resumes, instead of the run dying on a limit
+			// the client never set.
+			emit(Event{Kind: EventNotice, Text: "The backend cut that step at its output limit; continuing from what arrived."})
+		}
+
 		// A step that produced no text and no tool call is not a turn worth
 		// keeping. Storing it would put an empty assistant message, or two
 		// in a row when the model is idle, into the history: a weaker
 		// OpenAI-compatible model reads that as a malformed turn and can
 		// answer an earlier message instead of the operator's latest one.
 		// The guard below still counts the idle step, so the loop stops.
-		if strings.TrimSpace(answer.String()) != "" || len(calls) > 0 {
-			session.AddAssistant(answer.String(), reasoning.String(), calls)
+		// Reasoning items are the one exception: an entry carrying only
+		// them encodes to no message at all for other providers, and for a
+		// stateless Codex backend they are the step's thought, which the
+		// next request must hand back or lose.
+		if strings.TrimSpace(answer.String()) != "" || len(calls) > 0 || len(reasoningItems) > 0 {
+			session.AddAssistant(answer.String(), reasoning.String(), calls, reasoningItems)
 		}
 
 		if len(calls) == 0 {
 			if strings.TrimSpace(answer.String()) == "" {
+				// Reasoning is model output, not silence: a step that only
+				// thought (a reasoning model cut off before its answer, or
+				// working through a hard step) must not feed the idle guard,
+				// or a run that is demonstrably working gets filed as stuck
+				// after three such steps. The thought may be visible as
+				// summary text, as stored reasoning items, or only as
+				// reasoning tokens in the step's usage when the backend
+				// streamed no summary; all three are the model working.
+				// The step budget stays the outer bound, the same
+				// arrangement as the error streak.
+				if reasoning.Len() > 0 || len(reasoningItems) > 0 || stepUsage.ReasoningTokens > 0 {
+					guard.noteProgress()
+					continue
+				}
 				// Silence is not success: a model that returns no text
 				// and no calls is stuck, so ask again up to the guard
 				// instead of filing an empty turn as done.
@@ -264,6 +301,14 @@ runLoop:
 						continue
 					}
 				}
+				continue
+			}
+			if incompleteReason != "" {
+				// A cut step's text is a partial answer, not a finished
+				// one: it is already stored above, so continue and let
+				// the next step finish it rather than presenting half an
+				// answer as the turn's result.
+				guard.noteProgress()
 				continue
 			}
 			guard.noteProgress()

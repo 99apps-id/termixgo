@@ -44,12 +44,22 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 		payload["tools"] = tools
 		payload["tool_choice"] = "auto"
 	}
-	// A lite model rejects the top-level field and carries the level inside the
-	// reasoning object instead, so the two must not both be written.
+	// The reasoning controls travel as one object, the shape the reference
+	// client sends: the effort level, plus the summary request that makes
+	// the model's thinking stream back as summary deltas. Without the
+	// summary a reasoning step can arrive with no visible output at all and
+	// read as an idle step to the agent loop. The encrypted-content include
+	// is what lets the next step hand this step's reasoning items back,
+	// which a store: false backend cannot fetch on its own. A lite model
+	// rejects this arrangement and is rewritten by applyResponsesLite
+	// instead, so the two shapes must not both be written.
 	if !isCodexResponsesLiteModel(req.Model) {
+		reasoning := map[string]any{"summary": "auto"}
 		if effort := compatibleEffort(c.info.ID, req.Effort); effort != "" {
-			payload["reasoning_effort"] = effort
+			reasoning["effort"] = effort
 		}
+		payload["reasoning"] = reasoning
+		payload["include"] = []string{"reasoning.encrypted_content"}
 	}
 	if isCodexResponsesLiteModel(req.Model) {
 		applyResponsesLite(payload, input, tools, instructions, req.Effort)
@@ -138,6 +148,18 @@ func decodeResponsesStream(label string, body io.Reader, emit func(StreamEvent) 
 				finalArgs[event.ItemID] = args
 			}
 		case "response.output_item.done":
+			// A reasoning item is kept whole: with store: false the backend
+			// cannot look its own reasoning back up, so the loop stores the
+			// item and the encoder hands it back on the next step.
+			if event.Item != nil && event.Item.Type == "reasoning" {
+				item := ReasoningItem{ID: event.Item.ID, EncryptedContent: event.Item.EncryptedContent}
+				for _, part := range event.Item.Summary {
+					item.Summary = append(item.Summary, part.Text)
+				}
+				if err := emit(StreamEvent{Type: EventReasoningItem, ReasoningItem: &item}); err != nil {
+					return err
+				}
+			}
 			if event.Item != nil && event.Item.Type == "function_call" && event.Item.Name != "" {
 				arguments := event.Item.Arguments
 				if strings.TrimSpace(arguments) == "" {
@@ -155,6 +177,15 @@ func decodeResponsesStream(label string, body io.Reader, emit func(StreamEvent) 
 				}
 			}
 		case "response.completed", "response.incomplete":
+			// An incomplete response still bills, so its usage is harvested
+			// below like a completed one; but it is not a finished step. It
+			// means the backend cut the generation off. A cut at the output
+			// ceiling (max_output_tokens) is reported as an EventIncomplete
+			// after the usage so the loop can continue the truncated step
+			// from its partial output; any other reason (a content filter)
+			// still ends the stream in an error naming the reason instead
+			// of looking like a model that silently produced nothing,
+			// which the agent loop would count as an idle step.
 			if event.Response != nil && event.Response.Usage != nil {
 				raw := event.Response.Usage
 				var cached, reasoning int
@@ -176,6 +207,25 @@ func decodeResponsesStream(label string, body io.Reader, emit func(StreamEvent) 
 					}
 				}
 			}
+			if event.Type == "response.incomplete" {
+				reason := "unspecified"
+				if event.Response != nil && event.Response.IncompleteDetails != nil && event.Response.IncompleteDetails.Reason != "" {
+					reason = event.Response.IncompleteDetails.Reason
+				}
+				if reason == "max_output_tokens" {
+					// The backend's own per-response output ceiling cut
+					// the generation; neither client sets that ceiling, so
+					// a reasoning-heavy step can hit it on a healthy run.
+					// The partial step stays valid: report it and let the
+					// loop continue from what arrived instead of failing
+					// the whole run.
+					if err := emit(StreamEvent{Type: EventIncomplete, IncompleteReason: reason}); err != nil {
+						return err
+					}
+				} else {
+					return wrapStreamError(label, fmt.Errorf("the Responses backend ended the response incomplete (%s) before the step finished", reason))
+				}
+			}
 		case "response.failed", "error":
 			return wrapStreamError(label, fmt.Errorf("the Responses backend reported a failure: %s", event.message()))
 		}
@@ -194,6 +244,12 @@ func encodeResponsesInput(req ChatRequest) []map[string]any {
 				"content": responsesUserContent(message),
 			})
 		case RoleAssistant:
+			// The step's reasoning items go back before its words and
+			// calls: they are the thought that produced them, and a
+			// stateless backend has no other way to recover it.
+			for _, item := range message.ReasoningItems {
+				items = append(items, reasoningItemInput(item))
+			}
 			if strings.TrimSpace(message.Content) != "" {
 				items = append(items, map[string]any{
 					"type":    "message",
@@ -226,6 +282,27 @@ func encodeResponsesInput(req ChatRequest) []map[string]any {
 // validated and answered with 400 "`arguments` must be valid JSON". Blank or
 // broken arguments degrade to an empty object (the tool error already
 // recorded in the history explains why) instead of failing every later turn.
+// reasoningItemInput renders a stored reasoning item back into a Responses
+// input item, in the shape the backend issued it: id and encrypted content
+// are what let it pick the thought up again, the summary rides along as it
+// originally did.
+func reasoningItemInput(item ReasoningItem) map[string]any {
+	out := map[string]any{"type": "reasoning", "encrypted_content": item.EncryptedContent}
+	if item.ID != "" {
+		out["id"] = item.ID
+	}
+	// The summary key is required on a replayed reasoning item even when
+	// the backend issued the item without summary parts: omitting it makes
+	// the backend reject the whole request ("Missing required parameter:
+	// 'input[N].summary'"). An empty array is the accepted shape.
+	summary := make([]map[string]any, 0, len(item.Summary))
+	for _, text := range item.Summary {
+		summary = append(summary, map[string]any{"type": "summary_text", "text": text})
+	}
+	out["summary"] = summary
+	return out
+}
+
 func responsesArguments(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" || !json.Valid([]byte(trimmed)) {
@@ -298,7 +375,7 @@ func applyResponsesLite(payload map[string]any, input []map[string]any, tools []
 	if mapped == "" {
 		mapped = "medium"
 	}
-	payload["reasoning"] = map[string]any{"effort": mapped, "context": "all_turns"}
+	payload["reasoning"] = map[string]any{"effort": mapped, "context": "all_turns", "summary": "auto"}
 	payload["include"] = []string{"reasoning.encrypted_content"}
 }
 
@@ -315,11 +392,16 @@ type responsesEvent struct {
 		Message string `json:"message"`
 	} `json:"error"`
 	Item *struct {
-		ID        string `json:"id"`
-		Type      string `json:"type"`
-		CallID    string `json:"call_id"`
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
+		ID               string `json:"id"`
+		Type             string `json:"type"`
+		CallID           string `json:"call_id"`
+		Name             string `json:"name"`
+		Arguments        string `json:"arguments"`
+		EncryptedContent string `json:"encrypted_content"`
+		Summary          []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"summary"`
 	} `json:"item"`
 	Response *struct {
 		Usage *struct {
@@ -333,6 +415,9 @@ type responsesEvent struct {
 				ReasoningTokens int `json:"reasoning_tokens"`
 			} `json:"output_tokens_details"`
 		} `json:"usage"`
+		IncompleteDetails *struct {
+			Reason string `json:"reason"`
+		} `json:"incomplete_details"`
 	} `json:"response"`
 }
 

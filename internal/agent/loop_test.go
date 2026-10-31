@@ -403,6 +403,189 @@ func TestWorkerSubagentKeepsFullToolset(t *testing.T) {
 	}
 }
 
+// A reasoning-only step is model output, not an idle one: a reasoning model
+// that thinks for several steps before answering must not trip the empty-step
+// guard, or a working run is reported as stuck.
+func TestRunReasoningOnlyStepsAreNotIdle(t *testing.T) {
+	reasoningOnly := []provider.StreamEvent{
+		{Type: provider.EventReasoningDelta, Text: "Working through the problem."},
+	}
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		reasoningOnly, reasoningOnly, reasoningOnly, reasoningOnly,
+		{textChunk("Done thinking.")},
+	}}
+	runner, env, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	session := NewSession(env.Workspace, "test-model")
+
+	if err := runner.Run(context.Background(), session, "think hard"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	recorder.mu.Lock()
+	for _, event := range recorder.events {
+		if event.Kind == EventNotice && strings.Contains(event.Text, "no text and no tool calls") {
+			t.Errorf("a reasoning-only step tripped the idle guard: %q", event.Text)
+		}
+	}
+	recorder.mu.Unlock()
+	client.mu.Lock()
+	calls := client.calls
+	client.mu.Unlock()
+	if calls != 5 {
+		t.Errorf("provider calls = %d, want all 5 steps consumed", calls)
+	}
+	messages := session.Messages()
+	last := messages[len(messages)-1]
+	if last.Role != provider.RoleAssistant || !strings.Contains(last.Content, "Done thinking.") {
+		t.Errorf("the final answer is missing: %+v", last)
+	}
+}
+
+// A step whose thinking never streamed (the backend billed reasoning tokens
+// but sent no summary) is still the model working: the usage alone must
+// reset the empty streak, or reasoning models whose summaries do not stream
+// are filed as idle while demonstrably thinking.
+func TestRunReasoningTokenOnlyStepsAreNotIdle(t *testing.T) {
+	thinking := []provider.StreamEvent{
+		{Type: provider.EventUsage, Usage: &provider.Usage{PromptTokens: 100, CompletionTokens: 60, TotalTokens: 160, ReasoningTokens: 55}},
+	}
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		thinking, thinking, thinking, thinking,
+		{textChunk("Done thinking.")},
+	}}
+	runner, env, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	session := NewSession(env.Workspace, "test-model")
+
+	if err := runner.Run(context.Background(), session, "think hard"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	recorder.mu.Lock()
+	for _, event := range recorder.events {
+		if event.Kind == EventNotice && strings.Contains(event.Text, "no text and no tool calls") {
+			t.Errorf("a reasoning-token step tripped the idle guard: %q", event.Text)
+		}
+	}
+	recorder.mu.Unlock()
+	client.mu.Lock()
+	calls := client.calls
+	client.mu.Unlock()
+	if calls != 5 {
+		t.Errorf("provider calls = %d, want all 5 steps consumed", calls)
+	}
+}
+
+// A step cut at the backend's output ceiling is a truncated step, not the
+// turn's end: its partial text is stored, a notice names the cut, and the
+// loop continues so the next step finishes the answer instead of the run
+// dying or the partial text being presented as the finished answer.
+func TestRunContinuesAStepCutAtTheOutputCeiling(t *testing.T) {
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{
+			textChunk("Partial ans"),
+			{Type: provider.EventIncomplete, IncompleteReason: "max_output_tokens"},
+		},
+		{textChunk("wer, finished.")},
+	}}
+	runner, env, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	session := NewSession(env.Workspace, "test-model")
+
+	if err := runner.Run(context.Background(), session, "answer"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	client.mu.Lock()
+	calls := client.calls
+	client.mu.Unlock()
+	if calls != 2 {
+		t.Errorf("provider calls = %d, want the truncated step and its continuation", calls)
+	}
+	recorder.mu.Lock()
+	notices := 0
+	for _, event := range recorder.events {
+		if event.Kind == EventNotice && strings.Contains(event.Text, "output limit") {
+			notices++
+		}
+	}
+	recorder.mu.Unlock()
+	if notices != 1 {
+		t.Errorf("cut notices = %d, want 1", notices)
+	}
+	messages := session.Messages()
+	var assistants []string
+	for _, message := range messages {
+		if message.Role == provider.RoleAssistant {
+			assistants = append(assistants, message.Content)
+		}
+	}
+	if len(assistants) != 2 || assistants[0] != "Partial ans" || assistants[1] != "wer, finished." {
+		t.Errorf("assistant messages = %v, want the stored partial followed by the finished answer", assistants)
+	}
+}
+
+// The step's reasoning items are stored on its session message: they are
+// the only copy of the thought a stateless backend produced, and the next
+// request replays them from there.
+func TestRunStoresReasoningItemsOnTheStep(t *testing.T) {
+	item := provider.ReasoningItem{ID: "rs_1", EncryptedContent: "enc_abc", Summary: []string{"thought one"}}
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{
+			{Type: provider.EventReasoningItem, ReasoningItem: &item},
+			callChunk("read_file", "call_1", `{"path":"note.txt"}`),
+		},
+		{textChunk("The note says hi.")},
+	}}
+	runner, env, _ := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	if err := os.WriteFile(filepath.Join(env.Workspace, "note.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	session := NewSession(env.Workspace, "test-model")
+
+	if err := runner.Run(context.Background(), session, "read the note"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, message := range session.Messages() {
+		if message.Role != provider.RoleAssistant || len(message.ToolCalls) == 0 {
+			continue
+		}
+		if len(message.ReasoningItems) != 1 || message.ReasoningItems[0].EncryptedContent != "enc_abc" || message.ReasoningItems[0].ID != "rs_1" {
+			t.Errorf("the tool step's reasoning items = %+v, want the streamed item stored", message.ReasoningItems)
+		}
+		return
+	}
+	t.Errorf("no stored assistant message carries the tool step: %+v", session.Messages())
+}
+
+// A step with no output at all is still idle: three of them in a row stop the
+// run with the guard's message, and no further step is attempted.
+func TestRunTrulyEmptyStepsStillStopAsIdle(t *testing.T) {
+	empty := []provider.StreamEvent{}
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		empty, empty, empty,
+		{textChunk("never reached")},
+	}}
+	runner, env, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	session := NewSession(env.Workspace, "test-model")
+
+	if err := runner.Run(context.Background(), session, "say something"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var notice string
+	recorder.mu.Lock()
+	for _, event := range recorder.events {
+		if event.Kind == EventNotice && strings.Contains(event.Text, "no text and no tool calls") {
+			notice = event.Text
+		}
+	}
+	recorder.mu.Unlock()
+	if notice == "" {
+		t.Fatalf("three truly empty steps must stop with the idle guard's notice")
+	}
+	client.mu.Lock()
+	calls := client.calls
+	client.mu.Unlock()
+	if calls != 3 {
+		t.Errorf("provider calls = %d, want the guard to stop at 3 empty steps", calls)
+	}
+}
+
 func TestLookupSubagentFallsBackToGeneral(t *testing.T) {
 	if got := LookupSubagent("nope"); got.Type != SubagentGeneral {
 		t.Errorf("unknown type = %q, want general", got.Type)

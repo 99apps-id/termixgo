@@ -204,11 +204,11 @@ func TestElideDoesNotMutateTheStoredMessage(t *testing.T) {
 	// session's own message list that is passed in.
 	session := NewSession("ws", "model")
 	session.AddUser("hello")
-	session.AddAssistant("calling", "", []provider.ToolCall{{ID: "1", Name: "read_file", Arguments: `{"path":"main.go"}`}})
+	session.AddAssistant("calling", "", []provider.ToolCall{{ID: "1", Name: "read_file", Arguments: `{"path":"main.go"}`}}, nil)
 	session.AddToolResult("1", "read_file", "content")
 	for index := 0; index < 30; index++ {
 		session.AddUser("filler message with enough text to consume the token budget")
-		session.AddAssistant("acknowledged", "", nil)
+		session.AddAssistant("acknowledged", "", nil, nil)
 	}
 	_ = Compact(session.Messages(), 200)
 	if got := session.Messages()[1].ToolCalls[0].Arguments; got != `{"path":"main.go"}` {
