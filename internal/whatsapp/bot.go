@@ -82,13 +82,20 @@ type Bot struct {
 	sendHook     func(chatID, text string)
 	sendFileHook func(chatID, filename string, data []byte, caption string)
 	downloadHook func(ctx context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error)
+<<<<<<< HEAD
 	interceptor  channel.MessageInterceptor
 	hookURL      string
 	hookSecret   string
+=======
+	markReadHook func(ctx context.Context, chat, sender types.JID, id types.MessageID)
+>>>>>>> e43a8a9 (Enable active delivery receipts, online presence, and read receipts in WhatsApp)
 }
 
 // New builds the bot for one client and bridge.
 func New(client *whatsmeow.Client, agent channel.Agent) *Bot {
+	if client != nil {
+		client.SetForceActiveDeliveryReceipts(true)
+	}
 	return &Bot{client: client, agent: agent}
 }
 
@@ -171,6 +178,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	if b.client == nil {
 		return fmt.Errorf("no WhatsApp client")
 	}
+	b.client.SetForceActiveDeliveryReceipts(true)
 	b.refreshSelf()
 	b.client.AddEventHandler(func(evt any) {
 		switch event := evt.(type) {
@@ -178,6 +186,7 @@ func (b *Bot) Run(ctx context.Context) error {
 			go b.handleMessage(ctx, event)
 		case *events.Connected:
 			b.refreshSelf()
+			_ = b.client.SendPresence(ctx, types.PresenceAvailable)
 		case *events.LoggedOut:
 			b.logf("logged out; run 'termixgo channel login whatsapp " + b.accountName() + "'")
 		}
@@ -185,6 +194,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	if err := b.client.Connect(); err != nil {
 		return fmt.Errorf("connect WhatsApp: %w", err)
 	}
+	_ = b.client.SendPresence(ctx, types.PresenceAvailable)
 	<-ctx.Done()
 	b.client.Disconnect()
 	return ctx.Err()
@@ -295,13 +305,19 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 	}
 	if !decision.Allow {
 		if b.mayPair(policy, request) {
+			b.markRead(ctx, evt)
 			b.reply(ctx, request.ChatID, b.pairingPrompt(request))
 			return
 		}
 		b.logfLine("ignored message from " + request.SenderID + " (" + decision.Reason + ")")
 		return
 	}
+<<<<<<< HEAD
 	lang := SenderLanguage(request)
+=======
+	b.markRead(ctx, evt)
+	lang := b.userLanguage(request)
+>>>>>>> e43a8a9 (Enable active delivery receipts, online presence, and read receipts in WhatsApp)
 	request.Admin = decision.Admin
 	if !decision.Admin {
 		b.mu.RLock()
@@ -1128,6 +1144,9 @@ func (b *Bot) reply(ctx context.Context, chatID, text string) {
 // keepTyping holds the composing indicator while the turn runs, which is the
 // whole progress story on WhatsApp: a person sees "typing", then one answer.
 func (b *Bot) keepTyping(ctx context.Context, chatID string, done <-chan struct{}) {
+	if b.client == nil {
+		return
+	}
 	jid, err := types.ParseJID(chatID)
 	if err != nil {
 		return
@@ -1149,6 +1168,24 @@ func (b *Bot) keepTyping(ctx context.Context, chatID string, done <-chan struct{
 			compose()
 		}
 	}
+}
+
+// markRead acknowledges an incoming message as read on WhatsApp.
+func (b *Bot) markRead(ctx context.Context, evt *events.Message) {
+	if evt == nil {
+		return
+	}
+	b.mu.RLock()
+	hook := b.markReadHook
+	b.mu.RUnlock()
+	if hook != nil {
+		hook(ctx, evt.Info.Chat, evt.Info.Sender, evt.Info.ID)
+		return
+	}
+	if b.client == nil {
+		return
+	}
+	_ = b.client.MarkRead(ctx, []types.MessageID{evt.Info.ID}, time.Now(), evt.Info.Chat, evt.Info.Sender)
 }
 
 // naturalError turns a failure into one human sentence. Tool names, paths and

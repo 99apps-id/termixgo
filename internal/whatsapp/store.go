@@ -67,5 +67,8 @@ func OpenDevice(ctx context.Context, path string) (*store.Device, func() error, 
 
 // Client builds the whatsmeow client for a device.
 func Client(device *store.Device) *whatsmeow.Client {
-	return whatsmeow.NewClient(device, waLog.Noop)
+	cli := whatsmeow.NewClient(device, waLog.Noop)
+	cli.SetForceActiveDeliveryReceipts(true)
+	cli.AutoTrustIdentity = true
+	return cli
 }
