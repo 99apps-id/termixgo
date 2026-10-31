@@ -665,13 +665,6 @@ func (b *telegramBridge) Workspace() string {
 	return b.app.AgentWorkspace(b.account.AgentName(b.name))
 }
 
-func (b *telegramBridge) interactor() Interactor {
-	if b.bot == nil {
-		return nil
-	}
-	return &telegramInteractor{bot: b.bot}
-}
-
 func (b *telegramBridge) interactorFor(request channel.Request) Interactor {
 	if b.bot == nil {
 		return nil

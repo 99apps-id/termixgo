@@ -495,10 +495,6 @@ func isOAuthOrPlanProvider(providerName string) bool {
 	return false
 }
 
-func isOAuthProvider(providerName string) bool {
-	return isOAuthOrPlanProvider(providerName)
-}
-
 // VisualGauge renders an ASCII progress bar of given width for 0-100 percentage.
 func VisualGauge(percent float64, width int) string {
 	if percent < 0 {
