@@ -62,6 +62,14 @@ func TestWelcomeBlockFollowsTheTrustChange(t *testing.T) {
 	}
 }
 
+func TestWelcomeExplainsCommandDiscovery(t *testing.T) {
+	model := chatModel(t)
+	welcome := welcomeText(t, model)
+	if !strings.Contains(welcome, "Type / to browse commands") {
+		t.Errorf("welcome should make the command palette discoverable:\n%s", welcome)
+	}
+}
+
 func welcomeText(t *testing.T, model *Model) string {
 	t.Helper()
 	for _, item := range model.blocks {

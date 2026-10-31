@@ -1094,13 +1094,14 @@ internal/whatsapp   native multi-device companion with whatsmeow, vision & enric
 ## Releasing
 
 ```sh
-git tag v0.2.3
-git push origin v0.2.3
+git tag v0.2.4
+git push origin v0.2.4
 ```
 
-The release workflow runs the full gate, then goreleaser builds six targets,
-writes `checksums.txt` and opens a draft release. Verify a download against that
-file before running it.
+The release workflow runs the full gate, requires the Antigravity OAuth client
+pair, then goreleaser builds six targets and verifies both credentials are
+stamped into every binary without printing them. It writes `checksums.txt` and
+opens a draft release. Verify a download against that file before running it.
 
 The version, commit and build date are stamped into the binary through ldflags,
 which is possible because `internal/version` declares them as vars rather than

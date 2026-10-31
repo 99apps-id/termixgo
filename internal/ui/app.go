@@ -427,7 +427,7 @@ func (m *Model) welcomeBlock() block {
 		m.styles.StatusKey.Render("folder  ") + m.styles.StatusValue.Render(m.app.Workspace()) + "  " + trust,
 		m.styles.StatusKey.Render("model   ") + modelLabel,
 		"",
-		m.styles.Subtitle.Render("Type a request and press Enter. /help lists commands, /setup finishes onboarding."),
+		m.styles.Subtitle.Render("Type a request and press Enter. Type / to browse commands; /setup finishes onboarding."),
 	}
 	if !m.app.Trusted() {
 		info = append(info, m.styles.Hint.Render("This folder is untrusted: writes and commands will ask first. Run /trust on to change that."))

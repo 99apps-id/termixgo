@@ -439,8 +439,8 @@ func TestBlockErrorAndUserRenderTheirMarker(t *testing.T) {
 	}
 
 	failure := stripANSI(renderBlock(block{kind: blockError, text: "boom"}, styles, width, true))
-	if !strings.Contains(failure, "boom") {
-		t.Errorf("error = %q", failure)
+	if !strings.Contains(failure, "Error: boom") {
+		t.Errorf("error = %q, want a scannable label", failure)
 	}
 	notice := stripANSI(renderBlock(block{kind: blockNotice, text: "a notice"}, styles, width, true))
 	if !strings.Contains(notice, "a notice") {

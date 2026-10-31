@@ -101,7 +101,7 @@ func renderBlock(item block, styles Styles, width int, showDetails bool) string 
 	case blockNotice:
 		return renderPrefixed(item.text, "  ", styles.Notice, width)
 	case blockError:
-		return renderPrefixed(item.text, "  ", styles.Error, width)
+		return renderPrefixed("Error: "+item.text, "  ", styles.Error, width)
 	case blockDiff:
 		if len(item.diffFiles) == 0 {
 			return ""
@@ -285,12 +285,17 @@ const editPreviewMinWidth = 24
 // as the change itself, and the box keeps the change from bleeding into the
 // surrounding transcript, which is what the previous bare lines did.
 func renderEditBox(preview string, styles Styles, width, maxLines int) string {
-	if strings.TrimSpace(preview) == "" || width < editPreviewMinWidth {
+	if strings.TrimSpace(preview) == "" {
 		return ""
 	}
 	files := sanitizeDiffFiles(parseUnifiedDiff(preview))
 	if len(files) == 0 {
 		return ""
+	}
+	if width < editPreviewMinWidth {
+		file := files[0]
+		summary := fmt.Sprintf("Diff %s (+%d -%d)", file.label, file.adds, file.dels)
+		return "  " + truncateANSI(styles.Dim.Render(summary), max(1, width-2))
 	}
 	// The transcript indents the box two columns, and the box spends two on
 	// its border and two more on its padding.

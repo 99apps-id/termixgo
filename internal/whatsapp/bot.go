@@ -82,13 +82,10 @@ type Bot struct {
 	sendHook     func(chatID, text string)
 	sendFileHook func(chatID, filename string, data []byte, caption string)
 	downloadHook func(ctx context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error)
-<<<<<<< HEAD
 	interceptor  channel.MessageInterceptor
 	hookURL      string
 	hookSecret   string
-=======
 	markReadHook func(ctx context.Context, chat, sender types.JID, id types.MessageID)
->>>>>>> e43a8a9 (Enable active delivery receipts, online presence, and read receipts in WhatsApp)
 }
 
 // New builds the bot for one client and bridge.
@@ -312,12 +309,8 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 		b.logfLine("ignored message from " + request.SenderID + " (" + decision.Reason + ")")
 		return
 	}
-<<<<<<< HEAD
-	lang := SenderLanguage(request)
-=======
 	b.markRead(ctx, evt)
-	lang := b.userLanguage(request)
->>>>>>> e43a8a9 (Enable active delivery receipts, online presence, and read receipts in WhatsApp)
+	lang := SenderLanguage(request)
 	request.Admin = decision.Admin
 	if !decision.Admin {
 		b.mu.RLock()
