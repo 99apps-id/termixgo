@@ -790,6 +790,10 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 			}
 		}
 		if decision == DecisionAllowAlways {
+			if r.Policy != nil {
+				r.Policy.AllowAlways(tool.Name())
+				r.Policy.AllowSession(tool.Name())
+			}
 			if r.Env != nil {
 				if r.Env.SessionAllowed == nil {
 					r.Env.SessionAllowed = map[string]bool{}

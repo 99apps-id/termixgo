@@ -27,6 +27,9 @@ func IndexLearnedContent(store *search.Store, memory *Memory, journal *ErrorJour
 		project, global := memory.Paths()
 		indexFile(store, "memory", "memory.md", "Project Memory", project)
 		indexFile(store, "memory", "global-memory.md", "Global Memory", global)
+		if ap := memory.AgentPath(); ap != "" {
+			indexFile(store, "memory", "agent-memory.md", "Agent Memory", ap)
+		}
 	}
 	if journal != nil {
 		indexFile(store, "journal", "error-journal.jsonl", "Error Journal", journal.Path())

@@ -479,6 +479,18 @@ func (a *App) startTelegramAccount(name string) error {
 			status = "waiting for pairing"
 		}
 		a.setChannelStatus(key, status)
+		lockName := fmt.Sprintf("poller-%s-%s.lock", key.Channel, key.Account)
+		lock, lockPID, lockErr := config.TryAcquireInstanceLock(lockName)
+		if errors.Is(lockErr, config.ErrAlreadyLocked) {
+			a.setChannelStatus(key, fmt.Sprintf("active in background (PID %d)", lockPID))
+			return
+		}
+		if lockErr != nil {
+			a.setChannelStatus(key, "lock error: "+lockErr.Error())
+			return
+		}
+		defer lock.Release()
+
 		if err := bot.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			a.setChannelStatus(key, "stopped: "+err.Error())
 		}
@@ -626,6 +638,14 @@ func (b *telegramBridge) Stop() { b.app.Stop() }
 func (b *telegramBridge) Model() string { return b.app.ModelLabel() }
 
 func (b *telegramBridge) SetModel(query string) (string, error) { return b.app.SetModel(query) }
+
+func (b *telegramBridge) RemoveCustomModel(modelID string) (bool, error) {
+	return b.app.RemoveCustomModel(modelID)
+}
+
+func (b *telegramBridge) RemoveSecret(providerID string) error {
+	return b.app.RemoveSecret(providerID)
+}
 
 func (b *telegramBridge) Models() string { return b.app.AvailableModelsText("en") }
 

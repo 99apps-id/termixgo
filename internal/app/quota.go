@@ -221,7 +221,38 @@ func (q *QuotaTracker) Snapshot(providerName string) *provider.QuotaSnapshot {
 	}
 	q.mu.RLock()
 	defer q.mu.RUnlock()
-	return q.snapshots[strings.ToLower(strings.TrimSpace(providerName))]
+	key := strings.ToLower(strings.TrimSpace(providerName))
+	if snap := q.snapshots[key]; snap != nil {
+		return snap
+	}
+	for _, alias := range providerAliases(key) {
+		if snap := q.snapshots[alias]; snap != nil {
+			return snap
+		}
+	}
+	return nil
+}
+
+func providerAliases(key string) []string {
+	switch key {
+	case "anthropic", "claude", "claude-code":
+		return []string{"claude-oauth", "anthropic"}
+	case "claude-oauth":
+		return []string{"anthropic", "claude"}
+	case "codex":
+		return []string{"openai-codex"}
+	case "openai-codex":
+		return []string{"codex"}
+	case "qwen":
+		return []string{"qwen-token-plan"}
+	case "qwen-token-plan":
+		return []string{"qwen"}
+	case "stepfun":
+		return []string{"stepfun-plan"}
+	case "stepfun-plan":
+		return []string{"stepfun"}
+	}
+	return nil
 }
 
 // Stats returns the rolling window summary for a specific provider.
@@ -405,33 +436,67 @@ func (q *QuotaTracker) ActiveQuotaGauge(providerName string, width int) string {
 		}
 	}
 	stats := q.Stats(providerName, RollingWindow)
-	if stats.RateLimit != nil && stats.RateLimit.TokensLimit > 0 {
-		if remaining := stats.RateLimit.PercentTokensRemaining(); remaining >= 0 {
-			return VisualGauge(100-remaining, width)
+	if stats.RateLimit == nil {
+		for _, alias := range providerAliases(providerName) {
+			if s := q.Stats(alias, RollingWindow); s.RateLimit != nil {
+				stats = s
+				break
+			}
 		}
 	}
-	// For OAuth providers or providers with an official snapshot history,
+	if stats.RateLimit != nil {
+		if stats.RateLimit.TokensLimit > 0 {
+			if remaining := stats.RateLimit.PercentTokensRemaining(); remaining >= 0 {
+				g := VisualGauge(100-remaining, width)
+				if stats.RateLimit.TokensReset != nil {
+					left := time.Until(*stats.RateLimit.TokensReset).Round(time.Minute)
+					if left > 0 {
+						g += fmt.Sprintf("(%s)", left)
+					}
+				}
+				return g
+			}
+		}
+		if stats.RateLimit.RequestsLimit > 0 {
+			if remaining := stats.RateLimit.PercentRequestsRemaining(); remaining >= 0 {
+				g := VisualGauge(100-remaining, width)
+				if stats.RateLimit.RequestsReset != nil {
+					left := time.Until(*stats.RateLimit.RequestsReset).Round(time.Minute)
+					if left > 0 {
+						g += fmt.Sprintf("(%s)", left)
+					}
+				}
+				return g
+			}
+		}
+	}
+	// For OAuth or plan providers, or providers with an official snapshot history,
 	// the local 5-hour window estimate acts as a fallback.
 	// For standard API key / local models, showing "[5h: ...]" is misleading
 	// because they do not have a 5-hour subscription quota window.
-	if (isOAuthProvider(providerName) || q.Snapshot(providerName) != nil) && stats.Requests > 0 {
+	if (isOAuthOrPlanProvider(providerName) || q.Snapshot(providerName) != nil) && stats.Requests > 0 {
 		return fmt.Sprintf("[5h: %dr/%dk] %s", stats.Requests, (stats.TotalTokens+500)/1000, LocalEstimateLabel)
 	}
 	return ""
 }
 
-func isOAuthProvider(providerName string) bool {
+func isOAuthOrPlanProvider(providerName string) bool {
 	norm := strings.ToLower(strings.TrimSpace(providerName))
-	if norm == "codex" || norm == "openai-codex" || norm == "antigravity" || norm == "muse" || norm == "github-copilot" {
+	if norm == "codex" || norm == "openai-codex" || norm == "antigravity" || norm == "muse" || norm == "github-copilot" ||
+		norm == "claude-oauth" || norm == "qwen-token-plan" || norm == "stepfun-plan" {
 		return true
 	}
-	if strings.Contains(norm, "oauth") {
+	if strings.Contains(norm, "oauth") || strings.Contains(norm, "plan") {
 		return true
 	}
-	if p, ok := provider.ByID(norm); ok && p.OAuth {
+	if p, ok := provider.ByID(norm); ok && (p.OAuth || strings.Contains(p.ID, "plan")) {
 		return true
 	}
 	return false
+}
+
+func isOAuthProvider(providerName string) bool {
+	return isOAuthOrPlanProvider(providerName)
 }
 
 // VisualGauge renders an ASCII progress bar of given width for 0-100 percentage.

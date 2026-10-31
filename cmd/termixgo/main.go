@@ -331,6 +331,39 @@ func runModel(args []string, stdout io.Writer) error {
 				fmt.Fprintf(stdout, "image model is now %s\n", cfg.ImageModel)
 			}
 			return config.Save(cfg)
+		case "rm", "remove", "delete":
+			if len(args) < 2 {
+				return fmt.Errorf("usage: termixgo model rm <model-id>")
+			}
+			target := strings.TrimSpace(args[1])
+			removed := false
+			for provID, models := range cfg.CustomModels {
+				var kept []string
+				for _, m := range models {
+					if strings.EqualFold(m, target) || strings.EqualFold(provID+":"+m, target) {
+						removed = true
+					} else {
+						kept = append(kept, m)
+					}
+				}
+				if len(kept) == 0 {
+					delete(cfg.CustomModels, provID)
+				} else {
+					cfg.CustomModels[provID] = kept
+				}
+			}
+			if strings.EqualFold(cfg.DefaultModel, target) {
+				cfg.DefaultModel = ""
+				removed = true
+			}
+			if !removed {
+				return fmt.Errorf("model %q was not found in custom configured models", target)
+			}
+			if err := config.Save(cfg); err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "removed custom model %q\n", target)
+			return nil
 		}
 	}
 	if len(args) == 0 {
@@ -584,9 +617,35 @@ func runHarness(args []string, stdout io.Writer) error {
 
 func runSecret(args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: termixgo secret <provider> [key]")
+		return fmt.Errorf("usage: termixgo secret <provider> [key] or termixgo secret rm <provider>")
 	}
-	providerID := args[0]
+	if args[0] == "rm" || args[0] == "remove" || args[0] == "delete" {
+		if len(args) < 2 {
+			return fmt.Errorf("usage: termixgo secret rm <provider>")
+		}
+		providerID := strings.ToLower(strings.TrimSpace(args[1]))
+		store, err := secrets.Load()
+		if err != nil {
+			return err
+		}
+		_ = store.Delete(secrets.ProviderKey(providerID))
+		_ = oauth.NewStore(store).Delete(providerID)
+		_ = store.Delete(secrets.TelegramAccountTokenKey(providerID))
+		fmt.Fprintf(stdout, "removed secret for %s\n", providerID)
+		return nil
+	}
+	providerID := strings.ToLower(strings.TrimSpace(args[0]))
+	if len(args) > 1 && (args[1] == "rm" || args[1] == "remove" || args[1] == "delete") {
+		store, err := secrets.Load()
+		if err != nil {
+			return err
+		}
+		_ = store.Delete(secrets.ProviderKey(providerID))
+		_ = oauth.NewStore(store).Delete(providerID)
+		_ = store.Delete(secrets.TelegramAccountTokenKey(providerID))
+		fmt.Fprintf(stdout, "removed secret for %s\n", providerID)
+		return nil
+	}
 	if _, ok := provider.ByID(providerID); !ok {
 		return fmt.Errorf("unknown provider %q", providerID)
 	}
@@ -692,7 +751,16 @@ func runTelegram(args []string, stdout io.Writer) error {
 }
 
 func runServe(stdout io.Writer) error {
-	fmt.Fprintf(stdout, "Starting Termixgo assistant (Ctrl+C to stop)...\n")
+	lock, existingPID, err := config.TryAcquireInstanceLock("serve.lock")
+	if err != nil {
+		if errors.Is(err, config.ErrAlreadyLocked) {
+			return fmt.Errorf("termixgo serve is already running (PID %d); only one serve instance can run at a time", existingPID)
+		}
+		return fmt.Errorf("failed to acquire serve lock: %w", err)
+	}
+	defer lock.Close()
+
+	fmt.Fprintf(stdout, "Starting Termixgo assistant (PID %d, Ctrl+C to stop)...\n", os.Getpid())
 
 	application, err := app.New("")
 	if err != nil {
@@ -1521,6 +1589,7 @@ func serviceStatus(stdout io.Writer) error {
 // windows -------------------------------------------------------------
 
 func serviceInstallWindows(stdout io.Writer, binary string) error {
+	_ = exec.Command("schtasks.exe", "/End", "/TN", serviceTaskName).Run()
 	command := fmt.Sprintf(`"%s" serve`, binary)
 	cmd := exec.Command("schtasks.exe", []string{
 		"/Create",

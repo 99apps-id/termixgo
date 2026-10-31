@@ -109,7 +109,7 @@ func ParseAnthropicRateLimit(headers http.Header) *RateLimitInfo {
 	return info
 }
 
-// ParseOpenAIRateLimit extracts OpenAI and Codex x-ratelimit-* headers.
+// ParseOpenAIRateLimit extracts OpenAI, Codex, Qwen, and StepFun x-ratelimit-* headers.
 func ParseOpenAIRateLimit(headers http.Header) *RateLimitInfo {
 	if headers == nil {
 		return nil
@@ -117,43 +117,97 @@ func ParseOpenAIRateLimit(headers http.Header) *RateLimitInfo {
 	info := &RateLimitInfo{}
 	found := false
 
-	if val := getHeaderFold(headers, "x-ratelimit-limit-requests"); val != "" {
-		if n, err := strconv.Atoi(val); err == nil {
-			info.RequestsLimit = n
-			found = true
-		}
-	}
-	if val := getHeaderFold(headers, "x-ratelimit-remaining-requests"); val != "" {
-		if n, err := strconv.Atoi(val); err == nil {
-			info.RequestsRemaining = n
-			found = true
-		}
-	}
-	if val := getHeaderFold(headers, "x-ratelimit-reset-requests"); val != "" {
-		if d, err := parseOpenAIReset(val); err == nil {
-			t := time.Now().Add(d)
-			info.RequestsReset = &t
-			found = true
+	// Requests limit: OpenAI, RFC, Qwen, and StepFun plan variants.
+	for _, k := range []string{
+		"x-ratelimit-limit-requests", "x-ratelimit-requests",
+		"ratelimit-limit-requests", "ratelimit-requests",
+		"x-step-quota-total", "x-ratelimit-plan-requests-limit",
+	} {
+		if val := getHeaderFold(headers, k); val != "" {
+			if n, err := strconv.Atoi(val); err == nil {
+				info.RequestsLimit = n
+				found = true
+				break
+			}
 		}
 	}
 
-	if val := getHeaderFold(headers, "x-ratelimit-limit-tokens"); val != "" {
-		if n, err := strconv.Atoi(val); err == nil {
-			info.TokensLimit = n
-			found = true
+	// Requests remaining:
+	for _, k := range []string{
+		"x-ratelimit-remaining-requests", "ratelimit-remaining-requests",
+		"x-step-quota-remaining", "x-ratelimit-plan-requests-remaining",
+	} {
+		if val := getHeaderFold(headers, k); val != "" {
+			if n, err := strconv.Atoi(val); err == nil {
+				info.RequestsRemaining = n
+				found = true
+				break
+			}
 		}
 	}
-	if val := getHeaderFold(headers, "x-ratelimit-remaining-tokens"); val != "" {
-		if n, err := strconv.Atoi(val); err == nil {
-			info.TokensRemaining = n
-			found = true
+
+	// Requests reset:
+	for _, k := range []string{
+		"x-ratelimit-reset-requests", "ratelimit-reset-requests", "x-step-quota-reset",
+	} {
+		if val := getHeaderFold(headers, k); val != "" {
+			if d, err := parseOpenAIReset(val); err == nil {
+				t := time.Now().Add(d)
+				info.RequestsReset = &t
+				found = true
+				break
+			} else if t, err := time.Parse(time.RFC3339, val); err == nil {
+				info.RequestsReset = &t
+				found = true
+				break
+			}
 		}
 	}
-	if val := getHeaderFold(headers, "x-ratelimit-reset-tokens"); val != "" {
-		if d, err := parseOpenAIReset(val); err == nil {
-			t := time.Now().Add(d)
-			info.TokensReset = &t
-			found = true
+
+	// Tokens limit:
+	for _, k := range []string{
+		"x-ratelimit-limit-tokens", "x-ratelimit-tokens",
+		"x-ratelimit-limit-tokens-per-minute", "ratelimit-limit-tokens",
+		"x-ratelimit-plan-tokens-limit",
+	} {
+		if val := getHeaderFold(headers, k); val != "" {
+			if n, err := strconv.Atoi(val); err == nil {
+				info.TokensLimit = n
+				found = true
+				break
+			}
+		}
+	}
+
+	// Tokens remaining:
+	for _, k := range []string{
+		"x-ratelimit-remaining-tokens", "ratelimit-remaining-tokens",
+		"x-ratelimit-remaining-tokens-per-minute", "x-ratelimit-plan-tokens-remaining",
+	} {
+		if val := getHeaderFold(headers, k); val != "" {
+			if n, err := strconv.Atoi(val); err == nil {
+				info.TokensRemaining = n
+				found = true
+				break
+			}
+		}
+	}
+
+	// Tokens reset:
+	for _, k := range []string{
+		"x-ratelimit-reset-tokens", "ratelimit-reset-tokens",
+	} {
+		if val := getHeaderFold(headers, k); val != "" {
+			if d, err := parseOpenAIReset(val); err == nil {
+				t := time.Now().Add(d)
+				info.TokensReset = &t
+				found = true
+				break
+			} else if t, err := time.Parse(time.RFC3339, val); err == nil {
+				info.TokensReset = &t
+				found = true
+				break
+			}
 		}
 	}
 

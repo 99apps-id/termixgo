@@ -271,6 +271,8 @@ func New(workspace string) (*App, error) {
 	defaultHome, homeErr := config.HomePath(filepath.Join("agents", config.FinalAgentName))
 	if homeErr != nil {
 		defaultHome = ""
+	} else {
+		instance.memory.SetAgentHome(defaultHome)
 	}
 	instance.agentCtx[config.FinalAgentName] = &agentContext{
 		name:      config.FinalAgentName,
@@ -918,6 +920,13 @@ func (a *App) resolveModelAlias(query string) string {
 		return "deepseek-chat"
 	case "qwen":
 		return "qwen-max"
+	case "codex", "openai-codex", "codex-sol", "codex-gpt-5.6":
+		return "codex-gpt-5.6-sol"
+	case "gpt-5.6-sol", "5.6-sol":
+		if a.store != nil && provider.UsesOAuth("openai-codex") && provider.HasKey(a.store, "openai-codex") && !provider.HasKey(a.store, "openai") {
+			return "codex-gpt-5.6-sol"
+		}
+		return "gpt-5.6-sol"
 	case "openai-compatible", "compatible", "openai_compatible":
 		if models := a.ModelsForProvider("openai-compatible"); len(models) > 0 {
 			return "openai-compatible:" + models[len(models)-1].ID
@@ -1092,6 +1101,58 @@ func (a *App) SetBaseURL(providerID, rawURL string) error {
 	cfg := a.cfg
 	a.mu.Unlock()
 	return config.Save(cfg)
+}
+
+// RemoveCustomModel deletes a custom or mistyped model from config across all providers.
+func (a *App) RemoveCustomModel(modelID string) (bool, error) {
+	trimmed := strings.TrimSpace(modelID)
+	if trimmed == "" {
+		return false, errors.New("model id is required")
+	}
+	removed := false
+	err := a.UpdateConfig(func(cfg *config.Config) {
+		if cfg.CustomModels == nil {
+			return
+		}
+		for provID, list := range cfg.CustomModels {
+			var kept []string
+			for _, m := range list {
+				if strings.EqualFold(m, trimmed) || strings.EqualFold(provID+":"+m, trimmed) {
+					removed = true
+				} else {
+					kept = append(kept, m)
+				}
+			}
+			if len(kept) == 0 {
+				delete(cfg.CustomModels, provID)
+			} else {
+				cfg.CustomModels[provID] = kept
+			}
+		}
+		if strings.EqualFold(cfg.DefaultModel, trimmed) {
+			cfg.DefaultModel = ""
+			removed = true
+		}
+	})
+	return removed, err
+}
+
+// RemoveSecret deletes the stored API key or OAuth token for a provider.
+func (a *App) RemoveSecret(providerID string) error {
+	trimmed := strings.ToLower(strings.TrimSpace(providerID))
+	if trimmed == "" {
+		return errors.New("provider id is required")
+	}
+	a.mu.Lock()
+	store := a.store
+	a.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	_ = store.Delete(secrets.ProviderKey(trimmed))
+	_ = provider.OAuthStore(store).Delete(trimmed)
+	_ = store.Delete(secrets.TelegramAccountTokenKey(trimmed))
+	return nil
 }
 
 // SetApprovalMode changes the approval policy.
@@ -1625,6 +1686,33 @@ func (a *App) emitInto(event agent.Event, foldUsage bool) {
 		a.mu.Unlock()
 		if tracker != nil {
 			tracker.RecordRateLimit(prov, event.RateLimit)
+			if (prov == "qwen-token-plan" || prov == "stepfun-plan" || prov == "qwen" || prov == "stepfun") && (event.RateLimit.TokensLimit > 0 || event.RateLimit.RequestsLimit > 0) {
+				var usedPct float64
+				var resetAt *time.Time
+				display := "Plan Quota"
+				if event.RateLimit.TokensLimit > 0 && event.RateLimit.PercentTokensRemaining() >= 0 {
+					usedPct = 100 - event.RateLimit.PercentTokensRemaining()
+					resetAt = event.RateLimit.TokensReset
+					display = "Token Quota"
+				} else if event.RateLimit.RequestsLimit > 0 && event.RateLimit.PercentRequestsRemaining() >= 0 {
+					usedPct = 100 - event.RateLimit.PercentRequestsRemaining()
+					resetAt = event.RateLimit.RequestsReset
+					display = "Request Quota"
+				}
+				snap := &provider.QuotaSnapshot{
+					Provider:  prov,
+					FetchedAt: time.Now(),
+					Windows: []provider.QuotaWindow{
+						{
+							Key:         provider.QuotaSessionKey,
+							DisplayName: display,
+							UsedPercent: usedPct,
+							ResetsAt:    resetAt,
+						},
+					},
+				}
+				tracker.RecordSnapshot(prov, snap)
+			}
 		}
 	}
 	if event.Kind == agent.EventTurnEnd {

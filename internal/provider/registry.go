@@ -361,6 +361,9 @@ func Providers() []Provider {
 
 // ByID finds a provider.
 func ByID(id string) (Provider, bool) {
+	if id == "codex" {
+		id = "openai-codex"
+	}
 	for _, provider := range Providers() {
 		if provider.ID == id {
 			return provider, true
@@ -670,8 +673,17 @@ func ModelFromQuery(query string) (Model, bool) {
 	// prefix names a real provider.
 	if strings.Contains(trimmed, ":") && !IsLocal(trimmed) {
 		parts := strings.SplitN(trimmed, ":", 2)
-		if _, ok := ByID(parts[0]); ok {
-			return Model{ID: parts[1], Provider: parts[0], Label: parts[1], APIID: parts[1]}, true
+		provID := parts[0]
+		if provID == "codex" {
+			provID = "openai-codex"
+		}
+		if _, ok := ByID(provID); ok {
+			for _, m := range ModelsFor(provID) {
+				if m.ID == parts[1] || m.APIID == parts[1] || m.ID == "codex-"+parts[1] {
+					return m, true
+				}
+			}
+			return Model{ID: parts[1], Provider: provID, Label: parts[1], APIID: parts[1]}, true
 		}
 	}
 	return FindModel(trimmed)

@@ -513,24 +513,23 @@ func (b *Bot) handleCallback(ctx context.Context, query *CallbackQuery) {
 	if query.Message != nil {
 		chat = query.Message.Chat
 	}
-	pairedChat, owner := b.Pairing()
+	fromID := int64(0)
+	if query.From != nil {
+		fromID = query.From.ID
+	}
+	req := channel.Request{
+		Channel:  config.ChannelTelegram,
+		ChatID:   strconv.FormatInt(chat.ID, 10),
+		SenderID: strconv.FormatInt(fromID, 10),
+		IsGroup:  chat.Type == "group" || chat.Type == "supergroup",
+	}
 	allowed := false
 	if query.From != nil {
-		if strings.HasPrefix(query.Data, "appr:") {
-			parts := strings.Split(query.Data, ":")
-			if len(parts) == 3 {
-				b.approvalsMu.Lock()
-				appr, ok := b.approvals[parts[2]]
-				b.approvalsMu.Unlock()
-				if ok && (owner == 0 || query.From.ID == owner || (appr.ChatID != 0 && chat.ID == appr.ChatID) || channel.MatchesAny(b.Policy().Admins, strconv.FormatInt(query.From.ID, 10))) {
-					allowed = true
-				}
-			}
-		}
-		if !allowed {
-			if pairedChat != 0 && owner != 0 && query.From.ID == owner && (chat.ID == 0 || chat.ID == pairedChat) {
-				allowed = true
-			} else if channel.MatchesAny(b.Policy().Admins, strconv.FormatInt(query.From.ID, 10)) {
+		if b.isOperator(req) || channel.MatchesAny(b.Policy().Admins, req.SenderID) {
+			allowed = true
+		} else {
+			pairedChat, owner := b.Pairing()
+			if pairedChat != 0 && (query.From.ID == owner || (owner == 0 && (chat.ID == 0 || chat.ID == pairedChat) && query.From.ID == pairedChat)) {
 				allowed = true
 			}
 		}
@@ -726,25 +725,16 @@ func (b *Bot) handleApprovalCallback(ctx context.Context, query *CallbackQuery) 
 		return
 	}
 
-	feedback := "Denied"
-	switch action {
-	case "once":
-		feedback = "Allowed once"
-	case "session":
-		feedback = "Allowed for this session"
-	case "always":
-		feedback = "Allowed always"
-	}
+	_ = b.client.AnswerCallbackQuery(ctx, query.ID, "Recorded: "+action)
 
-	_ = b.client.AnswerCallbackQuery(ctx, query.ID, "Recorded: "+feedback)
-	statusText := fmt.Sprintf("Decision: %s for %s", feedback, appr.Tool)
-	if query.Message != nil {
-		_ = b.client.EditMessageTextWithKeyboard(ctx, query.Message.Chat.ID, query.Message.MessageID, statusText, &InlineKeyboard{InlineKeyboard: [][]InlineButton{}})
-	}
-
+	// Deliver the decision to unblock the agent loop.
 	select {
 	case appr.Decision <- action:
 	default:
+	}
+	statusText := fmt.Sprintf("Decision: %s for %s", action, appr.Tool)
+	if query.Message != nil {
+		_ = b.client.EditMessageTextWithKeyboard(ctx, query.Message.Chat.ID, query.Message.MessageID, statusText, &InlineKeyboard{InlineKeyboard: [][]InlineButton{}})
 	}
 }
 
@@ -913,18 +903,50 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		b.agent.Stop()
 		b.reply(ctx, chatID, "Stopping the running turn.")
 	case "model":
-		if strings.TrimSpace(argument) == "" {
+		trimmedArg := strings.TrimSpace(argument)
+		if trimmedArg == "" {
 			// Open the picker rather than only reporting the active model: the
 			// operator asked to choose one.
 			b.sendModelMenu(ctx, chatID)
 			return
 		}
-		updated, err := b.agent.SetModel(argument)
+		fields := strings.Fields(trimmedArg)
+		if len(fields) >= 2 && (fields[0] == "rm" || fields[0] == "remove" || fields[0] == "delete") {
+			target := fields[1]
+			if remover, ok := b.agent.(interface{ RemoveCustomModel(string) (bool, error) }); ok {
+				removed, err := remover.RemoveCustomModel(target)
+				if err != nil {
+					b.reply(ctx, chatID, "Error: "+err.Error())
+					return
+				}
+				if removed {
+					b.reply(ctx, chatID, fmt.Sprintf("Removed custom model %s.", target))
+					return
+				}
+				b.reply(ctx, chatID, fmt.Sprintf("Model %s was not found in custom models.", target))
+				return
+			}
+		}
+		updated, err := b.agent.SetModel(trimmedArg)
 		if err != nil {
 			b.reply(ctx, chatID, err.Error())
 			return
 		}
 		b.reply(ctx, chatID, "Model is now "+updated+".")
+	case "secret":
+		fields := strings.Fields(strings.TrimSpace(argument))
+		if len(fields) >= 2 && (fields[0] == "rm" || fields[0] == "remove" || fields[0] == "delete") {
+			target := fields[1]
+			if remover, ok := b.agent.(interface{ RemoveSecret(string) error }); ok {
+				if err := remover.RemoveSecret(target); err != nil {
+					b.reply(ctx, chatID, "Error: "+err.Error())
+					return
+				}
+				b.reply(ctx, chatID, fmt.Sprintf("Removed secret for %s.", target))
+				return
+			}
+		}
+		b.reply(ctx, chatID, "Usage: /secret rm <provider>")
 	case "models":
 		if lister, ok := b.agent.(interface{ ModelsFor(string) string }); ok {
 			b.reply(ctx, chatID, lister.ModelsFor(lang))

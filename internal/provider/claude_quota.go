@@ -59,9 +59,12 @@ func (f *claudeQuotaFetcher) fetch(ctx context.Context) *QuotaSnapshot {
 	}
 	headers := map[string]string{
 		"Authorization":     "Bearer " + key,
-		"anthropic-beta":    "oauth-2025-04-20",
+		"anthropic-beta":    claudeOAuthBeta,
 		"anthropic-version": "2023-06-01",
-		"Accept":            "application/json",
+		"anthropic-dangerous-direct-browser-access": "true",
+		"x-app":      "cli",
+		"User-Agent": claudeCLIUserAgent,
+		"Accept":     "application/json",
 	}
 	body, status, err := quotaGET(ctx, f.http.http, claudeOAuthUsageURL, headers)
 	if err != nil {
@@ -169,6 +172,15 @@ func claudeUtilWindow(key, display string, window map[string]any) *QuotaWindow {
 		return nil
 	}
 	used, ok := quotaNumber(window["utilization"])
+	if !ok {
+		used, ok = quotaNumber(window["percent"])
+	}
+	if !ok {
+		used, ok = quotaNumber(window["used_percent"])
+	}
+	if !ok {
+		used, ok = quotaNumber(window["used"])
+	}
 	if !ok {
 		return nil
 	}

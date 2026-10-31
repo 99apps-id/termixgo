@@ -86,6 +86,9 @@ func BuildSystemParts(env *Env, model string) (staticPrompt, dynamicPlan string)
 		builder.WriteString("- Strict grounding is on: an answer with no tool evidence is challenged once, and an answer that still has no evidence is marked as unverified.\n")
 	}
 	if env.Memory != nil {
+		if strings.TrimSpace(env.AgentHome) != "" {
+			env.Memory.SetAgentHome(env.AgentHome)
+		}
 		builder.WriteString(env.Memory.PromptBlock())
 	}
 	if block := skill.PromptBlock(env.Skills); block != "" {

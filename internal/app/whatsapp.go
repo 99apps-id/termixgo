@@ -79,6 +79,18 @@ func (a *App) startWhatsAppAccount(name string) error {
 	go func() {
 		defer closeStore()
 		a.setChannelStatus(key, "connecting")
+		lockName := fmt.Sprintf("poller-%s-%s.lock", key.Channel, key.Account)
+		lock, lockPID, lockErr := config.TryAcquireInstanceLock(lockName)
+		if errors.Is(lockErr, config.ErrAlreadyLocked) {
+			a.setChannelStatus(key, fmt.Sprintf("active in background (PID %d)", lockPID))
+			return
+		}
+		if lockErr != nil {
+			a.setChannelStatus(key, "lock error: "+lockErr.Error())
+			return
+		}
+		defer lock.Release()
+
 		// Report the live state: without this the status view kept showing
 		// "connecting" forever on a healthy account whose bot never reports
 		// back, and a logout that Run only logs left the same stale line.

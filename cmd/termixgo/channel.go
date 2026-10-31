@@ -37,7 +37,7 @@ func runChannel(args []string, stdout io.Writer) error {
 		return toggleChannel(strings.ToLower(args[0]), args[1:], stdout)
 	case "status":
 		return statusChannel(args[1:], stdout)
-	case "rm", "remove":
+	case "rm", "remove", "logout":
 		return removeChannel(args[1:], stdout)
 	case "allow", "admin":
 		return editChannelList(args[1:], strings.ToLower(args[0]), stdout)
@@ -276,6 +276,22 @@ func loginChannel(args []string, stdout io.Writer) error {
 		store, err := secrets.Load()
 		if err != nil {
 			return err
+		}
+		oldToken := strings.TrimSpace(store.Get(secrets.TelegramAccountTokenKey(name)))
+		if oldToken != "" {
+			if oldToken == token {
+				fmt.Fprintf(stdout, "Notice: Token telegram yang diinput sama dengan token yang sebelumnya sudah tersimpan untuk akun %q.\n", name)
+			} else {
+				fmt.Fprintf(stdout, "Notice: Mengganti token telegram lama untuk akun %q.\n", name)
+			}
+		}
+		for otherName := range cfg.Channels.Telegram.Accounts {
+			if otherName != name {
+				otherTok := strings.TrimSpace(store.Get(secrets.TelegramAccountTokenKey(otherName)))
+				if otherTok != "" && otherTok == token {
+					fmt.Fprintf(stdout, "Notice: Token telegram ini sudah digunakan oleh akun %q. Menggunakan token yang sama dapat memicu konflik polling.\n", otherName)
+				}
+			}
 		}
 		if err := store.Set(secrets.TelegramAccountTokenKey(name), token); err != nil {
 			return err
