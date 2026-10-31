@@ -98,7 +98,7 @@ func deriveSessionID(seed string) string {
 	if _, err := rand.Read(randBytes[:]); err != nil {
 		binary.BigEndian.PutUint64(randBytes[:], uint64(time.Now().UnixNano())^uint64(sessionSeq.Add(1)))
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d|%x", seed, time.Now().UnixNano(), sessionSeq.Add(1), randBytes)))
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s|%d|%d|%x", seed, time.Now().UnixNano(), sessionSeq.Add(1), randBytes))
 	return hex.EncodeToString(sum[:16]) + fmt.Sprintf("%d", time.Now().UnixMilli())
 }
 

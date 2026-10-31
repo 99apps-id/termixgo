@@ -24,6 +24,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/cron"
 	"github.com/99apps-id/termixgo/internal/mcp"
+	"github.com/99apps-id/termixgo/internal/oauth"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/search"
 	"github.com/99apps-id/termixgo/internal/secrets"
@@ -1150,7 +1151,7 @@ func (a *App) RemoveSecret(providerID string) error {
 		return nil
 	}
 	_ = store.Delete(secrets.ProviderKey(trimmed))
-	_ = provider.OAuthStore(store).Delete(trimmed)
+	_ = oauth.NewStore(store).Delete(trimmed)
 	_ = store.Delete(secrets.TelegramAccountTokenKey(trimmed))
 	return nil
 }
