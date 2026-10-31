@@ -49,8 +49,10 @@ func runChannel(args []string, stdout io.Writer) error {
 		return editChannelGuest(args[1:], stdout)
 	case "pairing":
 		return pairingCommand(args[1:], stdout)
+	case "hook":
+		return editChannelHook(args[1:], stdout)
 	default:
-		return fmt.Errorf("usage: termixgo channel [list|add|login|on|off|status|rm|allow|admin|dm|groups|guest|pairing]")
+		return fmt.Errorf("usage: termixgo channel [list|add|login|on|off|status|rm|allow|admin|dm|groups|guest|pairing|hook]")
 	}
 }
 
@@ -466,6 +468,9 @@ func statusChannel(args []string, stdout io.Writer) error {
 				fmt.Fprintf(stdout, "              or set policy: termixgo channel dm telegram %s open|pairing\n", name)
 			}
 			fmt.Fprintf(stdout, "  groupPolicy: %s (%d groups listed)\n", config.NormalizeGroupPolicy(entry.GroupPolicy), len(entry.GroupAllowFrom))
+			if hookURL, _ := channel.ResolveHookTarget(entry.ChannelAccount, cfg.Channels.HookURL, cfg.Channels.HookSecret); hookURL != "" {
+				fmt.Fprintf(stdout, "  hookURL:    %s\n", hookURL)
+			}
 		case config.ChannelWhatsApp:
 			entry, ok := cfg.WhatsAppAccount(name)
 			if !ok {
@@ -482,6 +487,9 @@ func statusChannel(args []string, stdout io.Writer) error {
 				fmt.Fprintf(stdout, "              or set policy: termixgo channel dm whatsapp %s open|pairing\n", name)
 			}
 			fmt.Fprintf(stdout, "  groupPolicy: %s (%d groups listed)\n", config.NormalizeGroupPolicy(entry.GroupPolicy), len(entry.GroupAllowFrom))
+			if hookURL, _ := channel.ResolveHookTarget(entry, cfg.Channels.HookURL, cfg.Channels.HookSecret); hookURL != "" {
+				fmt.Fprintf(stdout, "  hookURL:    %s\n", hookURL)
+			}
 		}
 	}
 	return nil
@@ -906,5 +914,152 @@ func pairingCommand(args []string, stdout io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "%s (%s/%s) is now allowlisted\n", request.SenderID, request.Channel, request.Account)
+	return nil
+}
+
+func editChannelHook(args []string, stdout io.Writer) error {
+	var (
+		clearFlag   bool
+		testFlag    bool
+		urlVal      string
+		secretVal   string
+		positionals []string
+	)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--clear":
+			clearFlag = true
+		case "--test":
+			testFlag = true
+		case "--url":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--url requires a URL argument")
+			}
+			i++
+			urlVal = strings.TrimSpace(args[i])
+		case "--secret":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--secret requires a secret string")
+			}
+			i++
+			secretVal = strings.TrimSpace(args[i])
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return fmt.Errorf("unknown channel hook option %q", arg)
+			}
+			positionals = append(positionals, arg)
+		}
+	}
+
+	if len(positionals) < 1 {
+		return fmt.Errorf("usage: termixgo channel hook <whatsapp|telegram> [agent] [--url <url>] [--secret <secret>] [--test] [--clear]")
+	}
+	kind, err := channelType(positionals[0])
+	if err != nil {
+		return err
+	}
+	name := config.FinalAgentName
+	if len(positionals) > 1 {
+		name = strings.TrimSpace(positionals[1])
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	var account config.ChannelAccount
+	switch kind {
+	case config.ChannelWhatsApp:
+		entry, ok := cfg.WhatsAppAccount(name)
+		if !ok {
+			return fmt.Errorf("no whatsapp account %q", name)
+		}
+		account = entry
+	case config.ChannelTelegram:
+		entry, ok := cfg.TelegramAccount(name)
+		if !ok {
+			return fmt.Errorf("no telegram account %q", name)
+		}
+		account = entry.ChannelAccount
+	}
+
+	if testFlag {
+		targetURL, targetSecret := channel.ResolveHookTarget(account, cfg.Channels.HookURL, cfg.Channels.HookSecret)
+		if urlVal != "" {
+			targetURL = urlVal
+		}
+		if secretVal != "" {
+			targetSecret = secretVal
+		}
+		if targetURL == "" {
+			return fmt.Errorf("no hook URL configured for %s/%s", kind, name)
+		}
+		fmt.Fprintf(stdout, "Pinging hook %s ...\n", targetURL)
+		latency, err := channel.PingHTTPHook(context.Background(), targetURL, targetSecret)
+		if err != nil {
+			return fmt.Errorf("hook ping failed: %w", err)
+		}
+		fmt.Fprintf(stdout, "Hook reachable! Latency: %v\n", latency.Round(time.Millisecond))
+		return nil
+	}
+
+	if clearFlag {
+		account.HookURL = ""
+		account.HookSecret = ""
+		switch kind {
+		case config.ChannelWhatsApp:
+			cfg = cfg.WithWhatsAppAccount(name, account)
+		case config.ChannelTelegram:
+			tg, _ := cfg.TelegramAccount(name)
+			tg.ChannelAccount = account
+			cfg = cfg.WithTelegramAccount(name, tg)
+		}
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "cleared hook for %s/%s\n", kind, name)
+		return nil
+	}
+
+	if urlVal != "" || secretVal != "" {
+		if urlVal != "" {
+			account.HookURL = urlVal
+		}
+		if secretVal != "" {
+			account.HookSecret = secretVal
+		}
+		switch kind {
+		case config.ChannelWhatsApp:
+			cfg = cfg.WithWhatsAppAccount(name, account)
+		case config.ChannelTelegram:
+			tg, _ := cfg.TelegramAccount(name)
+			tg.ChannelAccount = account
+			cfg = cfg.WithTelegramAccount(name, tg)
+		}
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "configured hook for %s/%s -> %s\n", kind, name, account.HookURL)
+		return nil
+	}
+
+	effectiveURL, effectiveSecret := channel.ResolveHookTarget(account, cfg.Channels.HookURL, cfg.Channels.HookSecret)
+	fmt.Fprintf(stdout, "%s/%s hook:\n", kind, name)
+	if account.HookURL != "" {
+		fmt.Fprintf(stdout, "  url:     %s (account)\n", account.HookURL)
+	} else if effectiveURL != "" {
+		fmt.Fprintf(stdout, "  url:     %s (inherited/env)\n", effectiveURL)
+	} else {
+		fmt.Fprintln(stdout, "  url:     none")
+	}
+	if account.HookSecret != "" {
+		fmt.Fprintln(stdout, "  secret:  configured (account)")
+	} else if effectiveSecret != "" {
+		fmt.Fprintln(stdout, "  secret:  configured (inherited/env)")
+	} else {
+		fmt.Fprintln(stdout, "  secret:  none")
+	}
 	return nil
 }

@@ -4,6 +4,17 @@ All notable changes to Termixgo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+- WhatsApp in-chat approvals: an admin answers a tool approval by replying in the chat (y once, s session, a always, n deny), so mutating tools work over WhatsApp on a headless machine, not only from the terminal.
+- Native Channel Hook interceptor for WhatsApp and Telegram (`channel.InvokeInboundHook`, `channel.PostHTTPHook`): intercepts inbound channel messages before LLM execution via REST API (`http://localhost:xxxx/api/bot/handle`) or in-process Go callback (`channel.MessageInterceptor`), supporting direct replies, prompt rewriting, message dropping, and post-turn completion notifications.
+- CLI command `termixgo channel hook <whatsapp|telegram> [agent] [--url <url>] [--secret <secret>] [--test] [--clear]` to view, configure, test, or clear REST interceptor endpoints per account.
+
+### Fixed
+- A cut-off Codex response no longer kills the run: when the Responses backend ends a response incomplete (`max_output_tokens`, a content filter) after the step produced anything, the partial answer, tool call or reasoning items stand, a notice names the reason, and the run continues; only a cut-off that produced nothing errors.
+- An "Always" approval answer over a channel now persists the tool-level allow the way the terminal does, so the same tool stops asking on the next turn.
+
 ## 0.2.3 - 2026-10-29
 
 ### Added

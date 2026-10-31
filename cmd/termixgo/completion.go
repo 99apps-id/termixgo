@@ -40,7 +40,7 @@ _termixgo() {
     approval) COMPREPLY=($(compgen -W "ask edits all plan" -- "$cur")) ;;
     trust) COMPREPLY=($(compgen -W "on off" -- "$cur")) ;;
     agent) COMPREPLY=($(compgen -W "list add rm use show soul set" -- "$cur")) ;;
-    channel) COMPREPLY=($(compgen -W "list add login on off status rm allow admin groups guest pairing" -- "$cur")) ;;
+    channel) COMPREPLY=($(compgen -W "list add login on off status rm allow admin groups guest pairing hook" -- "$cur")) ;;
     completion) COMPREPLY=($(compgen -W "bash zsh fish powershell" -- "$cur")) ;;
     service) COMPREPLY=($(compgen -W "install uninstall status" -- "$cur")) ;;
   esac
@@ -62,7 +62,7 @@ _termixgo() {
     approval) _describe 'mode' '(ask edits all plan)' ;;
     trust) _describe 'trust' '(on off)' ;;
     agent) _describe 'action' '(list add rm use show soul set)' ;;
-    channel) _describe 'action' '(list add login on off status rm allow admin groups guest pairing)' ;;
+    channel) _describe 'action' '(list add login on off status rm allow admin groups guest pairing hook)' ;;
     completion) _describe 'shell' '(bash zsh fish powershell)' ;;
     service) _describe 'action' '(install uninstall status)' ;;
   esac
@@ -77,7 +77,7 @@ complete -c termixgo -f -n '__fish_use_subcommand' -a "$cmds"
 complete -c termixgo -f -n '__fish_seen_subcommand_from approval' -a "ask edits all plan"
 complete -c termixgo -f -n '__fish_seen_subcommand_from trust' -a "on off"
 complete -c termixgo -f -n '__fish_seen_subcommand_from agent' -a "list add rm use show soul set"
-complete -c termixgo -f -n '__fish_seen_subcommand_from channel' -a "list add login on off status rm allow admin groups guest pairing"
+complete -c termixgo -f -n '__fish_seen_subcommand_from channel' -a "list add login on off status rm allow admin groups guest pairing hook"
 complete -c termixgo -f -n '__fish_seen_subcommand_from completion' -a "bash zsh fish powershell"
 complete -c termixgo -f -n '__fish_seen_subcommand_from service' -a "install uninstall status"
 `, true
@@ -91,7 +91,7 @@ Register-ArgumentCompleter -Native -CommandName termixgo -ScriptBlock {
     'approval'   = @('ask','edits','all','plan')
     'trust'      = @('on','off')
     'agent'      = @('list','add','rm','use','show','soul','set')
-    'channel'    = @('list','add','login','on','off','status','rm','allow','admin','groups','guest','pairing')
+    'channel'    = @('list','add','login','on','off','status','rm','allow','admin','groups','guest','pairing','hook')
     'completion' = @('bash','zsh','fish','powershell')
     'service'    = @('install','uninstall','status')
   }

@@ -411,6 +411,7 @@ if [ "$INSTALL_DESKTOP" -eq 1 ] || [ -n "${XDG_CURRENT_DESKTOP:-}" ]; then
 Name=Termixgo
 Comment=Terminal AI Coding Agent
 Exec=termixgo
+Path=$HOME
 Icon=utilities-terminal
 Terminal=true
 Type=Application

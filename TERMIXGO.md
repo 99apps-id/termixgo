@@ -402,6 +402,17 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
 - Chat answers are final text only. A WhatsApp chat sees a typing presence and
   then one answer, never a tool line, a path or a raw error; every answer is
   redacted for token shapes and stored secret values before it is sent.
+  In-chat approvals let an operator answer mutating tool gates directly in the
+  conversation (replying y/s/a/n over WhatsApp, or inline buttons over
+  Telegram), and an "always" answer persists the tool grant across turns.
+- Native Channel Hook and REST interceptor. Inbound messages on WhatsApp and
+  Telegram pass through an interceptor before reaching the LLM. An external
+  HTTP REST endpoint (configured via `hookUrl` or `TERMIXGO_CHANNEL_HOOK_URL`)
+  or an in-process Go `MessageInterceptor` receives a structured JSON payload
+  (`inbound_message`). The hook can return a direct reply (`action: reply`) to
+  bypass the LLM, modify the prompt (`action: modify`), drop the message
+  (`action: drop`), or continue (`action: continue`). On turn completion, a
+  `turn_completed` event is posted for logging and audit sync.
 - Evidence or silence. The prompt's `## EVIDENCE` block requires a `path:line`
   for a workspace claim and a URL for a web claim, and `grounding: strict`
   (always on for guests) challenges an answer that used no tool, retries once

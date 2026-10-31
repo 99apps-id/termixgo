@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"sort"
 	"strings"
 )
@@ -96,6 +97,41 @@ type ChannelAccount struct {
 	// Guest bounds a non-operator conversation. Nil means the defaults.
 	Guest *GuestLimits            `json:"guest,omitempty"`
 	Chats map[string]ChatOverride `json:"chats,omitempty"`
+	// HookURL is an optional REST API endpoint to intercept inbound messages
+	// before they are sent to the LLM (e.g. http://localhost:8080/api/bot/handle).
+	HookURL string `json:"hookUrl,omitempty"`
+	// HookSecret is an optional shared secret for HMAC signature or Bearer auth.
+	HookSecret string `json:"hookSecret,omitempty"`
+}
+
+// EffectiveHookURL returns the configured webhook URL for this account,
+// falling back to channels-level config and environment variables.
+func (a ChannelAccount) EffectiveHookURL(fallbackURL string) string {
+	if trimmed := strings.TrimSpace(a.HookURL); trimmed != "" {
+		return trimmed
+	}
+	if trimmed := strings.TrimSpace(fallbackURL); trimmed != "" {
+		return trimmed
+	}
+	if env := strings.TrimSpace(os.Getenv("TERMIXGO_CHANNEL_HOOK_URL")); env != "" {
+		return env
+	}
+	return strings.TrimSpace(os.Getenv("TERMIXGO_BOT_HOOK_URL"))
+}
+
+// EffectiveHookSecret returns the configured webhook secret for this account,
+// falling back to channels-level config and environment variables.
+func (a ChannelAccount) EffectiveHookSecret(fallbackSecret string) string {
+	if trimmed := strings.TrimSpace(a.HookSecret); trimmed != "" {
+		return trimmed
+	}
+	if trimmed := strings.TrimSpace(fallbackSecret); trimmed != "" {
+		return trimmed
+	}
+	if env := strings.TrimSpace(os.Getenv("TERMIXGO_CHANNEL_HOOK_SECRET")); env != "" {
+		return env
+	}
+	return strings.TrimSpace(os.Getenv("TERMIXGO_BOT_HOOK_SECRET"))
 }
 
 // EffectiveGuestLimits fills the guest defaults when the account carries none.
@@ -150,8 +186,10 @@ type WhatsAppChannel struct {
 
 // Channels is every messaging account of this install.
 type Channels struct {
-	Telegram TelegramChannel `json:"telegram,omitempty"`
-	WhatsApp WhatsAppChannel `json:"whatsapp,omitempty"`
+	Telegram   TelegramChannel `json:"telegram,omitempty"`
+	WhatsApp   WhatsAppChannel `json:"whatsapp,omitempty"`
+	HookURL    string          `json:"hookUrl,omitempty"`
+	HookSecret string          `json:"hookSecret,omitempty"`
 }
 
 // NormalizeDMPolicy folds a hand-edited value onto the accepted set, with the

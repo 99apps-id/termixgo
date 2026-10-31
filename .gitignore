@@ -47,6 +47,7 @@ node_modules/
 # are never part of this module. The project builds from the installed Go.
 /go/
 go.tar.gz
+/termixgo
 /termixgo-linux
 
 # Editor and OS noise
@@ -55,3 +56,6 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Debian packages are build output, never source
+*.deb

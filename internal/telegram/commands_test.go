@@ -733,6 +733,31 @@ func TestRequestApprovalReceivesCallback(t *testing.T) {
 	}
 }
 
+func TestRequestApprovalAnsweredByText(t *testing.T) {
+	agent := &scriptedAgent{}
+	bot, _ := pairedBot(t, agent)
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		bot.handleMessage(context.Background(), &Message{
+			Chat: Chat{ID: 7},
+			From: &User{ID: 9},
+			Text: "y",
+		})
+	}()
+
+	decision, err := bot.RequestApprovalInChat(context.Background(), 7, "delete_file", "old.txt", "high")
+	if err != nil {
+		t.Fatalf("RequestApprovalInChat: %v", err)
+	}
+	if decision != "once" {
+		t.Errorf("decision = %q, want once", decision)
+	}
+	if agent.promptCount() != 0 {
+		t.Errorf("approval text reply must not start an agent turn, got count: %d", agent.promptCount())
+	}
+}
+
 func TestRunPromptDeletesStatusCardOnSilent(t *testing.T) {
 	agent := &scriptedAgent{answer: "[SILENT]"}
 	bot, api := pairedBot(t, agent)

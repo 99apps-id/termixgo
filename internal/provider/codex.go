@@ -430,5 +430,11 @@ func (e responsesEvent) message() string {
 
 func isCodexResponsesLiteModel(model string) bool {
 	m := strings.ToLower(model)
-	return strings.Contains(m, "gpt-6.1-sol") || strings.Contains(m, "gpt-6-sol") || strings.Contains(m, "gpt-6-luna")
+	return strings.Contains(m, "gpt-6.1-sol") ||
+		strings.Contains(m, "gpt-6-sol") ||
+		strings.Contains(m, "gpt-6-luna") ||
+		strings.Contains(m, "gpt-6-astra") ||
+		strings.Contains(m, "gpt-5.6-sol") ||
+		strings.Contains(m, "gpt-5.6-luna") ||
+		strings.Contains(m, "gpt-5.6-terra")
 }

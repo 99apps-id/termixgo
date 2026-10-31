@@ -346,6 +346,35 @@ func TestDecodeResponsesStreamUsesFunctionCallArgumentsDone(t *testing.T) {
 	}
 }
 
+// TestCodexResponsesLiteModelsCoversNewerGenerations covers the additional
+// models that share the responses-lite backend contract: gpt-6-astra and the
+// GPT-5.6 family. They must be rewritten the same way as gpt-6-sol.
+func TestCodexResponsesLiteModelsCoversNewerGenerations(t *testing.T) {
+	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"} {
+		payload := map[string]any{
+			"model":        model,
+			"messages":     []map[string]any{{"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": "hi"}}}},
+			"tools":        []map[string]any{{"type": "function", "name": "t", "strict": true}},
+			"instructions": "be brief",
+		}
+		applyResponsesLite(payload, []map[string]any{{"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": "hi"}}}}, payload["tools"].([]map[string]any), "be brief", "medium")
+		if _, present := payload["tools"]; present {
+			t.Errorf("%s: lite request must not carry top-level tools", model)
+		}
+		if _, present := payload["instructions"]; present {
+			t.Errorf("%s: lite request must not carry top-level instructions", model)
+		}
+		input := payload["input"].([]map[string]any)
+		if len(input) < 2 {
+			t.Errorf("%s: input prefix must contain at least tools and instructions", model)
+			continue
+		}
+		if input[0]["type"] != "additional_tools" {
+			t.Errorf("%s: first input item must be additional_tools", model)
+		}
+	}
+}
+
 // TestDecodeResponsesStreamFallsBackToArgumentDeltas covers a finalize event
 // that carries no arguments: the decoder assembles the streamed deltas instead
 // of emitting an empty string.

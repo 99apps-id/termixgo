@@ -507,7 +507,7 @@ func (b *telegramBridge) RunPrompt(ctx context.Context, request channel.Request,
 		return "", err
 	}
 	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactor(), b.promptFor(request, prompt), nil, guest, maxSteps, budget, progress)
+	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, progress)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}
@@ -534,7 +534,7 @@ func (b *telegramBridge) RunPromptWithImage(ctx context.Context, request channel
 	}
 	images := []provider.Image{{MediaType: mediaType, Data: data}}
 	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactor(), b.promptFor(request, prompt), images, guest, maxSteps, budget, progress)
+	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, progress)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}
@@ -650,6 +650,17 @@ func (b *telegramBridge) interactor() Interactor {
 		return nil
 	}
 	return &telegramInteractor{bot: b.bot}
+}
+
+func (b *telegramBridge) interactorFor(request channel.Request) Interactor {
+	if b.bot == nil {
+		return nil
+	}
+	var chatID int64
+	if id, err := strconv.ParseInt(request.ChatID, 10, 64); err == nil {
+		chatID = id
+	}
+	return &telegramInteractor{bot: b.bot, chat: chatID}
 }
 
 // session loads the chat's session, or starts one with the chat's stable id.

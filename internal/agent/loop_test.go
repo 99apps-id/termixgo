@@ -90,6 +90,10 @@ func callChunk(id, name, arguments string) provider.StreamEvent {
 	return provider.StreamEvent{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{ID: id, Name: name, Arguments: arguments}}
 }
 
+func noticeChunk(text string) provider.StreamEvent {
+	return provider.StreamEvent{Type: provider.EventIncomplete, IncompleteReason: text}
+}
+
 func newTestRunner(t *testing.T, client provider.Client, policy *ApprovalPolicy, approve func(ApprovalRequest) Decision) (*Runner, *Env, *recorder) {
 	t.Helper()
 	workspace := t.TempDir()
@@ -362,6 +366,26 @@ func TestRunPropagatesStreamErrors(t *testing.T) {
 		if event.Kind == EventTurnEnd && event.StopReason != "error" {
 			t.Errorf("stop reason = %q, want error", event.StopReason)
 		}
+	}
+}
+
+func TestRunDeliversStreamNotice(t *testing.T) {
+	// A provider note is not a failure: a Codex response cut off at its
+	// output ceiling arrives as a notice, and the transcript must show it.
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{noticeChunk("the response was cut off (max_output_tokens)"), textChunk("partial answer")},
+	}}
+	runner, _, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	session := NewSession(t.TempDir(), "test-model")
+
+	if err := runner.Run(context.Background(), session, "hello"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !recorder.has(EventNotice) {
+		t.Fatalf("a provider notice must reach the transcript")
+	}
+	if !recorder.has(EventTurnEnd) {
+		t.Fatalf("the notice must not end the turn as an error")
 	}
 }
 

@@ -148,6 +148,66 @@ type Bot struct {
 	approvalsMu sync.Mutex
 	approvals   map[string]*PendingApproval
 	nextApprID  int64
+
+	hookMu      sync.RWMutex
+	interceptor channel.MessageInterceptor
+	hookURL     string
+	hookSecret  string
+}
+
+// SetInterceptor installs a native Go message interceptor.
+func (b *Bot) SetInterceptor(interceptor channel.MessageInterceptor) {
+	b.hookMu.Lock()
+	defer b.hookMu.Unlock()
+	b.interceptor = interceptor
+}
+
+// SetHookURL configures an HTTP endpoint to intercept messages before LLM.
+func (b *Bot) SetHookURL(url, secret string) {
+	b.hookMu.Lock()
+	defer b.hookMu.Unlock()
+	b.hookURL = strings.TrimSpace(url)
+	b.hookSecret = strings.TrimSpace(secret)
+}
+
+func (b *Bot) invokeHook(ctx context.Context, request channel.Request, prompt, mediaType string) (*channel.HookResponse, error) {
+	b.hookMu.RLock()
+	interceptor := b.interceptor
+	hookURL := b.hookURL
+	hookSecret := b.hookSecret
+	b.hookMu.RUnlock()
+
+	policy := b.Policy()
+	if hookURL == "" {
+		hookURL = policy.EffectiveHookURL("")
+	}
+	if hookSecret == "" {
+		hookSecret = policy.EffectiveHookSecret("")
+	}
+
+	resp, err := channel.InvokeInboundHook(ctx, interceptor, hookURL, hookSecret, request, prompt, mediaType)
+	if err != nil {
+		b.logf("hook error: %v", err)
+	}
+	return resp, err
+}
+
+func (b *Bot) notifyHookTurnCompleted(ctx context.Context, request channel.Request, prompt, answer string) {
+	b.hookMu.RLock()
+	interceptor := b.interceptor
+	hookURL := b.hookURL
+	hookSecret := b.hookSecret
+	b.hookMu.RUnlock()
+
+	policy := b.Policy()
+	if hookURL == "" {
+		hookURL = policy.EffectiveHookURL("")
+	}
+	if hookSecret == "" {
+		hookSecret = policy.EffectiveHookSecret("")
+	}
+
+	channel.NotifyTurnCompleted(ctx, interceptor, hookURL, hookSecret, request, prompt, answer)
 }
 
 // New builds a bot for a token and agent.
@@ -456,10 +516,23 @@ func (b *Bot) handleCallback(ctx context.Context, query *CallbackQuery) {
 	pairedChat, owner := b.Pairing()
 	allowed := false
 	if query.From != nil {
-		if pairedChat != 0 && owner != 0 && query.From.ID == owner && (chat.ID == 0 || chat.ID == pairedChat) {
-			allowed = true
-		} else if channel.MatchesAny(b.Policy().Admins, strconv.FormatInt(query.From.ID, 10)) {
-			allowed = true
+		if strings.HasPrefix(query.Data, "appr:") {
+			parts := strings.Split(query.Data, ":")
+			if len(parts) == 3 {
+				b.approvalsMu.Lock()
+				appr, ok := b.approvals[parts[2]]
+				b.approvalsMu.Unlock()
+				if ok && (owner == 0 || query.From.ID == owner || (appr.ChatID != 0 && chat.ID == appr.ChatID) || channel.MatchesAny(b.Policy().Admins, strconv.FormatInt(query.From.ID, 10))) {
+					allowed = true
+				}
+			}
+		}
+		if !allowed {
+			if pairedChat != 0 && owner != 0 && query.From.ID == owner && (chat.ID == 0 || chat.ID == pairedChat) {
+				allowed = true
+			} else if channel.MatchesAny(b.Policy().Admins, strconv.FormatInt(query.From.ID, 10)) {
+				allowed = true
+			}
 		}
 	}
 	if !allowed {
@@ -482,8 +555,17 @@ func (b *Bot) handleCallback(ctx context.Context, query *CallbackQuery) {
 // until the operator selects Allow Once, Allow Always, or Deny (or timeout).
 func (b *Bot) RequestApproval(ctx context.Context, tool, detail, risk string) (string, error) {
 	chatID, _ := b.Pairing()
+	return b.RequestApprovalInChat(ctx, chatID, tool, detail, risk)
+}
+
+// RequestApprovalInChat posts an interactive inline confirmation dialog to chatID
+// and blocks until the operator answers (via inline button or reply in chat).
+func (b *Bot) RequestApprovalInChat(ctx context.Context, chatID int64, tool, detail, risk string) (string, error) {
 	if chatID == 0 {
-		return "deny", errors.New("bot is not paired")
+		chatID, _ = b.Pairing()
+	}
+	if chatID == 0 {
+		return "deny", errors.New("bot is not paired and no chat ID provided")
 	}
 
 	b.approvalsMu.Lock()
@@ -514,6 +596,7 @@ func (b *Bot) RequestApproval(ctx context.Context, tool, detail, risk string) (s
 		InlineKeyboard: [][]InlineButton{
 			{
 				{Text: "Allow Once", CallbackData: "appr:once:" + id},
+				{Text: "Session", CallbackData: "appr:session:" + id},
 				{Text: "Always", CallbackData: "appr:always:" + id},
 				{Text: "Deny", CallbackData: "appr:deny:" + id},
 			},
@@ -527,11 +610,14 @@ func (b *Bot) RequestApproval(ctx context.Context, tool, detail, risk string) (s
 	if strings.TrimSpace(detail) != "" {
 		text += "\n\n" + detail
 	}
+	text += "\n\nReply in chat: y (once), s (session), a (always), n (deny)."
 	msg, err := b.client.SendMessage(ctx, chatID, text, keyboard)
 	if err != nil {
 		return "deny", err
 	}
+	b.approvalsMu.Lock()
 	approval.MsgID = msg.MessageID
+	b.approvalsMu.Unlock()
 
 	timer := time.NewTimer(3 * time.Minute)
 	defer timer.Stop()
@@ -540,11 +626,86 @@ func (b *Bot) RequestApproval(ctx context.Context, tool, detail, risk string) (s
 	case decision := <-ch:
 		return decision, nil
 	case <-timer.C:
-		_ = b.client.EditMessageText(ctx, chatID, msg.MessageID, fmt.Sprintf("Approval for %s timed out (denied).", tool))
+		_ = b.client.EditMessageTextWithKeyboard(ctx, chatID, msg.MessageID, fmt.Sprintf("Approval for %s timed out (denied).", tool), &InlineKeyboard{InlineKeyboard: [][]InlineButton{}})
 		return "deny", nil
 	case <-ctx.Done():
 		return "deny", ctx.Err()
 	}
+}
+
+// ResolveApprovalByText checks if chatID has a pending approval and answers it
+// if the text represents an approval keyword (y, s, a, n, etc.).
+func (b *Bot) ResolveApprovalByText(chatID int64, text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	b.approvalsMu.Lock()
+	var target *PendingApproval
+	var targetMsgID int64
+	var targetTool string
+	for _, appr := range b.approvals {
+		if appr.ChatID == chatID {
+			target = appr
+			targetMsgID = appr.MsgID
+			targetTool = appr.Tool
+			break
+		}
+	}
+	b.approvalsMu.Unlock()
+	if target == nil {
+		return false
+	}
+
+	var action string
+	switch strings.ToLower(trimmed) {
+	case "y", "yes", "ya", "iya", "allow", "ok", "1":
+		action = "once"
+	case "s", "session", "sesi", "2":
+		action = "session"
+	case "a", "always", "selalu", "3":
+		action = "always"
+	case "n", "no", "deny", "tidak", "tolak", "cancel", "batal", "4":
+		action = "deny"
+	case "/stop", "/cancel":
+		action = "deny"
+	default:
+		return false
+	}
+
+	select {
+	case target.Decision <- action:
+	default:
+	}
+
+	feedback := "Denied"
+	switch action {
+	case "once":
+		feedback = "Allowed once"
+	case "session":
+		feedback = "Allowed for this session"
+	case "always":
+		feedback = "Allowed always"
+	}
+
+	if targetMsgID != 0 {
+		statusText := fmt.Sprintf("Decision: %s for %s", feedback, targetTool)
+		_ = b.client.EditMessageTextWithKeyboard(context.Background(), chatID, targetMsgID, statusText, &InlineKeyboard{InlineKeyboard: [][]InlineButton{}})
+	}
+	b.reply(context.Background(), chatID, feedback)
+	return true
+}
+
+// HasPendingApproval reports whether chatID is currently waiting for an approval.
+func (b *Bot) HasPendingApproval(chatID int64) bool {
+	b.approvalsMu.Lock()
+	defer b.approvalsMu.Unlock()
+	for _, appr := range b.approvals {
+		if appr.ChatID == chatID {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Bot) handleApprovalCallback(ctx context.Context, query *CallbackQuery) {
@@ -553,7 +714,7 @@ func (b *Bot) handleApprovalCallback(ctx context.Context, query *CallbackQuery) 
 		_ = b.client.AnswerCallbackQuery(ctx, query.ID, "Invalid action.")
 		return
 	}
-	action := parts[1] // once, always, deny
+	action := parts[1] // once, session, always, deny
 	id := parts[2]
 
 	b.approvalsMu.Lock()
@@ -565,8 +726,18 @@ func (b *Bot) handleApprovalCallback(ctx context.Context, query *CallbackQuery) 
 		return
 	}
 
-	_ = b.client.AnswerCallbackQuery(ctx, query.ID, "Recorded: "+action)
-	statusText := fmt.Sprintf("Decision: %s for %s", action, appr.Tool)
+	feedback := "Denied"
+	switch action {
+	case "once":
+		feedback = "Allowed once"
+	case "session":
+		feedback = "Allowed for this session"
+	case "always":
+		feedback = "Allowed always"
+	}
+
+	_ = b.client.AnswerCallbackQuery(ctx, query.ID, "Recorded: "+feedback)
+	statusText := fmt.Sprintf("Decision: %s for %s", feedback, appr.Tool)
 	if query.Message != nil {
 		_ = b.client.EditMessageTextWithKeyboard(ctx, query.Message.Chat.ID, query.Message.MessageID, statusText, &InlineKeyboard{InlineKeyboard: [][]InlineButton{}})
 	}
@@ -674,6 +845,18 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 
 	// No text means there is nothing to ask.
 	if text == "" {
+		return
+	}
+
+	if b.HasPendingApproval(chatID) {
+		if b.ResolveApprovalByText(chatID, text) {
+			return
+		}
+		if text == "/stop" || text == "/cancel" {
+			b.ResolveApprovalByText(chatID, "deny")
+			return
+		}
+		b.reply(ctx, chatID, "Waiting for approval. Reply y (once), s (session), a (always), n (deny), or /stop to cancel.")
 		return
 	}
 
@@ -817,8 +1000,32 @@ func (b *Bot) hasExplicitPolicy(policy config.ChannelAccount, request channel.Re
 
 // runPrompt runs one text turn and mirrors progress into a single edited card.
 func (b *Bot) runPrompt(ctx context.Context, chatID int64, request channel.Request, prompt string) {
+	if hookResp, _ := b.invokeHook(ctx, request, prompt, ""); hookResp != nil {
+		switch strings.ToLower(strings.TrimSpace(hookResp.Action)) {
+		case channel.ActionReply:
+			if hookResp.Reply != "" && !hookResp.Silent {
+				b.reply(ctx, chatID, hookResp.Reply)
+			}
+			return
+		case channel.ActionDrop, channel.ActionIgnore:
+			return
+		case channel.ActionModify:
+			if hookResp.Prompt != "" {
+				prompt = hookResp.Prompt
+			}
+		default:
+			if hookResp.Prompt != "" {
+				prompt = hookResp.Prompt
+			}
+		}
+	}
+
 	b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
-		return b.agent.RunPrompt(runCtx, request, prompt, progress)
+		answer, err := b.agent.RunPrompt(runCtx, request, prompt, progress)
+		if err == nil {
+			b.notifyHookTurnCompleted(runCtx, request, prompt, answer)
+		}
+		return answer, err
 	})
 }
 
@@ -851,10 +1058,35 @@ func (b *Bot) runPhoto(ctx context.Context, chatID int64, request channel.Reques
 			prompt = fmt.Sprintf("[Image uploaded: %s saved to %s]\n\n%s", savedName, rel, prompt)
 		}
 	}
+
+	if hookResp, _ := b.invokeHook(ctx, request, prompt, "image"); hookResp != nil {
+		switch strings.ToLower(strings.TrimSpace(hookResp.Action)) {
+		case channel.ActionReply:
+			if hookResp.Reply != "" && !hookResp.Silent {
+				b.reply(ctx, chatID, hookResp.Reply)
+			}
+			return
+		case channel.ActionDrop, channel.ActionIgnore:
+			return
+		case channel.ActionModify:
+			if hookResp.Prompt != "" {
+				prompt = hookResp.Prompt
+			}
+		default:
+			if hookResp.Prompt != "" {
+				prompt = hookResp.Prompt
+			}
+		}
+	}
+
 	encoded := base64.StdEncoding.EncodeToString(data)
 	mediaType := imageMediaType(file.FilePath)
 	b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
-		return b.agent.RunPromptWithImage(runCtx, request, prompt, mediaType, encoded, progress)
+		answer, err := b.agent.RunPromptWithImage(runCtx, request, prompt, mediaType, encoded, progress)
+		if err == nil {
+			b.notifyHookTurnCompleted(runCtx, request, prompt, answer)
+		}
+		return answer, err
 	})
 }
 
@@ -1003,8 +1235,31 @@ func (b *Bot) runVoice(ctx context.Context, chatID int64, request channel.Reques
 	}
 
 	if runner, ok := b.agent.(VoicePromptRunner); ok {
+		if hookResp, _ := b.invokeHook(ctx, request, prompt, "audio"); hookResp != nil {
+			switch strings.ToLower(strings.TrimSpace(hookResp.Action)) {
+			case channel.ActionReply:
+				if hookResp.Reply != "" && !hookResp.Silent {
+					b.reply(ctx, chatID, hookResp.Reply)
+				}
+				return
+			case channel.ActionDrop, channel.ActionIgnore:
+				return
+			case channel.ActionModify:
+				if hookResp.Prompt != "" {
+					prompt = hookResp.Prompt
+				}
+			default:
+				if hookResp.Prompt != "" {
+					prompt = hookResp.Prompt
+				}
+			}
+		}
 		b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
-			return runner.RunVoicePrompt(runCtx, request, prompt, progress)
+			answer, err := runner.RunVoicePrompt(runCtx, request, prompt, progress)
+			if err == nil {
+				b.notifyHookTurnCompleted(runCtx, request, prompt, answer)
+			}
+			return answer, err
 		})
 		return
 	}
@@ -1280,6 +1535,7 @@ func (b *Bot) requestFrom(message *Message) channel.Request {
 		Account: b.Account(),
 		ChatID:  strconv.FormatInt(message.Chat.ID, 10),
 		IsGroup: !message.Chat.IsPrivate(),
+		Text:    strings.TrimSpace(message.Text),
 	}
 	if message.From != nil {
 		request.SenderID = strconv.FormatInt(message.From.ID, 10)

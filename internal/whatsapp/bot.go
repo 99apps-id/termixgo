@@ -42,6 +42,15 @@ type VoicePromptRunner interface {
 	RunVoicePrompt(ctx context.Context, request channel.Request, prompt string, progress func(string)) (string, error)
 }
 
+// ApprovalRouter answers an in-chat approval. A turn that needs the operator
+// installs its own approval route on the bridge; the operator's next text
+// reply in that chat answers it instead of starting a new turn.
+type ApprovalRouter interface {
+	// ResolveApproval delivers one inbound text to the pending approval of
+	// the request's chat, reporting whether it consumed the message.
+	ResolveApproval(request channel.Request, text string) bool
+}
+
 // SessionInspector is an optional interface that exposes per-chat session cost, plan, and compaction.
 type SessionInspector interface {
 	CostInfo(request channel.Request, lang string) string
@@ -73,6 +82,9 @@ type Bot struct {
 	sendHook     func(chatID, text string)
 	sendFileHook func(chatID, filename string, data []byte, caption string)
 	downloadHook func(ctx context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error)
+	interceptor  channel.MessageInterceptor
+	hookURL      string
+	hookSecret   string
 }
 
 // New builds the bot for one client and bridge.
@@ -88,6 +100,61 @@ func (b *Bot) SetAccount(name string, policy config.ChannelAccount, pairing *cha
 	b.pairing = pairing
 	b.limiter = channel.ForAccount(policy)
 	b.mu.Unlock()
+}
+
+// SetInterceptor installs a native Go message interceptor.
+func (b *Bot) SetInterceptor(interceptor channel.MessageInterceptor) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.interceptor = interceptor
+}
+
+// SetHookURL configures an HTTP endpoint to intercept messages before LLM.
+func (b *Bot) SetHookURL(url, secret string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.hookURL = strings.TrimSpace(url)
+	b.hookSecret = strings.TrimSpace(secret)
+}
+
+func (b *Bot) invokeHook(ctx context.Context, request channel.Request, prompt, mediaType string) (*channel.HookResponse, error) {
+	b.mu.RLock()
+	interceptor := b.interceptor
+	hookURL := b.hookURL
+	hookSecret := b.hookSecret
+	policy := b.policy
+	b.mu.RUnlock()
+
+	if hookURL == "" {
+		hookURL = policy.EffectiveHookURL("")
+	}
+	if hookSecret == "" {
+		hookSecret = policy.EffectiveHookSecret("")
+	}
+
+	resp, err := channel.InvokeInboundHook(ctx, interceptor, hookURL, hookSecret, request, prompt, mediaType)
+	if err != nil {
+		b.logfLine("hook error: " + err.Error())
+	}
+	return resp, err
+}
+
+func (b *Bot) notifyHookTurnCompleted(ctx context.Context, request channel.Request, prompt, answer string) {
+	b.mu.RLock()
+	interceptor := b.interceptor
+	hookURL := b.hookURL
+	hookSecret := b.hookSecret
+	policy := b.policy
+	b.mu.RUnlock()
+
+	if hookURL == "" {
+		hookURL = policy.EffectiveHookURL("")
+	}
+	if hookSecret == "" {
+		hookSecret = policy.EffectiveHookSecret("")
+	}
+
+	channel.NotifyTurnCompleted(ctx, interceptor, hookURL, hookSecret, request, prompt, answer)
 }
 
 // SetLogger receives diagnostic lines; nil discards them.
@@ -234,7 +301,7 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 		b.logfLine("ignored message from " + request.SenderID + " (" + decision.Reason + ")")
 		return
 	}
-	lang := b.userLanguage(request)
+	lang := SenderLanguage(request)
 	request.Admin = decision.Admin
 	if !decision.Admin {
 		b.mu.RLock()
@@ -287,7 +354,49 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 		return
 	}
 
+	// An operator's reply to a pending approval answers it.
+	if router, ok := b.agent.(ApprovalRouter); ok {
+		if router.ResolveApproval(request, request.Text) {
+			return
+		}
+		if hasPending, ok := b.agent.(interface{ HasPendingApproval(channel.Request) bool }); ok && hasPending.HasPendingApproval(request) {
+			if strings.EqualFold(strings.TrimSpace(request.Text), "/stop") || strings.EqualFold(strings.TrimSpace(request.Text), "/cancel") {
+				router.ResolveApproval(request, "n")
+				return
+			}
+			if lang == "id" {
+				b.reply(ctx, request.ChatID, "Sedang menunggu persetujuan. Balas y (sekali), s (sesi), a (selalu), n (tolak), atau kirim /stop untuk membatalkan.")
+			} else {
+				b.reply(ctx, request.ChatID, "Waiting for approval. Reply y (once), s (session), a (always), n (deny), or /stop to cancel.")
+			}
+			return
+		}
+	}
+
 	prompt := channel.FormatQuotedPrompt(quoted, request.Text)
+
+	if hookResp, _ := b.invokeHook(ctx, request, prompt, ""); hookResp != nil {
+		switch strings.ToLower(strings.TrimSpace(hookResp.Action)) {
+		case channel.ActionReply:
+			if hookResp.Reply != "" && !hookResp.Silent {
+				for _, chunk := range channel.Chunk(hookResp.Reply, policy.EffectiveTextChunkLimit()) {
+					b.reply(ctx, request.ChatID, chunk)
+				}
+			}
+			return
+		case channel.ActionDrop, channel.ActionIgnore:
+			return
+		case channel.ActionModify:
+			if hookResp.Prompt != "" {
+				prompt = hookResp.Prompt
+			}
+		default:
+			if hookResp.Prompt != "" {
+				prompt = hookResp.Prompt
+			}
+		}
+	}
+
 	done := make(chan struct{})
 	go b.keepTyping(ctx, request.ChatID, done)
 	answer, err := b.agent.RunPrompt(ctx, request, prompt, nil)
@@ -296,6 +405,7 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 		b.reply(ctx, request.ChatID, naturalError(err, lang))
 		return
 	}
+	b.notifyHookTurnCompleted(ctx, request, prompt, answer)
 	if channel.Silent(answer) {
 		return
 	}
@@ -354,6 +464,28 @@ func (b *Bot) runImage(ctx context.Context, request channel.Request, imageMsg *w
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(data)
+	if hookResp, _ := b.invokeHook(ctx, request, prompt, "image"); hookResp != nil {
+		switch strings.ToLower(strings.TrimSpace(hookResp.Action)) {
+		case channel.ActionReply:
+			if hookResp.Reply != "" && !hookResp.Silent {
+				for _, chunk := range channel.Chunk(hookResp.Reply, policy.EffectiveTextChunkLimit()) {
+					b.reply(ctx, request.ChatID, chunk)
+				}
+			}
+			return
+		case channel.ActionDrop, channel.ActionIgnore:
+			return
+		case channel.ActionModify:
+			if hookResp.Prompt != "" {
+				prompt = hookResp.Prompt
+			}
+		default:
+			if hookResp.Prompt != "" {
+				prompt = hookResp.Prompt
+			}
+		}
+	}
+
 	done := make(chan struct{})
 	go b.keepTyping(ctx, request.ChatID, done)
 	var answer string
@@ -369,6 +501,7 @@ func (b *Bot) runImage(ctx context.Context, request channel.Request, imageMsg *w
 		b.reply(ctx, request.ChatID, naturalError(runErr, lang))
 		return
 	}
+	b.notifyHookTurnCompleted(ctx, request, prompt, answer)
 	if channel.Silent(answer) {
 		return
 	}
@@ -506,14 +639,38 @@ func (b *Bot) runDocument(ctx context.Context, request channel.Request, docMsg *
 		builder.WriteString(channel.FormatQuotedPrompt(quoted, defaultPrompt))
 	}
 
+	finalPrompt := builder.String()
+	if hookResp, _ := b.invokeHook(ctx, request, finalPrompt, "document"); hookResp != nil {
+		switch strings.ToLower(strings.TrimSpace(hookResp.Action)) {
+		case channel.ActionReply:
+			if hookResp.Reply != "" && !hookResp.Silent {
+				for _, chunk := range channel.Chunk(hookResp.Reply, policy.EffectiveTextChunkLimit()) {
+					b.reply(ctx, request.ChatID, chunk)
+				}
+			}
+			return
+		case channel.ActionDrop, channel.ActionIgnore:
+			return
+		case channel.ActionModify:
+			if hookResp.Prompt != "" {
+				finalPrompt = hookResp.Prompt
+			}
+		default:
+			if hookResp.Prompt != "" {
+				finalPrompt = hookResp.Prompt
+			}
+		}
+	}
+
 	done := make(chan struct{})
 	go b.keepTyping(ctx, request.ChatID, done)
-	answer, err := b.agent.RunPrompt(ctx, request, builder.String(), nil)
+	answer, err := b.agent.RunPrompt(ctx, request, finalPrompt, nil)
 	close(done)
 	if err != nil {
 		b.reply(ctx, request.ChatID, naturalError(err, lang))
 		return
 	}
+	b.notifyHookTurnCompleted(ctx, request, finalPrompt, answer)
 	if channel.Silent(answer) {
 		return
 	}
@@ -577,6 +734,32 @@ func (b *Bot) runAudio(ctx context.Context, request channel.Request, audioMsg *w
 		return
 	}
 	prompt := channel.FormatQuotedPrompt(quoted, transcript)
+
+	if hookResp, _ := b.invokeHook(ctx, request, prompt, "audio"); hookResp != nil {
+		close(done)
+		switch strings.ToLower(strings.TrimSpace(hookResp.Action)) {
+		case channel.ActionReply:
+			if hookResp.Reply != "" && !hookResp.Silent {
+				for _, chunk := range channel.Chunk(hookResp.Reply, policy.EffectiveTextChunkLimit()) {
+					b.reply(ctx, request.ChatID, chunk)
+				}
+			}
+			return
+		case channel.ActionDrop, channel.ActionIgnore:
+			return
+		case channel.ActionModify:
+			if hookResp.Prompt != "" {
+				prompt = hookResp.Prompt
+			}
+		default:
+			if hookResp.Prompt != "" {
+				prompt = hookResp.Prompt
+			}
+		}
+		done = make(chan struct{})
+		go b.keepTyping(ctx, request.ChatID, done)
+	}
+
 	var answer string
 	var runErr error
 	if vr, ok := b.agent.(VoicePromptRunner); ok {
@@ -589,6 +772,7 @@ func (b *Bot) runAudio(ctx context.Context, request channel.Request, audioMsg *w
 		b.reply(ctx, request.ChatID, naturalError(runErr, lang))
 		return
 	}
+	b.notifyHookTurnCompleted(ctx, request, prompt, answer)
 	if channel.Silent(answer) {
 		return
 	}
@@ -709,7 +893,9 @@ func (b *Bot) mayPair(policy config.ChannelAccount, request channel.Request) boo
 	return store != nil
 }
 
-func (b *Bot) userLanguage(request channel.Request) string {
+// SenderLanguage reports the chat language from the sender's phone prefix,
+// which is the one identity a linked-device chat reliably carries.
+func SenderLanguage(request channel.Request) string {
 	sender := request.SenderID
 	if idx := strings.Index(sender, "@"); idx > 0 {
 		sender = sender[:idx]
@@ -750,7 +936,7 @@ func (b *Bot) pairingPrompt(request channel.Request) string {
 	if created {
 		b.logfLine("pairing request from " + request.SenderID + " (" + pending.Code + ")")
 	}
-	if b.userLanguage(request) == "id" {
+	if SenderLanguage(request) == "id" {
 		return "Halo! Percakapan ini belum diizinkan. Sandi pairing kamu: " + pending.Code +
 			"\nMinta operator menyetujui dengan: termixgo channel pairing approve " + pending.Code
 	}
@@ -1012,7 +1198,7 @@ type DiffProvider interface {
 
 func (b *Bot) handleCommand(ctx context.Context, request channel.Request) {
 	command, argument := splitCommand(request.Text)
-	lang := b.userLanguage(request)
+	lang := SenderLanguage(request)
 	switch command {
 	case "help", "menu", "start":
 		b.sendReply(ctx, request.ChatID, b.helpText(lang))

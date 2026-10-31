@@ -210,19 +210,22 @@ func (a *App) TelegramChatID() int64 {
 }
 
 type telegramInteractor struct {
-	bot *telegram.Bot
+	bot  *telegram.Bot
+	chat int64
 }
 
 func (ti *telegramInteractor) Approve(request agent.ApprovalRequest) agent.Decision {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	decision, err := ti.bot.RequestApproval(ctx, request.Tool, request.Detail, request.Risk)
+	decision, err := ti.bot.RequestApprovalInChat(ctx, ti.chat, request.Tool, request.Detail, request.Risk)
 	if err != nil {
 		return agent.DecisionDeny
 	}
 	switch decision {
 	case "once":
 		return agent.DecisionAllowOnce
+	case "session":
+		return agent.DecisionAllowSession
 	case "always":
 		return agent.DecisionAllowAlways
 	default:

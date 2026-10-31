@@ -1769,6 +1769,12 @@ func (a *App) noteFolderDecision(tool string, decision agent.Decision) {
 		a.recordFolderGrant(tool)
 	case agent.DecisionAllowAlways:
 		a.recordFolderGrant(tool)
+		// Every surface must mean the same thing by "always". The terminal
+		// writes the tool-level grant from its own answer; a channel answers
+		// through this path, so it writes it here too, or an "Always" button
+		// over Telegram would only silence the folder gate and the same tool
+		// would ask again on the next turn.
+		a.AllowTool(tool)
 		_ = a.UpdateConfig(func(cfg *config.Config) {
 			cfg.AllowInFolder(a.workspace, tool)
 		})
