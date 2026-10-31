@@ -18,7 +18,8 @@ type openAIClient struct{ *httpClient }
 // would fail the whole request, so the rest go without.
 var streamOptionsProviders = map[string]bool{
 	"openai": true, "groq": true, "cerebras": true, "deepseek": true,
-	"xai": true, "mistral": true, "openrouter": true, "qwen": true, "zhipu": true,
+	"xai": true, "xai-oauth": true, "stepfun-plan": true,
+	"mistral": true, "openrouter": true, "qwen": true, "zhipu": true,
 }
 
 func (c *openAIClient) Stream(ctx context.Context, req ChatRequest, emit func(StreamEvent) error) error {

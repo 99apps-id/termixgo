@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,40 @@ import (
 // the same tokens once per chunk: a real session recorded tens of millions of
 // prompt tokens for a handful of steps and the cost ran far ahead of the
 // provider's own dashboard. The client must emit only the increase.
+func TestOpenAICompatibleOAuthProvidersRequestStreamUsage(t *testing.T) {
+	for _, providerID := range []string{"xai-oauth", "stepfun-plan"} {
+		t.Run(providerID, func(t *testing.T) {
+			var includeUsage bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					StreamOptions struct {
+						IncludeUsage bool `json:"include_usage"`
+					} `json:"stream_options"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode request: %v", err)
+				}
+				includeUsage = body.StreamOptions.IncludeUsage
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "data: [DONE]\n\n")
+			}))
+			defer server.Close()
+
+			client, err := newHTTPClient(Provider{ID: providerID, Label: providerID, Kind: KindOpenAI}, server.URL, "test-key")
+			if err != nil {
+				t.Fatalf("newHTTPClient: %v", err)
+			}
+			request := ChatRequest{Model: "test-model", Messages: []Message{{Role: "user", Content: "hi"}}}
+			if err := client.Stream(t.Context(), request, func(StreamEvent) error { return nil }); err != nil {
+				t.Fatalf("Stream: %v", err)
+			}
+			if !includeUsage {
+				t.Fatal("request did not ask the provider for streamed usage")
+			}
+		})
+	}
+}
+
 func TestOpenAIStreamCountsRepeatedUsageOnce(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")

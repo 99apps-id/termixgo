@@ -12,6 +12,7 @@ All notable changes to Termixgo are recorded here. The format follows
 - CLI command `termixgo channel hook <whatsapp|telegram> [agent] [--url <url>] [--secret <secret>] [--test] [--clear]` to view, configure, test, or clear REST interceptor endpoints per account.
 
 ### Fixed
+- xAI OAuth and StepFun Plan now request streamed usage from their OpenAI-compatible APIs, so server-reported token usage and rate-limit headers reach the quota gauge instead of silently falling back to estimates.
 - A cut-off Codex response no longer kills the run: when the Responses backend ends a response incomplete (`max_output_tokens`, a content filter) after the step produced anything, the partial answer, tool call or reasoning items stand, a notice names the reason, and the run continues; only a cut-off that produced nothing errors.
 - An "Always" approval answer over a channel now persists the tool-level allow the way the terminal does, so the same tool stops asking on the next turn.
 
