@@ -43,3 +43,4 @@ $env:CGO_ENABLED = "0"
 go build -ldflags $ldflags -o $outputPath ./cmd/termixgo
 $size = (Get-Item $outputPath).Length
 Write-Host "Success: $outputPath ($size bytes)"
+
