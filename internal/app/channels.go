@@ -93,14 +93,27 @@ func (a *App) StartChannel(kind, name string) error {
 	}
 	a.mu.Unlock()
 
+	var startErr error
 	switch kind {
 	case config.ChannelTelegram:
-		return a.startTelegramAccount(name)
+		startErr = a.startTelegramAccount(name)
 	case config.ChannelWhatsApp:
-		return a.startWhatsAppAccount(name)
+		startErr = a.startWhatsAppAccount(name)
 	default:
-		return fmt.Errorf("unknown channel %q", kind)
+		startErr = fmt.Errorf("unknown channel %q", kind)
 	}
+
+	a.mu.Lock()
+	if startErr != nil {
+		if a.channelProblems == nil {
+			a.channelProblems = map[channel.AccountID]string{}
+		}
+		a.channelProblems[key] = "error: " + startErr.Error()
+	} else if a.channelProblems != nil {
+		delete(a.channelProblems, key)
+	}
+	a.mu.Unlock()
+	return startErr
 }
 
 // StopChannel stops one account, if it is running.
@@ -153,6 +166,10 @@ func (a *App) ChannelStatuses() []ChannelStatus {
 	for key, runtime := range a.channels {
 		runtimes[key] = runtime
 	}
+	problems := make(map[channel.AccountID]string, len(a.channelProblems))
+	for key, prob := range a.channelProblems {
+		problems[key] = prob
+	}
 	a.mu.Unlock()
 
 	var statuses []ChannelStatus
@@ -163,6 +180,8 @@ func (a *App) ChannelStatuses() []ChannelStatus {
 			state = "disabled"
 		} else if runtime, ok := runtimes[key]; ok {
 			state = runtime.status
+		} else if prob, ok := problems[key]; ok && prob != "" {
+			state = prob
 		} else if !a.store.Has(secrets.TelegramAccountTokenKey(name)) {
 			state = "no token"
 		} else if entry.ChatID != 0 {
@@ -177,13 +196,15 @@ func (a *App) ChannelStatuses() []ChannelStatus {
 	}
 	for name, entry := range cfg.Channels.WhatsApp.Accounts {
 		key := channel.AccountID{Channel: config.ChannelWhatsApp, Account: name}
-		state := "linked, not running"
+		state := "not linked"
 		if !entry.Enabled {
 			state = "disabled"
 		} else if runtime, ok := runtimes[key]; ok {
 			state = runtime.status
-		} else if agentName := entry.AgentName(name); !whatsAppLinked(a.Config(), agentName, name) {
-			state = "not linked"
+		} else if prob, ok := problems[key]; ok && prob != "" {
+			state = prob
+		} else if agentName := entry.AgentName(name); whatsAppLinked(a.Config(), agentName, name) {
+			state = "linked, not running"
 		}
 		statuses = append(statuses, ChannelStatus{
 			Channel: config.ChannelWhatsApp, Account: name,
@@ -204,14 +225,18 @@ func (a *App) ChannelStatuses() []ChannelStatus {
 // with what `channel status` prints.
 func whatsAppLinked(cfg config.Config, agentName, account string) bool {
 	paths, err := agenthome.Resolve(agentName, cfg.Agent(agentName).Workspace)
-	if err != nil {
-		return false
+	if err == nil {
+		path := whatsapp.SessionPath(paths.Home, account)
+		if whatsapp.HasLinkedDevice(path) {
+			return true
+		}
 	}
-	path := whatsapp.SessionPath(paths.Home, account)
-	if _, err := os.Stat(path); err != nil {
-		return false
+	for _, fallback := range whatsapp.FallbackSessionPaths(account) {
+		if whatsapp.HasLinkedDevice(fallback) {
+			return true
+		}
 	}
-	return true
+	return false
 }
 
 // RedactForChannel removes secret-shaped text and every stored secret value

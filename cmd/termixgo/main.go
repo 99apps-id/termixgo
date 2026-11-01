@@ -1886,10 +1886,22 @@ func runDoctor(args []string, stdout io.Writer) error {
 		entry, _ := cfg.WhatsAppAccount(name)
 		state := "not linked"
 		agentName := entry.AgentName(name)
+		linked := false
 		if paths, resolveErr := agenthome.Resolve(agentName, cfg.Agent(agentName).Workspace); resolveErr == nil {
-			if _, statErr := os.Stat(whatsapp.SessionPath(paths.Home, name)); statErr == nil {
-				state = "session stored"
+			if whatsapp.HasLinkedDevice(whatsapp.SessionPath(paths.Home, name)) {
+				linked = true
 			}
+		}
+		if !linked {
+			for _, fallback := range whatsapp.FallbackSessionPaths(name) {
+				if whatsapp.HasLinkedDevice(fallback) {
+					linked = true
+					break
+				}
+			}
+		}
+		if linked {
+			state = "session stored"
 		}
 		fmt.Fprintf(stdout, "  whatsapp/%-12s enabled=%-5v agent=%-12s %s\n", name, entry.Enabled, agentName, state)
 		warnGuestBinding(stdout, cfg, name, entry, "whatsapp")

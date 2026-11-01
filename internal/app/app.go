@@ -162,9 +162,10 @@ type App struct {
 
 	// channels is the runtime registry of every started account, and pairing
 	// is the file of unknown DM senders waiting for the operator's answer.
-	channels     map[channel.AccountID]*channelRuntime
-	pairing      *channel.PairingStore
-	outboxCancel context.CancelFunc
+	channels        map[channel.AccountID]*channelRuntime
+	channelProblems map[channel.AccountID]string
+	pairing         *channel.PairingStore
+	outboxCancel    context.CancelFunc
 
 	// cronStore is the scheduled-job list. It is opened lazily so a terminal
 	// session with no scheduler still pays nothing for it.
@@ -226,20 +227,21 @@ func New(workspace string) (*App, error) {
 	}
 
 	instance := &App{
-		cfg:           cfg,
-		store:         store,
-		workspace:     workspace,
-		trusted:       cfg.IsTrusted(workspace),
-		skills:        skills,
-		memory:        agent.NewMemory(workspace),
-		todos:         agent.NewTodoStore(),
-		tools:         agent.DefaultRegistry(),
-		processes:     agent.NewProcessManager(),
-		events:        make(chan agent.Event, eventBuffer),
-		activeAgent:   cfg.ActiveAgent,
-		agentSessions: map[string]*agent.Session{},
-		agentCtx:      map[string]*agentContext{},
-		channels:      map[channel.AccountID]*channelRuntime{},
+		cfg:             cfg,
+		store:           store,
+		workspace:       workspace,
+		trusted:         cfg.IsTrusted(workspace),
+		skills:          skills,
+		memory:          agent.NewMemory(workspace),
+		todos:           agent.NewTodoStore(),
+		tools:           agent.DefaultRegistry(),
+		processes:       agent.NewProcessManager(),
+		events:          make(chan agent.Event, eventBuffer),
+		activeAgent:     cfg.ActiveAgent,
+		agentSessions:   map[string]*agent.Session{},
+		agentCtx:        map[string]*agentContext{},
+		channels:        map[channel.AccountID]*channelRuntime{},
+		channelProblems: map[channel.AccountID]string{},
 	}
 	journal, err := agent.NewErrorJournal(workspace)
 	if err == nil {

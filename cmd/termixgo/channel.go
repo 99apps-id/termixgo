@@ -151,12 +151,16 @@ func hasTelegramToken(name string) bool {
 func whatsappState(cfg config.Config, name string) string {
 	agent := cfg.Channels.WhatsApp.Accounts[name].AgentName(name)
 	paths, err := agenthome.Resolve(agent, cfg.Agent(agent).Workspace)
-	if err != nil {
-		return "unknown agent"
+	if err == nil {
+		session := whatsapp.SessionPath(paths.Home, name)
+		if whatsapp.HasLinkedDevice(session) {
+			return "linked"
+		}
 	}
-	session := whatsapp.SessionPath(paths.Home, name)
-	if _, err := os.Stat(session); err == nil {
-		return "linked"
+	for _, fallback := range whatsapp.FallbackSessionPaths(name) {
+		if whatsapp.HasLinkedDevice(fallback) {
+			return "linked"
+		}
 	}
 	return "not linked"
 }
