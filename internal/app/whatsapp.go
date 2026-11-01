@@ -287,7 +287,7 @@ func (b *whatsappBridge) RunPrompt(ctx context.Context, request channel.Request,
 		return "", err
 	}
 	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, progress)
+	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, request.SenderName, "WhatsApp", progress)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}
@@ -314,7 +314,7 @@ func (b *whatsappBridge) RunPromptWithImage(ctx context.Context, request channel
 	}
 	images := []provider.Image{{MediaType: mediaType, Data: data}}
 	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, progress)
+	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, request.SenderName, "WhatsApp", progress)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}
@@ -322,6 +322,24 @@ func (b *whatsappBridge) RunPromptWithImage(ctx context.Context, request channel
 		return "", err
 	}
 	return b.app.RedactForChannel(answer), nil
+}
+
+// Steer forwards a steering message into an active turn in this chat.
+func (b *whatsappBridge) Steer(request channel.Request, prompt string) bool {
+	id := channelSessionID(config.ChannelWhatsApp, b.name, request.ChatID)
+	return b.app.SteerSession(id, prompt)
+}
+
+// IsRunning reports whether a turn is active for this chat.
+func (b *whatsappBridge) IsRunning(request channel.Request) bool {
+	id := channelSessionID(config.ChannelWhatsApp, b.name, request.ChatID)
+	return b.app.IsSessionRunning(id)
+}
+
+// StopChat cancels the turn in flight for this chat.
+func (b *whatsappBridge) StopChat(request channel.Request) bool {
+	id := channelSessionID(config.ChannelWhatsApp, b.name, request.ChatID)
+	return b.app.StopSession(id)
 }
 
 // TranscribeAudio forwards voice/audio bytes to the app's configured STT engine.

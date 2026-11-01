@@ -65,6 +65,15 @@ func BuildSystemParts(env *Env, model string) (staticPrompt, dynamicPlan string)
 		builder.WriteString("- When asked about the user, operator, or USER.md, use the profile below directly without searching workspace files.\n\n")
 		builder.WriteString(profile)
 	}
+	if caller := strings.TrimSpace(env.CallerName); caller != "" {
+		builder.WriteString("\n\n## CALLER PROFILE\n")
+		fmt.Fprintf(&builder, "- The person you are interacting with is identified as: %s", caller)
+		if ch := strings.TrimSpace(env.CallerChannel); ch != "" {
+			fmt.Fprintf(&builder, " (via %s)", ch)
+		}
+		builder.WriteString(".\n")
+		builder.WriteString("- Unless the operator profile in USER.md or the user explicitly asks to be called by another name or title, address them politely using their profile name (" + caller + ").\n")
+	}
 	if env.Guest {
 		builder.WriteString("\n\n## GUEST SESSION\n")
 		builder.WriteString("This chat belongs to someone who is not the operator. You are talking to a guest.\n")

@@ -350,7 +350,10 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 	}
 
 	if cmdText, isCmd := channel.ExtractCommandText(request.Text); isCmd {
-		if !decision.Admin {
+		cmdName, _ := splitCommand(cmdText)
+		isGuestAllowed := cmdName == "help" || cmdName == "start" || cmdName == "menu" ||
+			cmdName == "status" || cmdName == "new" || cmdName == "reset" || cmdName == "clear" || cmdName == "stop"
+		if !decision.Admin && !isGuestAllowed {
 			if lang == "id" {
 				b.reply(ctx, request.ChatID, "Maaf, perintah itu hanya untuk operator.")
 			} else {
@@ -403,6 +406,21 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 			if hookResp.Prompt != "" {
 				prompt = hookResp.Prompt
 			}
+		}
+	}
+
+	// If a run is in flight for this chat, steer it!
+	if steerable, ok := b.agent.(interface {
+		IsRunning(channel.Request) bool
+		Steer(channel.Request, string) bool
+	}); ok && steerable.IsRunning(request) {
+		if steerable.Steer(request, prompt) {
+			if lang == "id" {
+				b.reply(ctx, request.ChatID, "Pesan arahan (steer) diterima. Agent akan menyesuaikan tindakannya.")
+			} else {
+				b.reply(ctx, request.ChatID, "Steer message accepted. The agent will adjust its next steps.")
+			}
+			return
 		}
 	}
 
@@ -492,6 +510,21 @@ func (b *Bot) runImage(ctx context.Context, request channel.Request, imageMsg *w
 			if hookResp.Prompt != "" {
 				prompt = hookResp.Prompt
 			}
+		}
+	}
+
+	// If a run is in flight for this chat, steer it!
+	if steerable, ok := b.agent.(interface {
+		IsRunning(channel.Request) bool
+		Steer(channel.Request, string) bool
+	}); ok && steerable.IsRunning(request) {
+		if steerable.Steer(request, prompt) {
+			if lang == "id" {
+				b.reply(ctx, request.ChatID, "Pesan arahan (steer) diterima. Agent akan menyesuaikan tindakannya.")
+			} else {
+				b.reply(ctx, request.ChatID, "Steer message accepted. The agent will adjust its next steps.")
+			}
+			return
 		}
 	}
 
@@ -1298,6 +1331,14 @@ func (b *Bot) handleCommand(ctx context.Context, request channel.Request) {
 			b.sendReply(ctx, request.ChatID, "A new conversation session has been started.")
 		}
 	case "stop":
+		if stopper, ok := b.agent.(interface{ StopChat(channel.Request) bool }); ok && stopper.StopChat(request) {
+			if lang == "id" {
+				b.sendReply(ctx, request.ChatID, "Perintah berhenti dikirim ke proses sesi ini.")
+			} else {
+				b.sendReply(ctx, request.ChatID, "Stop signal sent to the process in this session.")
+			}
+			return
+		}
 		b.agent.Stop()
 		if lang == "id" {
 			b.sendReply(ctx, request.ChatID, "Perintah berhenti dikirim ke proses yang sedang berjalan.")

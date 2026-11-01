@@ -74,8 +74,10 @@ type Env struct {
 	// AgentName and AgentHome identify the agent whose turn this is. The
 	// system prompt reads SOUL.md and USER.md from AgentHome. Both are empty
 	// for a run with no agent registry (a one-shot helper, a white-box test).
-	AgentName string
-	AgentHome string
+	AgentName     string
+	AgentHome     string
+	CallerName    string
+	CallerChannel string
 	// Guest marks a non-operator turn: the tool registry is already reduced
 	// and Secrets is nil, and the prompt says so plainly.
 	Guest bool
@@ -258,6 +260,9 @@ func DefaultRegistry() *Registry {
 		&checkpointTool{},
 		&rewindTool{},
 		&sendChannelTool{},
+		&readDocumentTool{},
+		&createOfficeDocumentTool{},
+		&convertPDFToExcelTool{},
 	)
 }
 

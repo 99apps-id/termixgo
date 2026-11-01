@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -345,6 +346,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Default(), fmt.Errorf("read config %s: %w", path, err)
 	}
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 	// Restrict permissions on load to prevent world-readability of settings
 	// or sensitive credentials/pairing-codes left by older versions or loose umasks.
 	_ = os.Chmod(path, 0o600)

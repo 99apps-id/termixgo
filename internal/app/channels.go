@@ -232,7 +232,7 @@ func (a *App) RedactForChannel(text string) string {
 // runChannelTurn runs one turn owned by a channel chat. The answer is what
 // this turn produced, not the session's last answer: a model that said nothing
 // must not make the bot repeat an earlier reply.
-func (a *App) runChannelTurn(ctx context.Context, agentName string, session *agent.Session, interactor Interactor, prompt string, images []provider.Image, guest bool, maxSteps int, costBudgetUSD float64, progress func(string)) (string, error) {
+func (a *App) runChannelTurn(ctx context.Context, agentName string, session *agent.Session, interactor Interactor, prompt string, images []provider.Image, guest bool, maxSteps int, costBudgetUSD float64, callerName, callerChannel string, progress func(string)) (string, error) {
 	notice := ""
 	if progress != nil {
 		// The opening line is part of the contract: the caller shows it at
@@ -255,6 +255,8 @@ func (a *App) runChannelTurn(ctx context.Context, agentName string, session *age
 		images:        images,
 		session:       session,
 		agentName:     agentName,
+		callerName:    callerName,
+		callerChannel: callerChannel,
 		interactor:    interactor,
 		guest:         guest,
 		maxSteps:      maxSteps,
@@ -280,7 +282,7 @@ func (a *App) runChannelTurn(ctx context.Context, agentName string, session *age
 				answer = second
 			}
 		}
-		if session.ToolCallCountSince(retryMark) == 0 {
+		if session.ToolCallCountSince(retryMark) == 0 && !guest {
 			answer += "\n\n" + unverifiedNote
 		}
 	}
@@ -519,7 +521,7 @@ func (b *telegramBridge) RunPrompt(ctx context.Context, request channel.Request,
 		return "", err
 	}
 	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, progress)
+	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, request.SenderName, "Telegram", progress)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}
@@ -546,7 +548,7 @@ func (b *telegramBridge) RunPromptWithImage(ctx context.Context, request channel
 	}
 	images := []provider.Image{{MediaType: mediaType, Data: data}}
 	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, progress)
+	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, request.SenderName, "Telegram", progress)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}
@@ -554,6 +556,24 @@ func (b *telegramBridge) RunPromptWithImage(ctx context.Context, request channel
 		return "", err
 	}
 	return b.app.RedactForChannel(answer), nil
+}
+
+// Steer forwards a steering message into an active turn in this chat.
+func (b *telegramBridge) Steer(request channel.Request, prompt string) bool {
+	id := channelSessionID(config.ChannelTelegram, b.name, request.ChatID)
+	return b.app.SteerSession(id, prompt)
+}
+
+// IsRunning reports whether a turn is active for this chat.
+func (b *telegramBridge) IsRunning(request channel.Request) bool {
+	id := channelSessionID(config.ChannelTelegram, b.name, request.ChatID)
+	return b.app.IsSessionRunning(id)
+}
+
+// StopChat cancels the turn in flight for this chat.
+func (b *telegramBridge) StopChat(request channel.Request) bool {
+	id := channelSessionID(config.ChannelTelegram, b.name, request.ChatID)
+	return b.app.StopSession(id)
 }
 
 // TranscribeAudio forwards voice/audio bytes to the app's configured STT engine.

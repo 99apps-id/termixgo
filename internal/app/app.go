@@ -146,6 +146,9 @@ type App struct {
 	// caller instead of being dropped.
 	steer []string
 
+	activeRunsMu sync.Mutex
+	activeRuns   map[string]*activeRun
+
 	bot       *telegram.Bot
 	botCancel context.CancelFunc
 	botStatus string
@@ -1239,6 +1242,57 @@ func (a *App) SteerCount() int {
 	return len(a.steer)
 }
 
+// activeRun tracks one running turn keyed by its session or caller id.
+type activeRun struct {
+	key       string
+	agentName string
+	sessionID string
+	cancel    context.CancelFunc
+	mu        sync.Mutex
+	steer     []string
+}
+
+// IsSessionRunning reports whether a turn is active for the given session or run key.
+func (a *App) IsSessionRunning(runKey string) bool {
+	a.activeRunsMu.Lock()
+	defer a.activeRunsMu.Unlock()
+	_, ok := a.activeRuns[runKey]
+	return ok
+}
+
+// SteerSession queues a steer message into the turn in flight for the given session.
+func (a *App) SteerSession(runKey, input string) bool {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return false
+	}
+	a.activeRunsMu.Lock()
+	run, ok := a.activeRuns[runKey]
+	a.activeRunsMu.Unlock()
+	if !ok || run == nil {
+		return false
+	}
+	run.mu.Lock()
+	run.steer = append(run.steer, trimmed)
+	run.mu.Unlock()
+	return true
+}
+
+// StopSession cancels an active turn for the given session.
+func (a *App) StopSession(runKey string) bool {
+	a.activeRunsMu.Lock()
+	run, ok := a.activeRuns[runKey]
+	a.activeRunsMu.Unlock()
+	if !ok || run == nil {
+		return false
+	}
+	if run.cancel != nil {
+		run.cancel()
+		return true
+	}
+	return false
+}
+
 // HarnessProfile reports the harness the next turn will run under. An unset
 // profile resolves to the critical default rather than to no harness at all.
 func (a *App) HarnessProfile() agent.HarnessProfile {
@@ -2149,6 +2203,9 @@ type runOptions struct {
 	// agentName is whose workspace, persona and model the turn uses. Empty
 	// means the active terminal agent.
 	agentName string
+	// callerName and callerChannel identify who sent the request on WhatsApp or Telegram.
+	callerName    string
+	callerChannel string
 	// interactor answers this run's approvals. A channel turn installs its
 	// own, so a guest's approval lands in the operator's chat; the terminal
 	// leaves it nil and keeps the UI's interactor.
@@ -2180,22 +2237,52 @@ func (a *App) runOn(ctx context.Context, input string, images []provider.Image, 
 // model, budget, approval policy, tool wiring and agent context stay identical
 // whether the turn came from the terminal, a channel or a schedule.
 //
-// The single-run slot is taken with TryLock rather than Lock: a second caller
-// must be told the agent is busy instead of queueing behind a turn it cannot
-// see, which is what let a Telegram prompt block the terminal indefinitely.
+// A run is locked per session / channel profile so tasks across different channels
+// (WhatsApp, Telegram, or different agent profiles) can execute concurrently without
+// blocking each other. The terminal run retains runMu exclusivity.
 func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions) error {
-	if !a.runMu.TryLock() {
+	agentName := strings.TrimSpace(opts.agentName)
+	if agentName == "" {
+		agentName = a.ActiveAgent()
+	}
+
+	runKey := "terminal:" + agentName
+	if opts.session != nil && opts.session.ID() != "" {
+		runKey = opts.session.ID()
+	} else {
+		if !a.runMu.TryLock() {
+			return ErrBusy
+		}
+		defer a.runMu.Unlock()
+	}
+
+	a.activeRunsMu.Lock()
+	if a.activeRuns == nil {
+		a.activeRuns = make(map[string]*activeRun)
+	}
+	if _, running := a.activeRuns[runKey]; running {
+		a.activeRunsMu.Unlock()
 		return ErrBusy
 	}
-	defer a.runMu.Unlock()
+	curRun := &activeRun{
+		key:       runKey,
+		agentName: agentName,
+		sessionID: runKey,
+	}
+	a.activeRuns[runKey] = curRun
+	a.activeRunsMu.Unlock()
+
+	defer func() {
+		a.activeRunsMu.Lock()
+		delete(a.activeRuns, runKey)
+		a.activeRunsMu.Unlock()
+	}()
 
 	a.mu.Lock()
 	a.turnDelegations = 0
 	a.mu.Unlock()
 
 	if opts.interactor != nil {
-		// The run owns the approval route for its turn. Since runMu is held,
-		// restoring the previous interactor cannot race another run.
 		a.mu.Lock()
 		previous := a.interactor
 		a.interactor = opts.interactor
@@ -2207,18 +2294,12 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 		}()
 	}
 
-	agentName := strings.TrimSpace(opts.agentName)
-	if agentName == "" {
-		agentName = a.ActiveAgent()
-	}
 	client, currentModel, model := a.agentModel(agentName)
 	if client == nil {
 		a.mu.Lock()
 		modelErr := a.modelErr
 		a.mu.Unlock()
 		if modelErr != nil && agentName == a.ActiveAgent() {
-			// Name the actual cause: a bare ErrNoModel read as "nothing is
-			// configured" while /model was showing a configured id.
 			return fmt.Errorf("%w: %v", ErrNoModel, modelErr)
 		}
 		return ErrNoModel
@@ -2228,20 +2309,27 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 	a.mu.Lock()
 	price := a.pricing
 	costKnown := a.costKnown
-	a.running = true
+	if opts.session == nil {
+		a.running = true
+	}
 	a.mu.Unlock()
 
 	runCtx, cancel := context.WithCancel(ctx)
-	a.mu.Lock()
-	a.cancel = cancel
-	a.mu.Unlock()
-	defer func() {
-		cancel()
+	curRun.cancel = cancel
+	if opts.session == nil {
 		a.mu.Lock()
-		a.cancel = nil
-		a.running = false
+		a.cancel = cancel
 		a.mu.Unlock()
-	}()
+		defer func() {
+			cancel()
+			a.mu.Lock()
+			a.cancel = nil
+			a.running = false
+			a.mu.Unlock()
+		}()
+	} else {
+		defer cancel()
+	}
 
 	runEnv := a.envForRun(agentName, opts.guest)
 	if opts.session != nil {
@@ -2250,6 +2338,20 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 		// session; the owned session still accounts for itself.
 		runEnv = a.isolatedEnvForRun(agentName, opts.guest)
 	}
+	runEnv.CallerName = opts.callerName
+	runEnv.CallerChannel = opts.callerChannel
+
+	if opts.interactor != nil {
+		runEnv.Approve = func(req agent.ApprovalRequest) agent.Decision {
+			return opts.interactor.Approve(req)
+		}
+		if ask, ok := opts.interactor.(interface {
+			Ask(string, []string) (string, error)
+		}); ok {
+			runEnv.Ask = ask.Ask
+		}
+	}
+
 	// Delegation belongs to this run: its agent, guest state and ceilings.
 	// Without this a channel turn of a named agent would delegate as the
 	// terminal's active agent.
@@ -2280,10 +2382,24 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 		CostKnown:     costKnown,
 		CostBudgetUSD: ceilingBudget(cfg.CostBudgetUSD, opts.costBudgetUSD),
 		Effort:        cfg.EffortFor(currentModel.ID),
-		Steer:         a.TakeSteer,
-		Journal:       runEnv.Journal,
-		ToolSearch:    cfg.ToolSearchEnabled,
-		TurnImages:    opts.images,
+		Steer: func() []string {
+			var steers []string
+			curRun.mu.Lock()
+			if len(curRun.steer) > 0 {
+				steers = append(steers, curRun.steer...)
+				curRun.steer = nil
+			}
+			curRun.mu.Unlock()
+			if opts.session == nil {
+				if global := a.TakeSteer(); len(global) > 0 {
+					steers = append(steers, global...)
+				}
+			}
+			return steers
+		},
+		Journal:    runEnv.Journal,
+		ToolSearch: cfg.ToolSearchEnabled,
+		TurnImages: opts.images,
 	}
 	session := opts.session
 	if session == nil {

@@ -142,8 +142,9 @@ type Bot struct {
 	// runMu guards the single agent turn this bot may start. Commands that do
 	// not run the agent are deliberately outside it, so /stop and /status are
 	// answered while a turn is in flight.
-	runMu   sync.Mutex
-	running bool
+	runMu        sync.Mutex
+	running      bool
+	runningChats map[int64]bool
 
 	approvalsMu sync.Mutex
 	approvals   map[string]*PendingApproval
@@ -313,6 +314,31 @@ func (b *Bot) endRun() {
 	b.runMu.Lock()
 	b.running = false
 	b.runMu.Unlock()
+}
+
+func (b *Bot) tryStartRunChat(chatID int64) bool {
+	b.runMu.Lock()
+	defer b.runMu.Unlock()
+	if b.runningChats == nil {
+		b.runningChats = make(map[int64]bool)
+	}
+	if b.runningChats[chatID] || (len(b.runningChats) == 0 && b.running) {
+		return false
+	}
+	b.runningChats[chatID] = true
+	b.running = true
+	return true
+}
+
+func (b *Bot) endRunChat(chatID int64) {
+	b.runMu.Lock()
+	defer b.runMu.Unlock()
+	if b.runningChats != nil {
+		delete(b.runningChats, chatID)
+		b.running = len(b.runningChats) > 0
+	} else {
+		b.running = false
+	}
 }
 
 func (b *Bot) logf(format string, args ...any) {
@@ -530,6 +556,18 @@ func (b *Bot) handleCallback(ctx context.Context, query *CallbackQuery) {
 		} else {
 			pairedChat, owner := b.Pairing()
 			if pairedChat != 0 && (query.From.ID == owner || (owner == 0 && (chat.ID == 0 || chat.ID == pairedChat) && query.From.ID == pairedChat)) {
+				allowed = true
+			}
+		}
+	}
+	if !allowed && strings.HasPrefix(query.Data, "appr:") {
+		parts := strings.Split(query.Data, ":")
+		if len(parts) == 3 {
+			id := parts[2]
+			b.approvalsMu.Lock()
+			appr, ok := b.approvals[id]
+			b.approvalsMu.Unlock()
+			if ok && appr.ChatID == chat.ID {
 				allowed = true
 			}
 		}
@@ -900,8 +938,12 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		b.agent.NewSession(request)
 		b.reply(ctx, chatID, "Started a new session.")
 	case "stop":
-		b.agent.Stop()
-		b.reply(ctx, chatID, "Stopping the running turn.")
+		if stopper, ok := b.agent.(interface{ StopChat(channel.Request) bool }); ok && stopper.StopChat(request) {
+			b.reply(ctx, chatID, "Stopping the running turn in this chat.")
+		} else {
+			b.agent.Stop()
+			b.reply(ctx, chatID, "Stopping the running turn.")
+		}
 	case "model":
 		trimmedArg := strings.TrimSpace(argument)
 		if trimmedArg == "" {
@@ -1022,6 +1064,17 @@ func (b *Bot) hasExplicitPolicy(policy config.ChannelAccount, request channel.Re
 
 // runPrompt runs one text turn and mirrors progress into a single edited card.
 func (b *Bot) runPrompt(ctx context.Context, chatID int64, request channel.Request, prompt string) {
+	// If a run is already active in this chat, forward as a steering message!
+	if steerable, ok := b.agent.(interface {
+		IsRunning(channel.Request) bool
+		Steer(channel.Request, string) bool
+	}); ok && steerable.IsRunning(request) {
+		if steerable.Steer(request, prompt) {
+			b.reply(ctx, chatID, "Pesan arahan (steer) diterima. Agent akan menyesuaikan tindakannya.")
+			return
+		}
+	}
+
 	if hookResp, _ := b.invokeHook(ctx, request, prompt, ""); hookResp != nil {
 		switch strings.ToLower(strings.TrimSpace(hookResp.Action)) {
 		case channel.ActionReply:
@@ -1325,11 +1378,11 @@ func formatRunFailure(err error) string {
 // runWithCard runs one turn behind the single-run gate and mirrors progress
 // into one message that is edited in place instead of flooding the chat.
 func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Context, func(string)) (string, error)) {
-	if !b.tryStartRun() {
-		b.reply(ctx, chatID, "A run is already in progress. Send /stop to stop it, then retry.")
+	if !b.tryStartRunChat(chatID) {
+		b.reply(ctx, chatID, "A run is already in progress in this chat. Send /stop to stop it, or send a new instruction to steer it.")
 		return
 	}
-	defer b.endRun()
+	defer b.endRunChat(chatID)
 
 	statusMessage, err := b.client.SendMessage(ctx, chatID, "Working...", nil)
 	if err != nil {
@@ -1671,6 +1724,15 @@ func (b *Bot) handleGuestMessage(ctx context.Context, request channel.Request, m
 	if text == "" {
 		return
 	}
+	if b.HasPendingApproval(chatID) {
+		if b.ResolveApprovalByText(chatID, text) {
+			return
+		}
+		if text == "/stop" || text == "/cancel" {
+			b.ResolveApprovalByText(chatID, "deny")
+			return
+		}
+	}
 	quoted := quotedText(message)
 	if !isCommand {
 		b.runPrompt(ctx, chatID, request, channel.FormatQuotedPrompt(quoted, text))
@@ -1685,6 +1747,13 @@ func (b *Bot) handleGuestMessage(ctx context.Context, request channel.Request, m
 	case "new", "reset", "clear":
 		b.agent.NewSession(request)
 		b.reply(ctx, chatID, "Mulai sesi baru ya.")
+	case "stop":
+		if stopper, ok := b.agent.(interface{ StopChat(channel.Request) bool }); ok && stopper.StopChat(request) {
+			b.reply(ctx, chatID, "Menghentikan proses yang sedang berjalan di sesi ini.")
+		} else {
+			b.agent.Stop()
+			b.reply(ctx, chatID, "Menghentikan proses.")
+		}
 	case "run", "query":
 		prompt := strings.TrimSpace(rest)
 		if prompt == "" {
