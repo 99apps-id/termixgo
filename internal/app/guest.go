@@ -57,8 +57,8 @@ func (a *App) toolsFor(agentName string, guest bool) *agent.Registry {
 
 // policyFor returns the approval policy one run uses. A guest always asks, and
 // never inherits the operator's tool-level "always allow" answers: those are
-// the operator's consent, not a stranger's. Safe document creation tools are
-// permitted so guest chats can produce and deliver requested office files.
+// the operator's consent, not a stranger's. Safe document creation and delivery
+// tools are permitted so guest chats can produce and deliver requested files.
 func (a *App) policyFor(agentName string, guest bool) *agent.ApprovalPolicy {
 	base := a.Policy()
 	if guest {
@@ -67,6 +67,8 @@ func (a *App) policyFor(agentName string, guest bool) *agent.ApprovalPolicy {
 			AlwaysAllowed: map[string]bool{
 				"create_office_document": true,
 				"convert_pdf_to_excel":   true,
+				"send_channel":           true,
+				"send_file":              true,
 			},
 			SessionAllowed: map[string]bool{},
 			Memory:         base.Memory,
@@ -99,6 +101,8 @@ func (a *App) envForRun(agentName string, guest bool) *agent.Env {
 		runEnv.AlwaysAllowed = map[string]bool{
 			"create_office_document": true,
 			"convert_pdf_to_excel":   true,
+			"send_channel":           true,
+			"send_file":              true,
 		}
 		runEnv.SessionAllowed = map[string]bool{}
 	}

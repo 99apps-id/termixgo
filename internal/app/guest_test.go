@@ -66,8 +66,8 @@ func TestGuestPolicyAlwaysAsksAndForgetsGrants(t *testing.T) {
 	if _, ok := guest.AlwaysAllowed["write_file"]; ok {
 		t.Errorf("the operator's always-allow leaked into a guest run")
 	}
-	if !guest.AlwaysAllowed["create_office_document"] || !guest.AlwaysAllowed["convert_pdf_to_excel"] {
-		t.Errorf("office document creation tools must be always allowed for guest runs")
+	if !guest.AlwaysAllowed["create_office_document"] || !guest.AlwaysAllowed["convert_pdf_to_excel"] || !guest.AlwaysAllowed["send_channel"] || !guest.AlwaysAllowed["send_file"] {
+		t.Errorf("office document creation and delivery tools must be always allowed for guest runs: %+v", guest.AlwaysAllowed)
 	}
 
 	admin := application.policyFor(config.FinalAgentName, false)

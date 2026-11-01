@@ -8,13 +8,16 @@ import (
 
 func TestSendChannelToolDeliversAttachmentAndRespectsGuestRestriction(t *testing.T) {
 	registry := DefaultRegistry()
-	for _, name := range []string{"send_channel", "send_channel_file", "send_telegram", "send_whatsapp"} {
+	for _, name := range []string{"send_channel", "send_file", "send_document", "send_channel_file", "send_telegram", "send_whatsapp"} {
 		if _, ok := registry.Lookup(name); !ok {
 			t.Fatalf("expected %q to be registered in DefaultRegistry", name)
 		}
 	}
 
-	tool, _ := registry.Lookup("send_channel")
+	tool, _ := registry.Lookup("send_file")
+	if tool == nil {
+		t.Fatal("send_file must resolve to sendChannelTool")
+	}
 
 	// 1. Guest session without caller chat must be refused.
 	guestRes, err := tool.Run(context.Background(), &Env{Guest: true}, map[string]any{
@@ -49,13 +52,13 @@ func TestSendChannelToolDeliversAttachmentAndRespectsGuestRestriction(t *testing
 		t.Fatalf("expected refusal when guest specifies other recipient, got: %+v", refusedOther)
 	}
 	allowedOwn, err := tool.Run(context.Background(), guestEnv, map[string]any{
-		"file_path": ".termixgo/uploads/report.pdf",
+		"path": ".termixgo/uploads/report.pdf",
 	})
 	if err != nil || allowedOwn.IsError {
 		t.Fatalf("expected guest sending to own chat to succeed, got: %+v, err: %v", allowedOwn, err)
 	}
-	if guestCaptured.Recipient != "450913223" {
-		t.Fatalf("expected guest delivery to own chat 450913223, got %q", guestCaptured.Recipient)
+	if guestCaptured.Recipient != "450913223" || guestCaptured.Channel != "telegram" || guestCaptured.FilePath != ".termixgo/uploads/report.pdf" {
+		t.Fatalf("expected guest delivery to own chat 450913223 via telegram with path resolved, got %+v", guestCaptured)
 	}
 
 	// 2. Operator session forwards attachment and caption to SendChannel.
