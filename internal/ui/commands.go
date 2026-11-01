@@ -136,6 +136,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Stopping the running turn."})
 		m.refresh()
 		return m, nil
+	case "cd":
+		return m.slashCd(args)
 	case "status":
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: m.app.Status()})
 		m.refresh()
@@ -872,6 +874,20 @@ func (m *Model) slashTrust(args string) (tea.Model, tea.Cmd) {
 	default:
 		m.blocks = append(m.blocks, block{kind: blockError, text: "Usage: /trust [on|off]"})
 	}
+	m.refresh()
+	return m, nil
+}
+
+func (m *Model) slashCd(args string) (tea.Model, tea.Cmd) {
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Current folder: " + m.app.CurrentFolder()})
+		m.refresh()
+		return m, nil
+	}
+	m.app.SetCurrentFolder(trimmed)
+	m.refreshWelcome()
+	m.blocks = append(m.blocks, block{kind: blockNotice, text: "Current folder is now " + m.app.CurrentFolder()})
 	m.refresh()
 	return m, nil
 }

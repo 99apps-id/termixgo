@@ -58,9 +58,10 @@ type Interactor interface {
 type App struct {
 	mu sync.Mutex
 
-	cfg       config.Config
-	store     *secrets.Store
-	workspace string
+	cfg           config.Config
+	store         *secrets.Store
+	workspace     string
+	currentFolder string
 
 	trusted bool
 	skills  []skill.Skill
@@ -615,6 +616,24 @@ func (a *App) Secrets() *secrets.Store { return a.store }
 
 // Workspace is the canonical workspace root.
 func (a *App) Workspace() string { return a.workspace }
+
+// CurrentFolder is the folder shown in the UI. It defaults to the workspace
+// root and can be changed with /cd without moving the actual workspace.
+func (a *App) CurrentFolder() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.currentFolder != "" {
+		return a.currentFolder
+	}
+	return a.workspace
+}
+
+// SetCurrentFolder changes the folder shown in the UI.
+func (a *App) SetCurrentFolder(path string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.currentFolder = config.CleanFolder(path)
+}
 
 // Trusted reports the folder's trust state.
 func (a *App) Trusted() bool {

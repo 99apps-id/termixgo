@@ -66,6 +66,7 @@ var slashCommands = []SlashCommand{
 	{Trigger: "/quota", Args: "[refresh]", Summary: "Show official provider usage plus 5-hour rolling counts", Options: []SlashOption{
 		{Value: "refresh", Detail: "refetch official usage from the provider"},
 	}},
+	{Trigger: "/cd", Args: "[path]", Summary: "Show or change the current folder", Options: []SlashOption{}},
 	{Trigger: "/trust", Args: "[on|off]", Summary: "Show or change folder trust", Options: []SlashOption{
 		{Value: "on", Detail: "writes and commands run without asking"},
 		{Value: "off", Detail: "every mutating tool asks first"},

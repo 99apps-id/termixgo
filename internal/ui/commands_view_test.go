@@ -623,6 +623,28 @@ func TestRunPlainSlashTrustRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRunPlainSlashCdChangesCurrentFolder(t *testing.T) {
+	model := chatModel(t)
+	if got := model.app.CurrentFolder(); got != model.app.Workspace() {
+		t.Fatalf("default current folder = %q, want workspace %q", got, model.app.Workspace())
+	}
+
+	if _, err := runPlainSlash(context.Background(), model.app, "cd", model.app.Workspace(), &bytes.Buffer{}); err != nil {
+		t.Fatalf("/cd: %v", err)
+	}
+	if got := model.app.CurrentFolder(); got != model.app.Workspace() {
+		t.Errorf("current folder after /cd workspace = %q, want %q", got, model.app.Workspace())
+	}
+
+	target := t.TempDir()
+	if _, err := runPlainSlash(context.Background(), model.app, "cd", target, &bytes.Buffer{}); err != nil {
+		t.Fatalf("/cd target: %v", err)
+	}
+	if got := model.app.CurrentFolder(); got != target {
+		t.Errorf("current folder after /cd target = %q, want %q", got, target)
+	}
+}
+
 func TestRunPlainSlashReportsFailures(t *testing.T) {
 	model := chatModel(t)
 

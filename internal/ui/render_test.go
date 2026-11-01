@@ -408,7 +408,7 @@ func TestViewHeaderNamesFolderModelAndTrust(t *testing.T) {
 	// The header clips a long folder from the left, so the full path need not
 	// survive on a CI runner whose temp directory is deep. The basename is the
 	// part that must always show, since it is what names the project.
-	if !strings.Contains(header, "Termixgo") || !strings.Contains(header, filepath.Base(model.app.Workspace())) {
+	if !strings.Contains(header, "Termixgo") || !strings.Contains(header, filepath.Base(model.app.CurrentFolder())) {
 		t.Errorf("header = %q", header)
 	}
 	if !strings.Contains(header, "untrusted") {

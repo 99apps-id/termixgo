@@ -424,7 +424,7 @@ func (m *Model) welcomeBlock() block {
 	info := []string{
 		m.styles.Title.Render(fmt.Sprintf("%s %s", version.Name, version.Version)),
 		"",
-		m.styles.StatusKey.Render("folder  ") + m.styles.StatusValue.Render(m.app.Workspace()) + "  " + trust,
+		m.styles.StatusKey.Render("folder  ") + m.styles.StatusValue.Render(m.app.CurrentFolder()) + "  " + trust,
 		m.styles.StatusKey.Render("model   ") + modelLabel,
 		"",
 		m.styles.Subtitle.Render("Type a request and press Enter. /help lists commands, /setup finishes onboarding."),
@@ -468,9 +468,10 @@ func (m *Model) Init() tea.Cmd {
 // way Codex CLI keeps its tab informative.
 func (m *Model) windowTitle() string {
 	base := "Termixgo"
-	if workspace := strings.TrimSpace(m.app.Workspace()); workspace != "" {
+	if workspace := strings.TrimSpace(m.app.CurrentFolder()); workspace != "" {
 		base += " - " + filepath.Base(workspace)
 	}
+
 	switch {
 	case m.pendingApproval != nil:
 		return base + " - approval needed"
@@ -2040,7 +2041,7 @@ func (m *Model) viewHeader() string {
 		trustStyle = m.styles.StatusTrust
 	}
 	label := "Termixgo "
-	workspace := m.app.Workspace()
+	workspace := m.app.CurrentFolder()
 	right := fmt.Sprintf("%s / %s", m.app.ModelLabel(), m.app.CurrentModel().Provider)
 	// The effort is named only when the provider is actually being told one.
 	// An empty effort means the vendor's own default, and printing "default"

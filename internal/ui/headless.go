@@ -455,7 +455,7 @@ func printPlainWelcome(application *app.App, out io.Writer, colored bool) {
 	if application.Trusted() {
 		trust = "trusted"
 	}
-	fmt.Fprintf(out, "folder: %s (%s)\n", application.Workspace(), trust)
+	fmt.Fprintf(out, "folder: %s (%s)\n", application.CurrentFolder(), trust)
 	fmt.Fprintf(out, "model:  %s\n", orNone(application.ModelLabel()))
 	fmt.Fprintln(out, "Type a request, or /help for commands. /exit quits.")
 }
@@ -636,6 +636,14 @@ func runPlainSlash(ctx context.Context, application *app.App, name, args string,
 			fmt.Fprintf(out, "  folder is %s\n", map[bool]string{true: "trusted", false: "untrusted"}[application.Trusted()])
 			return false, fmt.Errorf("usage: /trust [on|off]")
 		}
+	case "cd":
+		trimmed := strings.TrimSpace(args)
+		if trimmed == "" {
+			fmt.Fprintf(out, "  current folder: %s\n", application.CurrentFolder())
+			return false, nil
+		}
+		application.SetCurrentFolder(trimmed)
+		fmt.Fprintf(out, "  current folder is now %s\n", application.CurrentFolder())
 	case "approval":
 		if strings.TrimSpace(args) == "" {
 			fmt.Fprintf(out, "  approval mode: %s\n", application.Config().ApprovalMode)
