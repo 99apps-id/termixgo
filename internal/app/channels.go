@@ -257,7 +257,7 @@ func (a *App) RedactForChannel(text string) string {
 // runChannelTurn runs one turn owned by a channel chat. The answer is what
 // this turn produced, not the session's last answer: a model that said nothing
 // must not make the bot repeat an earlier reply.
-func (a *App) runChannelTurn(ctx context.Context, agentName string, session *agent.Session, interactor Interactor, prompt string, images []provider.Image, guest bool, maxSteps int, costBudgetUSD float64, callerName, callerChannel string, progress func(string)) (string, error) {
+func (a *App) runChannelTurn(ctx context.Context, agentName string, session *agent.Session, interactor Interactor, prompt string, images []provider.Image, guest bool, maxSteps int, costBudgetUSD float64, callerName, callerChannel, callerChatID, callerAccount string, progress func(string)) (string, error) {
 	notice := ""
 	if progress != nil {
 		// The opening line is part of the contract: the caller shows it at
@@ -282,6 +282,8 @@ func (a *App) runChannelTurn(ctx context.Context, agentName string, session *age
 		agentName:     agentName,
 		callerName:    callerName,
 		callerChannel: callerChannel,
+		callerChatID:  callerChatID,
+		callerAccount: callerAccount,
 		interactor:    interactor,
 		guest:         guest,
 		maxSteps:      maxSteps,
@@ -546,7 +548,7 @@ func (b *telegramBridge) RunPrompt(ctx context.Context, request channel.Request,
 		return "", err
 	}
 	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, request.SenderName, "Telegram", progress)
+	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, request.SenderName, "Telegram", request.ChatID, b.name, progress)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}
@@ -573,7 +575,7 @@ func (b *telegramBridge) RunPromptWithImage(ctx context.Context, request channel
 	}
 	images := []provider.Image{{MediaType: mediaType, Data: data}}
 	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, request.SenderName, "Telegram", progress)
+	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, request.SenderName, "Telegram", request.ChatID, b.name, progress)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}

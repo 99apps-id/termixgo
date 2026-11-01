@@ -28,7 +28,6 @@ var guestDeniedTools = []string{
 	"github_create_pr", "github_get_pr", "github_list_prs", "github_review_pr",
 	"github_comment_pr", "github_merge_pr",
 	"ask_user", "remember", "install_skill", "propose_skill",
-	"send_channel",
 }
 
 // denyList is the effective tool deny-list of one run: the agent's own list,
@@ -58,13 +57,17 @@ func (a *App) toolsFor(agentName string, guest bool) *agent.Registry {
 
 // policyFor returns the approval policy one run uses. A guest always asks, and
 // never inherits the operator's tool-level "always allow" answers: those are
-// the operator's consent, not a stranger's.
+// the operator's consent, not a stranger's. Safe document creation tools are
+// permitted so guest chats can produce and deliver requested office files.
 func (a *App) policyFor(agentName string, guest bool) *agent.ApprovalPolicy {
 	base := a.Policy()
 	if guest {
 		return &agent.ApprovalPolicy{
-			Mode:           agent.ApprovalAsk,
-			AlwaysAllowed:  map[string]bool{},
+			Mode: agent.ApprovalAsk,
+			AlwaysAllowed: map[string]bool{
+				"create_office_document": true,
+				"convert_pdf_to_excel":   true,
+			},
 			SessionAllowed: map[string]bool{},
 			Memory:         base.Memory,
 		}
@@ -91,8 +94,12 @@ func (a *App) envForRun(agentName string, guest bool) *agent.Env {
 		// unsupported answer in a public chat is a promise nobody verified.
 		runEnv.Grounding = config.GroundingStrict
 		runEnv.Secrets = nil
-		runEnv.SendChannel = nil
-		runEnv.AlwaysAllowed = map[string]bool{}
+		// SendChannel is retained for guests because send_channel restricts delivery
+		// strictly to the guest's own chat.
+		runEnv.AlwaysAllowed = map[string]bool{
+			"create_office_document": true,
+			"convert_pdf_to_excel":   true,
+		}
 		runEnv.SessionAllowed = map[string]bool{}
 	}
 	return runEnv

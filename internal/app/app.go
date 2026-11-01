@@ -2208,6 +2208,8 @@ type runOptions struct {
 	// callerName and callerChannel identify who sent the request on WhatsApp or Telegram.
 	callerName    string
 	callerChannel string
+	callerChatID  string
+	callerAccount string
 	// interactor answers this run's approvals. A channel turn installs its
 	// own, so a guest's approval lands in the operator's chat; the terminal
 	// leaves it nil and keeps the UI's interactor.
@@ -2342,6 +2344,8 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 	}
 	runEnv.CallerName = opts.callerName
 	runEnv.CallerChannel = opts.callerChannel
+	runEnv.CallerChatID = opts.callerChatID
+	runEnv.CallerAccount = opts.callerAccount
 
 	if opts.interactor != nil {
 		runEnv.Approve = func(req agent.ApprovalRequest) agent.Decision {

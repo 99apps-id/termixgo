@@ -287,7 +287,7 @@ func (b *whatsappBridge) RunPrompt(ctx context.Context, request channel.Request,
 		return "", err
 	}
 	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, request.SenderName, "WhatsApp", progress)
+	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, request.SenderName, "WhatsApp", request.ChatID, b.name, progress)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}
@@ -314,7 +314,7 @@ func (b *whatsappBridge) RunPromptWithImage(ctx context.Context, request channel
 	}
 	images := []provider.Image{{MediaType: mediaType, Data: data}}
 	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, request.SenderName, "WhatsApp", progress)
+	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, request.SenderName, "WhatsApp", request.ChatID, b.name, progress)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}

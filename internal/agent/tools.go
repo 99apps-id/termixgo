@@ -78,6 +78,8 @@ type Env struct {
 	AgentHome     string
 	CallerName    string
 	CallerChannel string
+	CallerChatID  string
+	CallerAccount string
 	// Guest marks a non-operator turn: the tool registry is already reduced
 	// and Secrets is nil, and the prompt says so plainly.
 	Guest bool

@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"strings"
+
+	"github.com/99apps-id/termixgo/internal/channel"
 )
 
 // ChannelSendRequest describes a message and/or file attachment to deliver to a
@@ -64,11 +66,8 @@ func (t *sendChannelTool) Schema() map[string]any {
 }
 
 func (t *sendChannelTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
-	if env == nil || env.Guest {
-		return Result{Output: "sending to messaging channels is restricted to the operator", IsError: true}, nil
-	}
-	if env.SendChannel == nil {
-		return Result{Output: "channel delivery is not available in this environment", IsError: true}, nil
+	if env == nil {
+		return Result{Output: "no environment available", IsError: true}, nil
 	}
 	req := ChannelSendRequest{
 		Channel:   strings.TrimSpace(argString(args, "channel")),
@@ -76,6 +75,26 @@ func (t *sendChannelTool) Run(ctx context.Context, env *Env, args map[string]any
 		Recipient: strings.TrimSpace(argString(args, "recipient")),
 		Message:   strings.TrimSpace(argString(args, "message")),
 		FilePath:  strings.TrimSpace(argString(args, "file_path")),
+	}
+	if env.Guest {
+		if env.CallerChatID == "" {
+			return Result{Output: "sending to messaging channels is restricted to the operator", IsError: true}, nil
+		}
+		cleanRecip := channel.CanonicalID(req.Recipient)
+		cleanCaller := channel.CanonicalID(env.CallerChatID)
+		if cleanRecip != "" && cleanRecip != cleanCaller {
+			return Result{Output: "guests may only receive files in their own chat", IsError: true}, nil
+		}
+		req.Recipient = env.CallerChatID
+		if req.Channel == "" {
+			req.Channel = strings.ToLower(env.CallerChannel)
+		}
+		if req.Account == "" {
+			req.Account = env.CallerAccount
+		}
+	}
+	if env.SendChannel == nil {
+		return Result{Output: "channel delivery is not available in this environment", IsError: true}, nil
 	}
 	if req.Channel == "" {
 		return Result{Output: "channel is required ('telegram' or 'whatsapp')", IsError: true}, nil
