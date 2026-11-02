@@ -658,8 +658,12 @@ func runSecret(args []string, stdin io.Reader, stdout io.Writer) error {
 	if _, ok := provider.ByID(providerID); !ok {
 		return fmt.Errorf("unknown provider %q", providerID)
 	}
-	if provider.UsesOAuth(providerID) {
+	if provider.UsesOAuth(providerID) && providerID != "muse" {
 		return fmt.Errorf("%s logs in with a device code, not an API key; run 'termixgo login %s'", providerID, providerID)
+	}
+	if providerID == "muse" {
+		fmt.Fprintln(stdout, "Muse accepts either the OAuth subscription login or a Model API key (LLM_...).")
+		fmt.Fprintln(stdout, "A subscription key is chat-only from this client; a Model API key from https://dev.meta.ai is required for tool use.")
 	}
 	value := ""
 	if len(args) > 1 {

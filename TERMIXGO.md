@@ -436,6 +436,13 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   a datacenter one. So a persistent 404 is explained by reading `GET /v1/models`
   before naming a cause, and the registry states what the wire accepts, never
   what a given account or address is entitled to.
+- A provider's policy refusal is reported as policy, not as a bad key. Meta now
+  requires the official Muse Code client's attestation when a request carries
+  tools: a subscription key answers plain chat but returns 403
+  `client_attestation_denied` for any tool call, with quota still available.
+  `providerStatusError` keeps the provider's `code` so `museAttestationError`
+  can name the pay-as-you-go key as the next step instead of telling the
+  operator to re-check a key that is valid.
 - The agent-event observer is one slot with one owner. `App.SetObserver` returns a
   claim and refuses to install over a live one, so a second surface cannot detach
   the sink of the turn that is streaming; the holder releases it with

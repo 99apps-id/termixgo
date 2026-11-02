@@ -45,6 +45,7 @@ func TestBuildWorkerArgv(t *testing.T) {
 		"claude":   "claude",
 		"codex":    "codex",
 		"opencode": "opencode",
+		"muse":     "muse",
 	}
 	for kind, want := range cases {
 		argv, err := buildWorkerArgv(kind, "do it")

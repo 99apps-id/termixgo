@@ -28,10 +28,34 @@ func EnvKey(id string) string {
 	return ""
 }
 
+// museModelAPIKey returns an explicit Meta Model API key for Muse, if one is
+// configured. A Muse Code subscription login mints a key that Meta attests to
+// the official client and refuses for tool use from another client, while a
+// pay-as-you-go Model API key (LLM_...) is meant for third-party clients.
+// Matching the official CLI, the environment wins over the stored key.
+func museModelAPIKey(store *secrets.Store, id string) string {
+	if value := EnvKey(id); value != "" {
+		return value
+	}
+	if store != nil {
+		if value := strings.TrimSpace(store.Get(secrets.ProviderKey(id))); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 // ResolveKey returns the credential for a provider: an OAuth access token for
-// a login provider, otherwise the stored secret, then the environment.
+// a login provider, otherwise the stored secret, then the environment. Muse is
+// the one login provider where an explicit Model API key wins over the OAuth
+// token, because only that key may use tools.
 func ResolveKey(store *secrets.Store, id string) string {
 	if info, ok := ByID(id); ok && info.OAuth {
+		if id == "muse" {
+			if key := museModelAPIKey(store, id); key != "" {
+				return key
+			}
+		}
 		return oauth.AccessToken(context.Background(), oauth.NewStore(store), id)
 	}
 	if store != nil {
@@ -46,6 +70,11 @@ func ResolveKey(store *secrets.Store, id string) string {
 // expiry timers.
 func ForceResolveKey(store *secrets.Store, id string) string {
 	if info, ok := ByID(id); ok && info.OAuth {
+		if id == "muse" {
+			if key := museModelAPIKey(store, id); key != "" {
+				return key
+			}
+		}
 		return oauth.ForceRefreshToken(context.Background(), oauth.NewStore(store), id)
 	}
 	return ResolveKey(store, id)
@@ -67,6 +96,9 @@ func UsesOAuth(id string) bool {
 // provider answers with the stored OAuth token, not an API key.
 func KeySource(store *secrets.Store, id string) string {
 	if UsesOAuth(id) {
+		if id == "muse" && museModelAPIKey(store, id) != "" {
+			return "model API key"
+		}
 		if token, ok := OAuthStore(store).Load(id); ok && strings.TrimSpace(token.Access) != "" {
 			return "oauth login"
 		}

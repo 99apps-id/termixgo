@@ -15,7 +15,7 @@ import (
 
 // museUserAgent is the identity Meta's Muse backend expects. It gates access,
 // so the official CLI's build string is reused rather than the Termixgo agent.
-const museUserAgent = "muse-build/1.3.0 (interactive; macos-aarch64; build ac7280f2aca67769d1455a8847bb502b617d50f6)"
+const museUserAgent = "muse-code/1.0.2"
 
 // museRetryAttempts bounds how many times a transient Muse failure is retried
 // with the same key before the key is treated as stale and re-minted. Meta is
@@ -63,7 +63,6 @@ func (c *museClient) resetSession() string {
 
 func (c *museClient) Stream(ctx context.Context, req ChatRequest, emit func(StreamEvent) error) error {
 	payload := c.payload(req)
-
 	key := c.currentKey()
 	response, err := c.sendWithRetry(ctx, key, payload)
 	if err == nil {
@@ -81,7 +80,7 @@ func (c *museClient) Stream(ctx context.Context, req ChatRequest, emit func(Stre
 	// not the network: refresh the token, reset the session, and try again once
 	// (matching Antigravity's durability).
 	if !isMuseAuthOrSessionError(err) {
-		return err
+		return museAttestationError(err)
 	}
 	c.resetSession()
 	fresh := c.refreshKey()
@@ -90,7 +89,7 @@ func (c *museClient) Stream(ctx context.Context, req ChatRequest, emit func(Stre
 	}
 	response, err = c.sendWithRetry(ctx, key, payload)
 	if err != nil {
-		return c.modelHint(ctx, req.Model, err)
+		return museAttestationError(c.modelHint(ctx, req.Model, err))
 	}
 	defer response.Body.Close()
 
@@ -149,8 +148,6 @@ func (c *museClient) catalogue(ctx context.Context) ([]string, error) {
 	}
 	request.Header.Set("Authorization", "Bearer "+c.currentKey())
 	request.Header.Set("User-Agent", museUserAgent)
-	request.Header.Set("X-Client-Id", "tbh:tui")
-	request.Header.Set("x-api-version", "1.0.0")
 	response, err := c.http.Do(request)
 	if err != nil {
 		return nil, err
@@ -221,8 +218,6 @@ func (c *museClient) send(ctx context.Context, key string, payload map[string]an
 	headers := map[string]string{
 		"Authorization": "Bearer " + key,
 		"User-Agent":    museUserAgent,
-		"X-Client-Id":   "tbh:tui",
-		"x-api-version": "1.0.0",
 		"session_id":    c.session(),
 	}
 	return c.post(ctx, c.baseURL+"/responses", headers, payload)
@@ -322,6 +317,22 @@ func (c *museClient) payload(req ChatRequest) map[string]any {
 		payload["tool_choice"] = "auto"
 	}
 	return payload
+}
+
+// museAttestationError turns Meta's client-attestation refusal into an
+// actionable message. A Muse Code subscription key still answers a plain chat
+// request, but Meta now requires the official client's attestation whenever the
+// request carries tools, so tool use from another client is denied by policy
+// rather than by the key.
+func museAttestationError(err error) error {
+	var status *providerStatusError
+	if !errors.As(err, &status) || status.status != http.StatusForbidden {
+		return err
+	}
+	if status.code != "client_attestation_denied" && !strings.Contains(strings.ToLower(status.message), "muse code subscription") {
+		return err
+	}
+	return fmt.Errorf("%w: Meta now requires the official Muse Code client's attestation for tool use, so a Muse Code subscription key cannot call tools from Termixgo. Use a pay-as-you-go API key from https://dev.meta.ai for tool use, or keep this key in the official Muse Code client", err)
 }
 
 // isMuseAuthOrSessionError reports whether an error means the credential or session

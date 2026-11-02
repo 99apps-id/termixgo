@@ -530,6 +530,19 @@ termixgo logout <provider>
 The setup wizard runs the same check: choosing an OAuth provider shows "login
 required" and points at the login command instead of asking for an API key.
 
+**Muse Code policy.** Meta now requires the official Muse Code client's
+attestation when a request carries tools. A Muse Code subscription key still
+answers a plain chat request, but any request with tools returns
+`403 client_attestation_denied`; Termixgo reports that as a policy refusal and
+names the pay-as-you-go key at https://dev.meta.ai as the next step. The agent
+always sends tools, so a subscription key cannot drive Termixgo's tool loop,
+even with quota remaining. This affects the Termigo client as well. Two
+sanctioned paths remain: a pay-as-you-go Model API key (`LLM_...`) stored with
+`termixgo secret muse` or exported as `META_API_KEY`, which takes precedence
+over the OAuth login and may use tools; or the official CLI, either directly or
+as a `code_worker` with `worker=muse`, which runs `muse exec` with the
+subscription.
+
 Then pick a model:
 
 ```sh
@@ -613,7 +626,7 @@ ecosystem tools out of every request and loads them on demand through
 | `think` | reason without acting |
 | `subagent` | delegate a typed, self-contained task |
 | `orchestrate`, `list_pipelines` | run a multi-agent pipeline |
-| `code_worker` | hand a coding task to a background agent (termixgo, claude, codex, opencode) in its own worktree |
+| `code_worker` | hand a coding task to a background agent (termixgo, claude, codex, opencode, muse) in its own worktree |
 
 | Tool | Purpose |
 | --- | --- |
@@ -793,8 +806,10 @@ The worker is one of:
 
 - `termixgo` - this same binary running `termixgo run <task>`, so it needs no
   external account and uses the model already configured here.
-- `claude`, `codex` or `opencode` - an external coding CLI, which must be on
-  `PATH`; a missing one is named rather than reported as a bare command error.
+- `claude`, `codex`, `opencode` or `muse` - an external coding CLI, which must
+  be on `PATH`; a missing one is named rather than reported as a bare command
+  error. `muse` runs the official Muse Code CLI (`muse exec`), so a Muse Code
+  subscription covers its tool use even though the raw API does not.
 
 A native worker is marked so it cannot start another worker and recurse. The
 tool is approval gated like any other command, because it runs a coding agent

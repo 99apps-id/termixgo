@@ -26,14 +26,15 @@ func fastMuseRetry(t *testing.T) {
 // with the Meta identity headers and decodes the typed event feed, the same
 // shape the Codex client uses.
 func TestMuseStreamUsesTheResponsesAPI(t *testing.T) {
-	var gotPath, gotAuth, gotAgent, gotClientID, gotAPIVersion, gotSessionID string
+	var gotPath, gotAuth, gotAgent, gotSessionID string
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		gotPath = request.URL.Path
 		gotAuth = request.Header.Get("Authorization")
 		gotAgent = request.Header.Get("User-Agent")
-		gotClientID = request.Header.Get("X-Client-Id")
-		gotAPIVersion = request.Header.Get("x-api-version")
+		if request.Header.Get("X-Client-Id") != "" || request.Header.Get("x-api-version") != "" {
+			t.Errorf("Muse must not send the old client-id headers")
+		}
 		gotSessionID = request.Header.Get("session_id")
 		raw, _ := io.ReadAll(request.Body)
 		_ = json.Unmarshal(raw, &gotBody)
@@ -90,12 +91,6 @@ func TestMuseStreamUsesTheResponsesAPI(t *testing.T) {
 	}
 	if gotAgent != museUserAgent {
 		t.Errorf("User-Agent = %q, want %q", gotAgent, museUserAgent)
-	}
-	if gotClientID != "tbh:tui" {
-		t.Errorf("X-Client-Id = %q, want tbh:tui", gotClientID)
-	}
-	if gotAPIVersion != "1.0.0" {
-		t.Errorf("x-api-version = %q, want 1.0.0", gotAPIVersion)
 	}
 	if gotSessionID == "" {
 		t.Errorf("session_id should not be empty")
@@ -625,6 +620,33 @@ func TestJudgeMuseCatalog(t *testing.T) {
 	for _, test := range cases {
 		if got := judgeMuseCatalog(test.model, test.list); got != test.want {
 			t.Errorf("%s: verdict = %d, want %d", test.name, got, test.want)
+		}
+	}
+}
+
+func TestMuseAttestationDeniedNamesThePolicy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(writer, `{"error":{"code":"client_attestation_denied","message":"This API key is billed to a Muse Code subscription.","type":"permission_error"}}`)
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "muse", Label: "Meta Muse Code", Kind: KindMuse}, server.URL, "LLM|muse-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "muse-spark-1.3",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		Tools:    []ToolDef{{Name: "read_file", Description: "Read a file.", Schema: map[string]any{"type": "object"}}},
+	}, func(StreamEvent) error { return nil })
+	if err == nil {
+		t.Fatal("a client-attestation refusal must be reported")
+	}
+	for _, want := range []string{"official Muse Code client", "pay-as-you-go"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err, want)
 		}
 	}
 }

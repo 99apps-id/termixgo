@@ -6,7 +6,13 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+- `muse-wonder-1.0` and its contributor variant are in the Muse catalogue, with a 1M-token window.
+- `muse` is a `code_worker` kind: the task runs through the official Muse Code CLI (`muse exec`) in its own worktree, so a Muse Code subscription covers tool use even though the raw API no longer allows it from another client.
+- A Meta Model API key (`LLM_...`) now takes precedence over the Muse OAuth subscription login, whether stored with `termixgo secret muse` or exported as `META_API_KEY`. That key is the pay-as-you-go credential Meta documents for third-party clients and may use tools.
+
 ### Fixed
+- Meta Muse Code now enforces client attestation for tool use: a Muse Code subscription key still answers a plain chat request, but any request carrying tools returns `403 client_attestation_denied`. Termixgo reports this as a policy refusal naming the pay-as-you-go key at https://dev.meta.ai as the next step, instead of a misleading key error. The request identity also matches Termigo again (`User-Agent: muse-code/1.0.2`, no `X-Client-Id` or `x-api-version`), and `providerStatusError` keeps the provider's error code so a policy refusal is matched without prose.
 - The Linux installer verifies the Antigravity client id and secret are embedded after a source build, warns when `.env.local` is missing either value, and prints a confirmation when both are stamped, so a build cannot silently ship without the OAuth pair.
 - Turns now switch to tool search automatically when the registry exceeds 128 tools. Five configured MCP servers contributed 408 schemas, and `codex-gpt-reserve` and `codex-auto-review` answered such a request with an empty response; with the core set plus `find_tools` both models reply and can still call tools. The cap is also OpenAI's documented function-calling limit, so it keeps every step under it.
 - Codex requests now send `OpenAI-Beta: responses=experimental`, the header the working Termigo client sends on every ChatGPT request. It aligns the client with the reference; it was not the cause of the empty responses.
