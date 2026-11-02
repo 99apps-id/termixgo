@@ -115,6 +115,18 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	// gate can attach their recorded journal remedies to its nudge.
 	failedTools := map[string]bool{}
 	planNudges := 0
+	// fruitlessCuts counts consecutive steps the backend cut at its output
+	// ceiling without returning any text, tool call or reasoning. Two in a row
+	// means the request itself cannot produce anything, so the run stops with a
+	// named cause instead of repeating an identical request until the idle guard
+	// fires with a misleading message.
+	fruitlessCuts := 0
+	// plainReasoningNext asks the next request for the pre-summary shape, which
+	// is the one change that can make a model that burns its whole output budget
+	// on reasoning actually answer. It stays on for the rest of the turn once a
+	// fruitless cut shows the model cannot carry the summary: switching back
+	// would only reproduce the cut that triggered it.
+	plainReasoningNext := false
 
 	turnText := input + "\n\n" + FormatEnvironmentBlock(r.Env.Workspace, TrustLabel(r.Env.Trusted))
 	if len(r.TurnImages) > 0 {
@@ -174,12 +186,13 @@ runLoop:
 		}
 
 		request := provider.ChatRequest{
-			Model:       r.Model,
-			System:      r.system(),
-			SystemParts: r.systemParts(),
-			Messages:    compactForModel(session.Messages(), r.ContextBudget),
-			Tools:       r.stepTools(discovered).Definitions(),
-			Effort:      r.Effort,
+			Model:          r.Model,
+			System:         r.system(),
+			SystemParts:    r.systemParts(),
+			Messages:       compactForModel(session.Messages(), r.ContextBudget),
+			Tools:          r.stepTools(discovered).Definitions(),
+			Effort:         r.Effort,
+			PlainReasoning: plainReasoningNext,
 		}
 
 		var answer strings.Builder
@@ -251,12 +264,24 @@ runLoop:
 		}
 
 		if incompleteReason != "" {
-			// The backend cut this step at its output ceiling. What
-			// arrived is stored below like any step's output and the loop
-			// continues, so the next request hands the partial step back
-			// and the model resumes, instead of the run dying on a limit
-			// the client never set.
-			emit(Event{Kind: EventNotice, Text: "The backend cut that step at its output limit; continuing from what arrived."})
+			// The backend cut this step at its output ceiling. What arrived is
+			// stored below like any step's output. A cut that carried output
+			// continues from it; a cut that carried nothing is not progress,
+			// and repeating that exact request would be cut identically, so
+			// the retry changes the request shape and is bounded to one try.
+			usable := answer.Len() > 0 || len(calls) > 0 || len(reasoningItems) > 0 ||
+				reasoning.Len() > 0 || stepUsage.ReasoningTokens > 0
+			if usable {
+				fruitlessCuts = 0
+				emit(Event{Kind: EventNotice, Text: "The backend cut that step at its output limit; continuing from what arrived."})
+			} else {
+				fruitlessCuts++
+				if fruitlessCuts == 1 {
+					emit(Event{Kind: EventNotice, Text: "The backend cut that step at its output limit before any text, tool call or reasoning summary arrived. Retrying with the plain reasoning request."})
+				}
+			}
+		} else {
+			fruitlessCuts = 0
 		}
 
 		// A step that produced no text and no tool call is not a turn worth
@@ -292,6 +317,23 @@ runLoop:
 				// arrangement as the error streak.
 				if reasoning.Len() > 0 || len(reasoningItems) > 0 || stepUsage.ReasoningTokens > 0 {
 					guard.noteProgress()
+					continue
+				}
+				if incompleteReason != "" {
+					if fruitlessCuts >= 2 {
+						stopReason = "incomplete"
+						emit(Event{Kind: EventError, Err: fmt.Errorf("the backend cut two steps at its output limit without returning any text, tool call or reasoning summary; lower the reasoning effort with /effort low, or switch model with /model")})
+						break runLoop
+					}
+					// One bounded retry with the plain reasoning request and a
+					// steering message. Both are needed: the request shape is
+					// what a reasoning-heavy model chokes on, and the message
+					// tells it to spend its budget on an answer instead of more
+					// thinking.
+					plainReasoningNext = true
+					guard.noteProgress()
+					session.AddUser("Your previous response was cut at the backend output limit before any text, tool call or reasoning summary arrived. Answer now with one short step: a tool call or a concise answer. Keep the reasoning brief.")
+					r.persist()
 					continue
 				}
 				// Silence is not success: a model that returns no text

@@ -104,6 +104,12 @@ type ChatRequest struct {
 	// provider that accepts no such control sends nothing rather than a
 	// guess, because these fields are strict and a 400 costs the whole turn.
 	Effort string
+	// PlainReasoning asks the Responses client for the pre-summary request
+	// shape: the effort field alone, without the auto summary and the
+	// encrypted-content include. The agent loop sets it for the step after one
+	// the backend cut at its output limit without returning anything usable,
+	// because repeating that request would be cut exactly the same way.
+	PlainReasoning bool
 }
 
 // joinSystemParts folds the structured system blocks back into one string for

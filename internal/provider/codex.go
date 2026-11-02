@@ -53,13 +53,32 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 	// which a store: false backend cannot fetch on its own. A lite model
 	// rejects this arrangement and is rewritten by applyResponsesLite
 	// instead, so the two shapes must not both be written.
+	//
+	// PlainReasoning is the fallback shape. The agent loop asks for it after
+	// the backend cut a step at its output limit without returning any text,
+	// tool call or reasoning summary, which is what a model that cannot carry
+	// the summary does: it spends the whole output budget on reasoning and
+	// hands back an empty step every time. Repeating that request would be cut
+	// identically, so the retry keeps the effort but drops the summary and the
+	// include. The effort stays inside the reasoning object: this backend
+	// rejects the older top-level reasoning_effort spelling.
 	if !isCodexResponsesLiteModel(req.Model) {
-		reasoning := map[string]any{"summary": "auto"}
-		if effort := compatibleEffort(c.info.ID, req.Effort); effort != "" {
-			reasoning["effort"] = effort
+		if req.PlainReasoning {
+			reasoning := map[string]any{}
+			if effort := compatibleEffort(c.info.ID, req.Effort); effort != "" {
+				reasoning["effort"] = effort
+			}
+			if len(reasoning) > 0 {
+				payload["reasoning"] = reasoning
+			}
+		} else {
+			reasoning := map[string]any{"summary": "auto"}
+			if effort := compatibleEffort(c.info.ID, req.Effort); effort != "" {
+				reasoning["effort"] = effort
+			}
+			payload["reasoning"] = reasoning
+			payload["include"] = []string{"reasoning.encrypted_content"}
 		}
-		payload["reasoning"] = reasoning
-		payload["include"] = []string{"reasoning.encrypted_content"}
 	}
 	if isCodexResponsesLiteModel(req.Model) {
 		applyResponsesLite(payload, input, tools, instructions, req.Effort)

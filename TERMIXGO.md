@@ -114,7 +114,16 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   step, not the run: the ceiling is the backend's own (no client here sets
   it), so the decoder reports the cut as an event, the partial step is
   stored like any other, and the loop continues from it; any other
-  incomplete reason still fails the step with a named error.
+  incomplete reason still fails the step with a named error. A cut that
+  carried no text, tool call, reasoning summary, item or reasoning token is
+  not progress: repeating that identical request would be cut the same way,
+  so the loop retries once with `ChatRequest.PlainReasoning` (the Codex
+  effort-only shape, no auto summary and no encrypted include) plus a
+  message that asks for a short answer, and a second fruitless cut stops
+  the run with an error naming the cause and the next action (`/effort low`
+  or another model), so a script sees a non-zero exit instead of a turn
+  that reports success with no answer and the idle guard never reports a
+  model that was not idle.
 - A read-tier verdict with zero tool calls behind it is prose, not a review.
   `agent.RunSubagent` counts the nested run's assistant tool calls: an empty
   pass for a read-only role is retried once with an explicit mandate, and a

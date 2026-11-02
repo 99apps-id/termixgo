@@ -454,6 +454,52 @@ func TestDecodeResponsesStreamReportsOutputCeilingAsEvent(t *testing.T) {
 // step the loop should quietly retry: the decoder must still harvest its
 // usage, then end the stream in an error naming the reason, so the agent
 // loop reports a provider failure instead of counting the step as idle.
+// A fruitless cut at the output ceiling asks the next step for the plain
+// reasoning shape: effort only, no auto summary and no encrypted include.
+// Repeating the summary request would spend the whole budget on reasoning again
+// and be cut identically, which is the loop this fallback breaks.
+func TestCodexPlainReasoningRequestDropsTheSummaryShape(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		raw, _ := io.ReadAll(request.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		writer.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "openai-codex", Label: "Codex", Kind: KindOpenAI}, server.URL, "oauth-token")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	codex, ok := client.(*codexClient)
+	if !ok {
+		t.Fatalf("client = %T, want *codexClient", client)
+	}
+	err = codex.Stream(context.Background(), ChatRequest{
+		Model:          "gpt-5.3-codex",
+		Messages:       []Message{{Role: RoleUser, Content: "hi"}},
+		Effort:         EffortHigh,
+		PlainReasoning: true,
+	}, func(StreamEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if _, present := gotBody["include"]; present {
+		t.Errorf("the plain request must not include encrypted reasoning: %v", gotBody["include"])
+	}
+	reasoning, ok := gotBody["reasoning"].(map[string]any)
+	if !ok || reasoning["effort"] != "high" {
+		t.Errorf("reasoning = %v, want the effort inside the reasoning object", gotBody["reasoning"])
+	}
+	if _, present := reasoning["summary"]; present {
+		t.Errorf("the plain request must not ask for a summary: %v", reasoning)
+	}
+	if _, present := gotBody["reasoning_effort"]; present {
+		t.Errorf("this backend rejects the top-level reasoning_effort spelling: %v", gotBody)
+	}
+}
+
 func TestDecodeResponsesStreamErrorsOnOtherIncompleteReasons(t *testing.T) {
 	sse := strings.Join([]string{
 		`data: {"type":"response.incomplete","response":{"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15},"incomplete_details":{"reason":"content_filter"}}}`,
