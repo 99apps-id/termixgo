@@ -91,6 +91,12 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 		"User-Agent":    "codex_cli_rs/" + codexCLIVersion,
 		"version":       codexCLIVersion,
 		"session_id":    c.SessionID(),
+		// The working Termigo desktop client sends this on every ChatGPT
+		// request. Without it the backend answers some of the catalogue's
+		// models (a reserve id, a virtual review id) with an incomplete
+		// response carrying zero output tokens, while the same request with
+		// the header answers normally.
+		"OpenAI-Beta": "responses=experimental",
 	}
 	if strings.TrimSpace(c.accountID) != "" {
 		headers["ChatGPT-Account-ID"] = c.accountID
