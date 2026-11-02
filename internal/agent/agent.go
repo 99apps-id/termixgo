@@ -266,9 +266,7 @@ runLoop:
 		if incompleteReason != "" {
 			// The backend cut this step at its output ceiling. What arrived is
 			// stored below like any step's output. A cut that carried output
-			// continues from it; a cut that carried nothing is not progress,
-			// and repeating that exact request would be cut identically, so
-			// the retry changes the request shape and is bounded to one try.
+			// continues from it; a cut that carried nothing is not progress.
 			usable := answer.Len() > 0 || len(calls) > 0 || len(reasoningItems) > 0 ||
 				reasoning.Len() > 0 || stepUsage.ReasoningTokens > 0
 			if usable {
@@ -276,9 +274,6 @@ runLoop:
 				emit(Event{Kind: EventNotice, Text: "The backend cut that step at its output limit; continuing from what arrived."})
 			} else {
 				fruitlessCuts++
-				if fruitlessCuts == 1 {
-					emit(Event{Kind: EventNotice, Text: "The backend cut that step at its output limit before any text, tool call or reasoning summary arrived. Retrying with the plain reasoning request."})
-				}
 			}
 		} else {
 			fruitlessCuts = 0
@@ -320,9 +315,19 @@ runLoop:
 					continue
 				}
 				if incompleteReason != "" {
+					if stepUsage.CompletionTokens <= 0 && stepUsage.ReasoningTokens <= 0 {
+						// A cut with zero output tokens and no item is not a
+						// truncated answer: the backend produced nothing at
+						// all. Retrying cannot change that, and some ids
+						// (a virtual review model, a reserve model without
+						// capacity) answer exactly like this on every shape.
+						stopReason = "incomplete"
+						emit(Event{Kind: EventError, Err: fmt.Errorf("the backend returned an empty response for model %q (0 output tokens, cut at its output limit); this model does not serve chat turns on this account. Switch model with /model.", r.Model)})
+						break runLoop
+					}
 					if fruitlessCuts >= 2 {
 						stopReason = "incomplete"
-						emit(Event{Kind: EventError, Err: fmt.Errorf("the backend cut two steps at its output limit without returning any text, tool call or reasoning summary; lower the reasoning effort with /effort low, or switch model with /model")})
+						emit(Event{Kind: EventError, Err: fmt.Errorf("the backend cut two steps at its output limit without returning usable output; lower the reasoning effort with /effort low, or switch model with /model")})
 						break runLoop
 					}
 					// One bounded retry with the plain reasoning request and a
@@ -330,6 +335,7 @@ runLoop:
 					// what a reasoning-heavy model chokes on, and the message
 					// tells it to spend its budget on an answer instead of more
 					// thinking.
+					emit(Event{Kind: EventNotice, Text: "The backend cut that step at its output limit before any text, tool call or reasoning summary arrived. Retrying with the plain reasoning request."})
 					plainReasoningNext = true
 					guard.noteProgress()
 					session.AddUser("Your previous response was cut at the backend output limit before any text, tool call or reasoning summary arrived. Answer now with one short step: a tool call or a concise answer. Keep the reasoning brief.")

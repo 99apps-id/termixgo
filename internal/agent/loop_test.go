@@ -560,7 +560,10 @@ func TestRunContinuesAStepCutAtTheOutputCeiling(t *testing.T) {
 // request and a steering message, and a second fruitless cut stops the run with
 // a named cause instead of surfacing the idle-run message.
 func TestRunFruitlessOutputLimitRetriesPlainThenStops(t *testing.T) {
-	cut := []provider.StreamEvent{{Type: provider.EventIncomplete, IncompleteReason: "max_output_tokens"}}
+	cut := []provider.StreamEvent{
+		{Type: provider.EventUsage, Usage: &provider.Usage{PromptTokens: 10, CompletionTokens: 1, TotalTokens: 11}},
+		{Type: provider.EventIncomplete, IncompleteReason: "max_output_tokens"},
+	}
 	client := &fakeClient{steps: [][]provider.StreamEvent{cut, cut, cut}}
 	runner, env, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
 	session := NewSession(env.Workspace, "test-model")
@@ -615,6 +618,39 @@ func TestRunFruitlessOutputLimitRetriesPlainThenStops(t *testing.T) {
 	}
 	if !steered {
 		t.Error("the retry must steer the model toward a short answer")
+	}
+}
+
+// A cut that spent zero output tokens and returned no item is not a truncated
+// answer: the backend produced nothing. Retrying is pointless and hides the
+// cause, so the run stops at once and names the model that does not serve chat
+// on this account.
+func TestRunEmptyBackendResponseStopsImmediately(t *testing.T) {
+	cut := []provider.StreamEvent{{Type: provider.EventIncomplete, IncompleteReason: "max_output_tokens"}}
+	client := &fakeClient{steps: [][]provider.StreamEvent{cut, cut}}
+	runner, env, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	session := NewSession(env.Workspace, "test-model")
+
+	if err := runner.Run(context.Background(), session, "answer"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	client.mu.Lock()
+	calls := client.calls
+	client.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want a single attempt", calls)
+	}
+
+	recorder.mu.Lock()
+	var failure string
+	for _, event := range recorder.events {
+		if event.Kind == EventError && event.Err != nil {
+			failure = event.Err.Error()
+		}
+	}
+	recorder.mu.Unlock()
+	if !strings.Contains(failure, "test-model") || !strings.Contains(failure, "does not serve chat turns") {
+		t.Fatalf("failure = %q", failure)
 	}
 }
 

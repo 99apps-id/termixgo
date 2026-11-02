@@ -7,7 +7,7 @@ All notable changes to Termixgo are recorded here. The format follows
 ## Unreleased
 
 ### Fixed
-- Codex/ChatGPT OAuth runs that were cut at the backend output limit with nothing usable no longer retry the identical request three times and then report a misleading idle run. The first fruitless cut retries once with the effort inside the reasoning object and no auto summary or encrypted-content include (this backend rejects the older top-level `reasoning_effort`), plus a short-answer steer; a second one stops the run with an error naming the cause and the next action, so the process exits non-zero instead of reporting success.
+- Codex/ChatGPT OAuth runs that were cut at the backend output limit with nothing usable no longer retry the identical request three times and then report a misleading idle run. A cut with zero output tokens and no item stops at once with an error naming the model (a virtual review model or a reserve model without capacity answers exactly like this). A cut that spent output but returned nothing visible retries once with the effort inside the reasoning object and no auto summary or encrypted-content include (this backend rejects the older top-level `reasoning_effort`) plus a short-answer steer; a second one stops with an error naming the cause and the next action. Both stops exit non-zero.
 
 ## 0.2.4 - 2026-10-31
 

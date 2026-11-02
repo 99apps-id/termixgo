@@ -123,7 +123,11 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   the run with an error naming the cause and the next action (`/effort low`
   or another model), so a script sees a non-zero exit instead of a turn
   that reports success with no answer and the idle guard never reports a
-  model that was not idle.
+  model that was not idle. A cut with zero output tokens and no item is not
+  retried at all: the backend produced nothing, which is how a virtual
+  review model or a reserve model without capacity answers, so the run
+  stops at once naming the model instead of spending two more requests on
+  a shape change that cannot help.
 - A read-tier verdict with zero tool calls behind it is prose, not a review.
   `agent.RunSubagent` counts the nested run's assistant tool calls: an empty
   pass for a read-only role is retried once with an explicit mandate, and a
