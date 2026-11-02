@@ -505,15 +505,30 @@ func TestSetupProgressCounts(t *testing.T) {
 		setupKey:           2,
 		setupModel:         2,
 		setupCustomModel:   2,
-		setupTelegramAsk:   3,
-		setupTelegramToken: 3,
-		setupTelegramPair:  3,
+		setupTelegramAsk:   4,
+		setupTelegramToken: 4,
+		setupTelegramPair:  4,
 		setupWhatsAppAsk:   4,
 		setupDone:          5,
 	}
 	for step, want := range cases {
 		if got := setupProgress(step); got != want {
 			t.Errorf("setupProgress(%d) = %d, want %d", step, got, want)
+		}
+	}
+}
+
+func TestSetupStepLabelsDescribeTheCurrentTask(t *testing.T) {
+	cases := map[setupStep]string{
+		setupProvider:      "Provider",
+		setupModel:         "Connection and model",
+		setupVoiceModel:    "Optional models",
+		setupTelegramToken: "Channels",
+		setupDone:          "Complete",
+	}
+	for step, want := range cases {
+		if got := setupStepLabel(step); got != want {
+			t.Errorf("setupStepLabel(%d) = %q, want %q", step, got, want)
 		}
 	}
 }

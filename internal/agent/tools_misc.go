@@ -459,12 +459,12 @@ func (t *rememberTool) DoneLabel(a map[string]any) string {
 	return "Remembered: " + Shorten(argString(a, "fact"), 50)
 }
 func (t *rememberTool) Description() string {
-	return "Store a durable fact or convention so later sessions know it. Use project scope for this codebase, global for cross-project preferences."
+	return "Store a durable fact or convention so later sessions know it. Use project scope for this codebase, agent for agent-specific memory, or global for cross-project preferences."
 }
 func (t *rememberTool) Schema() map[string]any {
 	return object(map[string]any{
 		"fact":  strProp("The fact to remember, one sentence."),
-		"scope": map[string]any{"type": "string", "enum": []string{"project", "global"}, "description": "Defaults to project."},
+		"scope": map[string]any{"type": "string", "enum": []string{"project", "agent", "global"}, "description": "Defaults to project."},
 	}, "fact")
 }
 
@@ -476,8 +476,11 @@ func (t *rememberTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	if env.Memory == nil {
 		return Result{Output: "memory is not available", IsError: true}, nil
 	}
+	if env.AgentHome != "" {
+		env.Memory.SetAgentHome(env.AgentHome)
+	}
 	scope := strings.ToLower(strings.TrimSpace(argString(args, "scope")))
-	if scope != "global" {
+	if scope != "global" && scope != "agent" {
 		scope = "project"
 	}
 	if err := env.Memory.Remember(fact, scope); err != nil {

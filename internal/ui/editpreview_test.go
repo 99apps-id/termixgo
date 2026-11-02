@@ -60,6 +60,18 @@ func TestToolBlockCompactPeeksAndStaysBounded(t *testing.T) {
 	}
 }
 
+func TestToolBlockSummarizesPreviewInNarrowTerminals(t *testing.T) {
+	styles := NewStyles(DefaultPalette())
+	item := block{kind: blockTool, toolName: "edit", toolLabel: "Edited note.txt", toolOK: true, preview: samplePreview}
+	out := stripANSI(renderToolBlock(item, styles, 22, true))
+	if !strings.Contains(out, "+1 -1") {
+		t.Errorf("narrow preview should preserve the change summary, got:\n%s", out)
+	}
+	if strings.Contains(out, "hello changed") {
+		t.Errorf("narrow preview should not overflow with diff contents, got:\n%s", out)
+	}
+}
+
 func TestToolBlockPreviewStaysBoxedAtEveryWidth(t *testing.T) {
 	styles := NewStyles(DefaultPalette())
 	item := block{kind: blockTool, toolName: "edit", toolLabel: "Edited note.txt", toolOK: true, preview: samplePreview}

@@ -520,7 +520,7 @@ func (m *Model) userMessage() {
 // viewSetup renders the wizard.
 func (m *Model) viewSetup() string {
 	body := []string{
-		m.styles.BoxTitle.Render(fmt.Sprintf("%s (%d/%d)", setupTitlePrefix, setupProgress(m.setup.step), 5)),
+		m.styles.BoxTitle.Render(fmt.Sprintf("%s (%d/%d) · %s", setupTitlePrefix, setupProgress(m.setup.step), 5, setupStepLabel(m.setup.step))),
 		"",
 	}
 	if m.setup.message != "" {
@@ -586,12 +586,25 @@ func setupProgress(step setupStep) int {
 		return 2
 	case setupVoiceModel, setupCustomVoiceModel, setupImageModel, setupCustomImageModel:
 		return 3
-	case setupTelegramAsk, setupTelegramToken, setupTelegramPair:
-		return 3
-	case setupWhatsAppAsk:
+	case setupTelegramAsk, setupTelegramToken, setupTelegramPair, setupWhatsAppAsk:
 		return 4
 	default:
 		return 5
+	}
+}
+
+func setupStepLabel(step setupStep) string {
+	switch step {
+	case setupProvider:
+		return "Provider"
+	case setupEndpoint, setupKey, setupModel, setupCustomModel, setupOAuth:
+		return "Connection and model"
+	case setupVoiceModel, setupCustomVoiceModel, setupImageModel, setupCustomImageModel:
+		return "Optional models"
+	case setupTelegramAsk, setupTelegramToken, setupTelegramPair, setupWhatsAppAsk:
+		return "Channels"
+	default:
+		return "Complete"
 	}
 }
 

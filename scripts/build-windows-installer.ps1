@@ -62,12 +62,15 @@ try {
         }
     }
     $oauthModule = "github.com/99apps-id/termixgo/internal/oauth"
-    if ($env:TERMIXGO_ANTIGRAVITY_CLIENT_ID) {
-        $ldflags += " -X $oauthModule.AntigravityClientID=$($env:TERMIXGO_ANTIGRAVITY_CLIENT_ID)"
+    if ([string]::IsNullOrWhiteSpace($env:TERMIXGO_ANTIGRAVITY_CLIENT_ID)) {
+        throw "TERMIXGO_ANTIGRAVITY_CLIENT_ID is required to build the Windows installer"
     }
-    if ($env:TERMIXGO_ANTIGRAVITY_CLIENT_SECRET) {
-        $ldflags += " -X $oauthModule.AntigravityClientSecret=$($env:TERMIXGO_ANTIGRAVITY_CLIENT_SECRET)"
+    if ([string]::IsNullOrWhiteSpace($env:TERMIXGO_ANTIGRAVITY_CLIENT_SECRET)) {
+        throw "TERMIXGO_ANTIGRAVITY_CLIENT_SECRET is required to build the Windows installer"
     }
+    $ldflags += " -X $oauthModule.AntigravityClientID=$($env:TERMIXGO_ANTIGRAVITY_CLIENT_ID)"
+    $ldflags += " -X $oauthModule.AntigravityClientSecret=$($env:TERMIXGO_ANTIGRAVITY_CLIENT_SECRET)"
+    Write-Host "  Antigravity OAuth credentials: embedded"
 
     $dist = Join-Path $root "dist"
     if (-not (Test-Path $dist)) {

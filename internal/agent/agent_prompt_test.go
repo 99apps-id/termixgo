@@ -62,3 +62,19 @@ func TestBuildSystemPartsWithoutAgentHomeIsUnchanged(t *testing.T) {
 		t.Errorf("a run with no agent home must not grow persona blocks")
 	}
 }
+
+func TestBuildSystemPartsIncludesCallerProfile(t *testing.T) {
+	workspace := t.TempDir()
+	env := &Env{
+		Workspace:     workspace,
+		CallerName:    "Budi Santoso",
+		CallerChannel: "WhatsApp",
+	}
+	static, _ := BuildSystemParts(env, "test-model")
+	if !strings.Contains(static, "## CALLER PROFILE") {
+		t.Fatalf("expected CALLER PROFILE block")
+	}
+	if !strings.Contains(static, "Budi Santoso") || !strings.Contains(static, "WhatsApp") {
+		t.Errorf("expected caller name and channel in prompt, got: %s", static)
+	}
+}

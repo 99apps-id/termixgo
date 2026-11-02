@@ -235,7 +235,7 @@ func extractXLSX(path string) (string, int, error) {
 	}
 	defer reader.Close()
 
-	shared := parseSharedStrings(reader.File)
+	shared := parseWorkbookSharedStrings(reader.File)
 	var sheets []*zip.File
 	for _, entry := range reader.File {
 		if strings.HasPrefix(entry.Name, "xl/worksheets/sheet") && strings.HasSuffix(entry.Name, ".xml") {
@@ -322,8 +322,8 @@ func extractEPUB(path string) (string, error) {
 	return out.String(), nil
 }
 
-// parseSharedStrings builds the string table an xlsx cell references by index.
-func parseSharedStrings(files []*zip.File) []string {
+// parseWorkbookSharedStrings builds the string table an xlsx cell references by index.
+func parseWorkbookSharedStrings(files []*zip.File) []string {
 	entry := findZipEntry(files, "xl/sharedStrings.xml")
 	if entry == nil {
 		return nil

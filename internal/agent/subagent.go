@@ -198,7 +198,7 @@ func readOnlyTools() *Registry {
 		&grepTool{},
 		&globTool{},
 		&readImageTool{},
-		&documentExtractTool{},
+		&readDocumentTool{},
 		&codeOutlineTool{},
 		&symbolSearchTool{},
 		&symbolReferencesTool{},

@@ -57,7 +57,7 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 		"project":   project,
 		"model":     req.Model,
 		"userAgent": "antigravity",
-		"requestId": agRequestID(session, req.Model, len(req.Messages)),
+		"requestId": agRequestID(len(req.Messages)),
 		"request": map[string]any{
 			"contents":         c.encodeContents(req),
 			"sessionId":        session,
@@ -93,7 +93,7 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 			headers["X-Machine-Session-Id"] = newSession
 			reqMap := body["request"].(map[string]any)
 			reqMap["sessionId"] = newSession
-			body["requestId"] = agRequestID(newSession, req.Model, len(req.Messages))
+			body["requestId"] = agRequestID(len(req.Messages))
 			response, err = c.post(ctx, endpoint, headers, body)
 		}
 		// The daily host is the chat host; when it fails at the endpoint level,
@@ -802,7 +802,7 @@ func isEndpointError(err error) bool {
 		strings.Contains(msg, "no such host")
 }
 
-func agRequestID(session, model string, messageCount int) string {
+func agRequestID(messageCount int) string {
 	if messageCount < 1 {
 		messageCount = 1
 	}

@@ -60,11 +60,14 @@ func TestGuestPolicyAlwaysAsksAndForgetsGrants(t *testing.T) {
 	if guest.Mode != agent.ApprovalAsk {
 		t.Errorf("a guest run must ask for every mutating tool, got %v", guest.Mode)
 	}
-	if len(guest.AlwaysAllowed) != 0 || len(guest.SessionAllowed) != 0 {
-		t.Errorf("a guest must not inherit the operator's grants: %+v", guest)
+	if len(guest.SessionAllowed) != 0 {
+		t.Errorf("a guest must not inherit session grants: %+v", guest)
 	}
 	if _, ok := guest.AlwaysAllowed["write_file"]; ok {
 		t.Errorf("the operator's always-allow leaked into a guest run")
+	}
+	if !guest.AlwaysAllowed["create_office_document"] || !guest.AlwaysAllowed["convert_pdf_to_excel"] || !guest.AlwaysAllowed["send_channel"] || !guest.AlwaysAllowed["send_file"] {
+		t.Errorf("office document creation and delivery tools must be always allowed for guest runs: %+v", guest.AlwaysAllowed)
 	}
 
 	admin := application.policyFor(config.FinalAgentName, false)

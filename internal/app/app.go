@@ -24,6 +24,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/cron"
 	"github.com/99apps-id/termixgo/internal/mcp"
+	"github.com/99apps-id/termixgo/internal/oauth"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/sandbox"
 	"github.com/99apps-id/termixgo/internal/search"
@@ -152,6 +153,9 @@ type App struct {
 	// caller instead of being dropped.
 	steer []string
 
+	activeRunsMu sync.Mutex
+	activeRuns   map[string]*activeRun
+
 	bot       *telegram.Bot
 	botCancel context.CancelFunc
 	botStatus string
@@ -165,9 +169,10 @@ type App struct {
 
 	// channels is the runtime registry of every started account, and pairing
 	// is the file of unknown DM senders waiting for the operator's answer.
-	channels     map[channel.AccountID]*channelRuntime
-	pairing      *channel.PairingStore
-	outboxCancel context.CancelFunc
+	channels        map[channel.AccountID]*channelRuntime
+	channelProblems map[channel.AccountID]string
+	pairing         *channel.PairingStore
+	outboxCancel    context.CancelFunc
 
 	// cronStore is the scheduled-job list. It is opened lazily so a terminal
 	// session with no scheduler still pays nothing for it.
@@ -232,21 +237,22 @@ func New(workspace string) (*App, error) {
 	}
 
 	instance := &App{
-		cfg:           cfg,
-		store:         store,
-		workspace:     workspace,
-		trusted:       cfg.IsTrusted(workspace),
-		skills:        skills,
-		memory:        agent.NewMemory(workspace),
-		todos:         agent.NewTodoStore(),
-		tools:         buildDefaultTools(cfg),
-		runQueue:      newRunQueue(),
-		processes:     agent.NewProcessManager(),
-		events:        make(chan agent.Event, eventBuffer),
-		activeAgent:   cfg.ActiveAgent,
-		agentSessions: map[string]*agent.Session{},
-		agentCtx:      map[string]*agentContext{},
-		channels:      map[channel.AccountID]*channelRuntime{},
+		cfg:             cfg,
+		store:           store,
+		workspace:       workspace,
+		trusted:         cfg.IsTrusted(workspace),
+		skills:          skills,
+		memory:          agent.NewMemory(workspace),
+		todos:           agent.NewTodoStore(),
+		tools:           buildDefaultTools(cfg),
+		runQueue:        newRunQueue(),
+		processes:       agent.NewProcessManager(),
+		events:          make(chan agent.Event, eventBuffer),
+		activeAgent:     cfg.ActiveAgent,
+		agentSessions:   map[string]*agent.Session{},
+		agentCtx:        map[string]*agentContext{},
+		channels:        map[channel.AccountID]*channelRuntime{},
+		channelProblems: map[channel.AccountID]string{},
 	}
 	journal, err := agent.NewErrorJournal(workspace)
 	if err == nil {
@@ -282,6 +288,8 @@ func New(workspace string) (*App, error) {
 	defaultHome, homeErr := config.HomePath(filepath.Join("agents", config.FinalAgentName))
 	if homeErr != nil {
 		defaultHome = ""
+	} else {
+		instance.memory.SetAgentHome(defaultHome)
 	}
 	instance.agentCtx[config.FinalAgentName] = &agentContext{
 		name:      config.FinalAgentName,
@@ -914,10 +922,7 @@ func (a *App) Policy() *agent.ApprovalPolicy {
 func (a *App) AllowTool(name string) {
 	a.mu.Lock()
 	a.policy.AllowSession(name)
-	if a.policy.AlwaysAllowed == nil {
-		a.policy.AlwaysAllowed = map[string]bool{}
-	}
-	a.policy.AlwaysAllowed[name] = true
+	a.policy.AllowAlways(name)
 	if !containsString(a.cfg.AlwaysAllowedTools, name) {
 		a.cfg.AlwaysAllowedTools = append(append([]string{}, a.cfg.AlwaysAllowedTools...), name)
 	}
@@ -953,6 +958,13 @@ func (a *App) resolveModelAlias(query string) string {
 		return "deepseek-chat"
 	case "qwen":
 		return "qwen-max"
+	case "codex", "openai-codex", "codex-sol", "codex-gpt-5.6":
+		return "codex-gpt-5.6-sol"
+	case "gpt-5.6-sol", "5.6-sol":
+		if a.store != nil && provider.UsesOAuth("openai-codex") && provider.HasKey(a.store, "openai-codex") && !provider.HasKey(a.store, "openai") {
+			return "codex-gpt-5.6-sol"
+		}
+		return "gpt-5.6-sol"
 	case "openai-compatible", "compatible", "openai_compatible":
 		if models := a.ModelsForProvider("openai-compatible"); len(models) > 0 {
 			return "openai-compatible:" + models[len(models)-1].ID
@@ -1129,6 +1141,58 @@ func (a *App) SetBaseURL(providerID, rawURL string) error {
 	return config.Save(cfg)
 }
 
+// RemoveCustomModel deletes a custom or mistyped model from config across all providers.
+func (a *App) RemoveCustomModel(modelID string) (bool, error) {
+	trimmed := strings.TrimSpace(modelID)
+	if trimmed == "" {
+		return false, errors.New("model id is required")
+	}
+	removed := false
+	err := a.UpdateConfig(func(cfg *config.Config) {
+		if cfg.CustomModels == nil {
+			return
+		}
+		for provID, list := range cfg.CustomModels {
+			var kept []string
+			for _, m := range list {
+				if strings.EqualFold(m, trimmed) || strings.EqualFold(provID+":"+m, trimmed) {
+					removed = true
+				} else {
+					kept = append(kept, m)
+				}
+			}
+			if len(kept) == 0 {
+				delete(cfg.CustomModels, provID)
+			} else {
+				cfg.CustomModels[provID] = kept
+			}
+		}
+		if strings.EqualFold(cfg.DefaultModel, trimmed) {
+			cfg.DefaultModel = ""
+			removed = true
+		}
+	})
+	return removed, err
+}
+
+// RemoveSecret deletes the stored API key or OAuth token for a provider.
+func (a *App) RemoveSecret(providerID string) error {
+	trimmed := strings.ToLower(strings.TrimSpace(providerID))
+	if trimmed == "" {
+		return errors.New("provider id is required")
+	}
+	a.mu.Lock()
+	store := a.store
+	a.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	_ = store.Delete(secrets.ProviderKey(trimmed))
+	_ = oauth.NewStore(store).Delete(trimmed)
+	_ = store.Delete(secrets.TelegramAccountTokenKey(trimmed))
+	return nil
+}
+
 // SetApprovalMode changes the approval policy.
 func (a *App) SetApprovalMode(mode config.ApprovalMode) error {
 	if !config.ValidApprovalMode(mode) {
@@ -1210,6 +1274,57 @@ func (a *App) SteerCount() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return len(a.steer)
+}
+
+// activeRun tracks one running turn keyed by its session or caller id.
+type activeRun struct {
+	key       string
+	agentName string
+	sessionID string
+	cancel    context.CancelFunc
+	mu        sync.Mutex
+	steer     []string
+}
+
+// IsSessionRunning reports whether a turn is active for the given session or run key.
+func (a *App) IsSessionRunning(runKey string) bool {
+	a.activeRunsMu.Lock()
+	defer a.activeRunsMu.Unlock()
+	_, ok := a.activeRuns[runKey]
+	return ok
+}
+
+// SteerSession queues a steer message into the turn in flight for the given session.
+func (a *App) SteerSession(runKey, input string) bool {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return false
+	}
+	a.activeRunsMu.Lock()
+	run, ok := a.activeRuns[runKey]
+	a.activeRunsMu.Unlock()
+	if !ok || run == nil {
+		return false
+	}
+	run.mu.Lock()
+	run.steer = append(run.steer, trimmed)
+	run.mu.Unlock()
+	return true
+}
+
+// StopSession cancels an active turn for the given session.
+func (a *App) StopSession(runKey string) bool {
+	a.activeRunsMu.Lock()
+	run, ok := a.activeRuns[runKey]
+	a.activeRunsMu.Unlock()
+	if !ok || run == nil {
+		return false
+	}
+	if run.cancel != nil {
+		run.cancel()
+		return true
+	}
+	return false
 }
 
 // HarnessProfile reports the harness the next turn will run under. An unset
@@ -1703,6 +1818,33 @@ func (a *App) emitInto(event agent.Event, foldUsage bool) {
 		a.mu.Unlock()
 		if tracker != nil {
 			tracker.RecordRateLimit(prov, event.RateLimit)
+			if (prov == "qwen-token-plan" || prov == "stepfun-plan" || prov == "qwen" || prov == "stepfun") && (event.RateLimit.TokensLimit > 0 || event.RateLimit.RequestsLimit > 0) {
+				var usedPct float64
+				var resetAt *time.Time
+				display := "Plan Quota"
+				if event.RateLimit.TokensLimit > 0 && event.RateLimit.PercentTokensRemaining() >= 0 {
+					usedPct = 100 - event.RateLimit.PercentTokensRemaining()
+					resetAt = event.RateLimit.TokensReset
+					display = "Token Quota"
+				} else if event.RateLimit.RequestsLimit > 0 && event.RateLimit.PercentRequestsRemaining() >= 0 {
+					usedPct = 100 - event.RateLimit.PercentRequestsRemaining()
+					resetAt = event.RateLimit.RequestsReset
+					display = "Request Quota"
+				}
+				snap := &provider.QuotaSnapshot{
+					Provider:  prov,
+					FetchedAt: time.Now(),
+					Windows: []provider.QuotaWindow{
+						{
+							Key:         provider.QuotaSessionKey,
+							DisplayName: display,
+							UsedPercent: usedPct,
+							ResetsAt:    resetAt,
+						},
+					},
+				}
+				tracker.RecordSnapshot(prov, snap)
+			}
 		}
 	}
 	if event.Kind == agent.EventTurnEnd {
@@ -2146,6 +2288,11 @@ type runOptions struct {
 	// agentName is whose workspace, persona and model the turn uses. Empty
 	// means the active terminal agent.
 	agentName string
+	// callerName and callerChannel identify who sent the request on WhatsApp or Telegram.
+	callerName    string
+	callerChannel string
+	callerChatID  string
+	callerAccount string
 	// interactor answers this run's approvals. A channel turn installs its
 	// own, so a guest's approval lands in the operator's chat; the terminal
 	// leaves it nil and keeps the UI's interactor.
@@ -2180,34 +2327,65 @@ func (a *App) runOn(ctx context.Context, input string, images []provider.Image, 
 // model, budget, approval policy, tool wiring and agent context stay identical
 // whether the turn came from the terminal, a channel or a schedule.
 //
-// The single-run slot is admitted by runQueue with priority rather than taken
-// with a bare TryLock: a scheduled job or the heartbeat can no longer make the
-// operator's request bounce, and a chat message waits a bounded time instead of
-// being told the agent is busy at once. runMu stays behind it as the exclusion
-// that Close and ForceCompactSession observe for the whole turn.
+// A run is locked per session or channel profile so tasks across different
+// channels (WhatsApp, Telegram, or different agent profiles) can execute
+// concurrently without blocking each other. A terminal run keeps the exclusive
+// slot, admitted by runQueue with priority: a scheduled job or the heartbeat can
+// no longer make the operator's request bounce, and the operator waits a bounded
+// time instead of being refused at once. runMu stays behind the queue as the
+// exclusion that Close and ForceCompactSession observe for the whole turn.
 func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions) error {
-	priority := opts.priority
-	if priority == 0 {
-		priority = PriorityOperator
+	agentName := strings.TrimSpace(opts.agentName)
+	if agentName == "" {
+		agentName = a.ActiveAgent()
 	}
-	release, err := a.acquireTurn(ctx, priority)
-	if err != nil {
-		return err
+
+	runKey := "terminal:" + agentName
+	if opts.session != nil && opts.session.ID() != "" {
+		runKey = opts.session.ID()
+	} else {
+		priority := opts.priority
+		if priority == 0 {
+			priority = PriorityOperator
+		}
+		release, err := a.acquireTurn(ctx, priority)
+		if err != nil {
+			return err
+		}
+		defer release()
+		if !a.runMu.TryLock() {
+			return ErrBusy
+		}
+		defer a.runMu.Unlock()
 	}
-	defer release()
-	if !a.runMu.TryLock() {
-		// Only a manual compaction or Close can hold this without the queue.
+
+	a.activeRunsMu.Lock()
+	if a.activeRuns == nil {
+		a.activeRuns = make(map[string]*activeRun)
+	}
+	if _, running := a.activeRuns[runKey]; running {
+		a.activeRunsMu.Unlock()
 		return ErrBusy
 	}
-	defer a.runMu.Unlock()
+	curRun := &activeRun{
+		key:       runKey,
+		agentName: agentName,
+		sessionID: runKey,
+	}
+	a.activeRuns[runKey] = curRun
+	a.activeRunsMu.Unlock()
+
+	defer func() {
+		a.activeRunsMu.Lock()
+		delete(a.activeRuns, runKey)
+		a.activeRunsMu.Unlock()
+	}()
 
 	a.mu.Lock()
 	a.turnDelegations = 0
 	a.mu.Unlock()
 
 	if opts.interactor != nil {
-		// The run owns the approval route for its turn. Since runMu is held,
-		// restoring the previous interactor cannot race another run.
 		a.mu.Lock()
 		previous := a.interactor
 		a.interactor = opts.interactor
@@ -2219,18 +2397,12 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 		}()
 	}
 
-	agentName := strings.TrimSpace(opts.agentName)
-	if agentName == "" {
-		agentName = a.ActiveAgent()
-	}
 	client, currentModel, model := a.agentModel(agentName)
 	if client == nil {
 		a.mu.Lock()
 		modelErr := a.modelErr
 		a.mu.Unlock()
 		if modelErr != nil && agentName == a.ActiveAgent() {
-			// Name the actual cause: a bare ErrNoModel read as "nothing is
-			// configured" while /model was showing a configured id.
 			return fmt.Errorf("%w: %v", ErrNoModel, modelErr)
 		}
 		return ErrNoModel
@@ -2240,20 +2412,27 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 	a.mu.Lock()
 	price := a.pricing
 	costKnown := a.costKnown
-	a.running = true
+	if opts.session == nil {
+		a.running = true
+	}
 	a.mu.Unlock()
 
 	runCtx, cancel := context.WithCancel(ctx)
-	a.mu.Lock()
-	a.cancel = cancel
-	a.mu.Unlock()
-	defer func() {
-		cancel()
+	curRun.cancel = cancel
+	if opts.session == nil {
 		a.mu.Lock()
-		a.cancel = nil
-		a.running = false
+		a.cancel = cancel
 		a.mu.Unlock()
-	}()
+		defer func() {
+			cancel()
+			a.mu.Lock()
+			a.cancel = nil
+			a.running = false
+			a.mu.Unlock()
+		}()
+	} else {
+		defer cancel()
+	}
 
 	runEnv := a.envForRun(agentName, opts.guest)
 	if opts.session != nil {
@@ -2262,6 +2441,22 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 		// session; the owned session still accounts for itself.
 		runEnv = a.isolatedEnvForRun(agentName, opts.guest)
 	}
+	runEnv.CallerName = opts.callerName
+	runEnv.CallerChannel = opts.callerChannel
+	runEnv.CallerChatID = opts.callerChatID
+	runEnv.CallerAccount = opts.callerAccount
+
+	if opts.interactor != nil {
+		runEnv.Approve = func(req agent.ApprovalRequest) agent.Decision {
+			return opts.interactor.Approve(req)
+		}
+		if ask, ok := opts.interactor.(interface {
+			Ask(string, []string) (string, error)
+		}); ok {
+			runEnv.Ask = ask.Ask
+		}
+	}
+
 	// Delegation belongs to this run: its agent, guest state and ceilings.
 	// Without this a channel turn of a named agent would delegate as the
 	// terminal's active agent.
@@ -2292,10 +2487,24 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 		CostKnown:     costKnown,
 		CostBudgetUSD: ceilingBudget(cfg.CostBudgetUSD, opts.costBudgetUSD),
 		Effort:        cfg.EffortFor(currentModel.ID),
-		Steer:         a.TakeSteer,
-		Journal:       runEnv.Journal,
-		ToolSearch:    cfg.ToolSearchEnabled,
-		TurnImages:    opts.images,
+		Steer: func() []string {
+			var steers []string
+			curRun.mu.Lock()
+			if len(curRun.steer) > 0 {
+				steers = append(steers, curRun.steer...)
+				curRun.steer = nil
+			}
+			curRun.mu.Unlock()
+			if opts.session == nil {
+				if global := a.TakeSteer(); len(global) > 0 {
+					steers = append(steers, global...)
+				}
+			}
+			return steers
+		},
+		Journal:    runEnv.Journal,
+		ToolSearch: cfg.ToolSearchEnabled,
+		TurnImages: opts.images,
 	}
 	session := opts.session
 	if session == nil {

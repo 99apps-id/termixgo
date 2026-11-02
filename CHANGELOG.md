@@ -6,6 +6,8 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+## 0.2.4 - 2026-10-31
+
 ### Added
 - Optional container sandbox (`sandbox` in config) for shell execution: `run_command`, `run_checks` and the hypothesis check run inside Docker or Podman with the workspace mounted at the same path, no inherited environment, no Linux capabilities, `no-new-privileges`, a pid limit, the operator's uid/gid on POSIX, and `none` network by default. `run_background` is refused while it is on, a missing engine or image refuses the command instead of falling back to the host, and `doctor` reports whether the engine is reachable.
 - Durable turns: a saved conversation marks a turn in flight and flushes it after the prompt, after each model step and after each tool batch. If the process dies, the next load closes every unanswered tool call with a result that says its effect is unknown, so the transcript stays valid for the next model call and a call that may already have happened is never silently repeated. The terminal reports the recovery once.
@@ -20,6 +22,14 @@ All notable changes to Termixgo are recorded here. The format follows
 - WhatsApp in-chat approvals: an admin answers a tool approval by replying in the chat (y once, s session, a always, n deny), so mutating tools work over WhatsApp on a headless machine, not only from the terminal.
 - Native Channel Hook interceptor for WhatsApp and Telegram (`channel.InvokeInboundHook`, `channel.PostHTTPHook`): intercepts inbound channel messages before LLM execution via REST API (`http://localhost:xxxx/api/bot/handle`) or in-process Go callback (`channel.MessageInterceptor`), supporting direct replies, prompt rewriting, message dropping, and post-turn completion notifications.
 - CLI command `termixgo channel hook <whatsapp|telegram> [agent] [--url <url>] [--secret <secret>] [--test] [--clear]` to view, configure, test, or clear REST interceptor endpoints per account.
+- Agent-scoped learned memory alongside project and global memory, indexed for retrieval without leaking facts between agents.
+- Live quota gauges for Claude OAuth, Qwen Token Plan, and StepFun Plan, including reset-time context when providers expose it.
+- Single-instance channel locks that prevent duplicate Telegram and WhatsApp pollers across foreground and background processes.
+
+### Changed
+- Setup now names the current stage, command discovery is explicit on the welcome screen, transcript errors carry a scannable label, and narrow terminals retain a compact diff summary.
+- WhatsApp marks inbound messages as read and publishes composing presence while a reply is being generated.
+- Release builds now fail closed when Antigravity OAuth credentials are absent and verify both stamps in every distributed binary.
 
 ### Fixed
 - xAI OAuth and StepFun Plan now request streamed usage from their OpenAI-compatible APIs, so server-reported token usage and rate-limit headers reach the quota gauge instead of silently falling back to estimates.

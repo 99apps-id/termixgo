@@ -85,10 +85,14 @@ type Bot struct {
 	interceptor  channel.MessageInterceptor
 	hookURL      string
 	hookSecret   string
+	markReadHook func(ctx context.Context, chat, sender types.JID, id types.MessageID)
 }
 
 // New builds the bot for one client and bridge.
 func New(client *whatsmeow.Client, agent channel.Agent) *Bot {
+	if client != nil {
+		client.SetForceActiveDeliveryReceipts(true)
+	}
 	return &Bot{client: client, agent: agent}
 }
 
@@ -171,6 +175,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	if b.client == nil {
 		return fmt.Errorf("no WhatsApp client")
 	}
+	b.client.SetForceActiveDeliveryReceipts(true)
 	b.refreshSelf()
 	b.client.AddEventHandler(func(evt any) {
 		switch event := evt.(type) {
@@ -178,6 +183,7 @@ func (b *Bot) Run(ctx context.Context) error {
 			go b.handleMessage(ctx, event)
 		case *events.Connected:
 			b.refreshSelf()
+			_ = b.client.SendPresence(ctx, types.PresenceAvailable)
 		case *events.LoggedOut:
 			b.logf("logged out; run 'termixgo channel login whatsapp " + b.accountName() + "'")
 		}
@@ -185,6 +191,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	if err := b.client.Connect(); err != nil {
 		return fmt.Errorf("connect WhatsApp: %w", err)
 	}
+	_ = b.client.SendPresence(ctx, types.PresenceAvailable)
 	<-ctx.Done()
 	b.client.Disconnect()
 	return ctx.Err()
@@ -295,12 +302,14 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 	}
 	if !decision.Allow {
 		if b.mayPair(policy, request) {
+			b.markRead(ctx, evt)
 			b.reply(ctx, request.ChatID, b.pairingPrompt(request))
 			return
 		}
 		b.logfLine("ignored message from " + request.SenderID + " (" + decision.Reason + ")")
 		return
 	}
+	b.markRead(ctx, evt)
 	lang := SenderLanguage(request)
 	request.Admin = decision.Admin
 	if !decision.Admin {
@@ -341,7 +350,10 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 	}
 
 	if cmdText, isCmd := channel.ExtractCommandText(request.Text); isCmd {
-		if !decision.Admin {
+		cmdName, _ := splitCommand(cmdText)
+		isGuestAllowed := cmdName == "help" || cmdName == "start" || cmdName == "menu" ||
+			cmdName == "status" || cmdName == "new" || cmdName == "reset" || cmdName == "clear" || cmdName == "stop"
+		if !decision.Admin && !isGuestAllowed {
 			if lang == "id" {
 				b.reply(ctx, request.ChatID, "Maaf, perintah itu hanya untuk operator.")
 			} else {
@@ -394,6 +406,21 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 			if hookResp.Prompt != "" {
 				prompt = hookResp.Prompt
 			}
+		}
+	}
+
+	// If a run is in flight for this chat, steer it!
+	if steerable, ok := b.agent.(interface {
+		IsRunning(channel.Request) bool
+		Steer(channel.Request, string) bool
+	}); ok && steerable.IsRunning(request) {
+		if steerable.Steer(request, prompt) {
+			if lang == "id" {
+				b.reply(ctx, request.ChatID, "Pesan arahan (steer) diterima. Agent akan menyesuaikan tindakannya.")
+			} else {
+				b.reply(ctx, request.ChatID, "Steer message accepted. The agent will adjust its next steps.")
+			}
+			return
 		}
 	}
 
@@ -483,6 +510,21 @@ func (b *Bot) runImage(ctx context.Context, request channel.Request, imageMsg *w
 			if hookResp.Prompt != "" {
 				prompt = hookResp.Prompt
 			}
+		}
+	}
+
+	// If a run is in flight for this chat, steer it!
+	if steerable, ok := b.agent.(interface {
+		IsRunning(channel.Request) bool
+		Steer(channel.Request, string) bool
+	}); ok && steerable.IsRunning(request) {
+		if steerable.Steer(request, prompt) {
+			if lang == "id" {
+				b.reply(ctx, request.ChatID, "Pesan arahan (steer) diterima. Agent akan menyesuaikan tindakannya.")
+			} else {
+				b.reply(ctx, request.ChatID, "Steer message accepted. The agent will adjust its next steps.")
+			}
+			return
 		}
 	}
 
@@ -1128,6 +1170,9 @@ func (b *Bot) reply(ctx context.Context, chatID, text string) {
 // keepTyping holds the composing indicator while the turn runs, which is the
 // whole progress story on WhatsApp: a person sees "typing", then one answer.
 func (b *Bot) keepTyping(ctx context.Context, chatID string, done <-chan struct{}) {
+	if b.client == nil {
+		return
+	}
 	jid, err := types.ParseJID(chatID)
 	if err != nil {
 		return
@@ -1149,6 +1194,24 @@ func (b *Bot) keepTyping(ctx context.Context, chatID string, done <-chan struct{
 			compose()
 		}
 	}
+}
+
+// markRead acknowledges an incoming message as read on WhatsApp.
+func (b *Bot) markRead(ctx context.Context, evt *events.Message) {
+	if evt == nil {
+		return
+	}
+	b.mu.RLock()
+	hook := b.markReadHook
+	b.mu.RUnlock()
+	if hook != nil {
+		hook(ctx, evt.Info.Chat, evt.Info.Sender, evt.Info.ID)
+		return
+	}
+	if b.client == nil {
+		return
+	}
+	_ = b.client.MarkRead(ctx, []types.MessageID{evt.Info.ID}, time.Now(), evt.Info.Chat, evt.Info.Sender)
 }
 
 // naturalError turns a failure into one human sentence. Tool names, paths and
@@ -1268,6 +1331,14 @@ func (b *Bot) handleCommand(ctx context.Context, request channel.Request) {
 			b.sendReply(ctx, request.ChatID, "A new conversation session has been started.")
 		}
 	case "stop":
+		if stopper, ok := b.agent.(interface{ StopChat(channel.Request) bool }); ok && stopper.StopChat(request) {
+			if lang == "id" {
+				b.sendReply(ctx, request.ChatID, "Perintah berhenti dikirim ke proses sesi ini.")
+			} else {
+				b.sendReply(ctx, request.ChatID, "Stop signal sent to the process in this session.")
+			}
+			return
+		}
 		b.agent.Stop()
 		if lang == "id" {
 			b.sendReply(ctx, request.ChatID, "Perintah berhenti dikirim ke proses yang sedang berjalan.")

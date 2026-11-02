@@ -170,25 +170,26 @@ func TestExtractDocumentTruncates(t *testing.T) {
 	}
 }
 
-func TestDocumentExtractToolReadsWorkspaceFile(t *testing.T) {
+func TestReadDocumentToolReadsPptx(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "spec.md"), []byte("the spec"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	path := filepath.Join(dir, "deck.pptx")
+	writeZip(t, path, map[string]string{
+		"ppt/slides/slide1.xml": `<p:sld><p:cSld><p:spTree><a:p><a:r><a:t>Quarterly plan</a:t></a:r></a:p></p:spTree></p:cSld></p:sld>`,
+	})
 	env := &Env{Workspace: dir}
-	result, err := (&documentExtractTool{}).Run(context.Background(), env, map[string]any{"path": "spec.md"})
+	result, err := (&readDocumentTool{}).Run(context.Background(), env, map[string]any{"path": "deck.pptx"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Output)
 	}
-	if !strings.Contains(result.Output, "the spec") {
+	if !strings.Contains(result.Output, "Quarterly plan") {
 		t.Fatalf("output = %q", result.Output)
 	}
 }
 
-func TestDocumentExtractToolRejectsOutsidePath(t *testing.T) {
+func TestReadDocumentToolRejectsOutsidePath(t *testing.T) {
 	workspace := t.TempDir()
 	outside := t.TempDir()
 	path := filepath.Join(outside, "secret.md")
@@ -196,7 +197,7 @@ func TestDocumentExtractToolRejectsOutsidePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := &Env{Workspace: workspace}
-	result, err := (&documentExtractTool{}).Run(context.Background(), env, map[string]any{"path": path})
+	result, err := (&readDocumentTool{}).Run(context.Background(), env, map[string]any{"path": path})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

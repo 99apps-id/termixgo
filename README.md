@@ -621,7 +621,8 @@ ecosystem tools out of every request and loads them on demand through
 | `web_search` | search the web and return titles, URLs and snippets |
 | `lookup` | weather, exchange rate, crypto price or a Wikipedia summary from a known keyless source |
 | `read_image` | attach a local image so a vision model can see it |
-| `document_extract` | text of a PDF, .docx, .xlsx, .pptx, .epub or HTML file |
+| `read_document` | text, tables and data from PDF, .docx, .xlsx, .csv, .pptx, .epub and HTML |
+| `create_office_document`, `convert_pdf_to_excel` | write an Office file or turn a PDF into a workbook |
 | `browser_navigate`, `browser_read` | open a live page and read its text, HTML, links or form controls |
 | `browser_click`, `browser_type`, `browser_press`, `browser_scroll` | drive the live page |
 | `browser_wait_for`, `browser_eval`, `browser_tabs` | wait for a state, run JavaScript, manage tabs |
@@ -1345,13 +1346,14 @@ internal/whatsapp   native multi-device companion with whatsmeow, vision & enric
 ## Releasing
 
 ```sh
-git tag v0.2.3
-git push origin v0.2.3
+git tag v0.2.4
+git push origin v0.2.4
 ```
 
-The release workflow runs the full gate, then goreleaser builds six targets,
-writes `checksums.txt` and opens a draft release. Verify a download against that
-file before running it.
+The release workflow runs the full gate, requires the Antigravity OAuth client
+pair, then goreleaser builds six targets and verifies both credentials are
+stamped into every binary without printing them. It writes `checksums.txt` and
+opens a draft release. Verify a download against that file before running it.
 
 The version, commit and build date are stamped into the binary through ldflags,
 which is possible because `internal/version` declares them as vars rather than

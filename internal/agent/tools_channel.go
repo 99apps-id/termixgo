@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"strings"
+
+	"github.com/99apps-id/termixgo/internal/channel"
 )
 
 // ChannelSendRequest describes a message and/or file attachment to deliver to a
@@ -20,7 +22,13 @@ type sendChannelTool struct{}
 func (t *sendChannelTool) Name() string { return "send_channel" }
 
 func (t *sendChannelTool) Aliases() []string {
-	return []string{"send_channel_file", "send_channel_message", "send_telegram", "send_whatsapp"}
+	return []string{
+		"send_file", "send_document",
+		"send_channel_file", "send_channel_message",
+		"send_telegram", "send_whatsapp",
+		"telegram_send_document", "telegram_send_message",
+		"whatsapp_send_document", "whatsapp_send_message",
+	}
 }
 
 func (t *sendChannelTool) Mutating() bool { return false }
@@ -55,27 +63,69 @@ func (t *sendChannelTool) Description() string {
 
 func (t *sendChannelTool) Schema() map[string]any {
 	return object(map[string]any{
-		"channel":   strProp("Target messaging channel: 'telegram' or 'whatsapp'."),
-		"file_path": strProp("Optional workspace-relative or absolute file path to send as an attachment (for example '.termixgo/uploads/file.pdf' or 'report.txt')."),
-		"message":   strProp("Optional text message or caption to include with the attachment, or standalone message when file_path is omitted."),
-		"recipient": strProp("Optional target chat ID, phone number, or WhatsApp JID. Defaults to the configured owner/admin chat for the channel when omitted."),
-		"account":   strProp("Optional channel account name. Defaults to 'default'."),
-	}, "channel")
+		"channel":   strProp("Target messaging channel: 'telegram' or 'whatsapp'. When invoked inside a Telegram or WhatsApp chat, defaults to the current channel."),
+		"file_path": strProp("Workspace-relative or absolute file path to send as an attachment (e.g. '.termixgo/uploads/file.pdf' or 'report.xlsx'). Also accepts 'path' or 'file'."),
+		"message":   strProp("Optional text message or caption to include with the attachment, or standalone message when file_path is omitted. Also accepts 'caption' or 'text'."),
+		"recipient": strProp("Optional target chat ID, phone number, or WhatsApp JID. Defaults to the current chat for guests or the configured owner/admin chat."),
+		"account":   strProp("Optional channel account name. Defaults to the current caller account or 'default'."),
+	})
 }
 
 func (t *sendChannelTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
-	if env == nil || env.Guest {
-		return Result{Output: "sending to messaging channels is restricted to the operator", IsError: true}, nil
+	if env == nil {
+		return Result{Output: "no environment available", IsError: true}, nil
 	}
-	if env.SendChannel == nil {
-		return Result{Output: "channel delivery is not available in this environment", IsError: true}, nil
+	filePath := strings.TrimSpace(argString(args, "file_path"))
+	if filePath == "" {
+		filePath = strings.TrimSpace(argString(args, "path"))
+	}
+	if filePath == "" {
+		filePath = strings.TrimSpace(argString(args, "file"))
+	}
+	if filePath == "" {
+		filePath = strings.TrimSpace(argString(args, "document"))
+	}
+	message := strings.TrimSpace(argString(args, "message"))
+	if message == "" {
+		message = strings.TrimSpace(argString(args, "caption"))
+	}
+	if message == "" {
+		message = strings.TrimSpace(argString(args, "text"))
 	}
 	req := ChannelSendRequest{
 		Channel:   strings.TrimSpace(argString(args, "channel")),
 		Account:   strings.TrimSpace(argString(args, "account")),
 		Recipient: strings.TrimSpace(argString(args, "recipient")),
-		Message:   strings.TrimSpace(argString(args, "message")),
-		FilePath:  strings.TrimSpace(argString(args, "file_path")),
+		Message:   message,
+		FilePath:  filePath,
+	}
+	if req.Channel == "" && env.CallerChannel != "" {
+		req.Channel = strings.ToLower(env.CallerChannel)
+	}
+	if req.Account == "" && env.CallerAccount != "" {
+		req.Account = env.CallerAccount
+	}
+	if env.Guest {
+		if env.CallerChatID == "" {
+			return Result{Output: "sending to messaging channels is restricted to the operator", IsError: true}, nil
+		}
+		cleanRecip := channel.CanonicalID(req.Recipient)
+		cleanCaller := channel.CanonicalID(env.CallerChatID)
+		if cleanRecip != "" && cleanRecip != cleanCaller {
+			return Result{Output: "guests may only receive files in their own chat", IsError: true}, nil
+		}
+		req.Recipient = env.CallerChatID
+		if req.Channel == "" {
+			req.Channel = strings.ToLower(env.CallerChannel)
+		}
+		if req.Account == "" {
+			req.Account = env.CallerAccount
+		}
+	} else if req.Recipient == "" && env.CallerChatID != "" {
+		req.Recipient = env.CallerChatID
+	}
+	if env.SendChannel == nil {
+		return Result{Output: "channel delivery is not available in this environment", IsError: true}, nil
 	}
 	if req.Channel == "" {
 		return Result{Output: "channel is required ('telegram' or 'whatsapp')", IsError: true}, nil

@@ -624,3 +624,39 @@ func TestNormalizeJIDAndSendFileTo(t *testing.T) {
 		t.Fatalf("unexpected SendFileTo capture: chat=%q name=%q data=%q caption=%q", gotChat, gotName, string(gotBytes), gotCaption)
 	}
 }
+
+func TestWhatsAppMarkReadOnMessage(t *testing.T) {
+	agent := &fakeAgent{}
+	bot := New(nil, agent)
+	bot.SetAccount("test", config.ChannelAccount{
+		Enabled:  true,
+		DMPolicy: "open",
+	}, nil)
+
+	var markedChat, markedSender types.JID
+	var markedID types.MessageID
+	var markCount int
+	bot.markReadHook = func(ctx context.Context, chat, sender types.JID, id types.MessageID) {
+		markCount++
+		markedChat = chat
+		markedSender = sender
+		markedID = id
+	}
+
+	evt := testEvent("Halo bot")
+	evt.Info.ID = "MSG123456"
+	bot.handleMessage(context.Background(), evt)
+
+	if markCount != 1 {
+		t.Fatalf("markCount = %d, want 1", markCount)
+	}
+	if markedID != "MSG123456" {
+		t.Errorf("markedID = %q, want MSG123456", markedID)
+	}
+	if markedChat.String() != "628123@s.whatsapp.net" {
+		t.Errorf("markedChat = %q, want 628123@s.whatsapp.net", markedChat.String())
+	}
+	if markedSender.String() != "628999@s.whatsapp.net" {
+		t.Errorf("markedSender = %q, want 628999@s.whatsapp.net", markedSender.String())
+	}
+}

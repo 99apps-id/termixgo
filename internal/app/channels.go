@@ -93,14 +93,27 @@ func (a *App) StartChannel(kind, name string) error {
 	}
 	a.mu.Unlock()
 
+	var startErr error
 	switch kind {
 	case config.ChannelTelegram:
-		return a.startTelegramAccount(name)
+		startErr = a.startTelegramAccount(name)
 	case config.ChannelWhatsApp:
-		return a.startWhatsAppAccount(name)
+		startErr = a.startWhatsAppAccount(name)
 	default:
-		return fmt.Errorf("unknown channel %q", kind)
+		startErr = fmt.Errorf("unknown channel %q", kind)
 	}
+
+	a.mu.Lock()
+	if startErr != nil {
+		if a.channelProblems == nil {
+			a.channelProblems = map[channel.AccountID]string{}
+		}
+		a.channelProblems[key] = "error: " + startErr.Error()
+	} else if a.channelProblems != nil {
+		delete(a.channelProblems, key)
+	}
+	a.mu.Unlock()
+	return startErr
 }
 
 // StopChannel stops one account, if it is running.
@@ -153,6 +166,10 @@ func (a *App) ChannelStatuses() []ChannelStatus {
 	for key, runtime := range a.channels {
 		runtimes[key] = runtime
 	}
+	problems := make(map[channel.AccountID]string, len(a.channelProblems))
+	for key, prob := range a.channelProblems {
+		problems[key] = prob
+	}
 	a.mu.Unlock()
 
 	var statuses []ChannelStatus
@@ -163,6 +180,8 @@ func (a *App) ChannelStatuses() []ChannelStatus {
 			state = "disabled"
 		} else if runtime, ok := runtimes[key]; ok {
 			state = runtime.status
+		} else if prob, ok := problems[key]; ok && prob != "" {
+			state = prob
 		} else if !a.store.Has(secrets.TelegramAccountTokenKey(name)) {
 			state = "no token"
 		} else if entry.ChatID != 0 {
@@ -177,13 +196,15 @@ func (a *App) ChannelStatuses() []ChannelStatus {
 	}
 	for name, entry := range cfg.Channels.WhatsApp.Accounts {
 		key := channel.AccountID{Channel: config.ChannelWhatsApp, Account: name}
-		state := "linked, not running"
+		state := "not linked"
 		if !entry.Enabled {
 			state = "disabled"
 		} else if runtime, ok := runtimes[key]; ok {
 			state = runtime.status
-		} else if agentName := entry.AgentName(name); !whatsAppLinked(a.Config(), agentName, name) {
-			state = "not linked"
+		} else if prob, ok := problems[key]; ok && prob != "" {
+			state = prob
+		} else if agentName := entry.AgentName(name); whatsAppLinked(a.Config(), agentName, name) {
+			state = "linked, not running"
 		}
 		statuses = append(statuses, ChannelStatus{
 			Channel: config.ChannelWhatsApp, Account: name,
@@ -204,14 +225,18 @@ func (a *App) ChannelStatuses() []ChannelStatus {
 // with what `channel status` prints.
 func whatsAppLinked(cfg config.Config, agentName, account string) bool {
 	paths, err := agenthome.Resolve(agentName, cfg.Agent(agentName).Workspace)
-	if err != nil {
-		return false
+	if err == nil {
+		path := whatsapp.SessionPath(paths.Home, account)
+		if whatsapp.HasLinkedDevice(path) {
+			return true
+		}
 	}
-	path := whatsapp.SessionPath(paths.Home, account)
-	if _, err := os.Stat(path); err != nil {
-		return false
+	for _, fallback := range whatsapp.FallbackSessionPaths(account) {
+		if whatsapp.HasLinkedDevice(fallback) {
+			return true
+		}
 	}
-	return true
+	return false
 }
 
 // RedactForChannel removes secret-shaped text and every stored secret value
@@ -232,7 +257,7 @@ func (a *App) RedactForChannel(text string) string {
 // runChannelTurn runs one turn owned by a channel chat. The answer is what
 // this turn produced, not the session's last answer: a model that said nothing
 // must not make the bot repeat an earlier reply.
-func (a *App) runChannelTurn(ctx context.Context, agentName string, session *agent.Session, interactor Interactor, prompt string, images []provider.Image, guest bool, maxSteps int, costBudgetUSD float64, progress func(string)) (string, error) {
+func (a *App) runChannelTurn(ctx context.Context, agentName string, session *agent.Session, interactor Interactor, prompt string, images []provider.Image, guest bool, maxSteps int, costBudgetUSD float64, callerName, callerChannel, callerChatID, callerAccount string, progress func(string)) (string, error) {
 	notice := ""
 	if progress != nil {
 		// The opening line is part of the contract: the caller shows it at
@@ -255,6 +280,10 @@ func (a *App) runChannelTurn(ctx context.Context, agentName string, session *age
 		images:        images,
 		session:       session,
 		agentName:     agentName,
+		callerName:    callerName,
+		callerChannel: callerChannel,
+		callerChatID:  callerChatID,
+		callerAccount: callerAccount,
 		interactor:    interactor,
 		guest:         guest,
 		maxSteps:      maxSteps,
@@ -281,7 +310,7 @@ func (a *App) runChannelTurn(ctx context.Context, agentName string, session *age
 				answer = second
 			}
 		}
-		if session.ToolCallCountSince(retryMark) == 0 {
+		if session.ToolCallCountSince(retryMark) == 0 && !guest {
 			answer += "\n\n" + unverifiedNote
 		}
 	}
@@ -480,6 +509,18 @@ func (a *App) startTelegramAccount(name string) error {
 			status = "waiting for pairing"
 		}
 		a.setChannelStatus(key, status)
+		lockName := fmt.Sprintf("poller-%s-%s.lock", key.Channel, key.Account)
+		lock, lockPID, lockErr := config.TryAcquireInstanceLock(lockName)
+		if errors.Is(lockErr, config.ErrAlreadyLocked) {
+			a.setChannelStatus(key, fmt.Sprintf("active in background (PID %d)", lockPID))
+			return
+		}
+		if lockErr != nil {
+			a.setChannelStatus(key, "lock error: "+lockErr.Error())
+			return
+		}
+		defer lock.Release()
+
 		if err := bot.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			a.setChannelStatus(key, "stopped: "+err.Error())
 		}
@@ -508,7 +549,7 @@ func (b *telegramBridge) RunPrompt(ctx context.Context, request channel.Request,
 		return "", err
 	}
 	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, progress)
+	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, request.SenderName, "Telegram", request.ChatID, b.name, progress)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}
@@ -535,7 +576,7 @@ func (b *telegramBridge) RunPromptWithImage(ctx context.Context, request channel
 	}
 	images := []provider.Image{{MediaType: mediaType, Data: data}}
 	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, progress)
+	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, request.SenderName, "Telegram", request.ChatID, b.name, progress)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}
@@ -543,6 +584,24 @@ func (b *telegramBridge) RunPromptWithImage(ctx context.Context, request channel
 		return "", err
 	}
 	return b.app.RedactForChannel(answer), nil
+}
+
+// Steer forwards a steering message into an active turn in this chat.
+func (b *telegramBridge) Steer(request channel.Request, prompt string) bool {
+	id := channelSessionID(config.ChannelTelegram, b.name, request.ChatID)
+	return b.app.SteerSession(id, prompt)
+}
+
+// IsRunning reports whether a turn is active for this chat.
+func (b *telegramBridge) IsRunning(request channel.Request) bool {
+	id := channelSessionID(config.ChannelTelegram, b.name, request.ChatID)
+	return b.app.IsSessionRunning(id)
+}
+
+// StopChat cancels the turn in flight for this chat.
+func (b *telegramBridge) StopChat(request channel.Request) bool {
+	id := channelSessionID(config.ChannelTelegram, b.name, request.ChatID)
+	return b.app.StopSession(id)
 }
 
 // TranscribeAudio forwards voice/audio bytes to the app's configured STT engine.
@@ -628,6 +687,14 @@ func (b *telegramBridge) Model() string { return b.app.ModelLabel() }
 
 func (b *telegramBridge) SetModel(query string) (string, error) { return b.app.SetModel(query) }
 
+func (b *telegramBridge) RemoveCustomModel(modelID string) (bool, error) {
+	return b.app.RemoveCustomModel(modelID)
+}
+
+func (b *telegramBridge) RemoveSecret(providerID string) error {
+	return b.app.RemoveSecret(providerID)
+}
+
 func (b *telegramBridge) Models() string { return b.app.AvailableModelsText("en") }
 
 func (b *telegramBridge) ModelsFor(lang string) string { return b.app.AvailableModelsText(lang) }
@@ -644,13 +711,6 @@ func (b *telegramBridge) Status() string { return b.app.Status() }
 
 func (b *telegramBridge) Workspace() string {
 	return b.app.AgentWorkspace(b.account.AgentName(b.name))
-}
-
-func (b *telegramBridge) interactor() Interactor {
-	if b.bot == nil {
-		return nil
-	}
-	return &telegramInteractor{bot: b.bot}
 }
 
 func (b *telegramBridge) interactorFor(request channel.Request) Interactor {

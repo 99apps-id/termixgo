@@ -35,6 +35,14 @@ jobs:
           go test ./...
           go test -race ./...
 
+      - name: require Antigravity OAuth release credentials
+        env:
+          CLIENT_ID: ${{ secrets.TERMIXGO_ANTIGRAVITY_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.TERMIXGO_ANTIGRAVITY_CLIENT_SECRET }}
+        run: |
+          test -n "$CLIENT_ID"
+          test -n "$CLIENT_SECRET"
+
       - name: goreleaser
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -42,8 +50,21 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Public installed-app credentials, stamped into the binary so a
-          # download needs no prompt. Add them as repository secrets; a release
-          # without them still builds and falls back to the login prompt.
+          # Public installed-app credentials. The preceding gate and following
+          # byte-level check make their presence mandatory for every artifact.
           TERMIXGO_ANTIGRAVITY_CLIENT_ID: ${{ secrets.TERMIXGO_ANTIGRAVITY_CLIENT_ID }}
           TERMIXGO_ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.TERMIXGO_ANTIGRAVITY_CLIENT_SECRET }}
+
+      - name: verify Antigravity OAuth stamps
+        env:
+          CLIENT_ID: ${{ secrets.TERMIXGO_ANTIGRAVITY_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.TERMIXGO_ANTIGRAVITY_CLIENT_SECRET }}
+        run: |
+          count=0
+          while IFS= read -r -d '' binary; do
+            grep -aFq -- "$CLIENT_ID" "$binary"
+            grep -aFq -- "$CLIENT_SECRET" "$binary"
+            count=$((count + 1))
+          done < <(find dist -type f \( -name termixgo -o -name termixgo.exe \) -print0)
+          test "$count" -eq 6
+          echo "Verified OAuth stamps in $count release binaries."

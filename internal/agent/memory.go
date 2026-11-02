@@ -18,15 +18,24 @@ const (
 	maxMemoryBytes = 16 * 1024
 )
 
-// Memory reads and appends the two learned-memory files: project scope at
-// <workspace>/.termixgo/memory.md and global scope at ~/.termixgo/memory.md.
+// Memory reads and appends the learned-memory files: project scope at
+// <workspace>/.termixgo/memory.md, agent scope at <agentHome>/memories/MEMORY.md,
+// and global scope at ~/.termixgo/memory.md.
 type Memory struct {
 	mu        sync.Mutex
 	workspace string
+	agentHome string
 }
 
 // NewMemory builds a memory reader for a workspace.
 func NewMemory(workspace string) *Memory { return &Memory{workspace: workspace} }
+
+// SetAgentHome configures the agent home directory for agent-scoped memory.
+func (m *Memory) SetAgentHome(home string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.agentHome = strings.TrimSpace(home)
+}
 
 func (m *Memory) projectPath() string {
 	if strings.TrimSpace(m.workspace) == "" {
@@ -41,6 +50,16 @@ func (m *Memory) globalPath() string {
 		return ""
 	}
 	return filepath.Join(home, "memory.md")
+}
+
+// AgentPath reports the agent-scoped memory file when an agent home is set.
+func (m *Memory) AgentPath() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.agentHome == "" {
+		return ""
+	}
+	return filepath.Join(m.agentHome, "memories", "MEMORY.md")
 }
 
 // Paths reports the project and global memory files, so the full-text index can
@@ -61,8 +80,15 @@ func (m *Memory) Remember(fact, scope string) error {
 		trimmed = clipBytes(trimmed, maxFactChars)
 	}
 	path := m.projectPath()
-	if strings.EqualFold(scope, "global") {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "global":
 		path = m.globalPath()
+	case "agent":
+		if ap := m.AgentPath(); ap != "" {
+			path = ap
+		}
+	default:
+		path = m.projectPath()
 	}
 	if path == "" {
 		return errors.New("no memory file location is available")
@@ -118,21 +144,35 @@ func (m *Memory) Read() (project, global []string) {
 	return splitFacts(string(projectData)), splitFacts(string(globalData))
 }
 
+// ReadAll returns the project, global, and agent-scoped facts, newest last.
+func (m *Memory) ReadAll() (project, global, agentFacts []string) {
+	project, global = m.Read()
+	if ap := m.AgentPath(); ap != "" {
+		data, _ := os.ReadFile(ap)
+		agentFacts = splitFacts(string(data))
+	}
+	return project, global, agentFacts
+}
+
 // PromptBlock renders the learned-memory block, or "" when nothing is stored.
 func (m *Memory) PromptBlock() string {
-	project, global := m.Read()
-	if len(project) == 0 && len(global) == 0 {
+	project, global, agentFacts := m.ReadAll()
+	if len(project) == 0 && len(global) == 0 && len(agentFacts) == 0 {
 		return ""
 	}
 	var builder strings.Builder
 	builder.WriteString("\n\n## LEARNED MEMORY\nFacts the operator taught earlier. Trust them unless the code says otherwise.\n")
-	if len(global) > 0 {
-		builder.WriteString("\n### GLOBAL CONVENTIONS ( ~/.termixgo/memory.md )\n")
-		writeFactLines(&builder, global)
+	if len(agentFacts) > 0 {
+		builder.WriteString("\n### AGENT MEMORY ( agent memories/MEMORY.md )\n")
+		writeFactLines(&builder, agentFacts)
 	}
 	if len(project) > 0 {
 		builder.WriteString("\n### PROJECT CONVENTIONS & FACTS ( .termixgo/memory.md )\n")
 		writeFactLines(&builder, project)
+	}
+	if len(global) > 0 {
+		builder.WriteString("\n### GLOBAL CONVENTIONS ( ~/.termixgo/memory.md )\n")
+		writeFactLines(&builder, global)
 	}
 	return builder.String()
 }

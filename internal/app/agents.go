@@ -187,6 +187,7 @@ func buildAgentContext(name string, cfg config.Config, launchWorkspace string) *
 	}
 	if err == nil {
 		ctx.home = paths.Home
+		ctx.memory.SetAgentHome(paths.Home)
 	}
 	if journal, err := agent.NewErrorJournal(workspace); err == nil {
 		ctx.journal = journal

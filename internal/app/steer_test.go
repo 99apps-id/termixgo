@@ -167,3 +167,82 @@ func TestSteerLeftOverAfterATurnIsReturned(t *testing.T) {
 		t.Errorf("TakeSteer = %q, want the late steer back", left)
 	}
 }
+
+func TestConcurrentChannelTurnsDoNotBlockEachOther(t *testing.T) {
+	application, server := readyApp(t)
+	defer server.Close()
+
+	// Simulate WhatsApp session and Telegram session
+	sessWA, err := agent.NewSessionWithID("sales", "whatsapp-sales-101", t.TempDir(), "test-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessTG, err := agent.NewSessionWithID("sales", "telegram-sales-202", t.TempDir(), "test-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	ctx := context.Background()
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		errs <- application.runWithOptions(ctx, "hello from whatsapp", runOptions{session: sessWA, agentName: "sales"})
+	}()
+	go func() {
+		defer wg.Done()
+		errs <- application.runWithOptions(ctx, "hello from telegram", runOptions{session: sessTG, agentName: "sales"})
+	}()
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent channel turn failed: %v", err)
+		}
+	}
+}
+
+func TestSteerSessionInFlight(t *testing.T) {
+	application := newTestApp(t)
+
+	runKey := "channel-session-123"
+	if application.IsSessionRunning(runKey) {
+		t.Fatalf("session should not be running yet")
+	}
+
+	curRun := &activeRun{
+		key:       runKey,
+		sessionID: runKey,
+	}
+	application.activeRunsMu.Lock()
+	if application.activeRuns == nil {
+		application.activeRuns = make(map[string]*activeRun)
+	}
+	application.activeRuns[runKey] = curRun
+	application.activeRunsMu.Unlock()
+
+	defer func() {
+		application.activeRunsMu.Lock()
+		delete(application.activeRuns, runKey)
+		application.activeRunsMu.Unlock()
+	}()
+
+	if !application.IsSessionRunning(runKey) {
+		t.Fatalf("session should be reported as running")
+	}
+
+	steered := application.SteerSession(runKey, "please add a summary table")
+	if !steered {
+		t.Fatalf("SteerSession should return true for active run")
+	}
+
+	curRun.mu.Lock()
+	if len(curRun.steer) != 1 || curRun.steer[0] != "please add a summary table" {
+		t.Errorf("unexpected steer content: %v", curRun.steer)
+	}
+	curRun.mu.Unlock()
+}
