@@ -24,3 +24,12 @@ func TestBuildDefaultToolsFollowsDesktopControl(t *testing.T) {
 		}
 	}
 }
+
+func TestShouldDeferToolsAboveTheInlineCap(t *testing.T) {
+	if shouldDeferTools(maxInlineTools) {
+		t.Fatalf("%d tools still fit inline", maxInlineTools)
+	}
+	if !shouldDeferTools(maxInlineTools + 1) {
+		t.Fatalf("%d tools must switch to tool search", maxInlineTools+1)
+	}
+}

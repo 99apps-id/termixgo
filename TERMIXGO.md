@@ -469,6 +469,13 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   request id matches, because the transport lets progress notifications
   interleave with it. A server's `env` and HTTP `headers` are moved into the
   secret store on load, so a bearer token never sits in `config.json`.
+- A turn sends at most 128 tool schemas inline. Past that the runner switches to
+  tool search even when the operator did not enable it: the core set plus
+  find_tools is sent and the rest is loaded on demand. The cap is OpenAI's
+  documented function-calling limit, and it is also what keeps a large MCP
+  installation from producing a request a model answers with nothing at all:
+  408 schemas made a reserve-capacity model return an empty response while 150
+  still worked, and with tool search the same model replies and calls tools.
 - Hooks are operator code, not model code. They are read from
   `~/.termixgo/config.json` only, never from a workspace file, because a cloned
   repository must not be able to plant a command that runs on the operator's

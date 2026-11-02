@@ -2470,12 +2470,13 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 	agent.AutoCheckpoint(runCtx, runEnv.Workspace)
 
 	cfg := a.Config()
+	runTools := a.toolsFor(agentName, opts.guest)
 	runner := &agent.Runner{
 		Client: client,
 		Model:  model,
 		Config: cfg,
 		Env:    runEnv,
-		Tools:  a.toolsFor(agentName, opts.guest),
+		Tools:  runTools,
 		Policy: a.policyFor(agentName, opts.guest),
 		// cfg.MaxSteps is the whole per-turn ceiling, so an interactive turn
 		// pauses once, at the number the operator configured. A guest run may
@@ -2502,8 +2503,12 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 			}
 			return steers
 		},
-		Journal:    runEnv.Journal,
-		ToolSearch: cfg.ToolSearchEnabled,
+		Journal: runEnv.Journal,
+		// A registry past the inline cap switches to tool search for this turn
+		// even when the operator did not ask for it: sending 400 schemas can
+		// make a model answer with nothing at all, and the core set plus
+		// find_tools still reaches every tool.
+		ToolSearch: cfg.ToolSearchEnabled || shouldDeferTools(len(runTools.Tools())),
 		TurnImages: opts.images,
 	}
 	session := opts.session
