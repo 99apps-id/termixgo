@@ -9,13 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/rotate"
 )
 
 // Entry is one audited action. Fields are deliberately coarse: a name, a
@@ -87,15 +86,7 @@ func (l *Ledger) Record(entry Entry) error {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(l.path), 0o700); err != nil {
-		return fmt.Errorf("create audit directory: %w", err)
-	}
-	file, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("open audit log: %w", err)
-	}
-	defer file.Close()
-	if _, err := file.Write(appendNewline(data)); err != nil {
+	if err := rotate.Append(l.path, appendNewline(data), rotate.Options{}); err != nil {
 		return fmt.Errorf("write audit log: %w", err)
 	}
 	return nil
@@ -109,16 +100,13 @@ func (l *Ledger) Tail(limit int) ([]Entry, error) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	file, err := os.Open(l.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
+	reader, err := rotate.Reader(l.path)
 	if err != nil {
 		return nil, fmt.Errorf("read audit log: %w", err)
 	}
-	defer file.Close()
+	defer reader.Close()
 	ring := make([]Entry, 0, limit)
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())

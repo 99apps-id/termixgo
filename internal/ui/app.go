@@ -149,6 +149,13 @@ type Model struct {
 	// queues the composer text instead of refusing it, and each runDone
 	// starts the next queued input, so a steer message is never lost.
 	queue []string
+	// queueAttachments runs parallel to queue, one entry per queued input, so
+	// a file attached while a turn is running reaches the turn it was queued
+	// for rather than the one already in flight.
+	queueAttachments [][]attachment
+	// attachments are files the operator attached to the next turn: images
+	// reach a vision model, documents are extracted to text.
+	attachments []attachment
 	// steerEcho holds steer texts already shown as a user block. The agent
 	// emits a "Steering: ..." notice when it folds the message in at its next
 	// step; that notice is dropped for an echoed steer so the message is not
@@ -257,7 +264,12 @@ func NewWithOptions(application *app.App, options Options) *Model {
 	composer := textarea.New()
 	composer.Placeholder = "Ask Termixgo to change something, or type /help"
 	composer.ShowLineNumbers = false
-	composer.CharLimit = 32000
+	// The composer holds a megabyte, which covers any paste a terminal can
+	// deliver in one burst without letting a runaway producer grow the process
+	// without bound. A paste above pasteSpoolThreshold is moved out to a file
+	// when the turn starts, so the large ceiling is for editing, not for what
+	// the model receives.
+	composer.CharLimit = 1_000_000
 	composer.SetHeight(composerHeight)
 	// The marker is part of the textarea rather than painted over it, so it is
 	// counted when the text wraps.
@@ -396,6 +408,12 @@ func (m *Model) restoreSession(session *agent.Session) {
 	}
 	if todos := session.Todos(); len(todos) > 0 {
 		m.blocks = append(m.blocks, block{kind: blockPlan, plan: todos})
+	}
+	// A turn that a crash left open is closed at load. Tell the operator, and
+	// persist the closure so the next load does not have to do it again.
+	if notice := session.RecoveryNotice(); notice != "" {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: notice})
+		_ = session.Save()
 	}
 	title := session.Title()
 	if title != "" {
@@ -596,13 +614,23 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Anything the finished turn never took becomes the next input, in the
 		// order it was typed, so a steer that arrived too late still runs.
-		m.queue = append(m.queue, m.app.TakeSteer()...)
+		if steered := m.app.TakeSteer(); len(steered) > 0 {
+			m.queue = append(m.queue, steered...)
+			for range steered {
+				m.queueAttachments = append(m.queueAttachments, nil)
+			}
+		}
 		if len(m.queue) > 0 {
 			next := m.queue[0]
 			m.queue = m.queue[1:]
+			var nextAttachments []attachment
+			if len(m.queueAttachments) > 0 {
+				nextAttachments = m.queueAttachments[0]
+				m.queueAttachments = m.queueAttachments[1:]
+			}
 			m.notice = ""
 			m.refresh()
-			return m.submit(next)
+			return m.submitWith(next, nextAttachments)
 		}
 		m.refresh()
 		return m, tea.SetWindowTitle(m.windowTitle())
@@ -1479,11 +1507,16 @@ func (m *Model) enqueue(value string) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 	}
-	steered := shouldSteer(value, m.running && m.app.Running())
+	// An attachment cannot steer a turn that already started, because its
+	// first user message is fixed. A message carrying one therefore waits for
+	// the next turn, alongside its files.
+	steered := shouldSteer(value, m.running && m.app.Running()) && len(m.attachments) == 0
 	if steered {
 		m.recordSteer(value)
 	} else {
 		m.queue = append(m.queue, value)
+		m.queueAttachments = append(m.queueAttachments, m.attachments)
+		m.attachments = nil
 	}
 	m.composer.SetValue("")
 	m.slashMatches = nil
@@ -1544,6 +1577,7 @@ var liveSlashCommands = map[string]bool{
 	"help": true, "?": true, "status": true, "quota": true, "cost": true, "plan": true,
 	"tools": true, "harness": true, "trust": true, "approval": true,
 	"mcp": true, "skills": true, "memory": true, "ps": true,
+	"attach": true, "detach": true, "paste": true, "desktop": true,
 }
 
 // liveSlashCommand reports whether a command may run during a turn.
@@ -1593,25 +1627,45 @@ func (m *Model) runLocalCommand(cmdline string) (tea.Model, tea.Cmd) {
 
 // submit dispatches either a slash command or an agent turn.
 func (m *Model) submit(value string) (tea.Model, tea.Cmd) {
+	return m.submitWith(value, nil)
+}
+
+// submitWith runs one input. pending holds the attachments that belong to a
+// queued input; nil means the live composer attachments are the ones to take.
+func (m *Model) submitWith(value string, pending []attachment) (tea.Model, tea.Cmd) {
 	if name, args, ok := ParseSlash(value); ok {
+		// A slash command is a local control and takes no files. Files staged
+		// for a queued prompt stay pending for the next real prompt.
+		m.attachments = append(m.attachments, pending...)
 		return m.runSlash(name, args)
 	}
-	return m.startRun(value)
+	if pending != nil {
+		return m.startRunWith(value, value+attachmentDocumentBlock(pending), attachmentImages(pending))
+	}
+	// Attachments belong to this turn only. Documents travel as prompt text
+	// and images ride on the first user message, so consume them before the
+	// turn starts and never carry them into a later one.
+	prompt, images := m.consumeAttachments(value)
+	return m.startRunWith(value, prompt, images)
 }
 
 // startRun begins an agent turn and starts pumping events. @file mentions
 // stay as typed in the transcript while the turn itself receives the file
 // contents, so the operator reads what they wrote and the model reads more.
 func (m *Model) startRun(input string) (tea.Model, tea.Cmd) {
-	m.blocks = append(m.blocks, block{kind: blockUser, text: input})
+	return m.startRunWith(input, input, nil)
+}
+
+func (m *Model) startRunWith(display, prompt string, images []provider.Image) (tea.Model, tea.Cmd) {
+	m.blocks = append(m.blocks, block{kind: blockUser, text: displayInput(display)})
 	m.running = true
 	m.runStarted = time.Now()
 	m.refresh()
 
 	application := m.app
-	prompt := ExpandMentions(application.Workspace(), input)
+	prompt = ExpandMentions(application.Workspace(), spoolLongInput(application.Workspace(), prompt))
 	go func() {
-		err := application.RunTurn(context.Background(), prompt)
+		err := application.RunTurnWithImages(context.Background(), prompt, images)
 		if m.program != nil {
 			m.program.Send(runDoneMsg{err: err})
 		}
@@ -2260,6 +2314,12 @@ func (m *Model) viewHints() string {
 		}
 	} else {
 		text = " Enter send | !cmd exec | Ctrl+L model | Ctrl+P session | Ctrl+G agent | Ctrl+T think | Ctrl+O details | Ctrl+C copy | Ctrl+X quit"
+	}
+	// Pending files own the first columns of the hint row: what will be sent
+	// matters more than the key reminder, and the row never grows, so the
+	// frame height invariant holds.
+	if summary := m.attachmentHint(); summary != "" {
+		text = " " + summary + " |" + text
 	}
 	// A hint longer than the terminal would wrap and push the frame down, so it
 	// is clipped rather than allowed to reflow the whole screen.

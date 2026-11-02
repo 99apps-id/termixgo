@@ -298,6 +298,9 @@ func sanitize(raw string) string {
 // describe renders the command line for the operator, which is what they need
 // to reproduce a failure by hand.
 func describe(options Options) string {
+	if isHTTP(options) {
+		return options.URL
+	}
 	if len(options.Args) == 0 {
 		return options.Command
 	}

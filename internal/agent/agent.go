@@ -73,6 +73,10 @@ type Runner struct {
 	// reads it off the child's runner after RunSubagent to learn whether the
 	// nested run edited code, which the child's final text alone never says.
 	LastLedger VerifyLedger
+	// Persist, when set, flushes the session to disk. The loop calls it after
+	// each durable point, so a crash leaves a transcript the next process can
+	// close off instead of losing the turn. Nil means a throwaway session.
+	Persist func()
 }
 
 // Run executes one operator turn to completion.
@@ -118,6 +122,7 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	} else {
 		session.AddUser(turnText)
 	}
+	r.persist()
 
 	emit(Event{Kind: EventTurnStart})
 	stopReason := "stop"
@@ -266,6 +271,11 @@ runLoop:
 		// next request must hand back or lose.
 		if strings.TrimSpace(answer.String()) != "" || len(calls) > 0 || len(reasoningItems) > 0 {
 			session.AddAssistant(answer.String(), reasoning.String(), calls, reasoningItems)
+			// The model's step is durable before any tool runs. A crash from
+			// here leaves tool calls without results, and the loader closes
+			// them off with an "unknown effect" result rather than repeating
+			// a call that may already have happened.
+			r.persist()
 		}
 
 		if len(calls) == 0 {
@@ -437,6 +447,10 @@ runLoop:
 		if len(pendingImages) > 0 {
 			session.AddImages("Image data read by the tools above is attached for you to see.", pendingImages)
 		}
+		// One durable point per batch: the results and any image message are on
+		// disk together, so a crash cannot leave a tool result without its
+		// image or an image without the batch it belongs to.
+		r.persist()
 		if stopReason == "loop-guard" || stopReason == "aborted" {
 			break runLoop
 		}
@@ -446,11 +460,13 @@ runLoop:
 		}
 		if diagnose != "" {
 			session.AddUser(diagnose)
+			r.persist()
 			continue
 		}
 		if strings.TrimSpace(pendingVerify) != "" && nudges < MaxVerifyNudges {
 			nudges++
 			session.AddUser(pendingVerify)
+			r.persist()
 			emit(Event{Kind: EventNotice, Text: "Task finished. Verifying before the next one."})
 			continue
 		}
@@ -885,6 +901,14 @@ func (r *Runner) stepTools(discovered map[string]bool) *Registry {
 func (r *Runner) emit(event Event) {
 	if r.Env != nil && r.Env.Emit != nil {
 		r.Env.Emit(event)
+	}
+}
+
+// persist flushes the session at a durable point. A failed write never fails
+// the turn: the transcript is a safety net, and the next point tries again.
+func (r *Runner) persist() {
+	if r.Persist != nil {
+		r.Persist()
 	}
 }
 

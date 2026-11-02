@@ -25,10 +25,14 @@ var guestDeniedTools = []string{
 	"http_request", "probe_url", "dns_recon", "port_probe", "tls_inspect", "http_headers_audit",
 	"browser_open", "browser_screenshot", "browser_dump_dom",
 	"browser_session_open", "browser_session_read", "browser_session_close",
+	"browser_navigate", "browser_read", "browser_click", "browser_type",
+	"browser_press", "browser_scroll", "browser_wait_for", "browser_eval",
+	"browser_tabs", "browser_cookies", "browser_close",
 	"github_create_pr", "github_get_pr", "github_list_prs", "github_review_pr",
 	"github_comment_pr", "github_merge_pr",
 	"ask_user", "remember", "install_skill", "propose_skill",
 	"send_channel",
+	"desktop_screenshot", "desktop_input", "desktop_windows",
 }
 
 // denyList is the effective tool deny-list of one run: the agent's own list,

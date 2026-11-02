@@ -163,7 +163,7 @@ func NewRegistry(tools ...Tool) *Registry {
 
 // DefaultRegistry returns the built-in tool set.
 func DefaultRegistry() *Registry {
-	return NewRegistry(
+	tools := []Tool{
 		&readFileTool{},
 		&listDirectoryTool{},
 		&writeFileTool{},
@@ -208,6 +208,7 @@ func DefaultRegistry() *Registry {
 		&webSearchTool{},
 		&lookupTool{},
 		&readImageTool{},
+		&documentExtractTool{},
 		&tlsInspectTool{},
 		&httpHeadersAuditTool{},
 		&dnsReconTool{},
@@ -219,6 +220,17 @@ func DefaultRegistry() *Registry {
 		&browserSessionOpenTool{},
 		&browserSessionReadTool{},
 		&browserSessionCloseTool{},
+		&browserNavigateTool{},
+		&browserReadTool{},
+		&browserClickTool{},
+		&browserTypeTool{},
+		&browserPressTool{},
+		&browserScrollTool{},
+		&browserWaitForTool{},
+		&browserEvalTool{},
+		&browserTabsTool{},
+		&browserCookiesTool{},
+		&browserCloseTool{},
 		&httpRequestTool{},
 		&jwtInspectTool{},
 		&secretScanTool{},
@@ -258,7 +270,9 @@ func DefaultRegistry() *Registry {
 		&checkpointTool{},
 		&rewindTool{},
 		&sendChannelTool{},
-	)
+	}
+	tools = append(tools, DesktopTools()...)
+	return NewRegistry(tools...)
 }
 
 // Lookup finds a tool by name or alias.

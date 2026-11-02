@@ -24,6 +24,14 @@ var imageMediaTypes = map[string]string{
 	".bmp":  "image/bmp",
 }
 
+// ImageMediaType reports the MIME type for a supported image path. It is the
+// one place the extension list lives, so the terminal composer and the
+// read_image tool cannot disagree about what counts as an image.
+func ImageMediaType(path string) (string, bool) {
+	mediaType, ok := imageMediaTypes[strings.ToLower(filepath.Ext(path))]
+	return mediaType, ok
+}
+
 // readImageTool attaches a local image to the conversation for a vision model.
 type readImageTool struct{}
 

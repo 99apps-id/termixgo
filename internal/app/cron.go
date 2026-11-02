@@ -131,10 +131,17 @@ func (a *App) RunScheduled(ctx context.Context, job cron.Job) (string, error) {
 	agentName := a.scheduledAgent(job)
 	session := agent.NewSessionFor(agentName, a.AgentWorkspace(agentName), a.CurrentModel().ID)
 	started := time.Now()
+	priority := PriorityScheduled
+	if job.ID == "heartbeat" {
+		// The heartbeat never waits and never displaces anything: a missed
+		// beat costs nothing, the next one is one interval away.
+		priority = PriorityHeartbeat
+	}
 	err := a.runWithOptions(ctx, job.Prompt, runOptions{
 		session:   session,
 		isolated:  true,
 		agentName: agentName,
+		priority:  priority,
 	})
 	entry := cron.HistoryEntry{
 		Time:   started,

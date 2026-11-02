@@ -25,8 +25,10 @@ import (
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/agenthome"
+	"github.com/99apps-id/termixgo/internal/api"
 	"github.com/99apps-id/termixgo/internal/app"
 	"github.com/99apps-id/termixgo/internal/audit"
+	"github.com/99apps-id/termixgo/internal/browser"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/cron"
 	"github.com/99apps-id/termixgo/internal/eval"
@@ -34,6 +36,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/mcp"
 	"github.com/99apps-id/termixgo/internal/oauth"
 	"github.com/99apps-id/termixgo/internal/provider"
+	"github.com/99apps-id/termixgo/internal/sandbox"
 	"github.com/99apps-id/termixgo/internal/secrets"
 	"github.com/99apps-id/termixgo/internal/ui"
 	"github.com/99apps-id/termixgo/internal/version"
@@ -69,6 +72,10 @@ func signalContext() (context.Context, context.CancelFunc) {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	// A live browser is a child process this program started. Leaving it
+	// behind would keep a headless Chromium resident after the terminal
+	// closed; the idle timer covers a crash, this covers a clean exit.
+	defer func() { _ = browser.Close() }()
 	if len(args) == 0 {
 		return runInteractive(stdin, stdout, ui.Options{})
 	}
@@ -129,6 +136,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runChannel(args[1:], stdout)
 	case "serve":
 		return runServe(stdout)
+	case "api":
+		return runAPI(args[1:], stdout)
 	case "cron":
 		return runCron(args[1:], stdout)
 	case "heartbeat":
@@ -732,6 +741,18 @@ func runServe(stdout io.Writer) error {
 		fmt.Fprintf(stdout, "Heartbeat: %s\n", application.HeartbeatStatus())
 	}
 
+	if cfg := application.Config(); cfg.API.Enabled {
+		server, err := startAPIServer(application, cfg, stdout)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = server.Shutdown(shutdownCtx)
+		}()
+	}
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -740,8 +761,112 @@ func runServe(stdout io.Writer) error {
 		cancel()
 	}()
 
+	if cfg := application.Config(); cfg.HealthAlerts.Enabled {
+		if err := application.StartHealthWatch(ctx); err != nil {
+			fmt.Fprintf(stdout, "Health alerts: off (%v)\n", err)
+		} else {
+			fmt.Fprintf(stdout, "Health alerts: %s\n", application.HealthStatus())
+		}
+	}
+
 	<-ctx.Done()
 	fmt.Fprintf(stdout, "\nAssistant stopped.\n")
+	return nil
+}
+
+// startAPIServer creates the bearer token on first use and serves the local
+// HTTP endpoint. The token is written to the secret store, never to config.
+func startAPIServer(application *app.App, cfg config.Config, stdout io.Writer) (*api.Server, error) {
+	token := application.Secrets().Get(api.TokenKey)
+	if token == "" {
+		generated, err := api.GenerateToken()
+		if err != nil {
+			return nil, err
+		}
+		if err := application.Secrets().Set(api.TokenKey, generated); err != nil {
+			return nil, err
+		}
+		token = generated
+		fmt.Fprintf(stdout, "API token created and stored in the secret store:\n  %s\n", token)
+	}
+	server := api.New(application, cfg.API.Listen, token)
+	if err := server.Start(); err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(stdout, "API: http://%s\n", server.Addr())
+	if !api.IsLoopback(server.Addr()) {
+		fmt.Fprintln(stdout, "API warning: this address is reachable from the network. Keep the token private and put TLS in front of it.")
+	}
+	return server, nil
+}
+
+// runAPI manages the local HTTP endpoint: whether it starts with serve, the
+// bearer token, and a status summary.
+func runAPI(args []string, stdout io.Writer) error {
+	action := "status"
+	if len(args) > 0 {
+		action = strings.ToLower(strings.TrimSpace(args[0]))
+	}
+	store, err := secrets.Load()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	switch action {
+	case "", "status":
+		listen := cfg.API.Listen
+		if strings.TrimSpace(listen) == "" {
+			listen = api.DefaultListen
+		}
+		state := "off"
+		if cfg.API.Enabled {
+			state = "on"
+		}
+		token := "no token"
+		if store.Has(api.TokenKey) {
+			token = "token stored"
+		}
+		fmt.Fprintf(stdout, "API: %s, listen %s, %s\n", state, listen, token)
+		if !api.IsLoopback(listen) {
+			fmt.Fprintln(stdout, "Warning: this address binds beyond loopback, so the token crosses the network.")
+		}
+		fmt.Fprintln(stdout, "Turn it on with 'termixgo api on', then restart 'termixgo serve'.")
+	case "on", "off":
+		cfg.API.Enabled = action == "on"
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "API %s. Restart 'termixgo serve' for the change to take effect.\n", action)
+	case "token":
+		token := store.Get(api.TokenKey)
+		if token == "" {
+			generated, err := api.GenerateToken()
+			if err != nil {
+				return err
+			}
+			if err := store.Set(api.TokenKey, generated); err != nil {
+				return err
+			}
+			token = generated
+			fmt.Fprintln(stdout, "Generated a token and stored it in the secret store.")
+		}
+		fmt.Fprintln(stdout, token)
+	case "rotate":
+		generated, err := api.GenerateToken()
+		if err != nil {
+			return err
+		}
+		if err := store.Set(api.TokenKey, generated); err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, generated)
+		fmt.Fprintln(stdout, "Every caller must use the new token after 'termixgo serve' restarts.")
+	default:
+		return fmt.Errorf("usage: termixgo api [status|on|off|token|rotate]")
+	}
 	return nil
 }
 
@@ -1757,6 +1882,15 @@ func runDoctor(args []string, stdout io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "default model:  %s\n", orNone(cfg.DefaultModel))
 	fmt.Fprintf(stdout, "approval mode:  %s\n", cfg.ApprovalMode)
+	if line := sandbox.Describe(cfg.Sandbox); line != "" {
+		if err := sandbox.EngineAvailable(cfg.Sandbox); err != nil {
+			fmt.Fprintf(stdout, "sandbox:        on (%s), engine NOT reachable: %v\n", line, err)
+		} else {
+			fmt.Fprintf(stdout, "sandbox:        on (%s)\n", line)
+		}
+	} else {
+		fmt.Fprintln(stdout, "sandbox:        off")
+	}
 	fmt.Fprintf(stdout, "trusted folders: %d\n", len(cfg.TrustedFolders))
 	store, err := secrets.Load()
 	if err != nil {
@@ -1925,6 +2059,8 @@ Usage:
                                   Run static code and security audit over workspace
   termixgo worker [list]          List the background coding workers
   termixgo serve                  Run the Telegram assistant 24/7
+  termixgo api [status|on|off|token|rotate]
+                                  Local HTTP endpoint for other programs
   termixgo service [install|uninstall|status]
                                   Manage auto-start (systemd, launchd, schtasks)
   termixgo health                 Report system health (disk, memory, swap, load, services)

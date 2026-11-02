@@ -55,7 +55,9 @@ truth for Termixgo.
   commit, using the same `modernc.org/sqlite` driver for its device store, so
   the build stays cgo-free. `github.com/mdp/qrterminal/v3` draws the login QR.
   The Baileys/Node alternative was rejected because it needs a runtime this
-  binary does not have.
+  binary does not have. `github.com/coder/websocket` carries the live browser's
+  DevTools connection; it was already in the module graph as a whatsmeow
+  dependency, so promoting it adds no code and no transitive tree.
 
 ## Layout
 
@@ -63,6 +65,10 @@ truth for Termixgo.
 cmd/termixgo        entry point and subcommands (run, agent, channel, cron, doctor, ...)
 internal/app        shared state: config, provider client, sessions, agent contexts,
                     channel registry and delivery, cron integration
+internal/browser    the live headless browser: process launch, DevTools protocol
+                    client over one WebSocket, and the page actions
+internal/api        the local HTTP endpoint: bearer auth, turn, health and tool
+                    routes, rate limit and the bound listener
 internal/agent      the tool-calling run loop, tools, prompt, compaction, memory,
                     delegation and the subagent roster
 internal/agenthome  per-agent home: persona files, workspace, sessions, memory
@@ -70,6 +76,8 @@ internal/channel    transport-neutral request, access gate, pairing store, rate
                     limit, outbound redaction and chat text helpers
 internal/config     ~/.termixgo config.json: agents, channel accounts, defaults,
                     folder trust
+internal/desktop    local screen capture, pointer and keyboard input, window
+                    focus and application launch, one driver per host
 internal/eval       benchmark suite runner, task evaluation and reporting
 internal/mcp        MCP client: stdio JSON-RPC, tool listing and dispatch
 internal/secrets    0600 secret store for API keys and channel tokens
@@ -209,9 +217,60 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
 - A provider that goes silent must fail. The stall guard in the provider
   package is what turns a hung connection into an error; a bare
   `http.Client` timeout cannot see it.
-- One turn runs at a time across the whole app, acquired with `runMu.TryLock`.
-  A second caller gets `app.ErrBusy`; it is never queued, because a queued
-  caller looks hung to the operator.
+- One turn runs at a time across the whole app, admitted by `runQueue` with a
+  priority rather than taken with a bare `TryLock`: the operator outranks a
+  channel message, a channel message outranks a scheduled job, and a scheduled
+  job outranks the heartbeat. The heartbeat never waits (a missed beat costs
+  nothing), a job waits 30 seconds and is then requeued as busy, a chat waits 3
+  minutes and the operator 10, so no surface queues forever and none is refused
+  while it could reasonably wait. `runMu` stays behind the queue as the
+  exclusion that `Close` and `ForceCompactSession` observe for the whole turn.
+  A waiter that is cancelled leaves the queue: the wakeup broadcast happens
+  under the queue's own lock, which is what makes a context-aware condition
+  variable safe here.
+- The JSONL ledgers rotate. `internal/rotate` appends with a size cap (8 MB, 3
+  archives, `file.1` newest) for the audit log, the per-session usage ledger and
+  the cron history, because a daemon that never restarts would otherwise fill a
+  small disk and take the assistant down with it. Readers stream the archives
+  oldest first and then the live file, so a rotation never hides history from
+  `/audit`, `/cost` or `cron runs`.
+- The HTTP API is one authenticated surface, never an open door. Its token
+  lives in the secret store under `api:token`, is compared in constant time, and
+  the server refuses to start without one. The bind is loopback unless the
+  operator chose otherwise, and a non-loopback address is named as a warning
+  because the token then crosses the network over plain HTTP. Every request runs
+  on a throwaway session through `RunIsolatedTurn`, enters the queue at channel
+  priority, and is bounded by a ten-minute deadline; bodies are capped at 1 MB,
+  prompts at 64 KB and turns at 60 per minute. `/healthz` is the only
+  unauthenticated route and carries no detail.
+- The sandbox is opt-in, narrow, and honest about its edge. `sandbox.enabled`
+  routes `run_command`, `run_checks` and the hypothesis check through a
+  container engine, and nothing else: file tools, git, MCP servers, desktop
+  control, workers and the scheduler stay on the host, and `run_background` is
+  refused because a detached process would outlive the container. The
+  invocation drops every capability, sets `no-new-privileges`, limits pids,
+  defaults the network to `none`, mounts only the workspace (rw by default,
+  because a coding agent must edit the tree), uses the operator's uid and gid on
+  POSIX, and passes no inherited environment, so `~/.termixgo/secrets.json` is
+  not in the container. A missing engine or image refuses the command; it never
+  falls back to the host, because a silent fallback is the sandbox theatre this
+  project refuses to ship.
+- A saved turn is durable at every step boundary, and a crash is closed off,
+  never replayed. `Session.BeginTurn` sets a persisted `inFlight` marker; the
+  runner flushes after the user message, after each assistant step and after
+  each tool batch, and the app clears the marker when the turn ends. A load that
+  finds the marker appends one synthetic tool result for every call the last
+  assistant step left unanswered, saying the effect is unknown, because a
+  provider rejects a history that ends with a dangling call and re-running the
+  call could repeat an edit or a command that already happened. The recovery
+  notice is shown once and the closure is saved, so a second load has nothing
+  left to do.
+- Health alerts are a watcher, not a tool. `serve` reads `health.Collect` on a
+  timer, applies a cooldown per condition, and names a delivery failure in the
+  status line instead of pretending the message went out. A host with no swap or
+  no memory figure is skipped when its denominator is zero, never read as 0 or
+  100 percent. Thresholds are clamped to 1..100 and fall back to 90; the first
+  check runs 30 seconds after start so a disk already full at boot is named.
 - Telegram update handlers run on their own goroutines. A blocking poll loop
   would stop `/stop` from arriving during a run, which is the one moment it is
   needed. The offset is "the first update Telegram should return", so an update
@@ -311,6 +370,40 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   the system resolver fails, so an ISP DNS block does not take the keyless paths
   with it; the fallback runs only on a resolution failure, never on the happy
   path.
+- The live browser is one shared Chromium, started lazily by the first browser
+  tool and closed after five idle minutes or on a clean exit (`cmd/termixgo`
+  defers `browser.Close`). One page connection is attached at a time and
+  `actionMu` serialises each high-level action: a click is three protocol
+  commands, and interleaving two callers would land the events in a state
+  neither expected. A navigation is awaited by polling `document.readyState`
+  rather than by trusting an event stream that the next navigation interrupts.
+  Every string the model supplies is a JSON literal inside the injected script,
+  never script text, and typing goes through `Input.insertText` so a framework's
+  own input handlers run. Navigation refuses link-local and cloud metadata
+  addresses. A guest never receives any of these tools, and the browser is not
+  a sandbox: it is a real browser with the operator's network.
+- A turn's attachments belong to that turn and to no other. The composer holds
+  one pending set; `submit` consumes it (documents as prompt text, image bytes
+  on the first user message through `RunTurnWithImages`) and clears it, and a
+  message queued mid-turn carries its own set beside it so a file attached
+  while a turn runs reaches the turn it was queued for. An attachment can never
+  steer a running turn, because that turn's first user message is already
+  built. A paste above `pasteSpoolThreshold` is written under
+  `.termixgo/pastes/` (0700/0600) and replaced by its head plus the path, so a
+  huge log becomes a readable file instead of an oversized prompt.
+- Document text is extracted locally and the failure names the next action. The
+  Office containers are read with the standard library, PDF through
+  `pdftotext`, and a container with no text layer (a scan) returns an error
+  pointing at vision or OCR rather than an empty success that reads as "this
+  document says nothing".
+- Desktop control is opt-in at the registry, not at the prompt. `desktopControl`
+  is off by default, `buildDefaultTools` removes `agent.DesktopToolNames` from
+  the registry the model is offered, the guest deny-list names them again, and
+  each tool re-checks `Env.Config` because a registry mistake must not become a
+  machine controller. `internal/desktop` shells out with explicit argv and
+  numbers or text passed through argv or the environment, never through a shell
+  string, and each host says which driver it lacks instead of pretending the
+  action worked.
 - Cancellation flows through a context: `signal.NotifyContext` in the command,
   through `App.RunTurn`, into `Runner.Run`, and out to the HTTP request. The
   run loop checks the context between steps, so a stop is prompt and saves
@@ -356,7 +449,13 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   hint may lower the gate and never raise it, so a tool that claims nothing is
   treated as one that can change things. Connecting is best effort and the
   handshake is bounded: one broken server must not cost the operator the session
-  or the other servers.
+  or the other servers. A remote server is reached over the streamable HTTP
+  transport instead of a process: the URL must be http or https, the session id
+  the server issues rides on every request, a 404 is recovered with one new
+  handshake and one retry, and an answer is taken only from the SSE event whose
+  request id matches, because the transport lets progress notifications
+  interleave with it. A server's `env` and HTTP `headers` are moved into the
+  secret store on load, so a bearer token never sits in `config.json`.
 - Hooks are operator code, not model code. They are read from
   `~/.termixgo/config.json` only, never from a workspace file, because a cloned
   repository must not be able to plant a command that runs on the operator's

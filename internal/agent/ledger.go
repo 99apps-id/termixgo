@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/provider"
+	"github.com/99apps-id/termixgo/internal/rotate"
 	"github.com/99apps-id/termixgo/internal/secrets"
 )
 
@@ -306,21 +306,13 @@ func (l *UsageLedger) Append(record UsageRecord) error {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(l.path), 0o700); err != nil {
-		return fmt.Errorf("create usage ledger directory: %w", err)
+	if err := rotate.Append(l.path, append(data, '\n'), rotate.Options{}); err != nil {
+		return fmt.Errorf("write usage ledger: %w", err)
 	}
-	file, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("open usage ledger: %w", err)
-	}
-	defer file.Close()
 	// A freshly created file takes its mode from the open call on POSIX; on
 	// Windows the restriction has to be applied, as the session writer does.
 	if err := secrets.RestrictFile(l.path); err != nil {
 		return fmt.Errorf("protect usage ledger: %w", err)
-	}
-	if _, err := file.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("write usage ledger: %w", err)
 	}
 	return nil
 }
@@ -329,16 +321,13 @@ func (l *UsageLedger) Append(record UsageRecord) error {
 // file is an empty ledger, not an error: sessions written before records
 // existed have none, and their aggregate is the stored one.
 func ReadUsageLedger(path string) ([]UsageRecord, error) {
-	file, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
+	reader, err := rotate.Reader(path)
 	if err != nil {
 		return nil, fmt.Errorf("read usage ledger: %w", err)
 	}
-	defer file.Close()
+	defer reader.Close()
 	var records []UsageRecord
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())

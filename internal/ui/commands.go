@@ -213,6 +213,14 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashSkills(args)
 	case "memory":
 		return m.slashMemory()
+	case "attach":
+		return m.slashAttach(args)
+	case "detach":
+		return m.slashDetach()
+	case "paste":
+		return m.slashPaste(args)
+	case "desktop":
+		return m.slashDesktop(args)
 	case "checkpoint":
 		return m.slashCheckpoint(args)
 	case "rewind":
