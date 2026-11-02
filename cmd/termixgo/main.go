@@ -663,7 +663,7 @@ func runSecret(args []string, stdin io.Reader, stdout io.Writer) error {
 	}
 	if providerID == "muse" {
 		fmt.Fprintln(stdout, "Muse accepts either the OAuth subscription login or a Model API key (LLM_...).")
-		fmt.Fprintln(stdout, "A subscription key is chat-only from this client; a Model API key from https://dev.meta.ai is required for tool use.")
+		fmt.Fprintln(stdout, "A subscription login runs tools over a text protocol from this client; a Model API key from https://dev.meta.ai uses native tool calls.")
 	}
 	value := ""
 	if len(args) > 1 {

@@ -112,6 +112,9 @@ func Login(ctx context.Context, store *Store, provider string, in io.Reader, out
 				if err == nil && strings.TrimSpace(notice) != "" {
 					fmt.Fprintf(out, "%s\n", notice)
 				}
+				if err == nil {
+					fmt.Fprintf(out, "Note: Meta reserves native tool calls for its official Muse Code client, so this subscription login runs Termixgo's tools over a text protocol; a pay-as-you-go Model API key (termixgo secret muse) uses native tool calls instead.\n")
+				}
 			}
 		}
 	default:

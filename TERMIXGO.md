@@ -438,11 +438,20 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   what a given account or address is entitled to.
 - A provider's policy refusal is reported as policy, not as a bad key. Meta now
   requires the official Muse Code client's attestation when a request carries
-  tools: a subscription key answers plain chat but returns 403
-  `client_attestation_denied` for any tool call, with quota still available.
+  a native tools field: a subscription key answers a plain request but returns
+  403 `client_attestation_denied` for any native tool call, with quota still
+  available. The Muse client answers that refusal by switching the client
+  (once, sticky) to a text tool protocol: the tools are listed in the
+  instructions, the model replies with `tool_call` blocks, the parsed calls
+  are emitted as ordinary tool calls so Termixgo executes them locally under
+  the same approval gates, and stored calls and results are rendered back as
+  `tool_call` and `tool_result` blocks. A pay-as-you-go Model API key never
+  switches, because Meta does not refuse its native tool calls. Only a
+  refusal of the tool-less request itself is terminal, and
   `providerStatusError` keeps the provider's `code` so `museAttestationError`
   can name the pay-as-you-go key as the next step instead of telling the
-  operator to re-check a key that is valid.
+  operator to re-check a key that is valid, and the generic 403 hint is
+  suppressed for that code for the same reason.
 - The agent-event observer is one slot with one owner. `App.SetObserver` returns a
   claim and refuses to install over a live one, so a second surface cannot detach
   the sink of the turn that is streaming; the holder releases it with

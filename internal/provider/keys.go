@@ -30,9 +30,11 @@ func EnvKey(id string) string {
 
 // museModelAPIKey returns an explicit Meta Model API key for Muse, if one is
 // configured. A Muse Code subscription login mints a key that Meta attests to
-// the official client and refuses for tool use from another client, while a
-// pay-as-you-go Model API key (LLM_...) is meant for third-party clients.
-// Matching the official CLI, the environment wins over the stored key.
+// the official client and refuses for native tool use from another client
+// (the Muse client then runs tools over its text protocol), while a
+// pay-as-you-go Model API key (LLM_...) is meant for third-party clients and
+// keeps native tool calls. Matching the official CLI, the environment wins
+// over the stored key.
 func museModelAPIKey(store *secrets.Store, id string) string {
 	if value := EnvKey(id); value != "" {
 		return value
@@ -48,7 +50,8 @@ func museModelAPIKey(store *secrets.Store, id string) string {
 // ResolveKey returns the credential for a provider: an OAuth access token for
 // a login provider, otherwise the stored secret, then the environment. Muse is
 // the one login provider where an explicit Model API key wins over the OAuth
-// token, because only that key may use tools.
+// token, because that key keeps native tool calls instead of the text
+// tool protocol a subscription login falls back to.
 func ResolveKey(store *secrets.Store, id string) string {
 	if info, ok := ByID(id); ok && info.OAuth {
 		if id == "muse" {

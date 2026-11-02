@@ -177,7 +177,11 @@ func (e *providerStatusError) Error() string {
 	hint := ""
 	switch e.status {
 	case http.StatusUnauthorized, http.StatusForbidden:
-		hint = " (check the API key with /setup)"
+		// An attestation refusal is a policy answer about a valid key,
+		// so the key hint would send the operator after the wrong cause.
+		if e.code != "client_attestation_denied" {
+			hint = " (check the API key with /setup)"
+		}
 	case http.StatusTooManyRequests, 529:
 		hint = " (the provider is overloaded or rate limited; retry shortly)"
 	case http.StatusNotFound:

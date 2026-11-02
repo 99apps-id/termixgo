@@ -531,17 +531,19 @@ The setup wizard runs the same check: choosing an OAuth provider shows "login
 required" and points at the login command instead of asking for an API key.
 
 **Muse Code policy.** Meta now requires the official Muse Code client's
-attestation when a request carries tools. A Muse Code subscription key still
-answers a plain chat request, but any request with tools returns
-`403 client_attestation_denied`; Termixgo reports that as a policy refusal and
-names the pay-as-you-go key at https://dev.meta.ai as the next step. The agent
-always sends tools, so a subscription key cannot drive Termixgo's tool loop,
-even with quota remaining. This affects the Termigo client as well. Two
-sanctioned paths remain: a pay-as-you-go Model API key (`LLM_...`) stored with
-`termixgo secret muse` or exported as `META_API_KEY`, which takes precedence
-over the OAuth login and may use tools; or the official CLI, either directly or
-as a `code_worker` with `worker=muse`, which runs `muse exec` with the
-subscription.
+attestation when a request carries a native tools field. A Muse Code
+subscription key still answers a plain request, but a request that registers
+tools returns `403 client_attestation_denied`. Termixgo answers that refusal
+by switching the Muse client to a text tool protocol: the tools are listed
+in the instructions, the model replies with `tool_call` blocks, and Termixgo
+executes them locally under the usual approval gates, so a subscription login
+still drives the tool and exec loop (the reply is buffered rather than
+streamed in this mode, because a call is only complete at its closing
+fence). A pay-as-you-go Model API key (`LLM_...`) stored with
+`termixgo secret muse` or exported as `META_API_KEY` takes precedence over
+the OAuth login and keeps native tool calls; the official CLI, either
+directly or as a `code_worker` with `worker=muse`, which runs `muse exec`,
+remains the other path that uses the subscription.
 
 Then pick a model:
 

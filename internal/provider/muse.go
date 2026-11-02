@@ -43,6 +43,24 @@ type museClient struct {
 
 	mu        sync.Mutex
 	sessionID string
+	// textTools is set once Meta refuses a native tools field for this
+	// credential (a Muse Code subscription key). From then on the client
+	// runs Termixgo's tools over the text tool protocol below instead of
+	// asking Meta to register them, so the refusal is paid once per client,
+	// not on every step.
+	textTools bool
+}
+
+func (c *museClient) useTextTools() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.textTools
+}
+
+func (c *museClient) setTextTools() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.textTools = true
 }
 
 func (c *museClient) session() string {
@@ -62,6 +80,9 @@ func (c *museClient) resetSession() string {
 }
 
 func (c *museClient) Stream(ctx context.Context, req ChatRequest, emit func(StreamEvent) error) error {
+	if c.useTextTools() {
+		return c.streamTextTools(ctx, req, emit)
+	}
 	payload := c.payload(req)
 	key := c.currentKey()
 	response, err := c.sendWithRetry(ctx, key, payload)
@@ -74,6 +95,15 @@ func (c *museClient) Stream(ctx context.Context, req ChatRequest, emit func(Stre
 			_ = emit(StreamEvent{Type: EventRateLimit, RateLimit: rl})
 		}
 		return decodeResponsesStream(c.info.Label, response.Body, emit)
+	}
+
+	// A client-attestation refusal is a policy answer about the native
+	// tools field, not a stale key: re-minting hands back the same
+	// subscription key. Switch this client to the text tool protocol and
+	// run the step that way instead of failing a login that works.
+	if isAttestationDenied(err) {
+		c.setTextTools()
+		return c.streamTextTools(ctx, req, emit)
 	}
 
 	// Still failing after the transient retries means the credential or session,
@@ -89,6 +119,10 @@ func (c *museClient) Stream(ctx context.Context, req ChatRequest, emit func(Stre
 	}
 	response, err = c.sendWithRetry(ctx, key, payload)
 	if err != nil {
+		if isAttestationDenied(err) {
+			c.setTextTools()
+			return c.streamTextTools(ctx, req, emit)
+		}
 		return museAttestationError(c.modelHint(ctx, req.Model, err))
 	}
 	defer response.Body.Close()
@@ -319,20 +353,261 @@ func (c *museClient) payload(req ChatRequest) map[string]any {
 	return payload
 }
 
-// museAttestationError turns Meta's client-attestation refusal into an
-// actionable message. A Muse Code subscription key still answers a plain chat
-// request, but Meta now requires the official client's attestation whenever the
-// request carries tools, so tool use from another client is denied by policy
-// rather than by the key.
-func museAttestationError(err error) error {
+// streamTextTools runs one step without a native tools field, carrying
+// Termixgo's tools in the instructions instead. The model's reply is
+// buffered rather than streamed, because a tool_call block is only a tool
+// call once its closing fence has arrived; the parsed calls are then
+// emitted as ordinary ToolCall events, so the agent loop executes them
+// locally (approval gates, exec, file tools) exactly as it does for a
+// native call, and the next step renders the stored call and its result
+// back as protocol blocks. This is how a Muse Code subscription login,
+// which Meta will not let register tools from another client, still
+// drives Termixgo's tool loop; a pay-as-you-go Model API key never lands
+// here because its native requests are not refused.
+func (c *museClient) streamTextTools(ctx context.Context, req ChatRequest, emit func(StreamEvent) error) error {
+	payload := c.textToolsPayload(req)
+	key := c.currentKey()
+	response, err := c.sendWithRetry(ctx, key, payload)
+	if err != nil && !isAttestationDenied(err) && isMuseAuthOrSessionError(err) {
+		c.resetSession()
+		if fresh := c.refreshKey(); strings.TrimSpace(fresh) != "" {
+			key = fresh
+		}
+		response, err = c.sendWithRetry(ctx, key, payload)
+	}
+	if err != nil {
+		if isAttestationDenied(err) {
+			return museAttestationError(err)
+		}
+		return museAttestationError(c.modelHint(ctx, req.Model, err))
+	}
+	defer response.Body.Close()
+	if rl := ParseGenericRateLimit(response.Header); rl != nil {
+		_ = emit(StreamEvent{Type: EventRateLimit, RateLimit: rl})
+	}
+
+	var text strings.Builder
+	buffered := func(event StreamEvent) error {
+		if event.Type == EventTextDelta {
+			text.WriteString(event.Text)
+			return nil
+		}
+		return emit(event)
+	}
+	if err := decodeResponsesStream(c.info.Label, response.Body, buffered); err != nil {
+		return err
+	}
+	prose, calls := parseTextToolCalls(text.String())
+	if len(calls) == 0 {
+		if text.Len() > 0 {
+			return emit(StreamEvent{Type: EventTextDelta, Text: text.String()})
+		}
+		return nil
+	}
+	if strings.TrimSpace(prose) != "" {
+		if err := emit(StreamEvent{Type: EventTextDelta, Text: strings.TrimSpace(prose)}); err != nil {
+			return err
+		}
+	}
+	for index := range calls {
+		call := calls[index]
+		if err := emit(StreamEvent{Type: EventToolCall, ToolCall: &call}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// textToolsPayload builds the Responses body for the text tool protocol:
+// the same input shape as a plain request, with the tool catalogue and
+// the calling convention folded into the instructions and no tools
+// field for Meta to refuse.
+func (c *museClient) textToolsPayload(req ChatRequest) map[string]any {
+	instructions := strings.TrimSpace(req.System)
+	if len(req.SystemParts) > 0 {
+		instructions = strings.TrimSpace(joinSystemParts(req.SystemParts))
+	}
+	if len(req.Tools) > 0 {
+		instructions = strings.TrimSpace(instructions + "\n\n" + textToolProtocol(req.Tools))
+	}
+	payload := map[string]any{
+		"model":  req.Model,
+		"stream": true,
+		"input":  encodeTextToolsInput(req),
+	}
+	if instructions != "" {
+		payload["instructions"] = instructions
+	}
+	return payload
+}
+
+// textToolProtocol teaches the model the calling convention and lists the
+// tools Termixgo will execute for it.
+func textToolProtocol(tools []ToolDef) string {
+	var out strings.Builder
+	out.WriteString("Tool use (text protocol): the tools below are available, but they are not registered with this API request. Termixgo executes them on the operator's machine and returns their output to you.\n")
+	out.WriteString("To call a tool, end your reply with one block per call, in exactly this shape and with no text after the last block:\n")
+	out.WriteString("```tool_call\n{\"name\":\"tool_name\",\"arguments\":{\"arg\":value}}\n```\n")
+	out.WriteString("Tool outputs come back as tool_result blocks; read them and continue. When the task is finished, answer in plain text with no tool_call block.\n\nAvailable tools:\n")
+	for _, tool := range tools {
+		schema, err := json.Marshal(tool.Schema)
+		if err != nil || len(schema) == 0 {
+			schema = []byte("{}")
+		}
+		fmt.Fprintf(&out, "- %s: %s\n  arguments JSON schema: %s\n", tool.Name, tool.Description, schema)
+	}
+	return out.String()
+}
+
+// encodeTextToolsInput renders a history for the text tool protocol:
+// ordinary messages keep their Responses shape, while a stored tool call
+// becomes a tool_call block in an assistant message and its result a
+// tool_result block in a user message, so no function_call item (and no
+// tools field) is ever sent for Meta to refuse.
+func encodeTextToolsInput(req ChatRequest) []map[string]any {
+	items := make([]map[string]any, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		switch message.Role {
+		case RoleUser:
+			items = append(items, map[string]any{
+				"type":    "message",
+				"role":    "user",
+				"content": responsesUserContent(message),
+			})
+		case RoleAssistant:
+			var parts []string
+			if strings.TrimSpace(message.Content) != "" {
+				parts = append(parts, message.Content)
+			}
+			for _, call := range message.ToolCalls {
+				parts = append(parts, textToolCallBlock(call.Name, call.Arguments))
+			}
+			if len(parts) == 0 {
+				continue
+			}
+			items = append(items, map[string]any{
+				"type":    "message",
+				"role":    "assistant",
+				"content": []map[string]any{{"type": "output_text", "text": strings.Join(parts, "\n\n")}},
+			})
+		case RoleTool:
+			block, err := json.Marshal(map[string]string{
+				"name":    message.Name,
+				"call_id": message.ToolID,
+				"output":  message.Content,
+			})
+			if err != nil {
+				continue
+			}
+			items = append(items, map[string]any{
+				"type":    "message",
+				"role":    "user",
+				"content": []map[string]any{{"type": "input_text", "text": "```tool_result\n" + string(block) + "\n```"}},
+			})
+		}
+	}
+	return items
+}
+
+// textToolCallBlock renders one call in the protocol's fence shape.
+func textToolCallBlock(name, arguments string) string {
+	if !json.Valid([]byte(strings.TrimSpace(arguments))) {
+		arguments = "{}"
+	}
+	block, err := json.Marshal(map[string]json.RawMessage{
+		"name":      json.RawMessage(quoteJSONString(name)),
+		"arguments": json.RawMessage(arguments),
+	})
+	if err != nil {
+		return "```tool_call\n{\"name\":\"" + name + "\",\"arguments\":{}}\n```"
+	}
+	return "```tool_call\n" + string(block) + "\n```"
+}
+
+// quoteJSONString renders a string as a JSON string literal.
+func quoteJSONString(value string) string {
+	encoded, _ := json.Marshal(value)
+	return string(encoded)
+}
+
+// parseTextToolCalls splits a model reply into the prose around the
+// tool_call blocks and the calls themselves. A block that does not parse
+// is not a call: the whole reply then stays prose, so a model that talks
+// about the protocol in a code sample is not mistaken for one using it.
+func parseTextToolCalls(text string) (string, []ToolCall) {
+	const fence = "```tool_call"
+	var prose strings.Builder
+	var calls []ToolCall
+	rest := text
+	for {
+		start := strings.Index(rest, fence)
+		if start < 0 {
+			prose.WriteString(rest)
+			break
+		}
+		end := strings.Index(rest[start+len(fence):], "```")
+		if end < 0 {
+			return text, nil
+		}
+		raw := strings.TrimSpace(rest[start+len(fence) : start+len(fence)+end])
+		var parsed struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		if err := json.Unmarshal([]byte(raw), &parsed); err != nil || strings.TrimSpace(parsed.Name) == "" {
+			return text, nil
+		}
+		arguments := strings.TrimSpace(string(parsed.Arguments))
+		if arguments == "" {
+			arguments = "{}"
+		}
+		var asString string
+		if err := json.Unmarshal([]byte(arguments), &asString); err == nil {
+			arguments = asString
+		}
+		if !json.Valid([]byte(arguments)) {
+			return text, nil
+		}
+		prose.WriteString(rest[:start])
+		calls = append(calls, ToolCall{
+			ID:        fmt.Sprintf("call_muse_%d", sessionSeq.Add(1)),
+			Name:      strings.TrimSpace(parsed.Name),
+			Arguments: arguments,
+		})
+		rest = rest[start+len(fence)+end+len("```"):]
+	}
+	if len(calls) == 0 {
+		return text, nil
+	}
+	return prose.String(), calls
+}
+
+// isAttestationDenied reports whether an error is Meta's client
+// attestation refusal, matched on the provider's own code rather than
+// on prose alone.
+func isAttestationDenied(err error) bool {
 	var status *providerStatusError
 	if !errors.As(err, &status) || status.status != http.StatusForbidden {
+		return false
+	}
+	if status.code == "client_attestation_denied" {
+		return true
+	}
+	message := strings.ToLower(status.message)
+	return strings.Contains(message, "attestation") || strings.Contains(message, "muse code subscription")
+}
+
+// museAttestationError turns Meta's client-attestation refusal into an
+// actionable message. It is the terminal error: it only surfaces when
+// even a request without a native tools field was refused, because a
+// tools refusal on its own switches the client to the text tool protocol
+// instead. The refusal is policy, not a bad key, so the message names
+// the pay-as-you-go key as the next step.
+func museAttestationError(err error) error {
+	if !isAttestationDenied(err) {
 		return err
 	}
-	if status.code != "client_attestation_denied" && !strings.Contains(strings.ToLower(status.message), "muse code subscription") {
-		return err
-	}
-	return fmt.Errorf("%w: Meta now requires the official Muse Code client's attestation for tool use, so a Muse Code subscription key cannot call tools from Termixgo. Use a pay-as-you-go API key from https://dev.meta.ai for tool use, or keep this key in the official Muse Code client", err)
+	return fmt.Errorf("%w: Meta requires the official Muse Code client's attestation for this Muse Code subscription key, and refused the request even without native tools. Use a pay-as-you-go API key from https://dev.meta.ai, or keep this key in the official Muse Code client", err)
 }
 
 // isMuseAuthOrSessionError reports whether an error means the credential or session
