@@ -223,6 +223,9 @@ build_from_source() {
     . "$ROOT_DIR/.env.local"
     set +a
   fi
+  if [ -z "${TERMIXGO_ANTIGRAVITY_CLIENT_ID:-}" ] || [ -z "${TERMIXGO_ANTIGRAVITY_CLIENT_SECRET:-}" ]; then
+    warn "Antigravity OAuth stamp is incomplete: set TERMIXGO_ANTIGRAVITY_CLIENT_ID and TERMIXGO_ANTIGRAVITY_CLIENT_SECRET in .env.local. Without them the binary asks for the client pair once at runtime."
+  fi
   ldflags="-s -w -X github.com/99apps-id/termixgo/internal/version.Version=${ver} -X github.com/99apps-id/termixgo/internal/version.Commit=${commit} -X github.com/99apps-id/termixgo/internal/version.BuildDate=${build_date}"
   if [ -n "${TERMIXGO_ANTIGRAVITY_CLIENT_ID:-}" ]; then
     ldflags="${ldflags} -X github.com/99apps-id/termixgo/internal/oauth.AntigravityClientID=${TERMIXGO_ANTIGRAVITY_CLIENT_ID}"
@@ -231,6 +234,18 @@ build_from_source() {
     ldflags="${ldflags} -X github.com/99apps-id/termixgo/internal/oauth.AntigravityClientSecret=${TERMIXGO_ANTIGRAVITY_CLIENT_SECRET}"
   fi
   (cd "$ROOT_DIR" && CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "$ldflags" -o "$out_bin" ./cmd/termixgo)
+  # The stamp is a build artifact, so verify it instead of trusting the flag:
+  # an ldflag path that drifts with a rename would otherwise ship a binary that
+  # asks the operator for the client pair on first use.
+  if [ -n "${TERMIXGO_ANTIGRAVITY_CLIENT_ID:-}" ] && ! grep -aqF "$TERMIXGO_ANTIGRAVITY_CLIENT_ID" "$out_bin"; then
+    warn "The Antigravity client id was not embedded in the build; check the ldflags path."
+  fi
+  if [ -n "${TERMIXGO_ANTIGRAVITY_CLIENT_SECRET:-}" ] && ! grep -aqF "$TERMIXGO_ANTIGRAVITY_CLIENT_SECRET" "$out_bin"; then
+    warn "The Antigravity client secret was not embedded in the build; check the ldflags path."
+  fi
+  if [ -n "${TERMIXGO_ANTIGRAVITY_CLIENT_ID:-}" ] && [ -n "${TERMIXGO_ANTIGRAVITY_CLIENT_SECRET:-}" ]; then
+    success "Antigravity OAuth credentials stamped into the build"
+  fi
 }
 
 # 1. Resolve or Build the Binary
