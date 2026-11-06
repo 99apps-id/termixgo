@@ -269,7 +269,7 @@ func TestModelAliasResolutionAndAvailableModels(t *testing.T) {
 	if got := application.resolveModelAlias("muse"); got != "muse-spark-1.3" {
 		t.Errorf("muse alias = %q, want muse-spark-1.3", got)
 	}
-	if got := application.resolveModelAlias("stepfun"); got != "step-3.7-flash" && got != "stepfun-plan/step-3.7-flash" {
+	if got := application.resolveModelAlias("stepfun"); got != "step-3.7-flash" && got != "stepfun-plan/step-3.7-flash" && got != "stepfun-plan/step-5-preview" {
 		t.Errorf("stepfun alias = %q", got)
 	}
 	if got := application.resolveModelAlias("antigravity"); got != "gemini-3.8-flash" && got != "antigravity-gemini-3.8-flash" {

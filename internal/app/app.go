@@ -909,10 +909,10 @@ func (a *App) resolveModelAlias(query string) string {
 	switch q {
 	case "stepfun", "step", "step-plan", "stepfun-plan", "step-3.7-flash", "step-3.7":
 		if a.store != nil && (provider.HasKey(a.store, "stepfun-plan") || a.store.Has("provider:stepfun-plan")) && !provider.HasKey(a.store, "stepfun") && !a.store.Has("provider:stepfun") {
-			return "stepfun-plan/step-3.7-flash"
+			return "stepfun-plan/step-5-preview"
 		}
 		if a.store != nil && (provider.HasKey(a.store, "stepfun-plan") || a.store.Has("provider:stepfun-plan")) && (q == "stepfun" || q == "step" || q == "stepfun-plan" || q == "step-plan") {
-			return "stepfun-plan/step-3.7-flash"
+			return "stepfun-plan/step-5-preview"
 		}
 		return "step-3.7-flash"
 	case "muse", "spark", "musespark", "muse-spark", "muse-spart-1.3", "muse-spart":
