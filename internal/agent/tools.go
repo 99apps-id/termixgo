@@ -205,6 +205,7 @@ func DefaultRegistry() *Registry {
 		&artifactReadTool{},
 		&artifactListTool{},
 		&envListTool{},
+		&devServerTool{},
 		&rememberTool{},
 		&useSkillTool{},
 		&findSkillTool{},
