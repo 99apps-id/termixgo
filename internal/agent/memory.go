@@ -128,43 +128,12 @@ func (m *Memory) Remember(fact, scope string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
-// maxPromptMemoryFacts bounds how many facts one scope contributes to the
-// prompt. Every fact is paid for on every step, and a file that only grows
-// turns into background noise that competes with the operator's actual
-// request; past that point more memory makes an answer worse. The newest
-// facts are the ones a run is most likely to need, so the oldest go first.
-const maxPromptMemoryFacts = 40
-
-// newestFacts returns at most maxPromptMemoryFacts, dropping the oldest, plus
-// how many were dropped so the block can say so instead of looking complete.
-func newestFacts(facts []string) (kept []string, dropped int) {
-	if len(facts) <= maxPromptMemoryFacts {
-		return facts, 0
-	}
-	return facts[len(facts)-maxPromptMemoryFacts:], len(facts) - maxPromptMemoryFacts
-}
-
 // writeFactLines writes each fact as a markdown bullet.
 func writeFactLines(builder *strings.Builder, facts []string) {
 	for _, fact := range facts {
 		builder.WriteString("- ")
 		builder.WriteString(fact)
 		builder.WriteByte('\n')
-	}
-}
-
-// writeFactScope renders one memory scope, newest facts only, and says how
-// many older ones were left out so the model never reads a partial block as
-// the whole record.
-func writeFactScope(builder *strings.Builder, heading string, facts []string) {
-	if len(facts) == 0 {
-		return
-	}
-	builder.WriteString("\n" + heading + "\n")
-	kept, dropped := newestFacts(facts)
-	writeFactLines(builder, kept)
-	if dropped > 0 {
-		builder.WriteString(fmt.Sprintf("- (%d older facts omitted)\n", dropped))
 	}
 }
 
@@ -193,9 +162,18 @@ func (m *Memory) PromptBlock() string {
 	}
 	var builder strings.Builder
 	builder.WriteString("\n\n## LEARNED MEMORY\nFacts the operator taught earlier. Trust them unless the code says otherwise.\n")
-	writeFactScope(&builder, "### AGENT MEMORY ( agent memories/MEMORY.md )", agentFacts)
-	writeFactScope(&builder, "### PROJECT CONVENTIONS & FACTS ( .termixgo/memory.md )", project)
-	writeFactScope(&builder, "### GLOBAL CONVENTIONS ( ~/.termixgo/memory.md )", global)
+	if len(agentFacts) > 0 {
+		builder.WriteString("\n### AGENT MEMORY ( agent memories/MEMORY.md )\n")
+		writeFactLines(&builder, agentFacts)
+	}
+	if len(project) > 0 {
+		builder.WriteString("\n### PROJECT CONVENTIONS & FACTS ( .termixgo/memory.md )\n")
+		writeFactLines(&builder, project)
+	}
+	if len(global) > 0 {
+		builder.WriteString("\n### GLOBAL CONVENTIONS ( ~/.termixgo/memory.md )\n")
+		writeFactLines(&builder, global)
+	}
 	return builder.String()
 }
 

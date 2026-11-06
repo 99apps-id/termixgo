@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"go/ast"
-	"go/format"
 	"go/parser"
 	"go/token"
 	"os"
@@ -195,12 +194,6 @@ func runGoTestGen(ctx context.Context, env *Env, filePath, targetSymbol string, 
 		finalTestContent = strings.TrimRight(existingContent, "\n") + "\n\n" + strings.Join(newTestBlocks, "\n\n") + "\n"
 	}
 
-	// A generated file that is not gofmt'd trips the project's own check gate,
-	// which reads as the change breaking the build even though it compiles.
-	// The formatter is best effort: source it cannot parse is handed to the
-	// diagnostics below, which is where a real syntax error belongs.
-	finalTestContent = formatGeneratedGo(finalTestContent)
-
 	if dryRun {
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "// Preview of generated tests for %s (%d function(s)):\n\n", displayPath(env, filePath), len(coveredNames))
@@ -260,16 +253,6 @@ func runGoTestGen(ctx context.Context, env *Env, filePath, targetSymbol string, 
 	fmt.Fprintf(&summary, "\nVerification: %s\n%s", status, execRes.Output)
 
 	return Result{Output: strings.TrimRight(summary.String(), "\n")}, nil
-}
-
-// formatGeneratedGo runs the standard formatter over synthesized Go source.
-// When the source does not parse, it is returned unchanged so the caller's
-// syntax diagnostics can report the real error instead of a formatting one.
-func formatGeneratedGo(source string) string {
-	if formatted, err := format.Source([]byte(source)); err == nil {
-		return string(formatted)
-	}
-	return source
 }
 
 // scanTestNames reads test function names out of content that does not

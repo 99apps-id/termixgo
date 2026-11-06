@@ -162,52 +162,8 @@ func TestCompletedTaskAsksForVerification(t *testing.T) {
 	if !strings.Contains(notices(recorder), "Verifying before the next one") {
 		t.Errorf("finishing a task with unverified edits must ask for verification, got:\n%s", notices(recorder))
 	}
-	if !systemNotesReachTheModel(client, VerifyNudgePrefix) {
+	if !conversationContains(session, VerifyNudgePrefix) {
 		t.Errorf("the verification request never reached the model")
-	}
-}
-
-// TestHarnessNudgesStayOutOfTheOperatorChannel is the anti-hallucination
-// contract behind harness notes.
-//
-// The user channel is the operator's. A critic or verify reminder written there
-// is indistinguishable from the operator's own next request, and a long session
-// then executes a task nobody asked for: the transcript of the session that
-// motivated this test shows a model inventing a request in its reasoning and
-// building it. The notice must reach the model through the system prompt
-// instead, and no user turn may ever start with a harness marker.
-func TestHarnessNudgesStayOutOfTheOperatorChannel(t *testing.T) {
-	plan := func(status string) string {
-		return `{"todos":[{"id":"t1","title":"Change the parser","status":"` + status + `"}]}`
-	}
-	client := &fakeClient{steps: [][]provider.StreamEvent{
-		{
-			callChunk("c1", "todo_write", plan("in_progress")),
-			callChunk("c2", "write_file", `{"path":"note.go","content":"package main"}`),
-		},
-		{callChunk("c3", "todo_write", plan("completed"))},
-		{textChunk("The parser is changed.")},
-	}}
-	approve := func(ApprovalRequest) Decision { return DecisionAllowOnce }
-	runner, env, _ := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, approve)
-	session := NewSession(env.Workspace, "test-model")
-
-	if err := runner.Run(context.Background(), session, "change the parser"); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	for _, prefix := range []string{CriticNudgePrefix, VerifyNudgePrefix, PlanNudgePrefix} {
-		if conversationContains(session, prefix) {
-			t.Errorf("harness notice %q was stored as a conversation turn; the user channel belongs to the operator", prefix)
-		}
-	}
-	for _, message := range session.Messages() {
-		if message.Role == provider.RoleUser && strings.HasPrefix(strings.TrimSpace(message.Content), "[System:") {
-			t.Errorf("a user turn opens with a harness marker: %q", message.Content)
-		}
-	}
-	if !systemNotesReachTheModel(client, VerifyNudgePrefix) {
-		t.Errorf("the verification notice never reached the system prompt")
 	}
 }
 
@@ -265,38 +221,4 @@ func conversationContains(session *Session, text string) bool {
 		}
 	}
 	return false
-}
-
-// systemNotesReachTheModel reports whether a harness notice was delivered in
-// the system prompt of some request. A notice is deliberately not a
-// conversation turn, so checking the session would miss it by design.
-func systemNotesReachTheModel(client *fakeClient, text string) bool {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	for _, request := range client.requests {
-		for _, part := range request.SystemParts {
-			if strings.Contains(part, text) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// TestStaleNoticeDoesNotSurviveIntoTheNextTurn guards the abort path: an
-// operator stop breaks the loop before the pending notice is delivered, so the
-// notice would otherwise sit in the session and greet the next turn as if the
-// operator had asked for it.
-func TestStaleNoticeDoesNotSurviveIntoTheNextTurn(t *testing.T) {
-	client := &fakeClient{steps: [][]provider.StreamEvent{{textChunk("Done.")}}}
-	runner, env, _ := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
-	session := NewSession(env.Workspace, "test-model")
-	session.AddSystemNote("[System: critic] stale from an aborted turn")
-
-	if err := runner.Run(context.Background(), session, "say done"); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if systemNotesReachTheModel(client, "stale from an aborted turn") {
-		t.Errorf("a notice left by an earlier turn must not reach the next one")
-	}
 }

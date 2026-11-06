@@ -187,18 +187,3 @@ func TestGenerateTestsTool_Validation(t *testing.T) {
 		t.Errorf("expected not supported error, got: %v", res)
 	}
 }
-
-func TestFormatGeneratedGoFormatsAndSurvivesBadSource(t *testing.T) {
-	messy := "package x\nfunc   TestA(t *testing.T){\n_ = 1}\n"
-	formatted := formatGeneratedGo(messy)
-	if formatted == messy {
-		t.Errorf("generated Go was not formatted")
-	}
-	if !strings.Contains(formatted, "func TestA(t *testing.T) {") {
-		t.Errorf("formatted source lost the function:\n%s", formatted)
-	}
-	broken := "package x\nfunc (\n"
-	if got := formatGeneratedGo(broken); got != broken {
-		t.Errorf("unparseable source must be returned unchanged for diagnostics, got %q", got)
-	}
-}
