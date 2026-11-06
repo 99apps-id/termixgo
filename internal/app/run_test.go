@@ -43,7 +43,7 @@ func TestContextUsageIsReported(t *testing.T) {
 	}
 }
 
-func TestSecondTurnIsRejectedWhileOneIsInFlight(t *testing.T) {
+func TestSecondTurnWaitsForTheOneInFlight(t *testing.T) {
 	// The provider holds the request open, which is what puts a turn
 	// genuinely in flight.
 	// The handler captures this channel by reference, so it must never be
@@ -93,23 +93,30 @@ func TestSecondTurnIsRejectedWhileOneIsInFlight(t *testing.T) {
 		t.Fatalf("the first turn never started")
 	}
 
-	// The second caller must be told the agent is busy rather than queueing
-	// behind a turn it cannot see.
-	err = application.RunTurn(context.Background(), "second")
-	if !errors.Is(err, ErrBusy) {
-		t.Errorf("second turn err = %v, want ErrBusy", err)
+	// The second caller is queued at the operator priority, so it neither runs
+	// alongside the first nor is refused: it starts when the slot frees. A
+	// heartbeat, by contrast, never waits and never enters this queue.
+	second := make(chan error, 1)
+	go func() { second <- application.RunTurn(context.Background(), "second") }()
+	select {
+	case err := <-second:
+		t.Fatalf("the second turn ran while the first was in flight: %v", err)
+	case <-time.After(150 * time.Millisecond):
 	}
 
 	unblock()
 	if err := <-first; err != nil {
 		t.Fatalf("first turn failed: %v", err)
 	}
+	if err := <-second; err != nil {
+		t.Fatalf("second turn failed: %v", err)
+	}
 	if application.Running() {
 		t.Errorf("the app should not still report running after the turn")
 	}
-	// The turn is recorded once, not twice.
-	if got := application.Session().Turns(); got != 1 {
-		t.Errorf("turns = %d, want 1", got)
+	// Both turns were recorded, once each.
+	if got := application.Session().Turns(); got != 2 {
+		t.Errorf("turns = %d, want 2", got)
 	}
 }
 

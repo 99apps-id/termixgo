@@ -321,7 +321,7 @@ func TestPlainWelcomeNamesTheFolderAndTrust(t *testing.T) {
 	printPlainWelcome(application, &out, false)
 
 	rendered := out.String()
-	if !strings.Contains(rendered, application.Workspace()) {
+	if !strings.Contains(rendered, application.CurrentFolder()) {
 		t.Errorf("the welcome should name the folder:\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "untrusted") {

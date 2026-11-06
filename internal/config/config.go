@@ -80,6 +80,56 @@ type Heartbeat struct {
 	Interval string `json:"interval,omitempty"`
 }
 
+// API configures the local HTTP endpoint that lets another program run a turn.
+// The bearer token is never stored here: like every other secret it lives in
+// ~/.termixgo/secrets.json, under api:token.
+type API struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// Listen is the address to bind, for example 127.0.0.1:8787. Empty means
+	// 127.0.0.1:8787. A non-loopback address is allowed but warned about,
+	// because the token then travels over the network.
+	Listen string `json:"listen,omitempty"`
+}
+
+// HealthAlerts turns machine pressure into a chat message, so a headless
+// assistant warns the operator before a full disk or an out-of-memory kill
+// takes it down.
+type HealthAlerts struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// Interval is how often the counters are read, as a Go duration. Empty
+	// means 5m.
+	Interval string `json:"interval,omitempty"`
+	// DiskPercent, MemoryPercent and SwapPercent arm an alert. Zero uses 90.
+	DiskPercent   int `json:"diskPercent,omitempty"`
+	MemoryPercent int `json:"memoryPercent,omitempty"`
+	SwapPercent   int `json:"swapPercent,omitempty"`
+	// Cooldown keeps one condition quiet after it was reported. Empty means 1h,
+	// because a full disk that pages the operator every check is noise.
+	Cooldown string `json:"cooldown,omitempty"`
+	// Notify lists delivery targets such as telegram:default:123456. Empty
+	// means the paired Telegram chat, the same place cron answers go.
+	Notify []string `json:"notify,omitempty"`
+}
+
+// Sandbox runs shell commands inside a container instead of on the host. It is
+// opt-in and narrow: only run_command, run_checks and the hypothesis check go
+// through it. File tools, git, MCP servers, desktop control and background
+// processes still run on the host, and the workspace is mounted read-write by
+// default because a coding agent has to edit the tree it is building.
+type Sandbox struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// Engine is auto, docker or podman. Empty means auto.
+	Engine string `json:"engine,omitempty"`
+	// Image is the Linux image a command runs in. It must carry the project's
+	// toolchain; there is no default, because a wrong image fails confusingly.
+	Image string `json:"image,omitempty"`
+	// Network is none (default), bridge or host. A sandboxed build usually
+	// should not reach the network, so silence means none.
+	Network string `json:"network,omitempty"`
+	// Workspace is rw (default) or ro.
+	Workspace string `json:"workspace,omitempty"`
+}
+
 // MCPServer configures one Model Context Protocol server for this install.
 //
 // A server that is listed is wanted by definition, so the flag is the
@@ -94,6 +144,16 @@ type MCPServer struct {
 	Command string            `json:"command"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+	// URL reaches a remote server over the streamable HTTP transport. When it
+	// is set, Command is not started.
+	URL string `json:"url,omitempty"`
+	// Transport is "stdio" (default) or "http". Empty follows URL: a server
+	// with a URL is remote, one with a command is local.
+	Transport string `json:"transport,omitempty"`
+	// Headers are extra HTTP headers for a remote server. Their values are
+	// moved into the secret store on load, exactly like Env, so a bearer token
+	// never stays in config.json.
+	Headers map[string]string `json:"headers,omitempty"`
 	// Disabled keeps a server out of the session without removing it.
 	Disabled bool `json:"disabled,omitempty"`
 	// DisabledTools lists tools that are deliberately disabled on this server.
@@ -166,6 +226,25 @@ type Config struct {
 	// find_tools. It trades one discovery round trip for a smaller tool schema
 	// on every step, which matters with a large toolset.
 	ToolSearchEnabled bool `json:"toolSearchEnabled,omitempty"`
+
+	// DesktopControl offers the tools that drive the local machine: capture the
+	// screen, move and click the pointer, type, press keys, focus and launch
+	// applications. It is off by default because those tools act with the
+	// operator's own permissions and can reach anything the account can.
+	DesktopControl bool `json:"desktopControl,omitempty"`
+
+	// API is the local HTTP endpoint another program can call to run a turn.
+	// It is off by default, binds to loopback unless told otherwise, and always
+	// requires the bearer token kept in the secret store.
+	API API `json:"api,omitempty"`
+
+	// HealthAlerts is the periodic machine check that reports pressure to the
+	// operator's chat. It runs only under `serve`.
+	HealthAlerts HealthAlerts `json:"healthAlerts,omitempty"`
+
+	// Sandbox runs shell commands in a container. Off by default because it
+	// needs a container engine and an image chosen for the project.
+	Sandbox Sandbox `json:"sandbox,omitempty"`
 
 	// PostEditDiagnosticsDisabled turns off automatic syntax checks after file
 	// mutations. By default, edits run immediate in-memory syntax validation.

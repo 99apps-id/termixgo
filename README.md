@@ -46,6 +46,8 @@ the first request. The wordmark here is the same paint the README banner and
 - [Providers](#providers)
 - [OAuth logins](#oauth-logins)
 - [Tools](#tools)
+- [The live browser](#the-live-browser)
+- [HTTP API](#http-api)
 - [Orchestration pipelines](#orchestration-pipelines)
 - [Trust and approval](#trust-and-approval)
 - [Memory and skills](#memory-and-skills)
@@ -54,6 +56,7 @@ the first request. The wordmark here is the same paint the README banner and
 - [Run as a 24/7 assistant](#run-as-a-247-assistant)
 - [Scheduled jobs and heartbeat](#scheduled-jobs-and-heartbeat)
 - [Cost, budgets and plans](#cost-budgets-and-plans)
+- [Sandbox](#sandbox)
 - [Security](#security)
 - [Where state lives](#where-state-lives)
 - [CLI reference](#cli-reference)
@@ -196,6 +199,49 @@ While a turn runs, `Enter` steers it: the message is folded into the running
 turn at its next step so you can change course without stopping it. A slash
 command typed mid-turn is queued and runs when the turn ends.
 
+### Attachments from the terminal
+
+`/attach <path>` puts a file on the next turn. An image (png, jpg, gif, webp,
+bmp) is sent to a vision model exactly as a photo from a chat channel is; a
+document (PDF, .docx, .xlsx, .pptx, .epub, HTML or any text file) is extracted to
+text and travels with the prompt. `/attach` also takes several paths, `list` and
+`clear`, and the pending set shows above the composer. `/detach` drops it.
+
+`/paste` reads the real host clipboard, not the terminal's bracketed paste:
+text goes into the composer where you can still edit it, and an image is saved
+under `.termixgo/pastes/` and attached. A paste longer than 100 KB is spooled
+to `.termixgo/pastes/` as well, so a hundred-page log becomes a file the agent
+reads on demand instead of a prompt that crowds out the conversation (a
+spooled text paste is attached as a document rather than typed into the
+composer).
+
+PDF text extraction uses `pdftotext` (poppler). The Office containers are read
+with the standard library, so no install is needed for them. A scanned PDF has
+no text layer; send it from WhatsApp or Telegram, where a vision model can see
+the pages.
+
+### Desktop control
+
+With `"desktopControl": true` in the config (or `/desktop on`), the agent also
+gets three tools for the local machine: `desktop_screenshot`, `desktop_input`
+and `desktop_windows`. The intended loop is screenshot, read it with
+`read_image`, click or type, screenshot again to confirm.
+
+The capability is off by default and approval gated. A guest chat never
+receives it, and it is removed from the registry rather than only refused. It
+uses the host's own drivers and needs no runtime:
+
+- Linux: `xdotool` (X11) or `ydotool` (Wayland) for input, `grim`, ImageMagick
+  `import` or `scrot` for capture, and `wmctrl` for windows.
+- macOS: `screencapture` for capture, `cliclick` for pointer movement and drag,
+  and Accessibility permission for the terminal so System Events can type.
+- Windows: PowerShell with the .NET input and drawing assemblies, which ship
+  with the OS.
+
+`/desktop status` names what the host is still missing. Scrolling and
+window-specific capture are called out honestly where the host cannot do them
+(macOS scrolling, Windows window capture) instead of silently faking it.
+
 ## Slash commands
 
 | Command | What it does |
@@ -219,6 +265,10 @@ command typed mid-turn is queued and runs when the turn ends.
 | `/mcp [reload]` | show the MCP servers and the tools they add |
 | `/skills [list\|reload\|proposals\|apply\|reject]` | list or manage skills |
 | `/memory` | show what the agent has learned |
+| `/attach [<path...>\|list\|clear]` | attach images or documents to the next turn |
+| `/paste [text\|image]` | read the clipboard into the composer, or attach its image |
+| `/detach` | drop every pending attachment |
+| `/desktop [on\|off\|status]` | local screen, pointer, keyboard and application control |
 | `/telegram [setup\|on\|off\|status\|pair]` | manage the companion bot |
 | `/cron [list\|add\|remove\|on\|off\|run]` | schedule assistant jobs |
 | `/heartbeat [on\|off\|<interval>]` | periodic self-check for a 24/7 assistant |
@@ -301,6 +351,10 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
 | `maxSteps` | the whole per-turn ceiling: the agent pauses after this many steps and continues when you reply |
 | `harnessProfile` | `balanced`, `plan_briefly`, `verify_before_finish`, `terminal_first`, `shorter_loop`, `no_todo`, `autonomous` or `critical` |
 | `toolSearchEnabled` | load the ecosystem tools on demand instead of every request |
+| `desktopControl` | offer the local screen, pointer, keyboard and application tools. Off by default |
+| `api` | `{ "enabled": true, "listen": "127.0.0.1:8787" }` for the local HTTP endpoint |
+| `healthAlerts` | `{ "enabled": true, "interval": "5m", "diskPercent": 90, "notify": [...] }` machine pressure alerts |
+| `sandbox` | `{ "enabled": true, "image": "golang:1.26", "network": "none" }` run shell commands in a container |
 | `effort` | reasoning effort asked of models that accept one: `low`, `medium`, `high`, `max`. Empty leaves the vendor's own default |
 | `modelEfforts` | override `effort` per model id, so a fast model can run at `low` while a planner runs at `high` |
 | `compactionModel` | model for condensing old turns before they are trimmed, as a catalogue id, `provider:model` or `provider/model`. Empty keeps the plain trim and makes no extra call |
@@ -476,6 +530,21 @@ termixgo logout <provider>
 The setup wizard runs the same check: choosing an OAuth provider shows "login
 required" and points at the login command instead of asking for an API key.
 
+**Muse Code policy.** Meta now requires the official Muse Code client's
+attestation when a request carries a native tools field. A Muse Code
+subscription key still answers a plain request, but a request that registers
+tools returns `403 client_attestation_denied`. Termixgo answers that refusal
+by switching the Muse client to a text tool protocol: the tools are listed
+in the instructions, the model replies with `tool_call` blocks, and Termixgo
+executes them locally under the usual approval gates, so a subscription login
+still drives the tool and exec loop (the reply is buffered rather than
+streamed in this mode, because a call is only complete at its closing
+fence). A pay-as-you-go Model API key (`LLM_...`) stored with
+`termixgo secret muse` or exported as `META_API_KEY` takes precedence over
+the OAuth login and keeps native tool calls; the official CLI, either
+directly or as a `code_worker` with `worker=muse`, which runs `muse exec`,
+remains the other path that uses the subscription.
+
 Then pick a model:
 
 ```sh
@@ -559,7 +628,7 @@ ecosystem tools out of every request and loads them on demand through
 | `think` | reason without acting |
 | `subagent` | delegate a typed, self-contained task |
 | `orchestrate`, `list_pipelines` | run a multi-agent pipeline |
-| `code_worker` | hand a coding task to a background agent (termixgo, claude, codex, opencode) in its own worktree |
+| `code_worker` | hand a coding task to a background agent (termixgo, claude, codex, opencode, muse) in its own worktree |
 
 | Tool | Purpose |
 | --- | --- |
@@ -567,6 +636,15 @@ ecosystem tools out of every request and loads them on demand through
 | `web_search` | search the web and return titles, URLs and snippets |
 | `lookup` | weather, exchange rate, crypto price or a Wikipedia summary from a known keyless source |
 | `read_image` | attach a local image so a vision model can see it |
+| `read_document` | text, tables and data from PDF, .docx, .xlsx, .csv, .pptx, .epub and HTML |
+| `create_office_document`, `convert_pdf_to_excel` | write an Office file or turn a PDF into a workbook |
+| `browser_navigate`, `browser_read` | open a live page and read its text, HTML, links or form controls |
+| `browser_click`, `browser_type`, `browser_press`, `browser_scroll` | drive the live page |
+| `browser_wait_for`, `browser_eval`, `browser_tabs` | wait for a state, run JavaScript, manage tabs |
+| `browser_cookies`, `browser_close` | read or set cookies, shut the browser down |
+| `desktop_screenshot` | capture the screen, a region or one window (opt-in) |
+| `desktop_input` | move, click, drag, scroll, type or press a key (opt-in) |
+| `desktop_windows` | list, focus or launch local applications (opt-in) |
 | `find_tools` | search the toolset by keyword and load the match |
 
 `run_command` is how the agent drives `biome`, `vitest`, `cargo clippy`,
@@ -608,6 +686,95 @@ Weather uses Open-Meteo, exchange rates use the European Central Bank feed via
 Frankfurter, crypto prices use CoinGecko and summaries use Wikipedia. All are
 keyless.
 
+## The live browser
+
+`web_fetch` reads a page; the live browser uses one. It starts a headless
+Chromium over the DevTools Protocol the first time a browser tool runs, and
+keeps it open between calls, so a flow survives navigation, a click and a form
+in the same session, with the same cookies.
+
+```
+browser_navigate url=https://app.example.com/login
+browser_read     mode=forms
+browser_type     selector=#email text=me@example.com
+browser_type     selector=#password text=... submit=true
+browser_wait_for text=Dashboard
+browser_screenshot
+```
+
+| Tool | What it does |
+| --- | --- |
+| `browser_navigate` | open a URL and wait for the load |
+| `browser_read` | text, HTML, links, or form controls with usable selectors |
+| `browser_click` | click by selector, visible text or coordinate; `double` for a double click |
+| `browser_type` | focus a field, optionally clear it, insert text, optionally press Enter |
+| `browser_press` | one key or combination: enter, tab, esc, arrows, ctrl+a |
+| `browser_scroll` | wheel notches up or down |
+| `browser_wait_for` | wait for a selector, text or JavaScript expression |
+| `browser_eval` | evaluate an expression and return its value |
+| `browser_tabs` | list, open, switch or close tabs |
+| `browser_cookies` | list, set or clear cookies |
+| `browser_close` | quit the browser now |
+
+`browser_screenshot` uses the live session when it is open, so it captures the
+page you have been clicking in with its session, not a fresh signed-out load.
+`full_page=true` captures the whole document and `selector` captures one
+element.
+
+The browser needs Chrome, Chromium, Edge or Brave on the host; `TERMIXGO_BROWSER_BIN`
+points at a specific binary. It closes itself after five idle minutes and on a
+clean exit, because a resident Chromium is real memory on a small machine. A
+guest chat never receives these tools, and navigation refuses link-local and
+cloud metadata addresses.
+
+## HTTP API
+
+`termixgo serve` can also expose a small JSON endpoint, so another program (a
+webhook receiver, a dashboard, a cron entry on another host) can hand the agent
+a prompt without impersonating a chat account. It is off by default.
+
+```sh
+termixgo api on          # enable it in config
+termixgo api token       # print the bearer token, created on first use
+termixgo api rotate      # replace the token
+termixgo api status      # show state, address and whether a token exists
+```
+
+```sh
+curl -s http://127.0.0.1:8787/v1/turn \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"summarise the failures in today's cron runs","max_steps":20}'
+```
+
+| Endpoint | What it does |
+| --- | --- |
+| `GET /healthz` | liveness only, no token, no detail |
+| `GET /v1/health` | version, model, agent, workspace, queue state, tool count |
+| `GET /v1/tools` | the tool names this agent can call |
+| `POST /v1/turn` | run one prompt and return its answer |
+
+`POST /v1/turn` takes `{"prompt": "...", "agent": "default", "max_steps": 20}`
+and answers `{"ok": true, "answer": "...", "agent": "default"}`, or
+`{"ok": false, "busy": true, "error": "..."}` when the queue is full.
+
+The turn runs on a throwaway session, so an integration never rewrites the
+operator's conversation. It enters the queue as a channel caller: below the
+terminal, above a scheduled job. One request may take up to ten minutes, the
+endpoint accepts 60 turns a minute, a prompt is capped at 64 KB and a body at
+1 MB.
+
+There is no operator at the other end to answer an approval prompt, so a
+mutating tool is refused unless the workspace is trusted and the approval mode
+allows it. Run the API against a trusted folder with `approvalMode: all` (or
+`edits` for writes without commands) when it is expected to change things.
+
+The bearer token lives in `~/.termixgo/secrets.json` under `api:token`, never in
+`config.json`. The default bind is `127.0.0.1:8787`; a non-loopback address is
+allowed but warned about at startup, because the token then crosses the network
+and the endpoint speaks plain HTTP. Put TLS in front of it if it leaves the
+machine.
+
 ## Orchestration pipelines
 
 A pipeline is a JSON file in `.termixgo/pipelines/<id>.json`. Each step runs as a
@@ -641,8 +808,10 @@ The worker is one of:
 
 - `termixgo` - this same binary running `termixgo run <task>`, so it needs no
   external account and uses the model already configured here.
-- `claude`, `codex` or `opencode` - an external coding CLI, which must be on
-  `PATH`; a missing one is named rather than reported as a bare command error.
+- `claude`, `codex`, `opencode` or `muse` - an external coding CLI, which must
+  be on `PATH`; a missing one is named rather than reported as a bare command
+  error. `muse` runs the official Muse Code CLI (`muse exec`), so a Muse Code
+  subscription covers its tool use even though the raw API does not.
 
 A native worker is marked so it cannot start another worker and recurse. The
 tool is approval gated like any other command, because it runs a coding agent
@@ -687,8 +856,8 @@ work. Proposals live in `.termixgo/skill-proposals/` until they are resolved.
 
 ## MCP servers
 
-Termixgo is a Model Context Protocol client over stdio. A server you configure
-contributes its tools to the agent.
+Termixgo is a Model Context Protocol client over stdio or streamable HTTP. A
+server you configure contributes its tools to the agent.
 
 ```json
 {
@@ -697,20 +866,31 @@ contributes its tools to the agent.
       "name": "files",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    },
+    {
+      "name": "remote",
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer TOKEN" }
     }
   ]
 }
 ```
 
-Add that to `~/.termixgo/config.json` and run `/mcp reload`. The server starts
+Add that to `~/.termixgo/config.json` and run `/mcp reload`. A server starts
 with the session and its tools appear as `mcp_<server>__<tool>`, so
 `mcp_files__read_file` always says where the call went.
 
-A server's `env` is a place for a token such as
-`GITHUB_PERSONAL_ACCESS_TOKEN`. Those values are kept in the 0600 secret file
-rather than `config.json`, which has no explicit owner-only ACL on Windows; a
-server's `env` written into `config.json` by an older version is moved to the
-secret file on the next start.
+A server with a `url` is reached over the streamable HTTP transport: no process
+runs on this machine, the session id the server issues is carried on every
+request, and a `404` (the server forgot the session) is recovered with one new
+handshake and one retry. `transport` forces `stdio` or `http` when a server has
+both fields; otherwise a URL means HTTP and a command means stdio.
+
+A server's `env` (stdio) and `headers` (HTTP) are where a token belongs, such as
+`GITHUB_PERSONAL_ACCESS_TOKEN` or an `Authorization` bearer. Those values are
+kept in the 0600 secret file rather than `config.json`, which has no explicit
+owner-only ACL on Windows; values written into `config.json` by an older version
+are moved to the secret file on the next start.
 
 - `/mcp` lists every server, whether it started, and how many tools it added.
 - `termixgo mcp` does the same from a shell and exits non-zero when a server
@@ -719,12 +899,12 @@ secret file on the next start.
 
 Two things to know: every contributed tool is approval gated and, in an untrusted
 folder, asks before it runs, though a server can lower that with a `readOnlyHint`
-which is treated as a claim rather than a guarantee. And the protocol is on the
-server's stdio, so a server that prints a banner on stdout will not work; its
-stderr is kept and shown in the failure message.
+which is treated as a claim rather than a guarantee. And a stdio server speaks
+the protocol on its stdout, so a server that prints a banner there will not work;
+its stderr is kept and shown in the failure message.
 
-Only stdio transport is implemented, and only `initialize`, `tools/list` and
-`tools/call`.
+Both transports implement only `initialize`, `tools/list` and `tools/call`.
+Resources, prompts and sampling are out of scope.
 
 ## WhatsApp and Telegram companions
 
@@ -893,6 +1073,35 @@ termixgo heartbeat interval 2h
 Jobs and the heartbeat run only under `termixgo serve`; a plain terminal session
 is unaffected. `/heartbeat` and `/cron` show the same state from inside the UI.
 
+### Health alerts
+
+The heartbeat asks the model what is worth saying; health alerts watch the
+machine itself, so a full disk or an OOM kill is reported even when no model
+call is involved. They are off by default:
+
+```json
+{
+  "healthAlerts": {
+    "enabled": true,
+    "interval": "5m",
+    "diskPercent": 90,
+    "memoryPercent": 90,
+    "swapPercent": 90,
+    "cooldown": "1h",
+    "notify": ["telegram:default:123456"]
+  }
+}
+```
+
+Every interval `serve` reads disk, memory, swap, failed systemd units and OOM
+kills. A condition past its threshold is sent to the paired Telegram chat, or
+to the targets in `notify`, and then stays quiet for the cooldown so a disk that
+is still full does not page you every five minutes. A host with no swap figure
+is skipped rather than read as either 0 or 100 percent. `/status` shows the last
+check and how many alerts it produced, including a delivery failure when the
+message could not be sent, and `termixgo health` prints the same counters on
+demand.
+
 ## Cost, budgets and plans
 
 The status bar and `/cost` show estimated spend for the session, from published
@@ -930,6 +1139,49 @@ StepFun Step Plan providers report no dollar price, the status line reads
 `plan Credits`, and a `costBudgetUsd` cap does not apply to them. The plan's own
 console reports the credits used.
 
+## Sandbox
+
+`run_command` executes with your own permissions. If that is too much, the
+sandbox puts the shell in a container instead:
+
+```json
+{
+  "sandbox": {
+    "enabled": true,
+    "engine": "auto",
+    "image": "golang:1.26",
+    "network": "none",
+    "workspace": "rw"
+  }
+}
+```
+
+- `engine` is `auto` (Docker, then Podman), `docker`, `podman`, or a path.
+- `image` is required. Pick one that carries the project's toolchain; there is
+  no default, because a wrong image fails in confusing ways.
+- `network` is `none` by default. Use `bridge` or `host` only when a build has
+  to fetch.
+- `workspace` is `rw` by default, because a coding agent has to edit the tree.
+  `ro` makes the mount read-only.
+
+The container gets the workspace, a writable `/tmp`, no inherited environment,
+no Linux capabilities (`--cap-drop ALL`), `no-new-privileges`, a pid limit, and
+your own uid and gid on POSIX so builds do not leave root-owned files behind.
+The workspace is mounted at the same absolute path on POSIX, so a path a
+command prints is the path the agent knows; on Windows it is mounted at
+`/workspace`.
+
+What it covers, precisely: `run_command`, `run_checks` and the hypothesis
+check, which are the paths that execute a model-authored shell command. It does
+not sandbox the whole agent. File tools, git, MCP servers, desktop control,
+workers and the scheduler still run on the host, and `run_background` is
+refused while the sandbox is on because a detached process would outlive the
+container. If the engine or image is missing the command is refused; there is no
+silent fallback to the host, because that would be sandbox theatre.
+
+`/status` reports the sandbox line, and `termixgo doctor` shows whether an
+engine is reachable.
+
 ## Security
 
 Read [`SECURITY.md`](SECURITY.md) before running Termixgo somewhere that matters.
@@ -939,8 +1191,11 @@ The short version:
   and macOS that is mode 0600; on Windows it is an explicit ACL that replaces the
   inherited one, because `os.Chmod` only toggles the read-only attribute there.
   `termixgo doctor` reports the real state rather than assuming it.
-- **There is no sandbox.** Tools run with your permissions. Folder trust and the
-  approval policy are the only gates.
+- **There is no sandbox by default.** Tools run with your permissions, and
+  folder trust plus the approval policy are the gates. The optional `sandbox`
+  setting puts `run_command`, `run_checks` and the hypothesis check in a
+  container; it is not a jail for the whole agent, and [Sandbox](#sandbox) names
+  exactly what it covers.
 - **A cost cap is an estimate, not a guarantee.** It compares tokens against list
   prices and cannot fire for a model with no recorded price.
 - **Keys are stored as plaintext** in the state directory, not in the OS
@@ -997,6 +1252,7 @@ termixgo audit [count]          # metadata-only action ledger
 termixgo audit code [--category <cat>] [--json] # static code and security audit
 termixgo worker [list]          # background coding workers
 termixgo serve                  # run the messaging assistant (WhatsApp & Telegram) 24/7
+termixgo api [status|on|off|token|rotate] # local HTTP endpoint for other programs
 termixgo service [install|uninstall|status]
 termixgo completion [shell]     # bash, zsh, fish or powershell
 termixgo doctor                 # inspect configuration and provider keys
@@ -1023,8 +1279,21 @@ The things that decide whether a long run finishes:
   honouring `Retry-After`. A 401 or 404 fails immediately.
 - **Stall watchdog.** If a provider accepts the request and then goes silent for
   90 seconds, the stream is aborted with a clear message instead of hanging.
-- **One turn at a time.** A second request is told the agent is busy rather than
-  queued behind work it cannot see.
+- **One turn at a time, with a priority queue.** The operator runs first, then a
+  chat message, then a scheduled job, then the heartbeat. A heartbeat never
+  waits, a job waits 30 seconds before it is requeued, a chat waits up to three
+  minutes, and the operator up to ten, so no surface is refused while it could
+  reasonably wait and none queues forever. `/status` shows the slot.
+- **Bounded log files.** `audit.jsonl`, each session's usage ledger and
+  `cron-history.jsonl` rotate at 8 MB and keep three archives (`file.1` is the
+  newest). `/audit`, `/cost` and `cron runs` still read the archives, so a long
+  run never hides its history and never fills the disk.
+- **Durable turns.** A saved conversation marks a turn in flight and flushes it
+  at every step boundary: the prompt, the model's step, and each tool batch. If
+  the process dies, the session loads with every unanswered tool call closed off
+  by a result that says its effect is unknown, so the transcript stays valid for
+  the next model call and a call that may already have happened is never
+  silently repeated. The terminal says so when it happens.
 - **Responsive Telegram.** Updates are handled concurrently, so `/stop`,
   `/status` and `/model` are answered while a run is in progress.
 

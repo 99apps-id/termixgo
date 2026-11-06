@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/browser"
 )
 
 // browserOpenTool opens a web URL or local file path in the default system browser.
@@ -190,20 +192,62 @@ func (t *browserScreenshotTool) DoneLabel(a map[string]any) string {
 	return "Captured screenshot of " + Shorten(argString(a, "url"), 40)
 }
 func (t *browserScreenshotTool) Description() string {
-	return "Capture a headless screenshot of a webpage or local server URL using the installed browser (Chrome/Edge), saving a PNG image."
+	return "Capture a screenshot of a webpage as a PNG. With the live browser open it captures the current page, optionally full page or one element; otherwise it starts a one-shot headless browser at url."
 }
 func (t *browserScreenshotTool) Schema() map[string]any {
 	return object(map[string]any{
-		"url":           strProp("Target webpage or dev server URL (e.g. http://localhost:3000 or https://example.com)."),
+		"url":           strProp("Target webpage or dev server URL (e.g. http://localhost:3000 or https://example.com). Optional when the live browser is already open."),
 		"output_path":   strProp("Optional output path for the PNG image (defaults to '.termixgo/screenshots/<timestamp>.png')."),
 		"width":         intProp("Viewport width in pixels, 320 to 3840 (defaults to 1280)."),
 		"height":        intProp("Viewport height in pixels, 240 to 2160 (defaults to 800)."),
 		"delay_seconds": intProp("Delay in seconds to allow JavaScript/SPA to render, 0 to 10 (defaults to 1)."),
-	}, "url")
+		"full_page":     boolProp("Capture the whole page rather than the viewport. Live browser only."),
+		"selector":      strProp("Capture one element by CSS selector. Live browser only."),
+	})
 }
 
 func (t *browserScreenshotTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	targetURL := strings.TrimSpace(argString(args, "url"))
+	fullPage := argBool(args, "full_page", false)
+	selector := strings.TrimSpace(argString(args, "selector"))
+
+	outPath, pathErr := browserScreenshotPath(env, args)
+	if pathErr != nil {
+		return Result{Output: pathErr.Error(), IsError: true}, nil
+	}
+
+	// The live browser is the better path whenever it is already running: it
+	// captures the page the agent has been clicking in, with its session and
+	// cookies, instead of a fresh load that may show a signed-out shell.
+	if browser.IsOpen() || (targetURL == "" && selector == "") {
+		if targetURL == "" && !browser.IsOpen() {
+			return Result{Output: "url is required when no live browser is open", IsError: true}, nil
+		}
+		session, err := browser.Open(ctx)
+		if err != nil {
+			return Result{Output: "Browser screenshot failed: " + err.Error(), IsError: true}, nil
+		}
+		runCtx, cancel := context.WithTimeout(ctx, browserActionTimeout)
+		defer cancel()
+		if targetURL != "" {
+			if _, err := session.Navigate(runCtx, targetURL); err != nil {
+				return Result{Output: "Browser screenshot failed: " + err.Error(), IsError: true}, nil
+			}
+		}
+		data, err := session.Screenshot(runCtx, fullPage, selector)
+		if err != nil {
+			return Result{Output: "Browser screenshot failed: " + err.Error(), IsError: true}, nil
+		}
+		if err := os.WriteFile(outPath, data, 0o644); err != nil {
+			return Result{Output: "Cannot write the screenshot: " + err.Error(), IsError: true}, nil
+		}
+		relPath := displayPath(env, outPath)
+		return Result{Output: fmt.Sprintf("Screenshot captured from the live browser.\nPath: %s\nSize: %d bytes\nUse read_image with path %q to inspect it.", relPath, len(data), relPath)}, nil
+	}
+
+	if selector != "" {
+		return Result{Output: "a selector needs the live browser: call browser_navigate first", IsError: true}, nil
+	}
 	if targetURL == "" {
 		return Result{Output: "url is required.", IsError: true}, nil
 	}
@@ -236,23 +280,6 @@ func (t *browserScreenshotTool) Run(ctx context.Context, env *Env, args map[stri
 	width := argInt(args, "width", 1280, 320, 3840)
 	height := argInt(args, "height", 800, 240, 2160)
 	delaySec := argInt(args, "delay_seconds", 1, 0, 10)
-
-	outPathRaw := strings.TrimSpace(argString(args, "output_path"))
-	var outPath string
-	if outPathRaw != "" {
-		outPath = resolvePath(env, outPathRaw)
-		if err := checkWorkspacePath(env, outPath); err != nil {
-			return Result{Output: fmt.Sprintf("cannot write screenshot outside workspace: %v", err), IsError: true}, nil
-		}
-	} else {
-		dir := filepath.Join(env.Workspace, ".termixgo", "screenshots")
-		_ = os.MkdirAll(dir, 0o755)
-		outPath = filepath.Join(dir, fmt.Sprintf("shot-%d.png", time.Now().Unix()))
-	}
-
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
-		return Result{Output: fmt.Sprintf("Failed to create directory: %v", err), IsError: true}, nil
-	}
 
 	// Use context with timeout for headless browser execution
 	execCtx, cancel := context.WithTimeout(ctx, time.Duration(15+delaySec)*time.Second)
@@ -289,6 +316,28 @@ func (t *browserScreenshotTool) Run(ctx context.Context, env *Env, args map[stri
 		Output: fmt.Sprintf("Screenshot captured successfully!\nPath: %s\nSize: %d bytes (%dx%d px)\nBrowser: %s\nUse tool 'read_image' with path %q to inspect the visual rendering.",
 			relPath, fi.Size(), width, height, filepath.Base(browserBin), relPath),
 	}, nil
+}
+
+// browserScreenshotPath resolves the PNG destination and creates its
+// directory. Both the live and the one-shot path use it, so a screenshot
+// never lands outside the workspace.
+func browserScreenshotPath(env *Env, args map[string]any) (string, error) {
+	raw := strings.TrimSpace(argString(args, "output_path"))
+	var outPath string
+	if raw != "" {
+		outPath = resolvePath(env, raw)
+		if err := checkWorkspacePath(env, outPath); err != nil {
+			return "", fmt.Errorf("cannot write screenshot outside workspace: %v", err)
+		}
+	} else {
+		dir := filepath.Join(env.Workspace, ".termixgo", "screenshots")
+		_ = os.MkdirAll(dir, 0o755)
+		outPath = filepath.Join(dir, fmt.Sprintf("shot-%d.png", time.Now().Unix()))
+	}
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return "", fmt.Errorf("Failed to create directory: %v", err)
+	}
+	return outPath, nil
 }
 
 // browserDumpDOMTool renders client-side JavaScript via a headless browser and dumps the hydrated DOM.
@@ -443,68 +492,11 @@ func defaultBrowserHandler() ([]string, error) {
 	return nil, fmt.Errorf("no system browser handler found (%s)", strings.Join(names, ", "))
 }
 
-// findBrowserExecutable locates an installed Chromium-based browser on the host.
+// findBrowserExecutable locates an installed Chromium-based browser. The list
+// lives in the browser package so the one-shot screenshot and the live session
+// always find the same binary.
 func findBrowserExecutable() (string, error) {
-	if envBrowser := os.Getenv("TERMIXGO_BROWSER_BIN"); envBrowser != "" {
-		if _, err := os.Stat(envBrowser); err == nil {
-			return envBrowser, nil
-		}
-	}
-
-	switch runtime.GOOS {
-	case "windows":
-		candidates := []string{
-			`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
-			`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
-			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
-			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
-			`C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe`,
-		}
-		if localApp := os.Getenv("LOCALAPPDATA"); localApp != "" {
-			candidates = append(candidates,
-				filepath.Join(localApp, `Microsoft\Edge\Application\msedge.exe`),
-				filepath.Join(localApp, `Google\Chrome\Application\chrome.exe`),
-				filepath.Join(localApp, `BraveSoftware\Brave-Browser\Application\brave.exe`),
-			)
-		}
-		for _, c := range candidates {
-			if _, err := os.Stat(c); err == nil {
-				return c, nil
-			}
-		}
-		for _, name := range []string{"msedge.exe", "chrome.exe", "brave.exe"} {
-			if path, err := exec.LookPath(name); err == nil {
-				return path, nil
-			}
-		}
-
-	case "darwin":
-		candidates := []string{
-			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-			"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-			"/Applications/Chromium.app/Contents/MacOS/Chromium",
-		}
-		for _, c := range candidates {
-			if _, err := os.Stat(c); err == nil {
-				return c, nil
-			}
-		}
-		for _, name := range []string{"google-chrome", "chromium", "microsoft-edge"} {
-			if path, err := exec.LookPath(name); err == nil {
-				return path, nil
-			}
-		}
-
-	default: // Linux / BSD
-		for _, name := range []string{"google-chrome-stable", "google-chrome", "chromium-browser", "chromium", "microsoft-edge", "brave-browser"} {
-			if path, err := exec.LookPath(name); err == nil {
-				return path, nil
-			}
-		}
-	}
-
-	return "", errors.New("no compatible browser executable (Edge, Chrome, Chromium, or Brave) found on system")
+	return browser.FindExecutable()
 }
 
 func fileExists(path string) bool {

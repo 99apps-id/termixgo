@@ -1,10 +1,11 @@
-// Package mcp speaks the Model Context Protocol over stdio, so a Termixgo
-// session can use the tools an MCP server publishes.
+// Package mcp speaks the Model Context Protocol, so a Termixgo session can use
+// the tools an MCP server publishes.
 //
-// Only the stdio transport is implemented, and only the three calls the agent
-// needs: initialize, tools/list and tools/call. Those are the stable core of
-// the protocol. Resources, prompts and sampling are deliberately out of scope,
-// because the agent already has its own answer for each of them.
+// Two transports are implemented: stdio for a local server process, and the
+// streamable HTTP transport for a remote one. Only the three calls the agent
+// needs are sent: initialize, tools/list and tools/call. Those are the stable
+// core of the protocol. Resources, prompts and sampling are deliberately out of
+// scope, because the agent already has its own answer for each of them.
 package mcp
 
 import (

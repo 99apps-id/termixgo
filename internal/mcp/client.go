@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -35,9 +36,18 @@ type Options struct {
 	// Name is the label the operator uses and the prefix of every tool the
 	// server contributes.
 	Name string
-	// Command is the executable to run.
+	// Command is the executable to run. It is empty for the HTTP transport.
 	Command string
 	Args    []string
+	// URL is the streamable HTTP endpoint. When set, Transport defaults to
+	// "http" and no process is started.
+	URL string
+	// Transport is "stdio" (default) or "http". Empty follows URL: a server
+	// with a URL is remote, one with a command is local.
+	Transport string
+	// Headers are extra HTTP headers, kept in the secret store rather than
+	// config.json so a token never lands in the world-readable file.
+	Headers map[string]string
 	// Env adds to the inherited environment rather than replacing it: an MCP
 	// server needs PATH to find its own interpreter.
 	Env map[string]string
@@ -47,7 +57,8 @@ type Options struct {
 	DisabledTools []string
 }
 
-// Client is one running MCP server, seen as a JSON-RPC peer on its stdio.
+// Client is one running MCP server, seen as a JSON-RPC peer on its stdio or
+// over the streamable HTTP transport.
 type Client struct {
 	name    string
 	command string
@@ -55,6 +66,13 @@ type Client struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stderr *ringBuffer
+
+	// url is set for the HTTP transport; the process fields above stay nil.
+	url        string
+	httpClient *http.Client
+	headers    map[string]string
+	sessionID  string
+	httpErr    string
 
 	writeMu sync.Mutex
 
@@ -73,10 +91,14 @@ type Client struct {
 	tools []Tool
 }
 
-// Start launches the server and completes the handshake.
+// Start launches the server and completes the handshake. A server with a URL
+// is reached over HTTP; everything else is started as a local process.
 func Start(ctx context.Context, options Options) (*Client, error) {
+	if isHTTP(options) {
+		return startHTTP(ctx, options)
+	}
 	if strings.TrimSpace(options.Command) == "" {
-		return nil, errors.New("an MCP server needs a command to run; set command in the MCP config")
+		return nil, errors.New("an MCP server needs a command to run or a URL to reach; set command or url in the MCP config")
 	}
 	cmdName := options.Command
 	cmdArgs := options.Args
@@ -156,8 +178,16 @@ func (c *Client) ServerName() string { return c.serverName }
 // ProtocolVersion is the revision the server agreed to use.
 func (c *Client) ProtocolVersion() string { return c.version }
 
-// Stderr returns what the server has written to stderr, for diagnosis.
-func (c *Client) Stderr() string { return c.stderr.String() }
+// Stderr returns what the server has written to stderr, for diagnosis. A
+// remote server has no stderr, so its last HTTP failure stands in for it.
+func (c *Client) Stderr() string {
+	if c.stderr == nil {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.httpErr
+	}
+	return c.stderr.String()
+}
 
 // readLineWithLimit reads one JSON-RPC frame from stdout, capping the line
 // length so a misbehaving server cannot allocate unbounded memory.
@@ -255,6 +285,9 @@ func (c *Client) deliver(line []byte) {
 
 // exchange sends one request and waits for its answer.
 func (c *Client) exchange(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	if c.url != "" {
+		return c.httpExchange(ctx, method, params)
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -299,10 +332,14 @@ func (c *Client) exchange(ctx context.Context, method string, params any) (json.
 }
 
 // notify sends a message that expects no answer.
-func (c *Client) notify(method string, params any) error {
+func (c *Client) notify(ctx context.Context, method string, params any) error {
 	payload, err := json.Marshal(request{JSONRPC: "2.0", Method: method, Params: params})
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", method, err)
+	}
+	if c.url != "" {
+		_, err := c.httpRoundTrip(ctx, payload, 0)
+		return err
 	}
 	return c.write(payload)
 }
@@ -369,7 +406,7 @@ func (c *Client) initialize(ctx context.Context) error {
 	c.serverName = handshake.ServerInfo.Name
 	// The notification is not optional: a server that never receives it is
 	// entitled to keep waiting before it answers anything else.
-	return c.notify("notifications/initialized", map[string]any{})
+	return c.notify(ctx, "notifications/initialized", map[string]any{})
 }
 
 // mcpToolPageCap bounds the tools/list walk: a server that mints a fresh
@@ -450,6 +487,10 @@ func (c *Client) Close() {
 	c.closed = true
 	c.mu.Unlock()
 
+	if c.url != "" {
+		c.closeHTTP()
+		return
+	}
 	_ = c.stdin.Close()
 	if c.cmd != nil && c.cmd.Process != nil {
 		_ = c.cmd.Process.Kill()

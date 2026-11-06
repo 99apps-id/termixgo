@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/sandbox"
 )
 
 // runCommandTool executes a shell command in the workspace.
@@ -172,6 +174,17 @@ func execute(ctx context.Context, env *Env, command, dir string, timeout time.Du
 	defer cancel()
 
 	shell, shellArgs := shellForTool(command)
+	if env != nil && env.Config.Sandbox.Enabled {
+		// The container is the only shell that runs while the sandbox is on.
+		// A configuration error refuses the command instead of quietly falling
+		// back to the host, because a silent fallback is the sandbox theatre
+		// this project refuses to ship.
+		engine, args, sandboxErr := sandbox.Command(env.Config.Sandbox, env.Workspace, dir, command)
+		if sandboxErr != nil {
+			return Result{Output: "The sandbox is on but cannot run this command: " + sandboxErr.Error(), IsError: true}, nil
+		}
+		shell, shellArgs = engine, args
+	}
 	process := exec.CommandContext(runCtx, shell, shellArgs...)
 	process.Dir = dir
 	// A foreground command runs on model-authored input, so it gets the same

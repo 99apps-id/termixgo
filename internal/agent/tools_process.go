@@ -39,6 +39,11 @@ func (t *backgroundTool) Run(ctx context.Context, env *Env, args map[string]any)
 	if env.Processes == nil {
 		return Result{Output: "Background processes are not available in this session.", IsError: true}, nil
 	}
+	if env.Config.Sandbox.Enabled {
+		// A detached process outlives the turn and would escape the container,
+		// so the tool refuses instead of pretending the sandbox covers it.
+		return Result{Output: "Sandbox is on, and a background process cannot be sandboxed: it would outlive the turn and run on the host. Turn sandbox.enabled off to run a dev server, or keep it running outside the agent.", IsError: true}, nil
+	}
 	command := strings.TrimSpace(argString(args, "command"))
 	if command == "" {
 		return Result{Output: "command is required", IsError: true}, nil

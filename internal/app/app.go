@@ -26,6 +26,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/mcp"
 	"github.com/99apps-id/termixgo/internal/oauth"
 	"github.com/99apps-id/termixgo/internal/provider"
+	"github.com/99apps-id/termixgo/internal/sandbox"
 	"github.com/99apps-id/termixgo/internal/search"
 	"github.com/99apps-id/termixgo/internal/secrets"
 	"github.com/99apps-id/termixgo/internal/skill"
@@ -63,9 +64,10 @@ type Interactor interface {
 type App struct {
 	mu sync.Mutex
 
-	cfg       config.Config
-	store     *secrets.Store
-	workspace string
+	cfg           config.Config
+	store         *secrets.Store
+	workspace     string
+	currentFolder string
 
 	trusted bool
 	skills  []skill.Skill
@@ -140,10 +142,15 @@ type App struct {
 	observer      func(agent.Event)
 	observerClaim int64
 
-	events  chan agent.Event
-	runMu   sync.Mutex
-	cancel  context.CancelFunc
-	running bool
+	events chan agent.Event
+	runMu  sync.Mutex
+	// runQueue admits one turn at a time with priority, so a heartbeat or a
+	// scheduled job cannot make the operator wait and a chat message is queued
+	// instead of refused outright. runMu stays the exclusion that Close and a
+	// manual compaction observe.
+	runQueue *runQueue
+	cancel   context.CancelFunc
+	running  bool
 	// steer holds operator messages typed while a turn is running. The runner
 	// drains it at each step boundary so a steer can change the course of the
 	// turn in flight; whatever is left when the turn ends is returned to the
@@ -179,6 +186,9 @@ type App struct {
 	scheduler       *cron.Scheduler
 	schedulerCancel context.CancelFunc
 	schedulerStatus string
+	// healthStatus is the periodic health watcher's last result, shown by
+	// /status while `serve` runs.
+	healthStatus string
 
 	// mcp owns the connected MCP servers and the tools they contribute. It is
 	// replaced rather than mutated on a reload, so a turn already in flight
@@ -238,7 +248,8 @@ func New(workspace string) (*App, error) {
 		skills:          skills,
 		memory:          agent.NewMemory(workspace),
 		todos:           agent.NewTodoStore(),
-		tools:           agent.DefaultRegistry(),
+		tools:           buildDefaultTools(cfg),
+		runQueue:        newRunQueue(),
 		processes:       agent.NewProcessManager(),
 		events:          make(chan agent.Event, eventBuffer),
 		activeAgent:     cfg.ActiveAgent,
@@ -341,6 +352,9 @@ func (a *App) connectMCP(ctx context.Context) {
 			Name:          server.Name,
 			Command:       server.Command,
 			Args:          server.Args,
+			URL:           server.URL,
+			Transport:     server.Transport,
+			Headers:       a.mcpHeadersFor(server.Name),
 			Env:           a.mcpEnvFor(server.Name),
 			Dir:           a.workspace,
 			DisabledTools: server.DisabledTools,
@@ -375,7 +389,7 @@ func (a *App) connectMCP(ctx context.Context) {
 	a.mu.Lock()
 	previous := a.mcp
 	a.mcp = pool
-	a.tools = agent.DefaultRegistry().With(contributions...)
+	a.tools = buildDefaultTools(a.cfg).With(contributions...)
 	a.mu.Unlock()
 	if previous != nil {
 		previous.Close()
@@ -639,6 +653,24 @@ func (a *App) Secrets() *secrets.Store { return a.store }
 
 // Workspace is the canonical workspace root.
 func (a *App) Workspace() string { return a.workspace }
+
+// CurrentFolder is the folder shown in the UI. It defaults to the workspace
+// root and can be changed with /cd without moving the actual workspace.
+func (a *App) CurrentFolder() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.currentFolder != "" {
+		return a.currentFolder
+	}
+	return a.workspace
+}
+
+// SetCurrentFolder changes the folder shown in the UI.
+func (a *App) SetCurrentFolder(path string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.currentFolder = config.CleanFolder(path)
+}
 
 // Trusted reports the folder's trust state.
 func (a *App) Trusted() bool {
@@ -1505,6 +1537,10 @@ func (a *App) ForceCompact(ctx context.Context) (bool, error) {
 
 // ForceCompactSession manually condenses earlier turns of the given session into a brief.
 func (a *App) ForceCompactSession(ctx context.Context, session *agent.Session) (bool, error) {
+	if !a.runQueue.tryAcquire(PriorityOperator) {
+		return false, fmt.Errorf("cannot compact while a turn is in flight")
+	}
+	defer a.runQueue.release()
 	if !a.runMu.TryLock() {
 		return false, fmt.Errorf("cannot compact while a turn is in flight")
 	}
@@ -1598,36 +1634,60 @@ func (a *App) envFor(agentName string) *agent.Env {
 	}
 }
 
-// mcpEnvPrefix namespaces a server's environment inside the secret store.
-const mcpEnvPrefix = "mcp-env:"
+// mcpEnvPrefix namespaces a server's environment inside the secret store, and
+// mcpHeadersPrefix does the same for the HTTP headers of a remote server.
+const (
+	mcpEnvPrefix     = "mcp-env:"
+	mcpHeadersPrefix = "mcp-headers:"
+)
 
 // mcpEnvFor returns a server's environment from the secret store.
 func (a *App) mcpEnvFor(name string) map[string]string {
-	env := map[string]string{}
-	key := mcpEnvPrefix + strings.ToLower(strings.TrimSpace(name))
+	return a.mcpSecretMap(mcpEnvPrefix, name)
+}
+
+// mcpHeadersFor returns a remote server's HTTP headers from the secret store.
+func (a *App) mcpHeadersFor(name string) map[string]string {
+	return a.mcpSecretMap(mcpHeadersPrefix, name)
+}
+
+// mcpSecretMap reads one JSON object from the secret store. The store is keyed
+// by prefix and server name so a header and an environment value of the same
+// name never collide.
+func (a *App) mcpSecretMap(prefix, name string) map[string]string {
+	values := map[string]string{}
 	if a.store == nil {
-		return env
+		return values
 	}
-	raw := strings.TrimSpace(a.store.Get(key))
+	raw := strings.TrimSpace(a.store.Get(prefix + strings.ToLower(strings.TrimSpace(name))))
 	if raw == "" {
-		return env
+		return values
 	}
-	if err := json.Unmarshal([]byte(raw), &env); err != nil || env == nil {
+	if err := json.Unmarshal([]byte(raw), &values); err != nil || values == nil {
 		return map[string]string{}
 	}
-	return env
+	return values
 }
 
 // saveMCPEnv stores a server's environment in the 0600 secret file.
 func (a *App) saveMCPEnv(name string, env map[string]string) error {
+	return a.saveMCPSecretMap(mcpEnvPrefix, name, env)
+}
+
+// saveMCPHeaders stores a remote server's headers in the 0600 secret file.
+func (a *App) saveMCPHeaders(name string, headers map[string]string) error {
+	return a.saveMCPSecretMap(mcpHeadersPrefix, name, headers)
+}
+
+func (a *App) saveMCPSecretMap(prefix, name string, values map[string]string) error {
 	if a.store == nil {
 		return errors.New("no secret store is available")
 	}
-	data, err := json.Marshal(env)
+	data, err := json.Marshal(values)
 	if err != nil {
 		return err
 	}
-	return a.store.Set(mcpEnvPrefix+strings.ToLower(strings.TrimSpace(name)), string(data))
+	return a.store.Set(prefix+strings.ToLower(strings.TrimSpace(name)), string(data))
 }
 
 // migrateMCPEnv moves any environment a config.json still carries into the
@@ -1636,15 +1696,26 @@ func (a *App) saveMCPEnv(name string, env map[string]string) error {
 func (a *App) migrateMCPEnv() {
 	migrated := map[string]bool{}
 	for _, server := range a.Config().MCPServers {
-		if len(server.Env) == 0 {
+		if len(server.Env) == 0 && len(server.Headers) == 0 {
 			continue
 		}
-		env := a.mcpEnvFor(server.Name)
-		for key, value := range server.Env {
-			env[key] = value
+		if len(server.Env) > 0 {
+			env := a.mcpEnvFor(server.Name)
+			for key, value := range server.Env {
+				env[key] = value
+			}
+			if err := a.saveMCPEnv(server.Name, env); err != nil {
+				continue
+			}
 		}
-		if err := a.saveMCPEnv(server.Name, env); err != nil {
-			continue
+		if len(server.Headers) > 0 {
+			headers := a.mcpHeadersFor(server.Name)
+			for key, value := range server.Headers {
+				headers[key] = value
+			}
+			if err := a.saveMCPHeaders(server.Name, headers); err != nil {
+				continue
+			}
 		}
 		migrated[strings.ToLower(strings.TrimSpace(server.Name))] = true
 	}
@@ -1655,6 +1726,7 @@ func (a *App) migrateMCPEnv() {
 		for index := range c.MCPServers {
 			if migrated[strings.ToLower(strings.TrimSpace(c.MCPServers[index].Name))] {
 				c.MCPServers[index].Env = nil
+				c.MCPServers[index].Headers = nil
 			}
 		}
 	})
@@ -1694,6 +1766,9 @@ func (a *App) Shutdown() {
 	// the search index) landed after Close and raced a caller tearing the
 	// workspace state directory down.
 	a.Stop()
+	if a.runQueue != nil {
+		a.runQueue.close()
+	}
 	a.runMu.Lock()
 	defer a.runMu.Unlock()
 
@@ -2195,6 +2270,14 @@ func (a *App) RunTurn(ctx context.Context, input string) error {
 	return a.runTurn(ctx, input)
 }
 
+// RunTurnWithImages runs a turn in the live conversation with attachments on
+// the first user message. The terminal composer uses it so an image the
+// operator attached reaches a vision model exactly the way a photo sent over a
+// chat channel does.
+func (a *App) RunTurnWithImages(ctx context.Context, input string, images []provider.Image) error {
+	return a.runTurnWithImages(ctx, input, images)
+}
+
 // runTurn is the single path a turn takes, whether it was typed in the TUI,
 // sent over Telegram or passed to `termixgo run`. Sharing it keeps the model,
 // budget, approval policy and tool wiring identical everywhere.
@@ -2240,6 +2323,9 @@ type runOptions struct {
 	// isolated marks a throwaway session: the turn runs, its answer returns,
 	// and no session file is written.
 	isolated bool
+	// priority orders this caller against the other surfaces that share the
+	// single run slot. Zero means the operator.
+	priority RunPriority
 }
 
 // runOn is the single run path for a caller that only knows the session it
@@ -2257,9 +2343,13 @@ func (a *App) runOn(ctx context.Context, input string, images []provider.Image, 
 // model, budget, approval policy, tool wiring and agent context stay identical
 // whether the turn came from the terminal, a channel or a schedule.
 //
-// A run is locked per session / channel profile so tasks across different channels
-// (WhatsApp, Telegram, or different agent profiles) can execute concurrently without
-// blocking each other. The terminal run retains runMu exclusivity.
+// A run is locked per session or channel profile so tasks across different
+// channels (WhatsApp, Telegram, or different agent profiles) can execute
+// concurrently without blocking each other. A terminal run keeps the exclusive
+// slot, admitted by runQueue with priority: a scheduled job or the heartbeat can
+// no longer make the operator's request bounce, and the operator waits a bounded
+// time instead of being refused at once. runMu stays behind the queue as the
+// exclusion that Close and ForceCompactSession observe for the whole turn.
 func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions) error {
 	agentName := strings.TrimSpace(opts.agentName)
 	if agentName == "" {
@@ -2270,6 +2360,15 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 	if opts.session != nil && opts.session.ID() != "" {
 		runKey = opts.session.ID()
 	} else {
+		priority := opts.priority
+		if priority == 0 {
+			priority = PriorityOperator
+		}
+		release, err := a.acquireTurn(ctx, priority)
+		if err != nil {
+			return err
+		}
+		defer release()
 		if !a.runMu.TryLock() {
 			return ErrBusy
 		}
@@ -2387,12 +2486,13 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 	agent.AutoCheckpoint(runCtx, runEnv.Workspace)
 
 	cfg := a.Config()
+	runTools := a.toolsFor(agentName, opts.guest)
 	runner := &agent.Runner{
 		Client: client,
 		Model:  model,
 		Config: cfg,
 		Env:    runEnv,
-		Tools:  a.toolsFor(agentName, opts.guest),
+		Tools:  runTools,
 		Policy: a.policyFor(agentName, opts.guest),
 		// cfg.MaxSteps is the whole per-turn ceiling, so an interactive turn
 		// pauses once, at the number the operator configured. A guest run may
@@ -2419,13 +2519,30 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 			}
 			return steers
 		},
-		Journal:    runEnv.Journal,
-		ToolSearch: cfg.ToolSearchEnabled,
+		Journal: runEnv.Journal,
+		// A registry past the inline cap switches to tool search for this turn
+		// even when the operator did not ask for it: sending 400 schemas can
+		// make a model answer with nothing at all, and the core set plus
+		// find_tools still reaches every tool.
+		ToolSearch: cfg.ToolSearchEnabled || shouldDeferTools(len(runTools.Tools())),
 		TurnImages: opts.images,
 	}
 	session := opts.session
 	if session == nil {
 		session = a.currentSession()
+	}
+	// A saved turn is marked in flight and flushed at each durable point, so a
+	// crash leaves a transcript the loader can close off instead of losing the
+	// request and every tool result behind it. An isolated or ephemeral turn
+	// keeps no file and pays nothing for this.
+	if !opts.isolated && !a.Ephemeral() {
+		session.BeginTurn()
+		_ = session.Save()
+		defer func() {
+			session.EndTurn()
+			_ = session.Save()
+		}()
+		runner.Persist = func() { _ = session.Save() }
 	}
 	if err := runner.Run(runCtx, session, input); err != nil {
 		return err
@@ -2861,6 +2978,7 @@ func (a *App) Status() string {
 	}
 	lines = append(lines,
 		fmt.Sprintf("approval: %s", a.Config().ApprovalMode),
+		fmt.Sprintf("turn: %s", a.runQueueStatus()),
 		fmt.Sprintf("context: %s", a.contextUsage()),
 		fmt.Sprintf("session: %s, %d turn(s)", session.ID(), session.Turns()),
 		fmt.Sprintf("plan: %d/%d complete", done, total),
@@ -2873,6 +2991,12 @@ func (a *App) Status() string {
 		lines = append(lines, "telegram: "+a.botStatus)
 	} else {
 		lines = append(lines, "telegram: off")
+	}
+	if a.healthStatus != "" {
+		lines = append(lines, "health alerts: "+a.healthStatus)
+	}
+	if line := sandbox.Describe(a.Config().Sandbox); line != "" {
+		lines = append(lines, "sandbox: "+line)
 	}
 	return strings.Join(lines, "\n")
 }

@@ -14,12 +14,9 @@ import (
 
 // fakeClient replays a fixed list of event batches, one per Stream call.
 type fakeClient struct {
-	mu    sync.Mutex
-	steps [][]provider.StreamEvent
-	calls int
-	// requests keeps every request the runner built, which is how a test
-	// checks what actually reached the model instead of what stayed in the
-	// session transcript.
+	mu       sync.Mutex
+	steps    [][]provider.StreamEvent
+	calls    int
 	requests []provider.ChatRequest
 }
 
@@ -546,6 +543,114 @@ func TestRunContinuesAStepCutAtTheOutputCeiling(t *testing.T) {
 	}
 	if len(assistants) != 2 || assistants[0] != "Partial ans" || assistants[1] != "wer, finished." {
 		t.Errorf("assistant messages = %v, want the stored partial followed by the finished answer", assistants)
+	}
+	client.mu.Lock()
+	requests := append([]provider.ChatRequest(nil), client.requests...)
+	client.mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(requests))
+	}
+	if requests[1].PlainReasoning {
+		t.Error("a cut that carried text must continue with the full reasoning request")
+	}
+}
+
+// A cut that carried nothing is not progress. Repeating the identical request
+// would be cut the same way, so the first one retries with the plain reasoning
+// request and a steering message, and a second fruitless cut stops the run with
+// a named cause instead of surfacing the idle-run message.
+func TestRunFruitlessOutputLimitRetriesPlainThenStops(t *testing.T) {
+	cut := []provider.StreamEvent{
+		{Type: provider.EventUsage, Usage: &provider.Usage{PromptTokens: 10, CompletionTokens: 1, TotalTokens: 11}},
+		{Type: provider.EventIncomplete, IncompleteReason: "max_output_tokens"},
+	}
+	client := &fakeClient{steps: [][]provider.StreamEvent{cut, cut, cut}}
+	runner, env, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	session := NewSession(env.Workspace, "test-model")
+
+	if err := runner.Run(context.Background(), session, "answer"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	client.mu.Lock()
+	calls := client.calls
+	requests := append([]provider.ChatRequest(nil), client.requests...)
+	client.mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("provider calls = %d, want the retry and then the stop", calls)
+	}
+	if len(requests) != 2 || requests[0].PlainReasoning {
+		t.Fatalf("the first request must be the full shape, got %+v", requests)
+	}
+	if !requests[1].PlainReasoning {
+		t.Error("the retry after a fruitless cut must use the plain reasoning request")
+	}
+
+	recorder.mu.Lock()
+	var messages []string
+	for _, event := range recorder.events {
+		if event.Kind == EventNotice && event.Text != "" {
+			messages = append(messages, event.Text)
+		}
+		if event.Kind == EventError && event.Err != nil {
+			messages = append(messages, event.Err.Error())
+		}
+	}
+	recorder.mu.Unlock()
+	joined := strings.Join(messages, "\n")
+	if !strings.Contains(joined, "plain reasoning request") {
+		t.Errorf("the retry should be named: %v", messages)
+	}
+	if !strings.Contains(joined, "cut two steps") || !strings.Contains(joined, "/effort") {
+		t.Errorf("the stop should name the cause and the next action: %v", messages)
+	}
+	if strings.Contains(joined, "no text and no tool calls") {
+		t.Errorf("a cut step must not read as an idle model: %v", messages)
+	}
+	if !recorder.has(EventError) {
+		t.Error("a stopped run must emit an error, so a plain run exits non-zero")
+	}
+
+	steered := false
+	for _, message := range session.Messages() {
+		if message.Role == provider.RoleUser && strings.Contains(message.Content, "Keep the reasoning brief") {
+			steered = true
+		}
+	}
+	if !steered {
+		t.Error("the retry must steer the model toward a short answer")
+	}
+}
+
+// A cut that spent zero output tokens and returned no item is not a truncated
+// answer: the backend produced nothing. Retrying is pointless and hides the
+// cause, so the run stops at once and names the model that does not serve chat
+// on this account.
+func TestRunEmptyBackendResponseStopsImmediately(t *testing.T) {
+	cut := []provider.StreamEvent{{Type: provider.EventIncomplete, IncompleteReason: "max_output_tokens"}}
+	client := &fakeClient{steps: [][]provider.StreamEvent{cut, cut}}
+	runner, env, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	session := NewSession(env.Workspace, "test-model")
+
+	if err := runner.Run(context.Background(), session, "answer"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	client.mu.Lock()
+	calls := client.calls
+	client.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want a single attempt", calls)
+	}
+
+	recorder.mu.Lock()
+	var failure string
+	for _, event := range recorder.events {
+		if event.Kind == EventError && event.Err != nil {
+			failure = event.Err.Error()
+		}
+	}
+	recorder.mu.Unlock()
+	if !strings.Contains(failure, "test-model") || !strings.Contains(failure, "does not serve chat turns") {
+		t.Fatalf("failure = %q", failure)
 	}
 }
 

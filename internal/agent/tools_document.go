@@ -57,6 +57,9 @@ func (t *readDocumentTool) Run(ctx context.Context, env *Env, args map[string]an
 		return Result{Output: "path is required", IsError: true}, nil
 	}
 	path := resolvePath(env, rel)
+	if err := checkWorkspacePath(env, path); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	maxChars := argInt(args, "max_chars", 50000, 1000, 200000)
 
 	ext := strings.ToLower(filepath.Ext(path))
@@ -72,6 +75,11 @@ func (t *readDocumentTool) Run(ctx context.Context, env *Env, args map[string]an
 		content, err = extractXLSXText(path)
 	case ".csv", ".tsv":
 		content, err = extractCSVText(path, ext == ".tsv")
+	case ".pptx", ".epub", ".html", ".htm":
+		// The formats the shared extractor knows and this switch does not:
+		// reusing it keeps one parser for the tool and the TUI attachment path.
+		doc, docErr := ExtractDocument(path)
+		content, err = doc.Text, docErr
 	default:
 		// Text file fallback
 		data, readErr := os.ReadFile(path)
@@ -136,6 +144,9 @@ func (t *createOfficeDocumentTool) Run(ctx context.Context, env *Env, args map[s
 		return Result{Output: "path is required", IsError: true}, nil
 	}
 	path := resolvePath(env, rel)
+	if err := checkWorkspacePath(env, path); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return Result{Output: fmt.Sprintf("cannot create parent directory: %v", err), IsError: true}, nil
 	}
@@ -239,12 +250,18 @@ func (t *convertPDFToExcelTool) Run(ctx context.Context, env *Env, args map[stri
 		return Result{Output: "pdf_path is required", IsError: true}, nil
 	}
 	pdfPath := resolvePath(env, relPDF)
+	if err := checkWorkspacePath(env, pdfPath); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 
 	relOut := argString(args, "output_path", "out")
 	if relOut == "" {
 		relOut = strings.TrimSuffix(relPDF, filepath.Ext(relPDF)) + ".xlsx"
 	}
 	outPath := resolvePath(env, relOut)
+	if err := checkWorkspacePath(env, outPath); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
+	}
 
 	sheetName := argString(args, "sheet_name")
 	if sheetName == "" {

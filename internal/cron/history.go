@@ -4,11 +4,10 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/rotate"
 	"github.com/99apps-id/termixgo/internal/secrets"
 )
 
@@ -37,19 +36,13 @@ func RecordHistory(entry HistoryEntry) {
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return
-	}
-	defer func() { _ = file.Close() }()
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return
 	}
-	_, _ = file.Write(append(data, '\n'))
+	if err := rotate.Append(path, data, rotate.Options{}); err != nil {
+		return
+	}
 	_ = secrets.RestrictFile(path)
 }
 
@@ -59,16 +52,13 @@ func ReadHistory(limit int, jobID string) ([]HistoryEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	file, err := os.Open(path)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
+	reader, err := rotate.Reader(path)
 	if err != nil {
 		return nil, fmt.Errorf("read cron history: %w", err)
 	}
-	defer func() { _ = file.Close() }()
+	defer reader.Close()
 	var entries []HistoryEntry
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		var entry HistoryEntry

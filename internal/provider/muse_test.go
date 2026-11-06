@@ -26,14 +26,15 @@ func fastMuseRetry(t *testing.T) {
 // with the Meta identity headers and decodes the typed event feed, the same
 // shape the Codex client uses.
 func TestMuseStreamUsesTheResponsesAPI(t *testing.T) {
-	var gotPath, gotAuth, gotAgent, gotClientID, gotAPIVersion, gotSessionID string
+	var gotPath, gotAuth, gotAgent, gotSessionID string
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		gotPath = request.URL.Path
 		gotAuth = request.Header.Get("Authorization")
 		gotAgent = request.Header.Get("User-Agent")
-		gotClientID = request.Header.Get("X-Client-Id")
-		gotAPIVersion = request.Header.Get("x-api-version")
+		if request.Header.Get("X-Client-Id") != "" || request.Header.Get("x-api-version") != "" {
+			t.Errorf("Muse must not send the old client-id headers")
+		}
 		gotSessionID = request.Header.Get("session_id")
 		raw, _ := io.ReadAll(request.Body)
 		_ = json.Unmarshal(raw, &gotBody)
@@ -90,12 +91,6 @@ func TestMuseStreamUsesTheResponsesAPI(t *testing.T) {
 	}
 	if gotAgent != museUserAgent {
 		t.Errorf("User-Agent = %q, want %q", gotAgent, museUserAgent)
-	}
-	if gotClientID != "tbh:tui" {
-		t.Errorf("X-Client-Id = %q, want tbh:tui", gotClientID)
-	}
-	if gotAPIVersion != "1.0.0" {
-		t.Errorf("x-api-version = %q, want 1.0.0", gotAPIVersion)
 	}
 	if gotSessionID == "" {
 		t.Errorf("session_id should not be empty")
@@ -626,5 +621,181 @@ func TestJudgeMuseCatalog(t *testing.T) {
 		if got := judgeMuseCatalog(test.model, test.list); got != test.want {
 			t.Errorf("%s: verdict = %d, want %d", test.name, got, test.want)
 		}
+	}
+}
+
+// attestationServer answers 403 client_attestation_denied for a request
+// that carries a native tools field, and streams plain Responses text
+// otherwise, which is what Meta's Responses route does for a Muse Code
+// subscription key.
+type attestationServer struct {
+	toolHits  int
+	plainHits int
+	bodies    []map[string]any
+	reply     string
+}
+
+func (s *attestationServer) handler(writer http.ResponseWriter, request *http.Request) {
+	raw, _ := io.ReadAll(request.Body)
+	var body map[string]any
+	_ = json.Unmarshal(raw, &body)
+	s.bodies = append(s.bodies, body)
+	if tools, ok := body["tools"].([]any); ok && len(tools) > 0 {
+		s.toolHits++
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(writer, `{"error":{"code":"client_attestation_denied","message":"This API key is billed to a Muse Code subscription.","type":"permission_error"}}`)
+		return
+	}
+	s.plainHits++
+	writer.Header().Set("Content-Type", "text/event-stream")
+	delta, _ := json.Marshal(s.reply)
+	fmt.Fprintf(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":%s}\n\n", delta)
+	fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+}
+
+// TestMuseAttestationSwitchesToTextToolProtocol pins the fallback that
+// keeps a Muse Code subscription login able to use Termixgo tools: Meta
+// refuses a native tools field from a subscription key, so the client
+// retries on the text tool protocol and turns the model's tool_call block
+// into a real ToolCall the agent loop executes locally.
+func TestMuseAttestationSwitchesToTextToolProtocol(t *testing.T) {
+	fastMuseRetry(t)
+	fake := &attestationServer{reply: "```tool_call\n{\"name\":\"run_command\",\"arguments\":{\"command\":\"ls\"}}\n```"}
+	server := httptest.NewServer(http.HandlerFunc(fake.handler))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "muse", Label: "Meta Muse Code", Kind: KindMuse}, server.URL, "LLM|muse-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	var text strings.Builder
+	var calls []ToolCall
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "muse-spark-1.3",
+		System:   "be brief",
+		Messages: []Message{{Role: RoleUser, Content: "list files"}},
+		Tools:    []ToolDef{{Name: "run_command", Description: "Run a command.", Schema: map[string]any{"type": "object"}}},
+	}, func(event StreamEvent) error {
+		switch event.Type {
+		case EventTextDelta:
+			text.WriteString(event.Text)
+		case EventToolCall:
+			calls = append(calls, *event.ToolCall)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if len(calls) != 1 || calls[0].Name != "run_command" || calls[0].ID == "" {
+		t.Fatalf("calls = %+v, want one run_command call with an id", calls)
+	}
+	if calls[0].Arguments != `{"command":"ls"}` {
+		t.Errorf("arguments = %q, want the model's JSON", calls[0].Arguments)
+	}
+	if strings.Contains(text.String(), "tool_call") {
+		t.Errorf("the protocol block must not leak into the answer text, got %q", text.String())
+	}
+	if fake.toolHits != 1 || fake.plainHits != 1 {
+		t.Fatalf("tool hits = %d, plain hits = %d, want one native attempt then one text-protocol retry", fake.toolHits, fake.plainHits)
+	}
+	retry := fake.bodies[len(fake.bodies)-1]
+	if _, present := retry["tools"]; present {
+		t.Errorf("the text-protocol retry must not carry a native tools field: %v", retry)
+	}
+	instructions, _ := retry["instructions"].(string)
+	if !strings.Contains(instructions, "tool_call") || !strings.Contains(instructions, "run_command") {
+		t.Errorf("the retry instructions must teach the text tool protocol and list the tools, got %q", instructions)
+	}
+}
+
+// TestMuseTextToolProtocolContinuesFromAToolResult pins the second half
+// of the fallback: the next step stays on the text protocol (no new native
+// attempt for Meta to refuse), renders the stored tool call and its result
+// as protocol blocks, and returns the model's plain final answer as text.
+func TestMuseTextToolProtocolContinuesFromAToolResult(t *testing.T) {
+	fastMuseRetry(t)
+	fake := &attestationServer{reply: "```tool_call\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"a.go\"}}\n```"}
+	server := httptest.NewServer(http.HandlerFunc(fake.handler))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "muse", Label: "Meta Muse Code", Kind: KindMuse}, server.URL, "LLM|muse-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	tools := []ToolDef{{Name: "read_file", Description: "Read a file.", Schema: map[string]any{"type": "object"}}}
+	emit := func(StreamEvent) error { return nil }
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "muse-spark-1.3",
+		Messages: []Message{{Role: RoleUser, Content: "read a.go"}},
+		Tools:    tools,
+	}, emit)
+	if err != nil {
+		t.Fatalf("first Stream: %v", err)
+	}
+
+	fake.reply = "The file defines package a."
+	var text strings.Builder
+	err = client.Stream(context.Background(), ChatRequest{
+		Model: "muse-spark-1.3",
+		Messages: []Message{
+			{Role: RoleUser, Content: "read a.go"},
+			{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call_1", Name: "read_file", Arguments: `{"path":"a.go"}`}}},
+			{Role: RoleTool, ToolID: "call_1", Name: "read_file", Content: "package a"},
+		},
+		Tools: tools,
+	}, func(event StreamEvent) error {
+		if event.Type == EventTextDelta {
+			text.WriteString(event.Text)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("second Stream: %v", err)
+	}
+	if text.String() != "The file defines package a." {
+		t.Errorf("text = %q, want the plain final answer", text.String())
+	}
+	if fake.toolHits != 1 {
+		t.Errorf("tool hits = %d, want the text protocol to stick after the first refusal", fake.toolHits)
+	}
+	last := fake.bodies[len(fake.bodies)-1]
+	rendered, _ := json.Marshal(last["input"])
+	if !strings.Contains(string(rendered), "tool_call") || !strings.Contains(string(rendered), "read_file") {
+		t.Errorf("the stored tool call must be rendered as a protocol block, got %s", rendered)
+	}
+	if !strings.Contains(string(rendered), "tool_result") || !strings.Contains(string(rendered), "package a") {
+		t.Errorf("the stored tool result must be rendered as a protocol block, got %s", rendered)
+	}
+}
+
+func TestMuseAttestationDeniedNamesThePolicy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(writer, `{"error":{"code":"client_attestation_denied","message":"This API key is billed to a Muse Code subscription.","type":"permission_error"}}`)
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "muse", Label: "Meta Muse Code", Kind: KindMuse}, server.URL, "LLM|muse-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "muse-spark-1.3",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		Tools:    []ToolDef{{Name: "read_file", Description: "Read a file.", Schema: map[string]any{"type": "object"}}},
+	}, func(StreamEvent) error { return nil })
+	if err == nil {
+		t.Fatal("a client-attestation refusal must be reported")
+	}
+	for _, want := range []string{"official Muse Code client", "pay-as-you-go"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "check the API key") {
+		t.Fatalf("error %q must not blame a valid key for a policy refusal", err)
 	}
 }

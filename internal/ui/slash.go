@@ -66,6 +66,7 @@ var slashCommands = []SlashCommand{
 	{Trigger: "/quota", Args: "[refresh]", Summary: "Show official provider usage plus 5-hour rolling counts", Options: []SlashOption{
 		{Value: "refresh", Detail: "refetch official usage from the provider"},
 	}},
+	{Trigger: "/cd", Args: "[path]", Summary: "Show or change the current folder", Options: []SlashOption{}},
 	{Trigger: "/trust", Args: "[on|off]", Summary: "Show or change folder trust", Options: []SlashOption{
 		{Value: "on", Detail: "writes and commands run without asking"},
 		{Value: "off", Detail: "every mutating tool asks first"},
@@ -103,6 +104,20 @@ var slashCommands = []SlashCommand{
 		{Value: "reject", Detail: "drop a proposal by id", Complete: true},
 	}},
 	{Trigger: "/memory", Args: "", Summary: "Show what the agent has learned"},
+	{Trigger: "/attach", Args: "[<path...>|list|clear]", Summary: "Attach images or documents to the next turn", Options: []SlashOption{
+		{Value: "list", Detail: "show the pending attachments"},
+		{Value: "clear", Detail: "drop every pending attachment"},
+	}},
+	{Trigger: "/paste", Args: "[text|image]", Summary: "Read the clipboard into the composer or attach its image", Options: []SlashOption{
+		{Value: "text", Detail: "paste clipboard text into the composer"},
+		{Value: "image", Detail: "attach the clipboard image"},
+	}},
+	{Trigger: "/detach", Args: "", Summary: "Drop every pending attachment"},
+	{Trigger: "/desktop", Args: "[on|off|status]", Summary: "Local desktop control: screen, pointer, keyboard, apps", Options: []SlashOption{
+		{Value: "status", Detail: "show whether desktop control is on"},
+		{Value: "on", Detail: "offer the screen, input and application tools"},
+		{Value: "off", Detail: "remove those tools from the next turn"},
+	}},
 	{Trigger: "/telegram", Args: "[setup|on|off|status|pair]", Summary: "Manage the Telegram companion", Options: []SlashOption{
 		{Value: "status", Detail: "show whether the bot is running"},
 		{Value: "on", Detail: "start the bot"},

@@ -41,8 +41,8 @@ func (t *parallelBatchTool) Description() string {
 }
 func (t *parallelBatchTool) Schema() map[string]any {
 	return object(map[string]any{
-		"tasks":  arrayProp("The tasks to run in parallel, each {task, worker?, name?}.", object(map[string]any{"task": strProp("One self-contained instruction."), "worker": strProp("termixgo, claude, codex or opencode."), "name": strProp("Worktree name.")})),
-		"worker": strProp("Default worker for every task: termixgo, claude, codex or opencode."),
+		"tasks":  arrayProp("The tasks to run in parallel, each {task, worker?, name?}.", object(map[string]any{"task": strProp("One self-contained instruction."), "worker": strProp("termixgo, claude, codex, opencode or muse."), "name": strProp("Worktree name.")})),
+		"worker": strProp("Default worker for every task: termixgo, claude, codex, opencode or muse."),
 		"prefix": strProp("Name prefix for generated worktrees."),
 	}, "tasks")
 }

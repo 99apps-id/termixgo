@@ -32,6 +32,10 @@ func buildWorkerArgv(kind, task string) ([]string, error) {
 		return []string{"codex", "exec", task}, nil
 	case "opencode":
 		return []string{"opencode", "run", task}, nil
+	case "muse":
+		// Meta's official Muse Code CLI: a subscription login covers its
+		// tool use, which the raw API key does not.
+		return []string{"muse", "exec", task}, nil
 	case "termixgo":
 		// The native worker needs no external account: it runs this same
 		// binary against the provider already configured here.
@@ -41,12 +45,12 @@ func buildWorkerArgv(kind, task string) ([]string, error) {
 		}
 		return []string{executable, "run", task}, nil
 	default:
-		return nil, fmt.Errorf("unknown worker %q; use termixgo, claude, codex or opencode", kind)
+		return nil, fmt.Errorf("unknown worker %q; use termixgo, claude, codex, opencode or muse", kind)
 	}
 }
 
 // workerKinds are the worker ids a caller may use, in display order.
-var workerKinds = []string{"termixgo", "claude", "codex", "opencode"}
+var workerKinds = []string{"termixgo", "claude", "codex", "opencode", "muse"}
 
 // WorkerKinds returns the supported worker ids, in display order.
 func WorkerKinds() []string {

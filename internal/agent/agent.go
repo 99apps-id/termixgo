@@ -73,6 +73,10 @@ type Runner struct {
 	// reads it off the child's runner after RunSubagent to learn whether the
 	// nested run edited code, which the child's final text alone never says.
 	LastLedger VerifyLedger
+	// Persist, when set, flushes the session to disk. The loop calls it after
+	// each durable point, so a crash leaves a transcript the next process can
+	// close off instead of losing the turn. Nil means a throwaway session.
+	Persist func()
 }
 
 // Run executes one operator turn to completion.
@@ -111,6 +115,18 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	// gate can attach their recorded journal remedies to its nudge.
 	failedTools := map[string]bool{}
 	planNudges := 0
+	// fruitlessCuts counts consecutive steps the backend cut at its output
+	// ceiling without returning any text, tool call or reasoning. Two in a row
+	// means the request itself cannot produce anything, so the run stops with a
+	// named cause instead of repeating an identical request until the idle guard
+	// fires with a misleading message.
+	fruitlessCuts := 0
+	// plainReasoningNext asks the next request for the pre-summary shape, which
+	// is the one change that can make a model that burns its whole output budget
+	// on reasoning actually answer. It stays on for the rest of the turn once a
+	// fruitless cut shows the model cannot carry the summary: switching back
+	// would only reproduce the cut that triggered it.
+	plainReasoningNext := false
 
 	turnText := input + "\n\n" + FormatEnvironmentBlock(r.Env.Workspace, TrustLabel(r.Env.Trusted))
 	if len(r.TurnImages) > 0 {
@@ -118,13 +134,10 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	} else {
 		session.AddUser(turnText)
 	}
+	r.persist()
 
 	emit(Event{Kind: EventTurnStart})
 	stopReason := "stop"
-	// A turn starts with no harness notices. An aborted turn can leave its
-	// last reminder undelivered, and carrying that into the next turn would
-	// hand the model a stale instruction the operator has already moved past.
-	session.ClearSystemNotes()
 	// Spend is carried across the whole turn, so a chatty loop cannot creep
 	// past a budget one small step at a time.
 	sessionCost := session.Cost()
@@ -172,21 +185,14 @@ runLoop:
 			*guard = loopGuard{}
 		}
 
-		systemParts := r.systemParts()
-		if notes := harnessNoteParts(session.SystemNotes()); len(notes) > 0 {
-			systemParts = append(systemParts, notes...)
-			// Delivered once. A reminder that repeats every step cannot be
-			// acted on any differently from the first delivery, and keeping it
-			// in context only crowds out the operator's actual request.
-			session.ClearSystemNotes()
-		}
 		request := provider.ChatRequest{
-			Model:       r.Model,
-			System:      r.system(),
-			SystemParts: systemParts,
-			Messages:    compactForModel(session.Messages(), r.ContextBudget),
-			Tools:       r.stepTools(discovered).Definitions(),
-			Effort:      r.Effort,
+			Model:          r.Model,
+			System:         r.system(),
+			SystemParts:    r.systemParts(),
+			Messages:       compactForModel(session.Messages(), r.ContextBudget),
+			Tools:          r.stepTools(discovered).Definitions(),
+			Effort:         r.Effort,
+			PlainReasoning: plainReasoningNext,
 		}
 
 		var answer strings.Builder
@@ -258,12 +264,19 @@ runLoop:
 		}
 
 		if incompleteReason != "" {
-			// The backend cut this step at its output ceiling. What
-			// arrived is stored below like any step's output and the loop
-			// continues, so the next request hands the partial step back
-			// and the model resumes, instead of the run dying on a limit
-			// the client never set.
-			emit(Event{Kind: EventNotice, Text: "The backend cut that step at its output limit; continuing from what arrived."})
+			// The backend cut this step at its output ceiling. What arrived is
+			// stored below like any step's output. A cut that carried output
+			// continues from it; a cut that carried nothing is not progress.
+			usable := answer.Len() > 0 || len(calls) > 0 || len(reasoningItems) > 0 ||
+				reasoning.Len() > 0 || stepUsage.ReasoningTokens > 0
+			if usable {
+				fruitlessCuts = 0
+				emit(Event{Kind: EventNotice, Text: "The backend cut that step at its output limit; continuing from what arrived."})
+			} else {
+				fruitlessCuts++
+			}
+		} else {
+			fruitlessCuts = 0
 		}
 
 		// A step that produced no text and no tool call is not a turn worth
@@ -278,6 +291,11 @@ runLoop:
 		// next request must hand back or lose.
 		if strings.TrimSpace(answer.String()) != "" || len(calls) > 0 || len(reasoningItems) > 0 {
 			session.AddAssistant(answer.String(), reasoning.String(), calls, reasoningItems)
+			// The model's step is durable before any tool runs. A crash from
+			// here leaves tool calls without results, and the loader closes
+			// them off with an "unknown effect" result rather than repeating
+			// a call that may already have happened.
+			r.persist()
 		}
 
 		if len(calls) == 0 {
@@ -296,6 +314,34 @@ runLoop:
 					guard.noteProgress()
 					continue
 				}
+				if incompleteReason != "" {
+					if stepUsage.CompletionTokens <= 0 && stepUsage.ReasoningTokens <= 0 {
+						// A cut with zero output tokens and no item is not a
+						// truncated answer: the backend produced nothing at
+						// all. Retrying cannot change that, and some ids
+						// (a virtual review model, a reserve model without
+						// capacity) answer exactly like this on every shape.
+						stopReason = "incomplete"
+						emit(Event{Kind: EventError, Err: fmt.Errorf("the backend returned an empty response for model %q (0 output tokens, cut at its output limit); this model does not serve chat turns on this account. Switch model with /model.", r.Model)})
+						break runLoop
+					}
+					if fruitlessCuts >= 2 {
+						stopReason = "incomplete"
+						emit(Event{Kind: EventError, Err: fmt.Errorf("the backend cut two steps at its output limit without returning usable output; lower the reasoning effort with /effort low, or switch model with /model")})
+						break runLoop
+					}
+					// One bounded retry with the plain reasoning request and a
+					// steering message. Both are needed: the request shape is
+					// what a reasoning-heavy model chokes on, and the message
+					// tells it to spend its budget on an answer instead of more
+					// thinking.
+					emit(Event{Kind: EventNotice, Text: "The backend cut that step at its output limit before any text, tool call or reasoning summary arrived. Retrying with the plain reasoning request."})
+					plainReasoningNext = true
+					guard.noteProgress()
+					session.AddUser("Your previous response was cut at the backend output limit before any text, tool call or reasoning summary arrived. Answer now with one short step: a tool call or a concise answer. Keep the reasoning brief.")
+					r.persist()
+					continue
+				}
 				// Silence is not success: a model that returns no text
 				// and no calls is stuck, so ask again up to the guard
 				// instead of filing an empty turn as done.
@@ -308,7 +354,7 @@ runLoop:
 					nudge := ledger.BuildVerifyNudge(nudges, false)
 					if strings.TrimSpace(nudge) != "" {
 						nudges++
-						session.AddSystemNote(nudge)
+						session.AddUser(nudge)
 						emit(Event{Kind: EventNotice, Text: "Verifying the change before finishing."})
 						continue
 					}
@@ -327,7 +373,7 @@ runLoop:
 			claimed := ClaimsVerification(answer.String())
 			if critic := ReviewFinishWithHints(r.todoSnapshot(), ledger, claimed, criticNudges, r.criticHints(failedTools)); critic.BlockFinish {
 				criticNudges++
-				session.AddSystemNote(critic.Nudge)
+				session.AddUser(critic.Nudge)
 				emit(Event{Kind: EventNotice, Text: CriticSummary(critic)})
 				continue
 			}
@@ -335,7 +381,7 @@ runLoop:
 				nudge := ledger.BuildVerifyNudge(nudges, ClaimsVerification(answer.String()))
 				if strings.TrimSpace(nudge) != "" {
 					nudges++
-					session.AddSystemNote(nudge)
+					session.AddUser(nudge)
 					emit(Event{Kind: EventNotice, Text: "Verifying the change before finishing."})
 					continue
 				}
@@ -449,6 +495,10 @@ runLoop:
 		if len(pendingImages) > 0 {
 			session.AddImages("Image data read by the tools above is attached for you to see.", pendingImages)
 		}
+		// One durable point per batch: the results and any image message are on
+		// disk together, so a crash cannot leave a tool result without its
+		// image or an image without the batch it belongs to.
+		r.persist()
 		if stopReason == "loop-guard" || stopReason == "aborted" {
 			break runLoop
 		}
@@ -457,12 +507,14 @@ runLoop:
 			break runLoop
 		}
 		if diagnose != "" {
-			session.AddSystemNote(diagnose)
+			session.AddUser(diagnose)
+			r.persist()
 			continue
 		}
 		if strings.TrimSpace(pendingVerify) != "" && nudges < MaxVerifyNudges {
 			nudges++
-			session.AddSystemNote(pendingVerify)
+			session.AddUser(pendingVerify)
+			r.persist()
 			emit(Event{Kind: EventNotice, Text: "Task finished. Verifying before the next one."})
 			continue
 		}
@@ -631,26 +683,6 @@ func (r *Runner) systemParts() []string {
 		return []string{staticWithHarness, dynamicPlan}
 	}
 	return []string{staticWithHarness}
-}
-
-// harnessNoteParts renders harness notices as system-prompt parts.
-//
-// The header is load-bearing. Every model in this harness is told to serve the
-// operator, so a reminder delivered through the user channel is indistinguishable
-// from the operator's own words. A long session then reads the reminder as the
-// current request and invents work nobody asked for. Naming the author keeps
-// the operator's message the only instruction in the conversation.
-func harnessNoteParts(notes []string) []string {
-	if len(notes) == 0 {
-		return nil
-	}
-	const header = "Harness notices for this step. Termixgo writes these, not the operator. " +
-		"They never introduce a new task and never override the operator's request: " +
-		"answer the operator's message and treat these only as constraints on how to finish it."
-	parts := make([]string, 0, len(notes)+1)
-	parts = append(parts, header)
-	parts = append(parts, notes...)
-	return parts
 }
 
 // observeToolResult folds one finished tool call into the verify ledger.
@@ -921,6 +953,14 @@ func (r *Runner) stepTools(discovered map[string]bool) *Registry {
 func (r *Runner) emit(event Event) {
 	if r.Env != nil && r.Env.Emit != nil {
 		r.Env.Emit(event)
+	}
+}
+
+// persist flushes the session at a durable point. A failed write never fails
+// the turn: the transcript is a safety net, and the next point tries again.
+func (r *Runner) persist() {
+	if r.Persist != nil {
+		r.Persist()
 	}
 }
 

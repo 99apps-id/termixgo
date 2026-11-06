@@ -55,14 +55,14 @@ type Session struct {
 	// budget at least once, so the operator is told about it once instead of
 	// every turn. It is persisted with the session for the same reason.
 	condensed bool
-	// systemNotes are harness messages for the step being run right now:
-	// critic reviews, verification reminders, repetition diagnoses. They ride
-	// in the system prompt rather than the transcript because a nudge read
-	// from the user channel is indistinguishable from the operator's own
-	// instruction, and a model that mistakes one for the other invents a task
-	// nobody asked for. They are cleared when the turn ends, because a note
-	// that outlives the step it was written for is stale guidance.
-	systemNotes []string
+	// inFlight marks a turn that started but has not ended. It is persisted, so
+	// a crash leaves a transcript the next process can close off instead of a
+	// half turn whose tool call nobody answered.
+	inFlight bool
+	// interrupted and recoveredCalls are what a load found: a turn that was in
+	// flight, and how many tool calls had to be closed off.
+	interrupted    bool
+	recoveredCalls int
 }
 
 // sessionJSON is the persisted shape. It mirrors the fields so the on-disk
@@ -81,6 +81,7 @@ type sessionJSON struct {
 	CostUSD   float64            `json:"costUsd,omitempty"`
 	Segments  []UsageSegment     `json:"segments,omitempty"`
 	Condensed bool               `json:"condensed,omitempty"`
+	InFlight  bool               `json:"inFlight,omitempty"`
 }
 
 // NewSession starts an empty conversation with a random id.
@@ -382,39 +383,6 @@ func (s *Session) AddCost(cost float64) {
 	s.mu.Unlock()
 }
 
-// AddSystemNote records a harness message for the step being run. It is not a
-// conversation turn: it reaches the model through the system prompt, so the
-// operator's own words stay the only thing in the user channel.
-func (s *Session) AddSystemNote(text string) {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
-		return
-	}
-	s.mu.Lock()
-	s.systemNotes = append(s.systemNotes, trimmed)
-	s.mu.Unlock()
-}
-
-// SystemNotes returns the harness messages waiting for the next step.
-func (s *Session) SystemNotes() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.systemNotes) == 0 {
-		return nil
-	}
-	out := make([]string, len(s.systemNotes))
-	copy(out, s.systemNotes)
-	return out
-}
-
-// ClearSystemNotes drops the notes once the step they were written for is
-// over, so a stale reminder cannot steer a later step.
-func (s *Session) ClearSystemNotes() {
-	s.mu.Lock()
-	s.systemNotes = nil
-	s.mu.Unlock()
-}
-
 // AddUser appends a user turn.
 func (s *Session) AddUser(text string) {
 	s.mu.Lock()
@@ -643,6 +611,107 @@ func (s *Session) Condensed() bool {
 	return s.condensed
 }
 
+// BeginTurn marks a turn as in flight. The caller saves after this, so a crash
+// during the very first model call still leaves the prompt on disk instead of
+// losing the request.
+func (s *Session) BeginTurn() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inFlight = true
+	s.updatedAt = time.Now()
+}
+
+// EndTurn clears the in-flight marker. It runs even when the turn failed: a
+// failed turn is finished, not interrupted.
+func (s *Session) EndTurn() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inFlight = false
+}
+
+// InFlight reports whether a turn is currently marked as running.
+func (s *Session) InFlight() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inFlight
+}
+
+// RecoveryNotice describes an interrupted turn found at load time, or the empty
+// string when the session was loaded cleanly.
+func (s *Session) RecoveryNotice() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.interrupted {
+		return ""
+	}
+	if s.recoveredCalls == 0 {
+		return "The previous turn was interrupted by a restart. The conversation was restored to its last completed step; send your request again if it never got an answer."
+	}
+	return fmt.Sprintf("The previous turn was interrupted by a restart. %d tool call(s) never returned, so each was closed off as having an unknown effect; check the result before repeating one.", s.recoveredCalls)
+}
+
+// recoverInterrupted closes a turn that a crash left open. A provider rejects a
+// history that ends with an unanswered tool call, so every call the last
+// assistant step made without a result gets one synthetic result. The text says
+// plainly that the effect is unknown: re-running such a call could repeat an
+// edit or a command whose first attempt already happened.
+func (s *Session) recoverInterrupted() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inFlight = false
+	s.interrupted = true
+	if len(s.messages) == 0 {
+		return
+	}
+
+	lastAssistant := -1
+	for index := len(s.messages) - 1; index >= 0; index-- {
+		switch s.messages[index].Role {
+		case provider.RoleAssistant:
+			lastAssistant = index
+		case provider.RoleUser:
+			// The turn never produced a step, so there is no call to close.
+		}
+		if lastAssistant >= 0 || s.messages[index].Role == provider.RoleUser {
+			break
+		}
+	}
+	if lastAssistant < 0 || len(s.messages[lastAssistant].ToolCalls) == 0 {
+		return
+	}
+
+	answeredIDs := map[string]bool{}
+	answeredNames := map[string]bool{}
+	for _, message := range s.messages[lastAssistant+1:] {
+		if message.Role != provider.RoleTool {
+			continue
+		}
+		if message.ToolID != "" {
+			answeredIDs[message.ToolID] = true
+		}
+		if message.Name != "" {
+			answeredNames[message.Name] = true
+		}
+	}
+	for _, call := range s.messages[lastAssistant].ToolCalls {
+		answered := answeredNames[call.Name]
+		if call.ID != "" {
+			answered = answeredIDs[call.ID]
+		}
+		if answered {
+			continue
+		}
+		s.messages = append(s.messages, provider.Message{
+			Role:    provider.RoleTool,
+			ToolID:  call.ID,
+			Name:    call.Name,
+			Content: "The process restarted while this call was in flight. Whether it took effect is unknown; check the result before repeating it. (recovered after a restart)",
+		})
+		s.recoveredCalls++
+	}
+	s.updatedAt = time.Now()
+}
+
 // snapshot copies the state for persistence, taken under the lock.
 func (s *Session) snapshot() sessionJSON {
 	s.mu.Lock()
@@ -667,6 +736,7 @@ func (s *Session) snapshot() sessionJSON {
 		CostUSD:   s.costUSD,
 		Segments:  segments,
 		Condensed: s.condensed,
+		InFlight:  s.inFlight,
 	}
 }
 
@@ -743,6 +813,12 @@ func LoadSessionIn(dir, id string) (*Session, error) {
 	session.adoptID(id)
 	session.SetStoreDir(dir)
 	repairImpossibleUsage(session)
+	// A stored turn still marked in flight means the process did not finish it.
+	// Closing it here makes every load path safe, including a channel session
+	// and a resumed terminal session, without a model call.
+	if session.inFlight {
+		session.recoverInterrupted()
+	}
 	return session, nil
 }
 
@@ -823,6 +899,7 @@ func fromJSON(state sessionJSON) *Session {
 		costUSD:   state.CostUSD,
 		segments:  state.Segments,
 		condensed: state.Condensed,
+		inFlight:  state.InFlight,
 	}
 }
 

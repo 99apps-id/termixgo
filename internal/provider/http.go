@@ -167,13 +167,21 @@ type providerStatusError struct {
 	label   string
 	status  int
 	message string
+	// code is the provider's machine-readable error code (for example
+	// client_attestation_denied), kept so a caller can react to a policy
+	// refusal without matching prose.
+	code string
 }
 
 func (e *providerStatusError) Error() string {
 	hint := ""
 	switch e.status {
 	case http.StatusUnauthorized, http.StatusForbidden:
-		hint = " (check the API key with /setup)"
+		// An attestation refusal is a policy answer about a valid key,
+		// so the key hint would send the operator after the wrong cause.
+		if e.code != "client_attestation_denied" {
+			hint = " (check the API key with /setup)"
+		}
 	case http.StatusTooManyRequests, 529:
 		hint = " (the provider is overloaded or rate limited; retry shortly)"
 	case http.StatusNotFound:
@@ -190,10 +198,13 @@ func (c *httpClient) statusError(response *http.Response) error {
 		Error struct {
 			Message string `json:"message"`
 			Type    string `json:"type"`
+			Code    string `json:"code"`
 		} `json:"error"`
 		Message string `json:"message"`
 	}
+	code := ""
 	if json.Unmarshal(raw, &parsed) == nil {
+		code = parsed.Error.Code
 		switch {
 		case parsed.Error.Message != "":
 			message = parsed.Error.Message
@@ -207,7 +218,7 @@ func (c *httpClient) statusError(response *http.Response) error {
 	if message == "" {
 		message = http.StatusText(response.StatusCode)
 	}
-	return &providerStatusError{label: c.info.Label, status: response.StatusCode, message: message}
+	return &providerStatusError{label: c.info.Label, status: response.StatusCode, message: message, code: code}
 }
 
 // sseReader reads Server-Sent Events and yields each event's joined data.

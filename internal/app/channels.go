@@ -301,6 +301,7 @@ func (a *App) runChannelTurn(ctx context.Context, agentName string, session *age
 		guest:         guest,
 		maxSteps:      maxSteps,
 		costBudgetUSD: costBudgetUSD,
+		priority:      PriorityChannel,
 	}
 	mark := session.MessageCount()
 	if err := a.runWithOptions(ctx, prompt, options); err != nil {

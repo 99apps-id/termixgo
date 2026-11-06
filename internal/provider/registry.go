@@ -134,9 +134,11 @@ var contextWindows = map[string]int{
 	"grok-build-0.1-oauth":      256000,
 
 	// Meta Muse.
-	"muse-spark-1.3":             1048576,
-	"muse-spark-1.3-contributor": 1048576,
-	"muse-spark-1.2":             1048576,
+	"muse-spark-1.3":              1048576,
+	"muse-spark-1.3-contributor":  1048576,
+	"muse-wonder-1.0":             1048576,
+	"muse-wonder-1.0-contributor": 1048576,
+	"muse-spark-1.2":              1048576,
 	// The published window for the two ids below is not known to this build, so
 	// they are pinned to the conservative default rather than inheriting the
 	// family's 1M. An over-large budget makes the provider reject the request;
@@ -297,7 +299,7 @@ func Providers() []Provider {
 		{ID: "xai-oauth", Label: "xAI Grok (OAuth)", Kind: KindOpenAI, DefaultBaseURL: "https://api.x.ai/v1", ConsoleURL: "https://x.ai/", NeedsKey: true, OAuth: true},
 		{ID: "openai-codex", Label: "OpenAI Codex (ChatGPT)", Kind: KindOpenAI, DefaultBaseURL: "https://chatgpt.com/backend-api/codex", ConsoleURL: "https://chatgpt.com/", NeedsKey: true, OAuth: true},
 		{ID: "github-copilot", Label: "GitHub Copilot", Kind: KindCopilot, DefaultBaseURL: "https://api.githubcopilot.com", ConsoleURL: "https://github.com/features/copilot", NeedsKey: true, OAuth: true},
-		{ID: "muse", Label: "Meta Muse Code", Kind: KindMuse, DefaultBaseURL: "https://api.meta.ai/v1", ConsoleURL: "https://dev.meta.ai/products/muse-code", NeedsKey: true, OAuth: true},
+		{ID: "muse", Label: "Meta Muse Code", Kind: KindMuse, DefaultBaseURL: "https://api.meta.ai/v1", ConsoleURL: "https://dev.meta.ai/products/muse-code", NeedsKey: true, OAuth: true, EnvKeys: []string{"META_API_KEY"}},
 
 		// Vendors that matter most for agentic coding, cheapest strong models
 		// first so the wizard's default order is also a sensible one.
@@ -484,6 +486,8 @@ func Models() []Model {
 		// GET /v1/models also answers with sam-3.1 and muse-voice-transcribe-1.0,
 		// which are not chat models and are deliberately not offered here.
 		{ID: "muse-spark-1.3", Provider: "muse", Label: "Muse Spark 1.3", Description: "Meta's flagship reasoning and agentic coding model through a Muse login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "muse-wonder-1.0", Provider: "muse", Label: "Muse Wonder 1.0", Description: "Muse creative reasoning model through a Meta login.", Tags: []string{"reasoning", "coding"}},
+		{ID: "muse-wonder-1.0-contributor", Provider: "muse", Label: "Muse Wonder 1.0 Contributor", Description: "Muse Wonder contributor model through a Meta login.", Tags: []string{"coding"}},
 		{ID: "muse-spark-1.3-contributor", Provider: "muse", Label: "Muse Spark 1.3 Contributor", Description: "Muse contributor model through a Meta login.", Tags: []string{"coding", "tools"}},
 		{ID: "muse-spark-1.2", Provider: "muse", Label: "Muse Spark 1.2", Description: "Previous Muse generation through a Meta login.", Tags: []string{"reasoning", "coding"}},
 		{ID: "muse-spark-1.2-contributor", Provider: "muse", Label: "Muse Spark 1.2 Contributor", Description: "Previous-generation Muse contributor model through a Meta login.", Tags: []string{"coding"}},
