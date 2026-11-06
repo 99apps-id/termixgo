@@ -185,6 +185,45 @@ func TestEndpointCommandRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEndpointAddAndRemoveNamedCompatibleEndpoints(t *testing.T) {
+	withState(t)
+
+	if _, _, err := runCLI(t, "endpoint", "add", "alpha", "https://a.example/v1"); err != nil {
+		t.Fatalf("endpoint add alpha: %v", err)
+	}
+	if _, _, err := runCLI(t, "endpoint", "add", "beta", "https://b.example/v1"); err != nil {
+		t.Fatalf("endpoint add beta: %v", err)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := loaded.BaseURLs["openai-compatible/alpha"]; got != "https://a.example/v1" {
+		t.Errorf("BaseURLs[alpha] = %q, want https://a.example/v1", got)
+	}
+	if got := loaded.BaseURLs["openai-compatible/beta"]; got != "https://b.example/v1" {
+		t.Errorf("BaseURLs[beta] = %q, want https://b.example/v1", got)
+	}
+
+	stdout, _, err := runCLI(t, "endpoint", "rm", "alpha")
+	if err != nil {
+		t.Fatalf("endpoint rm alpha: %v", err)
+	}
+	if !strings.Contains(stdout, "removed endpoint") {
+		t.Errorf("rm output = %q", stdout)
+	}
+	loaded, err = config.Load()
+	if err != nil {
+		t.Fatalf("Load after rm: %v", err)
+	}
+	if _, ok := loaded.BaseURLs["openai-compatible/alpha"]; ok {
+		t.Errorf("alpha endpoint should be removed")
+	}
+	if got := loaded.BaseURLs["openai-compatible/beta"]; got != "https://b.example/v1" {
+		t.Errorf("beta endpoint should survive alpha removal, got %q", got)
+	}
+}
+
 func TestApprovalCommandValidatesTheMode(t *testing.T) {
 	withState(t)
 

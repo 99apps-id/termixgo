@@ -365,10 +365,25 @@ func ByID(id string) (Provider, bool) {
 	if id == "codex" {
 		id = "openai-codex"
 	}
-	for _, provider := range Providers() {
-		if provider.ID == id {
-			return provider, true
+	for _, info := range Providers() {
+		if info.ID == id {
+			return info, true
 		}
+	}
+	if IsCompatible(id) && id != CompatibleID {
+		name := CompatibleName(id)
+		static, _ := ByID(CompatibleID)
+		return Provider{
+			ID:             id,
+			Label:          CompatibleLabel(name),
+			Kind:           static.Kind,
+			DefaultBaseURL: "",
+			ConsoleURL:     static.ConsoleURL,
+			NeedsKey:       static.NeedsKey,
+			KeyPrefix:      static.KeyPrefix,
+			EnvKeys:        static.EnvKeys,
+			OAuth:          static.OAuth,
+		}, true
 	}
 	return Provider{}, false
 }

@@ -153,12 +153,12 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 		items := make([]pickerItem, 0, len(models)+1)
 		for _, model := range models {
 			pickID := model.ID
-			if item.ID == "openai-compatible" || !staticSet[model.ID] {
+			if provider.IsCompatible(item.ID) || !staticSet[model.ID] {
 				pickID = item.ID + ":" + model.ID
 			}
 			items = append(items, pickerItem{ID: pickID, Label: model.Label, Detail: model.Description})
 		}
-		if item.ID == "openai-compatible" || len(items) == 0 {
+		if provider.IsCompatible(item.ID) || len(items) == 0 {
 			items = append(items, pickerItem{
 				ID:     "custom:" + item.ID,
 				Label:  "Custom Model",

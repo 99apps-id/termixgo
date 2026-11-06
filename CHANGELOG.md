@@ -8,6 +8,7 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Added
 - StepFun Plan model `step-5-preview` (`stepfun-plan/step-5-preview`) in the model catalogue, selectable through `/model` and the picker like the other plan models.
+- Multiple named OpenAI-compatible endpoints: `termixgo endpoint add <name> <url>` and `termixgo endpoint rm <name>`. Each is an `openai-compatible/<name>` provider with its own URL, key and models, so registering a new endpoint no longer overwrites the previous one.
 
 ## 0.2.4 - 2026-10-31
 

@@ -412,6 +412,60 @@ func runEndpoint(args []string, stdout io.Writer) error {
 		}
 		return nil
 	}
+	action := strings.ToLower(strings.TrimSpace(args[0]))
+	switch action {
+	case "add":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: termixgo endpoint add <name> <url>")
+		}
+		slug := slugifyEndpointName(args[1])
+		if slug == "" {
+			return fmt.Errorf("endpoint name must contain at least one letter or number")
+		}
+		id := provider.CompatibleProviderID(slug)
+		endpoint, err := provider.NormalizeBaseURL(strings.Join(args[2:], " "))
+		if err != nil {
+			return err
+		}
+		if cfg.BaseURLs == nil {
+			cfg.BaseURLs = map[string]string{}
+		}
+		cfg.BaseURLs[id] = endpoint
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "%s %s\n", id, endpoint)
+		return nil
+	case "rm", "remove", "delete":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: termixgo endpoint rm <name>")
+		}
+		slug := slugifyEndpointName(args[1])
+		if slug == "" {
+			return fmt.Errorf("endpoint name must contain at least one letter or number")
+		}
+		id := provider.CompatibleProviderID(slug)
+		if _, ok := cfg.BaseURLs[id]; !ok {
+			return fmt.Errorf("endpoint %q is not set", id)
+		}
+		delete(cfg.BaseURLs, id)
+		if cfg.CustomModels != nil {
+			delete(cfg.CustomModels, id)
+		}
+		store, err := secrets.Load()
+		if err != nil {
+			return err
+		}
+		_ = store.Delete(secrets.ProviderKey(id))
+		if strings.HasPrefix(cfg.DefaultModel, id+":") {
+			cfg.DefaultModel = ""
+		}
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "removed endpoint %q\n", id)
+		return nil
+	}
 	if len(args) < 2 {
 		return fmt.Errorf("usage: termixgo endpoint <provider> <url>")
 	}
@@ -432,6 +486,33 @@ func runEndpoint(args []string, stdout io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "%s endpoint is now %s\n", providerID, endpoint)
 	return nil
+}
+
+// slugifyEndpointName lowers, trims, replaces whitespace runs with '-', and
+// drops characters outside [a-z0-9._-].
+func slugifyEndpointName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	prevDash := false
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+			prevDash = false
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevDash = false
+		case r == '.' || r == '_' || r == '-':
+			b.WriteRune(r)
+			prevDash = true
+		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
+			if !prevDash {
+				b.WriteRune('-')
+				prevDash = true
+			}
+		}
+	}
+	return strings.TrimRight(b.String(), "-")
 }
 
 func runTrust(args []string, stdout io.Writer) error {
@@ -1980,8 +2061,10 @@ Usage:
                                   Run pre-commit static diff inspection and code review
   termixgo models [--provider id] List the model catalogue
   termixgo model [id]             Show or set the default model
-  termixgo endpoint [provider url]
-                                  Show or set a provider's custom base URL
+  termixgo endpoint [provider url]  Show or set a provider's custom base URL
+  termixgo endpoint add <name> <url>
+                                  Add a named OpenAI-compatible endpoint
+  termixgo endpoint rm <name>       Remove a named OpenAI-compatible endpoint
   termixgo trust [on|off]         Show or set folder trust for this directory
   termixgo approval [mode]        Show or set ask|edits|all|plan
   termixgo harness [id]           Show or set the agent harness profile

@@ -525,6 +525,18 @@ func (a *App) guessProvider(modelID string) string {
 	if a.store != nil && provider.KeySource(a.store, "openai-compatible") != "" {
 		return "openai-compatible"
 	}
+	for id, endpoint := range a.cfg.BaseURLs {
+		if provider.IsCompatible(id) && id != provider.CompatibleID && strings.TrimSpace(endpoint) != "" {
+			return id
+		}
+	}
+	if a.store != nil {
+		for _, info := range provider.Providers() {
+			if provider.IsCompatible(info.ID) && info.ID != provider.CompatibleID && provider.KeySource(a.store, info.ID) != "" {
+				return info.ID
+			}
+		}
+	}
 	for _, candidate := range provider.Providers() {
 		if candidate.NeedsKey && provider.HasKey(a.store, candidate.ID) {
 			return candidate.ID
@@ -2749,21 +2761,57 @@ func (a *App) ActiveProviders() []provider.Provider {
 	a.mu.Unlock()
 
 	var active []provider.Provider
+	seen := make(map[string]bool)
 	for _, info := range provider.Providers() {
 		hasCatalog := len(provider.ModelsFor(info.ID)) > 0
 		hasCustomModels := len(customModels[info.ID]) > 0
 		hasKey := provider.KeySource(store, info.ID) != ""
 		hasCustomURL := strings.TrimSpace(baseURLs[info.ID]) != ""
-		if !hasCatalog && !hasCustomModels && info.ID != current && info.ID != "openai-compatible" {
+		if !hasCatalog && !hasCustomModels && info.ID != current && !provider.IsCompatible(info.ID) {
 			continue
 		}
 		if info.ID == current {
 			active = append(active, info)
+			seen[info.ID] = true
 			continue
 		}
 		if hasKey || hasCustomURL || hasCustomModels {
 			active = append(active, info)
+			seen[info.ID] = true
 		}
+	}
+	// Synthesize named OpenAI-compatible endpoints so each registered
+	// compatible server appears as its own provider.
+	for id := range baseURLs {
+		if !provider.IsCompatible(id) || id == provider.CompatibleID || seen[id] {
+			continue
+		}
+		info, ok := provider.ByID(id)
+		if !ok {
+			continue
+		}
+		hasCustomModels := len(customModels[id]) > 0
+		hasKey := provider.KeySource(store, id) != ""
+		hasCustomURL := strings.TrimSpace(baseURLs[id]) != ""
+		if !hasCustomModels && !hasKey && !hasCustomURL {
+			continue
+		}
+		active = append(active, info)
+		seen[id] = true
+	}
+	for id, models := range customModels {
+		if !provider.IsCompatible(id) || id == provider.CompatibleID || seen[id] {
+			continue
+		}
+		if len(models) == 0 {
+			continue
+		}
+		info, ok := provider.ByID(id)
+		if !ok {
+			continue
+		}
+		active = append(active, info)
+		seen[id] = true
 	}
 	return active
 }
