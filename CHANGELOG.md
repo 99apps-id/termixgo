@@ -6,6 +6,9 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+- StepFun Plan model `step-5-preview` (`stepfun-plan/step-5-preview`) in the model catalogue, selectable through `/model` and the picker like the other plan models.
+
 ## 0.2.4 - 2026-10-31
 
 ### Added

@@ -162,6 +162,7 @@ var contextWindows = map[string]int{
 	// The same StepFun models served through the plan endpoint.
 	"stepfun-plan/step-3.7-flash": 262144,
 	"stepfun-plan/step-3.5-flash": 262144,
+	"stepfun-plan/step-5-preview": 262144,
 
 	"kimi-k3":        1048576,
 	"kimi-k2.7-code": 262144,
@@ -519,6 +520,7 @@ func Models() []Model {
 		// endpoint. The host prefix keeps the id unique.
 		{ID: "stepfun-plan/step-3.7-flash", Provider: "stepfun-plan", Label: "Step 3.7 Flash (Plan)", APIID: "step-3.7-flash", Description: "Step 3.7 Flash on the StepFun plan endpoint.", Tags: []string{"tools", "coding"}},
 		{ID: "stepfun-plan/step-3.5-flash", Provider: "stepfun-plan", Label: "Step 3.5 Flash (Plan)", APIID: "step-3.5-flash", Description: "Step 3.5 Flash on the StepFun plan endpoint.", Tags: []string{"fast", "tools"}},
+		{ID: "stepfun-plan/step-5-preview", Provider: "stepfun-plan", Label: "Step 5 Preview (Plan)", APIID: "step-5-preview", Description: "Step 5 Preview on the StepFun plan endpoint.", Tags: []string{"tools", "coding"}},
 
 		// Moonshot. K3 is the open-weight flagship.
 		{ID: "kimi-k3", Provider: "moonshot", Label: "Kimi K3", Description: "Open-weight multimodal reasoning at scale.", Tags: []string{"reasoning", "tools", "coding"}},

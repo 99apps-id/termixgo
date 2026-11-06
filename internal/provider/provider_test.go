@@ -148,6 +148,22 @@ func TestQwenTokenPlanListsThePlannedModels(t *testing.T) {
 	}
 }
 
+// TestStepFunPlanListsThePlannedModels pins the StepFun plan catalogue, so an
+// edit cannot quietly drop the newest generation the operator asked for.
+func TestStepFunPlanListsThePlannedModels(t *testing.T) {
+	want := []string{"step-3.7-flash", "step-3.5-flash", "step-5-preview"}
+	models := ModelsFor("stepfun-plan")
+	have := make(map[string]bool, len(models))
+	for _, model := range models {
+		have[model.WireID()] = true
+	}
+	for _, id := range want {
+		if !have[id] {
+			t.Errorf("stepfun-plan is missing model %q", id)
+		}
+	}
+}
+
 // TestPlanModelIdsResolveWithoutAmbiguity keeps the host-prefixed ids unique:
 // two catalogue entries sharing an id would make ModelByID pick one silently.
 func TestPlanModelIdsResolveWithoutAmbiguity(t *testing.T) {
@@ -160,6 +176,7 @@ func TestPlanModelIdsResolveWithoutAmbiguity(t *testing.T) {
 	}
 	for _, id := range []string{
 		"stepfun-plan/step-3.7-flash",
+		"stepfun-plan/step-5-preview",
 		"qwen-token-plan/qwen3.8-max",
 	} {
 		model, ok := ModelByID(id)
