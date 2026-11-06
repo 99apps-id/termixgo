@@ -606,3 +606,20 @@ func TestSaveTelegramTokenEscapeSkipsTelegram(t *testing.T) {
 		t.Errorf("the summary should stay on screen, got mode %d", final.current)
 	}
 }
+
+func TestMissingAnswerTailRecoversDroppedDeltas(t *testing.T) {
+	stored := "The build passes after the fix."
+	printed := "The build passes"
+	if got := missingAnswerTail(stored, printed); got != " after the fix." {
+		t.Errorf("tail = %q, want the missing suffix", got)
+	}
+	if got := missingAnswerTail(stored, stored); got != "" {
+		t.Errorf("a complete answer must add nothing, got %q", got)
+	}
+	if got := missingAnswerTail(stored, "something else entirely"); got != "" {
+		t.Errorf("a non-prefix must not be appended, got %q", got)
+	}
+	if got := missingAnswerTail("", "printed"); got != "" {
+		t.Errorf("no stored answer must add nothing, got %q", got)
+	}
+}

@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -300,5 +301,88 @@ func TestOpenAIStreamParsesReasoningTokensAndThinkTags(t *testing.T) {
 	}
 	if foundReasoningTokens != 10 {
 		t.Errorf("expected 10 reasoning tokens in usage, got %d", foundReasoningTokens)
+	}
+}
+
+func TestOpenAIDecodesNonStreamedJSONBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		io.WriteString(writer, `{"choices":[{"message":{"content":"Halo dari server lokal","tool_calls":[{"id":"call_x","function":{"name":"read_file","arguments":"{\"path\":\"a.go\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":9,"completion_tokens":4,"total_tokens":13}}`)
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "openai-compatible", Label: "Compatible", Kind: KindOpenAI}, server.URL, "test-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	events := collect(t, client, ChatRequest{Model: "local", Messages: []Message{{Role: RoleUser, Content: "hi"}}})
+
+	if got := joinText(events, EventTextDelta); got != "Halo dari server lokal" {
+		t.Errorf("text = %q, want the whole non-streamed answer", got)
+	}
+	calls := toolCalls(events)
+	if len(calls) != 1 || calls[0].Name != "read_file" {
+		t.Fatalf("tool calls = %+v, want one read_file", calls)
+	}
+	if !strings.Contains(calls[0].Arguments, "a.go") {
+		t.Errorf("arguments = %q, want the JSON payload", calls[0].Arguments)
+	}
+	if got := joinText(events, EventTextDelta); got == "" {
+		t.Errorf("empty answer from a JSON body would read as an idle step")
+	}
+}
+
+func TestOpenAIReportsContentFilterInsteadOfSilence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(writer, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n")
+		fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "openai", Label: "OpenAI", Kind: KindOpenAI}, server.URL, "test-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	err = client.Stream(context.Background(), ChatRequest{Model: "gpt", Messages: []Message{{Role: RoleUser, Content: "hi"}}}, func(StreamEvent) error { return nil })
+	if err == nil {
+		t.Fatalf("a filtered response must fail instead of returning an empty step")
+	}
+	if !strings.Contains(err.Error(), "content_filter") {
+		t.Errorf("error = %v, want it to name content_filter", err)
+	}
+}
+
+func TestOpenAIDecodesJSONBodyWithoutJSONContentType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain")
+		io.WriteString(writer, `{"choices":[{"message":{"content":"plain-typed JSON"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "openai-compatible", Label: "Compatible", Kind: KindOpenAI}, server.URL, "test-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	events := collect(t, client, ChatRequest{Model: "local", Messages: []Message{{Role: RoleUser, Content: "hi"}}})
+	if got := joinText(events, EventTextDelta); got != "plain-typed JSON" {
+		t.Errorf("text = %q, want the sniffed JSON answer", got)
+	}
+}
+
+func TestGooglePromptFeedbackBlockIsNamed(t *testing.T) {
+	url := googleUsageServer(t, []string{
+		`{"promptFeedback":{"blockReason":"SAFETY","blockReasonMessage":"the prompt was blocked"}}`,
+	})
+	client, err := newHTTPClient(Provider{ID: "google", Label: "Google", Kind: KindGoogle}, url, "google-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	err = client.Stream(context.Background(), ChatRequest{Model: "gemini-3-pro", Messages: []Message{{Role: RoleUser, Content: "hi"}}}, func(StreamEvent) error { return nil })
+	if err == nil {
+		t.Fatalf("a blocked prompt must fail instead of returning an empty step")
+	}
+	if !strings.Contains(err.Error(), "blocked") {
+		t.Errorf("error = %v, want it to name the block", err)
 	}
 }

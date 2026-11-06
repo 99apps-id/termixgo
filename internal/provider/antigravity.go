@@ -155,6 +155,13 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 			}
 		}
 		if len(chunk.Candidates) == 0 {
+			if chunk.PromptFeedback != nil && strings.TrimSpace(chunk.PromptFeedback.BlockReason) != "" {
+				message := chunk.PromptFeedback.BlockReasonMessage
+				if strings.TrimSpace(message) == "" {
+					message = "the request was blocked before generation"
+				}
+				return fmt.Errorf("the endpoint blocked the request (%s): %s", chunk.PromptFeedback.BlockReason, message)
+			}
 			continue
 		}
 		if reason := strings.TrimSpace(chunk.Candidates[0].FinishReason); reason != "" {
@@ -844,4 +851,10 @@ type agResponse struct {
 		CachedContentTokenCount int `json:"cachedContentTokenCount"`
 		ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
 	} `json:"usageMetadata"`
+	// PromptFeedback is the request-level safety block. It arrives with no
+	// candidates, which would otherwise read as a completed but empty step.
+	PromptFeedback *struct {
+		BlockReason        string `json:"blockReason"`
+		BlockReasonMessage string `json:"blockReasonMessage"`
+	} `json:"promptFeedback"`
 }

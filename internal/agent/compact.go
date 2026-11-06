@@ -173,6 +173,13 @@ func hardFit(messages []provider.Message, budgetTokens int) []provider.Message {
 		}
 		messages[index] = message
 	}
+	// The share pass above can reduce an assistant turn to nothing: its text is
+	// cut to the empty string and it carries no tool calls. Sending that turn is
+	// a provider error rather than a trimmed request, because the encoder turns
+	// blank content into null and a message then has neither content nor tool
+	// calls. It says nothing once its text is gone, so it is dropped, which can
+	// only lower the total below the budget this pass was enforcing.
+	messages = dropEmptyAssistantTurns(messages)
 	// The share pass cuts text only, and an attachment the estimate cannot
 	// shrink still stands in the request. Old attachments go first, oldest
 	// first, and the live turn's images stay because they carry what the
@@ -186,6 +193,28 @@ func hardFit(messages []provider.Message, budgetTokens int) []provider.Message {
 		}
 	}
 	return messages
+}
+
+// dropEmptyAssistantTurns removes assistant messages that carry no text, no
+// tool calls and no images.
+//
+// A provider accepts a user turn with no content and a tool result with no
+// text, but an assistant turn is required to say something or ask for a tool.
+// Compaction is the only place that can create such a turn, by cutting its text
+// to the empty string, so it is also the place that has to take it back out.
+func dropEmptyAssistantTurns(messages []provider.Message) []provider.Message {
+	kept := messages[:0]
+	for _, message := range messages {
+		if message.Role == provider.RoleAssistant &&
+			message.Content == "" &&
+			len(message.ToolCalls) == 0 &&
+			len(message.Images) == 0 &&
+			message.Reasoning == "" {
+			continue
+		}
+		kept = append(kept, message)
+	}
+	return kept
 }
 
 // CurrentTurnStart is the index of the message that begins the turn being
@@ -248,6 +277,16 @@ func clipText(text string) string {
 // defaultContextBudget is the history budget when a model's window is unknown.
 const defaultContextBudget = 96000
 
+// maxHistoryBudget caps the history budget however large the model's window is.
+//
+// A big window is not a licence to fill it. Halving a 2M-token window still
+// leaves a million tokens of history, and past a point more history makes an
+// answer worse, not better: the model loses the thread and starts inventing
+// requests that were never made. The ceiling is the same order as the largest
+// budget that behaved well in practice, and it binds only on models whose
+// window would otherwise allow more.
+const maxHistoryBudget = 200000
+
 // toolsAndOutputReserveTokens is held back from the window for the system
 // prompt, the tool schemas and the model's own answer. Without it a long
 // conversation fills the window and the request is rejected.
@@ -277,6 +316,9 @@ func HistoryBudget(contextWindow int) int {
 	floor := contextWindow * 30 / 100
 	if budget < floor {
 		budget = floor
+	}
+	if budget > maxHistoryBudget {
+		budget = maxHistoryBudget
 	}
 	return budget
 }

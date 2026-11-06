@@ -11,6 +11,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -277,7 +278,7 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, key
 func (c *Client) SendHTML(ctx context.Context, chatID int64, html string, keyboard *InlineKeyboard) (Message, error) {
 	message, err := c.sendMessage(ctx, chatID, html, keyboard, "HTML")
 	if err != nil && isParseError(err) {
-		return c.sendMessage(ctx, chatID, html, keyboard, "")
+		return c.sendMessage(ctx, chatID, stripTelegramHTML(html), keyboard, "")
 	}
 	return message, err
 }
@@ -293,7 +294,7 @@ func (c *Client) SendMarkdown(ctx context.Context, chatID int64, markdown string
 func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, keyboard *InlineKeyboard, parseMode string) (Message, error) {
 	payload := map[string]any{
 		"chat_id":                  chatID,
-		"text":                     clampText(text),
+		"text":                     clampText(validUTF8(text)),
 		"disable_web_page_preview": true,
 	}
 	if parseMode != "" {
@@ -400,7 +401,7 @@ func (c *Client) editMessage(ctx context.Context, chatID int64, messageID int64,
 	payload := map[string]any{
 		"chat_id":                  chatID,
 		"message_id":               messageID,
-		"text":                     clampText(text),
+		"text":                     clampText(validUTF8(text)),
 		"disable_web_page_preview": true,
 	}
 	if parseMode != "" {
@@ -412,7 +413,24 @@ func (c *Client) editMessage(ctx context.Context, chatID int64, messageID int64,
 		}
 		payload["reply_markup"] = keyboard
 	}
-	return c.call(ctx, "editMessageText", payload, nil)
+	err := c.call(ctx, "editMessageText", payload, nil)
+	// Telegram answers 400 "message is not modified" when the new body equals
+	// the current one. That is a successful edit, not a failure: reporting it
+	// as an error made the caller fall back to a new message, which duplicated
+	// the answer in the chat.
+	if err != nil && isNotModified(err) {
+		return nil
+	}
+	return err
+}
+
+// isNotModified reports the API's "nothing to change" 400 on an edit.
+func isNotModified(err error) bool {
+	apiErr, ok := err.(*APIError)
+	if !ok || apiErr.Code != http.StatusBadRequest {
+		return false
+	}
+	return strings.Contains(strings.ToLower(apiErr.Description), "not modified")
 }
 
 // isParseError reports whether the API rejected the message body's entities,
@@ -423,7 +441,40 @@ func isParseError(err error) bool {
 		return false
 	}
 	lowered := strings.ToLower(apiErr.Description)
-	return strings.Contains(lowered, "parse") || strings.Contains(lowered, "entities")
+	return strings.Contains(lowered, "parse") ||
+		strings.Contains(lowered, "entit") ||
+		strings.Contains(lowered, "tag") ||
+		strings.Contains(lowered, "markup") ||
+		strings.Contains(lowered, "entity")
+}
+
+// validUTF8 replaces any byte runs that are not valid UTF-8 with the
+// replacement glyph. Telegram rejects a body that carries invalid bytes, so
+// one stray byte would drop the whole message.
+func validUTF8(text string) string {
+	if utf8.ValidString(text) {
+		return text
+	}
+	return strings.ToValidUTF8(text, "\uFFFD")
+}
+
+var htmlTagPattern = regexp.MustCompile(`<[^>]*>`)
+
+// stripTelegramHTML removes the HTML subset the renderer emits and unescapes
+// the entities it writes, so a parse-failure fallback shows plain text rather
+// than raw markup.
+func stripTelegramHTML(html string) string {
+	stripped := htmlTagPattern.ReplaceAllString(html, "")
+	for _, pair := range [][2]string{
+		{"&amp;", "&"},
+		{"&lt;", "<"},
+		{"&gt;", ">"},
+		{"&quot;", "\""},
+		{"&#39;", "'"},
+	} {
+		stripped = strings.ReplaceAll(stripped, pair[0], pair[1])
+	}
+	return stripped
 }
 
 // maxDownloadBytes bounds one file download so a large upload cannot exhaust

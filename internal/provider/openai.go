@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -65,13 +67,28 @@ func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers ma
 		_ = emit(StreamEvent{Type: EventRateLimit, RateLimit: rl})
 	}
 
-	reader := newSSEReader(response.Body)
+	// A local OpenAI-compatible server sometimes ignores stream:true and
+	// answers one JSON body instead. The SSE reader sees no data frames in
+	// that body and the step arrives empty, which the loop files as an idle
+	// model after three tries. Sniff the first bytes rather than trusting the
+	// Content-Type: some servers label the body text/plain.
+	buffered := bufio.NewReader(response.Body)
+	if looksLikeWholeJSON(buffered) {
+		return c.decodeWholeResponse(buffered, emit)
+	}
+
+	reader := newSSEReader(buffered)
 	accumulator := newToolCallAccumulator()
 	thinkFilter := &thinkTagFilter{}
 	// A server may repeat the request-wide usage on every chunk, so the increase
 	// is emitted rather than each raw report: the agent sums what it is handed,
 	// and forwarding repeats charged the same tokens once per chunk.
 	usage := &cumulativeUsage{}
+	// emitted and reasoned separate "the model was silent" from "the model
+	// worked": a content filter is a named failure, not an idle step.
+	emitted := false
+	reasoned := false
+	finishReason := ""
 	for {
 		payload, err := reader.next()
 		if err == io.EOF {
@@ -95,46 +112,28 @@ func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers ma
 			return fmt.Errorf("%s stream reported an error: %s", c.info.Label, message)
 		}
 		if chunk.Usage != nil {
-			cached := 0
-			if chunk.Usage.PromptTokensDetails != nil {
-				cached = chunk.Usage.PromptTokensDetails.CachedTokens
-			}
-			// DeepSeek's disk cache is reported through prompt_cache_hit_tokens
-			// rather than prompt_tokens_details.cached_tokens. Its hit part sits
-			// inside prompt_tokens, exactly like the OpenAI cached_tokens field,
-			// so the same "subtract the cached part before applying the full
-			// input rate" rule prices it once.
-			if chunk.Usage.PromptCacheHitTokens > cached {
-				cached = chunk.Usage.PromptCacheHitTokens
-			}
-			reasoningTokens := 0
-			if chunk.Usage.CompletionTokensDetails != nil {
-				reasoningTokens = chunk.Usage.CompletionTokensDetails.ReasoningTokens
-			}
-			if step, ok := usage.step(Usage{
-				PromptTokens:     chunk.Usage.PromptTokens,
-				CompletionTokens: chunk.Usage.CompletionTokens,
-				TotalTokens:      chunk.Usage.TotalTokens,
-				CacheReadTokens:  cached,
-				ReasoningTokens:  reasoningTokens,
-			}); ok {
-				if err := emit(StreamEvent{Type: EventUsage, Usage: &step}); err != nil {
-					return err
-				}
+			if err := emitOpenAIUsage(chunk.Usage, usage, emit); err != nil {
+				return err
 			}
 		}
 		for _, choice := range chunk.Choices {
+			if choice.FinishReason != "" {
+				finishReason = choice.FinishReason
+			}
 			delta := choice.Delta
 			if thinking := delta.thinking(); thinking != "" {
+				reasoned = true
 				if err := emit(StreamEvent{Type: EventReasoningDelta, Text: thinking}); err != nil {
 					return err
 				}
 				if delta.Content != "" {
+					emitted = true
 					if err := emit(StreamEvent{Type: EventTextDelta, Text: delta.Content}); err != nil {
 						return err
 					}
 				}
 			} else if delta.Content != "" {
+				emitted = true
 				if err := thinkFilter.process(delta.Content, emit); err != nil {
 					return err
 				}
@@ -152,12 +151,185 @@ func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers ma
 		return err
 	}
 
-	for _, call := range accumulator.finish() {
+	calls := accumulator.finish()
+	if len(calls) > 0 {
+		emitted = true
+	}
+	for _, call := range calls {
 		if err := emit(StreamEvent{Type: EventToolCall, ToolCall: &call}); err != nil {
 			return err
 		}
 	}
+	if !emitted && !reasoned {
+		switch finishReason {
+		case "content_filter":
+			return fmt.Errorf("the %s endpoint blocked the response (finish reason content_filter)", c.info.Label)
+		case "length":
+			return fmt.Errorf("the %s endpoint hit the output token limit before writing any text", c.info.Label)
+		}
+	}
 	return nil
+}
+
+// looksLikeWholeJSON reports whether the body starts with a JSON document
+// rather than an SSE frame. A server that ignored stream:true answers the
+// whole completion at once, and treating it as SSE drops every byte.
+func looksLikeWholeJSON(reader *bufio.Reader) bool {
+	peek, err := reader.Peek(512)
+	if err != nil && len(peek) == 0 {
+		return false
+	}
+	trimmed := bytes.TrimSpace(peek)
+	if len(trimmed) == 0 {
+		return false
+	}
+	switch trimmed[0] {
+	case '{', '[':
+		return !bytes.HasPrefix(trimmed, []byte("data:"))
+	}
+	return false
+}
+
+// openAIUsage is the usage object of one chat-completion report.
+type openAIUsage struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	PromptTokensDetails *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	CompletionTokensDetails *struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
+	// DeepSeek reports its disk cache through these two fields instead of
+	// prompt_tokens_details: prompt_cache_hit_tokens is the part served from
+	// the cache at a tenth of the full input rate, prompt_cache_miss_tokens
+	// the part that was not. The hit count is the cache read; the miss count
+	// is already inside prompt_tokens, so recording only the hit keeps the
+	// cached part priced once.
+	PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
+}
+
+// emitOpenAIUsage folds one usage report into the cumulative tracker and emits
+// the increase.
+func emitOpenAIUsage(report *openAIUsage, usage *cumulativeUsage, emit func(StreamEvent) error) error {
+	cached := 0
+	if report.PromptTokensDetails != nil {
+		cached = report.PromptTokensDetails.CachedTokens
+	}
+	if report.PromptCacheHitTokens > cached {
+		cached = report.PromptCacheHitTokens
+	}
+	reasoningTokens := 0
+	if report.CompletionTokensDetails != nil {
+		reasoningTokens = report.CompletionTokensDetails.ReasoningTokens
+	}
+	step, ok := usage.step(Usage{
+		PromptTokens:     report.PromptTokens,
+		CompletionTokens: report.CompletionTokens,
+		TotalTokens:      report.TotalTokens,
+		CacheReadTokens:  cached,
+		ReasoningTokens:  reasoningTokens,
+	})
+	if !ok {
+		return nil
+	}
+	return emit(StreamEvent{Type: EventUsage, Usage: &step})
+}
+
+// wholeChatCompletion is a complete chat-completion body, which a server
+// returns when it ignores stream:true and replies in one JSON document.
+type wholeChatCompletion struct {
+	Choices []struct {
+		Message struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+			Reasoning        string `json:"reasoning"`
+			ToolCalls        []struct {
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage *openAIUsage    `json:"usage"`
+	Error json.RawMessage `json:"error"`
+}
+
+// decodeWholeResponse turns a non-streamed chat completion into the same
+// stream events the SSE path emits.
+func (c *openAIClient) decodeWholeResponse(body io.Reader, emit func(StreamEvent) error) error {
+	raw, err := io.ReadAll(io.LimitReader(body, 32<<20))
+	if err != nil {
+		return wrapStreamError(c.info.Label, err)
+	}
+	var decoded wholeChatCompletion
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return fmt.Errorf("%s returned a body that is neither an event stream nor a chat completion", c.info.Label)
+	}
+	if message, reported := inBandError(decoded.Error); reported {
+		return fmt.Errorf("%s stream reported an error: %s", c.info.Label, message)
+	}
+	usage := &cumulativeUsage{}
+	if decoded.Usage != nil {
+		if err := emitOpenAIUsage(decoded.Usage, usage, emit); err != nil {
+			return err
+		}
+	}
+	emitted := false
+	reasoned := false
+	for _, choice := range decoded.Choices {
+		message := choice.Message
+		if thinking := firstNonEmpty(message.ReasoningContent, message.Reasoning); thinking != "" {
+			reasoned = true
+			if err := emit(StreamEvent{Type: EventReasoningDelta, Text: thinking}); err != nil {
+				return err
+			}
+		}
+		if message.Content != "" {
+			emitted = true
+			if err := emit(StreamEvent{Type: EventTextDelta, Text: message.Content}); err != nil {
+				return err
+			}
+		}
+		for _, call := range message.ToolCalls {
+			emitted = true
+			arguments := call.Function.Arguments
+			if strings.TrimSpace(arguments) == "" {
+				arguments = "{}"
+			}
+			id := call.ID
+			if strings.TrimSpace(id) == "" {
+				id = fmt.Sprintf("call_%d", len(call.Function.Name))
+			}
+			toolCall := ToolCall{ID: id, Name: call.Function.Name, Arguments: arguments}
+			if err := emit(StreamEvent{Type: EventToolCall, ToolCall: &toolCall}); err != nil {
+				return err
+			}
+		}
+		if !emitted && !reasoned {
+			switch choice.FinishReason {
+			case "content_filter":
+				return fmt.Errorf("the %s endpoint blocked the response (finish reason content_filter)", c.info.Label)
+			case "length":
+				return fmt.Errorf("the %s endpoint hit the output token limit before writing any text", c.info.Label)
+			}
+		}
+	}
+	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // encodeMessages flattens the shared message shape into chat-completions
@@ -409,25 +581,7 @@ type openAIChunk struct {
 	// struct would make the string form a parse failure, which is then skipped
 	// exactly like the frame this is meant to catch.
 	Error json.RawMessage `json:"error"`
-	Usage *struct {
-		PromptTokens        int `json:"prompt_tokens"`
-		CompletionTokens    int `json:"completion_tokens"`
-		TotalTokens         int `json:"total_tokens"`
-		PromptTokensDetails *struct {
-			CachedTokens int `json:"cached_tokens"`
-		} `json:"prompt_tokens_details"`
-		CompletionTokensDetails *struct {
-			ReasoningTokens int `json:"reasoning_tokens"`
-		} `json:"completion_tokens_details"`
-		// DeepSeek reports its disk cache through these two fields instead of
-		// prompt_tokens_details: prompt_cache_hit_tokens is the part served from
-		// the cache at a tenth of the full input rate, prompt_cache_miss_tokens
-		// the part that was not. The hit count is the cache read; the miss count
-		// is already inside prompt_tokens, so recording only the hit keeps the
-		// cached part priced once.
-		PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
-		PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
-	} `json:"usage"`
+	Usage *openAIUsage    `json:"usage"`
 }
 
 // inBandError reads the error member of a stream frame, if the frame carried

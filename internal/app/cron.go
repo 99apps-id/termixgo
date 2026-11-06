@@ -244,6 +244,13 @@ func (a *App) Notify(ctx context.Context, text string) error {
 	if trimmed == "" {
 		return nil
 	}
+	// A scheduled or background delivery never passed through a chat answer
+	// path, so the secret scan belongs here as well: a job that printed a key
+	// must not post it to the operator's chat.
+	trimmed = strings.TrimSpace(a.RedactForChannel(trimmed))
+	if trimmed == "" {
+		return nil
+	}
 	a.mu.Lock()
 	bot := a.bot
 	chatID := a.cfg.Telegram.ChatID

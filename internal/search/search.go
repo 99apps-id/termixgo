@@ -4,6 +4,7 @@ package search
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -128,7 +129,11 @@ func OpenIn(root, dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("search: cannot create dir: %w", err)
 	}
 	dbPath := filepath.Join(dataDir, defaultDBSuffix)
-	db, err := sql.Open("sqlite", dbPath)
+	// busy_timeout is set through the DSN, not a PRAGMA executed after Open:
+	// database/sql may hand a statement a fresh connection, and a PRAGMA run on
+	// one connection does not arm the busy handler on another. The same DSN
+	// pragma the WhatsApp store uses keeps both files consistent.
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(dbPath)+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("search: open db: %w", err)
 	}
@@ -180,23 +185,82 @@ func (s *Store) Index(scope, path, title, body string) error {
 	body = clampIndexBytes(body)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// The delete and the insert share one transaction: a reader must never see
-	// the document missing.
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`DELETE FROM docs WHERE scope = ? AND path = ?`, scope, path); err != nil {
-		return err
-	}
-	if strings.TrimSpace(body) == "" {
+	// A stored query result outlives the document it described. Without this
+	// the same query keeps answering from the index as it was before the
+	// write: the memory tool writes a fact, searches for it, and is told it
+	// does not exist until the cache expires. Search holds the same lock while
+	// it reads and fills the cache, so clearing here cannot race a reader.
+	if err := s.writeWithLockWait(func() error {
+		// The delete and the insert share one transaction: a reader must never
+		// see the document missing.
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		if _, err := tx.Exec(`DELETE FROM docs WHERE scope = ? AND path = ?`, scope, path); err != nil {
+			return err
+		}
+		if strings.TrimSpace(body) == "" {
+			return tx.Commit()
+		}
+		if _, err := tx.Exec(`INSERT INTO docs(scope, path, title, body) VALUES(?,?,?,?)`, scope, path, title, body); err != nil {
+			return err
+		}
 		return tx.Commit()
-	}
-	if _, err := tx.Exec(`INSERT INTO docs(scope, path, title, body) VALUES(?,?,?,?)`, scope, path, title, body); err != nil {
+	}); err != nil {
 		return err
 	}
-	return tx.Commit()
+	s.queryCache = nil
+	return nil
+}
+
+// writeLockWait bounds how long a second writer waits for the first to release
+// the SQLite write lock.
+const (
+	writeLockWait  = 2 * time.Second
+	writeLockPause = 15 * time.Millisecond
+)
+
+// writeWithLockWait runs a write, retrying while another process holds the
+// write lock.
+//
+// busy_timeout alone does not cover this: when the lock holder is mid-write on
+// an FTS5 table, SQLite reports SQLITE_BUSY on the very first statement without
+// ever consulting the busy handler (measured: returns in under a millisecond
+// with busy_timeout armed at 5000). Two processes share this database, because
+// `serve` reindexes while the CLI runs search_memory, so the retry belongs here
+// rather than in the caller.
+func (s *Store) writeWithLockWait(write func() error) error {
+	deadline := time.Now().Add(writeLockWait)
+	for {
+		err := write()
+		if err == nil || !isLockError(err) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("search: index is locked by another process (try again): %w", err)
+		}
+		time.Sleep(writeLockPause)
+	}
+}
+
+// isLockError reports whether a driver error means the write lock was taken.
+//
+// The code is read through the driver's own Code method rather than an import,
+// so this file keeps its blank driver import. The message check covers a
+// wrapped error that no longer carries the type.
+func isLockError(err error) bool {
+	var coded interface{ Code() int }
+	if errors.As(err, &coded) {
+		switch coded.Code() {
+		case 5, 6: // SQLITE_BUSY, SQLITE_LOCKED
+			return true
+		}
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") ||
+		strings.Contains(message, "database table is locked")
 }
 
 // clampIndexBytes caps a document at maxIndexBytes.
@@ -219,8 +283,13 @@ func clampIndexBytes(text string) string {
 func (s *Store) Remove(scope, path string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec(`DELETE FROM docs WHERE scope = ? AND path = ?`, scope, path)
-	return err
+	// Same reason as Index: a cached answer would keep naming a document that
+	// is no longer there.
+	s.queryCache = nil
+	return s.writeWithLockWait(func() error {
+		_, err := s.db.Exec(`DELETE FROM docs WHERE scope = ? AND path = ?`, scope, path)
+		return err
+	})
 }
 
 // Search runs an FTS5 query and returns ranked results.

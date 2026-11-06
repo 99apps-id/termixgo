@@ -55,6 +55,14 @@ type Session struct {
 	// budget at least once, so the operator is told about it once instead of
 	// every turn. It is persisted with the session for the same reason.
 	condensed bool
+	// systemNotes are harness messages for the step being run right now:
+	// critic reviews, verification reminders, repetition diagnoses. They ride
+	// in the system prompt rather than the transcript because a nudge read
+	// from the user channel is indistinguishable from the operator's own
+	// instruction, and a model that mistakes one for the other invents a task
+	// nobody asked for. They are cleared when the turn ends, because a note
+	// that outlives the step it was written for is stale guidance.
+	systemNotes []string
 }
 
 // sessionJSON is the persisted shape. It mirrors the fields so the on-disk
@@ -371,6 +379,39 @@ func (s *Session) AddCost(cost float64) {
 	s.mu.Lock()
 	s.costUSD += cost
 	s.updatedAt = time.Now()
+	s.mu.Unlock()
+}
+
+// AddSystemNote records a harness message for the step being run. It is not a
+// conversation turn: it reaches the model through the system prompt, so the
+// operator's own words stay the only thing in the user channel.
+func (s *Session) AddSystemNote(text string) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return
+	}
+	s.mu.Lock()
+	s.systemNotes = append(s.systemNotes, trimmed)
+	s.mu.Unlock()
+}
+
+// SystemNotes returns the harness messages waiting for the next step.
+func (s *Session) SystemNotes() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.systemNotes) == 0 {
+		return nil
+	}
+	out := make([]string, len(s.systemNotes))
+	copy(out, s.systemNotes)
+	return out
+}
+
+// ClearSystemNotes drops the notes once the step they were written for is
+// over, so a stale reminder cannot steer a later step.
+func (s *Session) ClearSystemNotes() {
+	s.mu.Lock()
+	s.systemNotes = nil
 	s.mu.Unlock()
 }
 

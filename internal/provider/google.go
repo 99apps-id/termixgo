@@ -103,6 +103,15 @@ func (c *googleClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 			// like every sibling provider reports it, not an empty answer.
 			return wrapStreamError("Google", fmt.Errorf("the Google stream reported an error (code %d %s): %s", chunk.Error.Code, chunk.Error.Status, chunk.Error.Message))
 		}
+		if chunk.PromptFeedback != nil && strings.TrimSpace(chunk.PromptFeedback.BlockReason) != "" {
+			// A prompt-level block is a refusal, not silence: naming it stops
+			// the loop from retrying the same rejected request as an idle step.
+			message := chunk.PromptFeedback.BlockReasonMessage
+			if strings.TrimSpace(message) == "" {
+				message = "the request was blocked before generation"
+			}
+			return fmt.Errorf("the Google endpoint blocked the request (%s): %s", chunk.PromptFeedback.BlockReason, message)
+		}
 		if chunk.UsageMetadata != nil {
 			current := Usage{
 				PromptTokens:     chunk.UsageMetadata.PromptTokenCount,
@@ -309,6 +318,14 @@ type googleChunk struct {
 		Message string `json:"message"`
 		Status  string `json:"status"`
 	} `json:"error"`
+	// PromptFeedback carries the request-level block. A prompt rejected by
+	// the safety filter arrives with blockReason set and no candidates, which
+	// the old decoder skipped as an ordinary empty frame: the step then
+	// counted as an idle model instead of a named refusal.
+	PromptFeedback *struct {
+		BlockReason        string `json:"blockReason"`
+		BlockReasonMessage string `json:"blockReasonMessage"`
+	} `json:"promptFeedback"`
 	// A stream reports usage either way: usageMetadata is present on
 	// every frame.
 	UsageMetadata *struct {

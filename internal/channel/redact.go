@@ -54,14 +54,16 @@ var suspiciousDecodedMarkers = []string{
 // Redact removes token-shaped text and any stored secret value (including its
 // Base64-encoded form) from an answer. known is the list of live secret values;
 // a short value is skipped, because a common word would be edited out of every
-// sentence.
+// sentence. The floor is 12: eight characters is the length of an ordinary
+// product name, so a value that short turns every mention of it into the
+// placeholder and the answer reads as broken rather than protected.
 func Redact(text string, known []string) string {
 	if strings.TrimSpace(text) == "" {
 		return text
 	}
 	out := text
 	for _, value := range known {
-		if len(value) < 8 {
+		if len(value) < 12 {
 			continue
 		}
 		out = strings.ReplaceAll(out, value, RedactedPlaceholder)

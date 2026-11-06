@@ -140,6 +140,10 @@ type Model struct {
 
 	running    bool
 	runStarted time.Time
+	// turnMark is the session message count when the turn in flight started,
+	// so a reconciliation reads this turn's answer rather than an earlier one.
+	// A negative value means no turn has started from this model.
+	turnMark int
 
 	// showDetails controls whether thinking, reasoning and tool process
 	// blocks are expanded or collapsed. Ctrl+O toggles the value.
@@ -288,6 +292,7 @@ func NewWithOptions(application *app.App, options Options) *Model {
 		picker:      pickerList,
 		current:     modeChat,
 		showDetails: true,
+		turnMark:    -1,
 	}
 	// Detect initial terminal size so the first render is not stuck on
 	// "Loading Termixgo..." if Bubble Tea delays or zeroes the first
@@ -565,6 +570,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case runDoneMsg:
 		m.running = false
+		// A delta dropped by a full event queue would leave the transcript
+		// answer shorter than the stored one. The session is authoritative at
+		// the end of the turn, so the newest answer block is repaired from it.
+		m.reconcileAnswerText()
 		// A steer the finished turn never folded in is drained into the queue
 		// below and runs as the next turn, so the echo list is done with.
 		m.steerEcho = nil
@@ -1605,6 +1614,10 @@ func (m *Model) startRun(input string) (tea.Model, tea.Cmd) {
 	m.blocks = append(m.blocks, block{kind: blockUser, text: input})
 	m.running = true
 	m.runStarted = time.Now()
+	m.turnMark = -1
+	if session := m.app.Session(); session != nil {
+		m.turnMark = session.MessageCount()
+	}
 	m.refresh()
 
 	application := m.app
@@ -1717,6 +1730,43 @@ func (m *Model) applyEvent(event agent.Event) {
 			// The error event already rendered the message.
 		}
 	}
+}
+
+// reconcileAnswerText replaces the newest assistant block with the answer the
+// session stored. The event queue drops display events under load, and a lost
+// text delta is invisible in the transcript: the reply simply stops early. The
+// stored message is the whole answer, so repairing from it is exact.
+func (m *Model) reconcileAnswerText() {
+	if m.app == nil || m.turnMark < 0 {
+		return
+	}
+	session := m.app.Session()
+	if session == nil {
+		return
+	}
+	stored := strings.TrimSpace(session.LastAssistantTextSince(m.turnMark))
+	if stored == "" {
+		return
+	}
+	// The block has to belong to this turn: rewriting the previous turn's
+	// answer when every delta of the current one was dropped would move text
+	// under the wrong prompt.
+	lastUser := -1
+	for index := len(m.blocks) - 1; index >= 0; index-- {
+		if m.blocks[index].kind == blockUser {
+			lastUser = index
+			break
+		}
+	}
+	for index := len(m.blocks) - 1; index > lastUser; index-- {
+		if m.blocks[index].kind == blockAssistant {
+			m.blocks[index].text = stored
+			return
+		}
+	}
+	// Every delta of a real answer was dropped, so restore the whole reply as
+	// its own block instead of leaving the turn looking unanswered.
+	m.blocks = append(m.blocks, block{kind: blockAssistant, text: stored})
 }
 
 func (m *Model) applyPlan(plan []agent.Todo) {

@@ -74,3 +74,16 @@ func TestWrapUntrustedBlocksTagBreakoutAndBase64Payloads(t *testing.T) {
 		}
 	}
 }
+
+func TestRedactLeavesCommonProductNamesAlone(t *testing.T) {
+	// Eight to eleven characters is the length of a product name; a stored
+	// local key that happens to be one must not turn every mention into the
+	// placeholder, which reads as a broken answer.
+	if got := Redact("Termigo and termixgo are fine", []string{"termixgo"}); got != "Termigo and termixgo are fine" {
+		t.Errorf("a product-name-length value was redacted: %q", got)
+	}
+	long := "termixgo-local-key"
+	if got := Redact("the key is "+long, []string{long}); strings.Contains(got, long) {
+		t.Errorf("a long stored value survived: %q", got)
+	}
+}

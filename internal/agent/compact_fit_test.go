@@ -126,6 +126,35 @@ func TestCompactNeverMutatesTheSourceThatWasPassedIn(t *testing.T) {
 	}
 }
 
+// TestCompactNeverEmitsAnEmptyAssistantTurn is the empty-content 400.
+//
+// The share pass cuts text only. When an assistant turn's share ran out before
+// its first byte, its content became the empty string while it carried no tool
+// call, and the encoder turns blank content into null. The provider then rejects
+// the whole request with "content or toolcalls must be set", which surfaced as
+// Failed to contact the AI model on every later step of that session.
+func TestCompactNeverEmitsAnEmptyAssistantTurn(t *testing.T) {
+	// A window far below what the fixed overhead of these messages needs, so
+	// every share collapses to zero and the pass blanks what it can.
+	messages := []provider.Message{
+		{Role: provider.RoleUser, Content: strings.Repeat("u", 400)},
+		{Role: provider.RoleAssistant, Content: strings.Repeat("a", 400)},
+		{Role: provider.RoleUser, Content: strings.Repeat("v", 400)},
+		{Role: provider.RoleAssistant, Content: strings.Repeat("b", 400)},
+	}
+	trimmed := Compact(messages, 12)
+
+	for index, message := range trimmed {
+		if message.Role != provider.RoleAssistant {
+			continue
+		}
+		if message.Content == "" && len(message.ToolCalls) == 0 && len(message.Images) == 0 {
+			t.Fatalf("message %d is an assistant turn with neither content nor tool calls, "+
+				"which the provider rejects: %#v", index, message)
+		}
+	}
+}
+
 // TestCompactLeavesAFittingConversationAlone keeps the guarantee from becoming
 // a habit of touching work that did not need it.
 func TestCompactLeavesAFittingConversationAlone(t *testing.T) {

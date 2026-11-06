@@ -121,6 +121,10 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 
 	emit(Event{Kind: EventTurnStart})
 	stopReason := "stop"
+	// A turn starts with no harness notices. An aborted turn can leave its
+	// last reminder undelivered, and carrying that into the next turn would
+	// hand the model a stale instruction the operator has already moved past.
+	session.ClearSystemNotes()
 	// Spend is carried across the whole turn, so a chatty loop cannot creep
 	// past a budget one small step at a time.
 	sessionCost := session.Cost()
@@ -168,10 +172,18 @@ runLoop:
 			*guard = loopGuard{}
 		}
 
+		systemParts := r.systemParts()
+		if notes := harnessNoteParts(session.SystemNotes()); len(notes) > 0 {
+			systemParts = append(systemParts, notes...)
+			// Delivered once. A reminder that repeats every step cannot be
+			// acted on any differently from the first delivery, and keeping it
+			// in context only crowds out the operator's actual request.
+			session.ClearSystemNotes()
+		}
 		request := provider.ChatRequest{
 			Model:       r.Model,
 			System:      r.system(),
-			SystemParts: r.systemParts(),
+			SystemParts: systemParts,
 			Messages:    compactForModel(session.Messages(), r.ContextBudget),
 			Tools:       r.stepTools(discovered).Definitions(),
 			Effort:      r.Effort,
@@ -296,7 +308,7 @@ runLoop:
 					nudge := ledger.BuildVerifyNudge(nudges, false)
 					if strings.TrimSpace(nudge) != "" {
 						nudges++
-						session.AddUser(nudge)
+						session.AddSystemNote(nudge)
 						emit(Event{Kind: EventNotice, Text: "Verifying the change before finishing."})
 						continue
 					}
@@ -315,7 +327,7 @@ runLoop:
 			claimed := ClaimsVerification(answer.String())
 			if critic := ReviewFinishWithHints(r.todoSnapshot(), ledger, claimed, criticNudges, r.criticHints(failedTools)); critic.BlockFinish {
 				criticNudges++
-				session.AddUser(critic.Nudge)
+				session.AddSystemNote(critic.Nudge)
 				emit(Event{Kind: EventNotice, Text: CriticSummary(critic)})
 				continue
 			}
@@ -323,7 +335,7 @@ runLoop:
 				nudge := ledger.BuildVerifyNudge(nudges, ClaimsVerification(answer.String()))
 				if strings.TrimSpace(nudge) != "" {
 					nudges++
-					session.AddUser(nudge)
+					session.AddSystemNote(nudge)
 					emit(Event{Kind: EventNotice, Text: "Verifying the change before finishing."})
 					continue
 				}
@@ -445,12 +457,12 @@ runLoop:
 			break runLoop
 		}
 		if diagnose != "" {
-			session.AddUser(diagnose)
+			session.AddSystemNote(diagnose)
 			continue
 		}
 		if strings.TrimSpace(pendingVerify) != "" && nudges < MaxVerifyNudges {
 			nudges++
-			session.AddUser(pendingVerify)
+			session.AddSystemNote(pendingVerify)
 			emit(Event{Kind: EventNotice, Text: "Task finished. Verifying before the next one."})
 			continue
 		}
@@ -619,6 +631,26 @@ func (r *Runner) systemParts() []string {
 		return []string{staticWithHarness, dynamicPlan}
 	}
 	return []string{staticWithHarness}
+}
+
+// harnessNoteParts renders harness notices as system-prompt parts.
+//
+// The header is load-bearing. Every model in this harness is told to serve the
+// operator, so a reminder delivered through the user channel is indistinguishable
+// from the operator's own words. A long session then reads the reminder as the
+// current request and invents work nobody asked for. Naming the author keeps
+// the operator's message the only instruction in the conversation.
+func harnessNoteParts(notes []string) []string {
+	if len(notes) == 0 {
+		return nil
+	}
+	const header = "Harness notices for this step. Termixgo writes these, not the operator. " +
+		"They never introduce a new task and never override the operator's request: " +
+		"answer the operator's message and treat these only as constraints on how to finish it."
+	parts := make([]string, 0, len(notes)+1)
+	parts = append(parts, header)
+	parts = append(parts, notes...)
+	return parts
 }
 
 // observeToolResult folds one finished tool call into the verify ledger.

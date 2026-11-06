@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/agent"
@@ -259,6 +260,10 @@ func (a *App) RedactForChannel(text string) string {
 // must not make the bot repeat an earlier reply.
 func (a *App) runChannelTurn(ctx context.Context, agentName string, session *agent.Session, interactor Interactor, prompt string, images []provider.Image, guest bool, maxSteps int, costBudgetUSD float64, callerName, callerChannel, callerChatID, callerAccount string, progress func(string)) (string, error) {
 	notice := ""
+	stopReason := ""
+	// The emitter also runs on the process manager's goroutine, so the
+	// captured notice and stop reason are guarded rather than plain vars.
+	var captureMu sync.Mutex
 	if progress != nil {
 		// The opening line is part of the contract: the caller shows it at
 		// once, before the first event arrives.
@@ -266,9 +271,17 @@ func (a *App) runChannelTurn(ctx context.Context, agentName string, session *age
 		claim := a.SetObserver(func(event agent.Event) {
 			switch {
 			case event.Kind == agent.EventNotice && strings.TrimSpace(event.Text) != "":
+				captureMu.Lock()
 				notice = event.Text
+				captureMu.Unlock()
 			case event.Kind == agent.EventError && event.Err != nil:
+				captureMu.Lock()
 				notice = event.Err.Error()
+				captureMu.Unlock()
+			case event.Kind == agent.EventTurnEnd:
+				captureMu.Lock()
+				stopReason = event.StopReason
+				captureMu.Unlock()
 			}
 			if line := telegramProgressLine(event); line != "" {
 				progress(line)
@@ -316,7 +329,34 @@ func (a *App) runChannelTurn(ctx context.Context, agentName string, session *age
 	if answer != "" {
 		return answer, nil
 	}
-	return notice, nil
+	captureMu.Lock()
+	capturedNotice := notice
+	capturedStop := stopReason
+	captureMu.Unlock()
+	if capturedNotice != "" {
+		return capturedNotice, nil
+	}
+	return emptyTurnMessage(capturedStop), nil
+}
+
+// emptyTurnMessage describes a turn that produced no answer, naming the stop
+// reason when one is known. A channel must never deliver a blank reply that
+// reads as the bot ignoring the message, and "(no output)" at the bridge is a
+// last resort, so the reason travels from the loop instead.
+func emptyTurnMessage(stopReason string) string {
+	switch strings.TrimSpace(stopReason) {
+	case "loop-guard":
+		return "The run stopped because the model kept repeating itself without making progress. Send a clearer instruction to continue."
+	case "step-cap":
+		return "The run paused at the step budget before writing an answer. Reply \"continue\" to pick up where it stopped."
+	case "cost-cap":
+		return "The run stopped at the cost budget before writing an answer. Raise costBudgetUsd or reply to continue."
+	case "aborted":
+		return "The run was stopped before it wrote an answer."
+	case "error":
+		return "The run failed before writing an answer; see the notice above for the provider error."
+	}
+	return "The run finished without writing an answer. Reply to continue."
 }
 
 // evidenceReminder is the one retry's instruction: demand evidence, and accept
@@ -426,6 +466,9 @@ func (a *App) startTelegramAccount(name string) error {
 	bot := telegram.New(token, bridge)
 	bridge.bot = bot
 	bot.SetAccount(name, entry.ChannelAccount, a.pairingStore())
+	// The bot redacts every outbound line, including progress and error text
+	// that never passed through the answer path, with the live secret store.
+	bot.SetRedactor(a.RedactForChannel)
 	bot.Pair(entry.ChatID, entry.OwnerUserID)
 	bot.SetPairingCode(entry.PairingCode)
 	// The confirmed update id lives beside the rest of the state, scoped to

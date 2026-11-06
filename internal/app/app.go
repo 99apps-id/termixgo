@@ -33,7 +33,11 @@ import (
 )
 
 // eventBuffer is deep enough that a burst of tool output never blocks a run.
-const eventBuffer = 512
+// A slow consumer (a piped one-shot, a paused terminal) can still fill it, so
+// the UI and the one-shot printer reconcile the final answer from the session
+// instead of trusting every delta to have arrived. The depth keeps that
+// reconciliation rare without letting an idle app hold a large queue.
+const eventBuffer = 2048
 
 // mcpConnectTimeout bounds the MCP handshake and tool listing together. A server
 // that hangs on startup must not stop the session from opening, so the whole
@@ -2494,6 +2498,8 @@ func (a *App) GitDiff(ctx context.Context) (string, error) {
 // lines and returning the final answer text.
 func (a *App) RunPrompt(ctx context.Context, prompt string, progress func(string)) (string, error) {
 	notice := ""
+	stopReason := ""
+	var captureMu sync.Mutex
 	if progress != nil {
 		// The opening line is part of the contract: the caller shows it at once,
 		// before the first event arrives.
@@ -2501,9 +2507,17 @@ func (a *App) RunPrompt(ctx context.Context, prompt string, progress func(string
 		claim := a.SetObserver(func(event agent.Event) {
 			switch {
 			case event.Kind == agent.EventNotice && strings.TrimSpace(event.Text) != "":
+				captureMu.Lock()
 				notice = event.Text
+				captureMu.Unlock()
 			case event.Kind == agent.EventError && event.Err != nil:
+				captureMu.Lock()
 				notice = event.Err.Error()
+				captureMu.Unlock()
+			case event.Kind == agent.EventTurnEnd:
+				captureMu.Lock()
+				stopReason = event.StopReason
+				captureMu.Unlock()
 			}
 			if line := telegramProgressLine(event); line != "" {
 				progress(line)
@@ -2522,21 +2536,38 @@ func (a *App) RunPrompt(ctx context.Context, prompt string, progress func(string
 	if answer := strings.TrimSpace(session.LastAssistantTextSince(mark)); answer != "" {
 		return answer, nil
 	}
-	return notice, nil
+	captureMu.Lock()
+	capturedNotice := notice
+	capturedStop := stopReason
+	captureMu.Unlock()
+	if capturedNotice != "" {
+		return capturedNotice, nil
+	}
+	return emptyTurnMessage(capturedStop), nil
 }
 
 // RunPromptWithImage runs one turn with an image attached to the prompt, for a
 // photo the operator sent. mediaType is a MIME type and data is base64.
 func (a *App) RunPromptWithImage(ctx context.Context, prompt, mediaType, data string, progress func(string)) (string, error) {
 	notice := ""
+	stopReason := ""
+	var captureMu sync.Mutex
 	if progress != nil {
 		progress("Working...")
 		claim := a.SetObserver(func(event agent.Event) {
 			switch {
 			case event.Kind == agent.EventNotice && strings.TrimSpace(event.Text) != "":
+				captureMu.Lock()
 				notice = event.Text
+				captureMu.Unlock()
 			case event.Kind == agent.EventError && event.Err != nil:
+				captureMu.Lock()
 				notice = event.Err.Error()
+				captureMu.Unlock()
+			case event.Kind == agent.EventTurnEnd:
+				captureMu.Lock()
+				stopReason = event.StopReason
+				captureMu.Unlock()
 			}
 			if line := telegramProgressLine(event); line != "" {
 				progress(line)
@@ -2562,7 +2593,14 @@ func (a *App) RunPromptWithImage(ctx context.Context, prompt, mediaType, data st
 	if answer := strings.TrimSpace(session.LastAssistantTextSince(mark)); answer != "" {
 		return answer, nil
 	}
-	return notice, nil
+	captureMu.Lock()
+	capturedNotice := notice
+	capturedStop := stopReason
+	captureMu.Unlock()
+	if capturedNotice != "" {
+		return capturedNotice, nil
+	}
+	return emptyTurnMessage(capturedStop), nil
 }
 
 // RunVoicePrompt runs a turn initiated from a voice note. If the active model

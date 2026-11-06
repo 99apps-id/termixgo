@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -22,6 +23,30 @@ func TestRememberFlattensMultilineFact(t *testing.T) {
 	}
 	if strings.Contains(project[0], "\n") {
 		t.Errorf("fact must not contain a newline: %q", project[0])
+	}
+}
+
+// The prompt block must not grow without bound. Every fact is paid for on every
+// step, and an unbounded block crowds out the operator's request; the newest
+// facts are the ones a run needs, and the block has to say how many it left out
+// so a partial record never reads as the whole one.
+func TestPromptBlockKeepsNewestFactsAndSaysHowManyItDropped(t *testing.T) {
+	memory := NewMemory(t.TempDir())
+	for index := 0; index < maxPromptMemoryFacts+7; index++ {
+		fact := fmt.Sprintf("fact %03d", index)
+		if err := memory.Remember(fact, "project"); err != nil {
+			t.Fatalf("Remember: %v", err)
+		}
+	}
+	block := memory.PromptBlock()
+	if strings.Contains(block, "fact 000") {
+		t.Errorf("the oldest fact must be the one dropped, got:\n%s", block)
+	}
+	if !strings.Contains(block, "fact 046") {
+		t.Errorf("the newest fact must survive, got:\n%s", block)
+	}
+	if !strings.Contains(block, "(7 older facts omitted)") {
+		t.Errorf("a trimmed block must say how many facts it left out, got:\n%s", block)
 	}
 }
 

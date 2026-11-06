@@ -17,16 +17,21 @@ type fakeClient struct {
 	mu    sync.Mutex
 	steps [][]provider.StreamEvent
 	calls int
+	// requests keeps every request the runner built, which is how a test
+	// checks what actually reached the model instead of what stayed in the
+	// session transcript.
+	requests []provider.ChatRequest
 }
 
 func (f *fakeClient) ID() string { return "fake" }
 
 func (f *fakeClient) FetchQuota(context.Context) *provider.QuotaSnapshot { return nil }
 
-func (f *fakeClient) Stream(_ context.Context, _ provider.ChatRequest, emit func(provider.StreamEvent) error) error {
+func (f *fakeClient) Stream(_ context.Context, request provider.ChatRequest, emit func(provider.StreamEvent) error) error {
 	f.mu.Lock()
 	index := f.calls
 	f.calls++
+	f.requests = append(f.requests, request)
 	f.mu.Unlock()
 	if index >= len(f.steps) {
 		return nil

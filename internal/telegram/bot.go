@@ -154,6 +154,29 @@ type Bot struct {
 	interceptor channel.MessageInterceptor
 	hookURL     string
 	hookSecret  string
+	// redactor replaces token shapes and every stored secret value on the way
+	// out. The app installs one that knows the live secret store, so an error
+	// line that echoes a credential is scrubbed before it reaches the chat.
+	redactor func(string) string
+}
+
+// SetRedactor installs the outbound redactor. Nil keeps the pattern-only
+// default, which still strips token shapes but cannot know stored values.
+func (b *Bot) SetRedactor(redactor func(string) string) {
+	b.hookMu.Lock()
+	defer b.hookMu.Unlock()
+	b.redactor = redactor
+}
+
+// redact applies the installed redactor, falling back to the pattern scan.
+func (b *Bot) redact(text string) string {
+	b.hookMu.RLock()
+	redactor := b.redactor
+	b.hookMu.RUnlock()
+	if redactor != nil {
+		return redactor(text)
+	}
+	return channel.Redact(text, nil)
 }
 
 // SetInterceptor installs a native Go message interceptor.
@@ -1401,12 +1424,18 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 	// Replacing lost every earlier step: the operator saw one tool at a time and
 	// the task itself scrolled away. An edit the throttle skips is not lost
 	// either, because the next edit carries the whole list.
+	//
+	// The emitter can fire on a background process goroutine as well as the
+	// run's own, so the line list and the throttle clock are guarded.
+	var cardMu sync.Mutex
 	var lines []string
 	var lastEdit time.Time
 	flush := func(force bool) {
 		if statusMessage.MessageID == 0 {
 			return
 		}
+		cardMu.Lock()
+		defer cardMu.Unlock()
 		// Throttle edits: Telegram rate-limits rapid edits to one message.
 		if !force && time.Since(lastEdit) < 2*time.Second {
 			return
@@ -1418,18 +1447,29 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 			editCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 		}
-		_ = b.client.EditMarkdown(editCtx, chatID, statusMessage.MessageID, strings.Join(lines, "\n"), nil)
+		if err := b.client.EditMarkdown(editCtx, chatID, statusMessage.MessageID, strings.Join(lines, "\n"), nil); err != nil {
+			// A silent EditMarkdown failure leaves the card stuck at its last
+			// painted state, which reads as the turn being wedged. The log is
+			// the operator's only signal.
+			b.logf("could not edit the progress card: %v", err)
+		}
 	}
 	progress := func(line string) {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			return
 		}
+		// A tool label can echo a path or a command that holds a credential;
+		// the card crosses the same redactor the final answer does.
+		line = b.redact(line)
+		cardMu.Lock()
 		if len(lines) > 0 && lines[len(lines)-1] == line {
+			cardMu.Unlock()
 			return
 		}
 		lines = append(lines, line)
 		lines = capCardLines(lines, telegramChunkLimit)
+		cardMu.Unlock()
 		flush(false)
 	}
 
@@ -1457,7 +1497,9 @@ func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Co
 		return
 	}
 	if strings.TrimSpace(answer) != "" && channel.Silent(answer) {
-		_ = b.client.DeleteMessage(ctx, chatID, statusMessage.MessageID)
+		if err := b.client.DeleteMessage(ctx, chatID, statusMessage.MessageID); err != nil {
+			b.logf("could not delete the silent progress card: %v", err)
+		}
 		return
 	}
 	if strings.TrimSpace(answer) == "" {
@@ -1493,7 +1535,11 @@ const telegramChunkLimit = 3800
 // never exceeds telegramChunkLimit, keeping tags and HTML entities balanced in
 // every message.
 func (b *Bot) replyMarkdown(ctx context.Context, chatID int64, text string) {
-	text = channel.Redact(text, nil)
+	text = b.redact(text)
+	if strings.TrimSpace(text) == "" {
+		b.logf("replyMarkdown called with empty text; nothing sent")
+		return
+	}
 	sendCtx := ctx
 	if sendCtx == nil || sendCtx.Err() != nil {
 		var cancel context.CancelFunc
@@ -1504,9 +1550,37 @@ func (b *Bot) replyMarkdown(ctx context.Context, chatID int64, text string) {
 		part, rest := nextChunk(text, telegramChunkLimit)
 		text = rest
 		if _, err := b.client.SendMarkdown(sendCtx, chatID, part, nil); err != nil {
-			b.logf("send failed: %v", err)
+			// The chunk is lost but the loop keeps going: dropping from the head
+			// of the answer rather than stopping mid-way keeps whatever the
+			// model did say in the chat.
+			b.logf("send failed (chunk of %d bytes dropped): %v", len(part), err)
 		}
 	}
+}
+
+const markdownFenceClose = "\n```"
+
+// openedFence reports whether the text ends with an odd number of code fence
+// openers, which means the cut landed inside a fenced block. The second return
+// value names the opening fence's language tag, or an empty string when the
+// fence carried none.
+func openedFence(part string) (string, bool) {
+	fences := 0
+	lang := ""
+	for _, line := range strings.Split(part, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "```") {
+			continue
+		}
+		if fences == 0 {
+			lang = strings.TrimSpace(strings.TrimPrefix(trimmed, "```"))
+			if fields := strings.Fields(lang); len(fields) > 0 {
+				lang = fields[0]
+			}
+		}
+		fences++
+	}
+	return lang, fences%2 == 1
 }
 
 // nextChunk splits text into a part under limit bytes (both raw and after
@@ -1514,7 +1588,9 @@ func (b *Bot) replyMarkdown(ctx context.Context, chatID int64, text string) {
 // boundary, which Telegram requires, and prefers a line boundary near the limit
 // so a sentence is not split mid-line when a newline is close. The newline
 // itself stays with the next part: the renderer trims a trailing newline, so
-// keeping it here would drop it.
+// keeping it here would drop it. A cut inside a fenced code block closes and
+// reopens the fence across the two parts, so neither chunk reaches the wire
+// with an unterminated <pre> that swallows the rest of the message.
 func nextChunk(text string, limit int) (string, string) {
 	if len(text) <= limit && (limit < 64 || len(markdownToTelegramHTML(text)) <= limit) {
 		return text, ""
@@ -1539,7 +1615,12 @@ func nextChunk(text string, limit int) (string, string) {
 			return text[:width], text[width:]
 		}
 		if limit < 64 || len(markdownToTelegramHTML(text[:cut])) <= limit || cut <= 16 {
-			return text[:cut], text[cut:]
+			part, rest := text[:cut], text[cut:]
+			if fenceLang, open := openedFence(part); open {
+				part += markdownFenceClose
+				rest = "```" + fenceLang + "\n" + rest
+			}
+			return part, rest
 		}
 		capBytes = (cut * 3) / 4
 		if capBytes < 16 {
@@ -1549,7 +1630,8 @@ func nextChunk(text string, limit int) (string, string) {
 }
 
 // capCardLines keeps the newest lines within limit bytes, dropping the oldest so
-// the growing card never exceeds the Telegram message limit.
+// the growing card never exceeds the Telegram message limit. A row naming how
+// many lines were dropped is kept when the card has to give up earlier steps.
 func capCardLines(lines []string, limit int) []string {
 	total := 0
 	for _, line := range lines {
@@ -1559,9 +1641,15 @@ func capCardLines(lines []string, limit int) []string {
 		total--
 	}
 	kept := lines
+	dropped := 0
 	for len(kept) > 1 && total > limit {
 		total -= len(kept[0]) + 1
 		kept = kept[1:]
+		dropped++
+	}
+	if dropped > 0 {
+		marker := fmt.Sprintf("... (%d earlier lines dropped)", dropped)
+		kept = append([]string{marker}, kept...)
 	}
 	return kept
 }
@@ -1770,9 +1858,9 @@ func (b *Bot) reply(ctx context.Context, chatID int64, text string) {
 	// Error text is the one path where a raw URL (the Bot API client builds
 	// URLs that carry the token) or a provider body (which echoes key
 	// prefixes) could reach the chat unredacted: those strings never pass
-	// through the answer redaction, so every line crosses RedactForChannel
-	// on the way out.
-	text = channel.Redact(text, nil)
+	// through the answer redaction, so every line crosses the installed
+	// redactor (the app's RedactForChannel, which knows the secret store).
+	text = b.redact(text)
 	sendCtx := ctx
 	if sendCtx == nil || sendCtx.Err() != nil {
 		var cancel context.CancelFunc
@@ -1786,10 +1874,25 @@ func (b *Bot) reply(ctx context.Context, chatID int64, text string) {
 
 // SendTo posts one message to one chat, chunked to the account's limit. It is
 // how a scheduled job reaches a chat that is not the paired operator chat.
+//
+// The split is the same fence-aware one the answer path uses, so a code block
+// that lands on a chunk boundary stays balanced instead of reaching Telegram as
+// an unterminated <pre>.
 func (b *Bot) SendTo(ctx context.Context, chatID int64, text string) error {
 	limit := b.Policy().EffectiveTextChunkLimit()
-	for _, chunk := range channel.Chunk(text, limit) {
-		if _, err := b.client.SendMarkdown(ctx, chatID, chunk, nil); err != nil {
+	if limit <= 0 {
+		limit = telegramChunkLimit
+	}
+	// A scheduled delivery bypasses the answer path, so it crosses the same
+	// redactor here rather than trusting the caller to have done it.
+	text = b.redact(text)
+	for len(text) > 0 {
+		part, rest := nextChunk(text, limit)
+		text = rest
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		if _, err := b.client.SendMarkdown(ctx, chatID, part, nil); err != nil {
 			return err
 		}
 	}

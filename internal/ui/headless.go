@@ -35,6 +35,10 @@ type plainPrinter struct {
 	colored   bool
 	reasoning bool
 	lastLine  bool
+	// answer accumulates the EventText already printed. A dropped delta (the
+	// event queue is bounded) leaves the printed answer a strict prefix of the
+	// stored one, and the tail can be recovered from the session at the end.
+	answer strings.Builder
 	// failure is the first error event seen. The run loop reports a provider
 	// failure as an event and still returns nil, so this is the only signal a
 	// one-shot call has that the turn did not succeed.
@@ -78,6 +82,7 @@ func (p *plainPrinter) print(event agent.Event) {
 			fmt.Fprintln(p.out)
 		}
 		fmt.Fprint(p.out, event.Text)
+		p.answer.WriteString(event.Text)
 		p.lastLine = true
 	case agent.EventToolStart:
 		if p.lastLine {
@@ -263,8 +268,16 @@ func RunPlainWithContext(ctx context.Context, application *app.App, in io.Reader
 			}
 			continue
 		}
+		// Each turn's printed text starts empty, so the tail repair below can
+		// compare it against the answer the session stored.
+		printer.answer.Reset()
 		if err := application.RunTurn(ctx, ExpandMentions(application.Workspace(), line)); err != nil {
 			fmt.Fprintln(out, printer.color(ansiRed, "error: "+err.Error()))
+		}
+		// A delta dropped by a full event queue would leave the reply short;
+		// the stored answer is the whole one, so the missing tail goes out here.
+		if tail := missingAnswerTail(sessionLastAnswer(application), printer.answer.String()); tail != "" {
+			fmt.Fprint(out, tail)
 		}
 		fmt.Fprintln(out)
 	}
@@ -390,6 +403,12 @@ func RunOnceJSON(ctx context.Context, application *app.App, prompt string, out i
 	if err != nil {
 		return err
 	}
+	// The event stream is bounded, so a consumer that fell behind may have
+	// missed a text delta. The stored answer is authoritative; the trailing
+	// record lets a consumer that recomposes deltas end with the whole text.
+	if answer := sessionLastAnswer(application); strings.TrimSpace(answer) != "" {
+		_ = enc.Encode(&JSONEvent{Type: "final_answer", Text: answer})
+	}
 	return failure
 }
 
@@ -434,6 +453,14 @@ func runOnceWithOptions(ctx context.Context, application *app.App, prompt string
 	// Stopping first waits for the printer, so the answer is fully written and
 	// the recorded failure is safe to read.
 	stop()
+	// A delta dropped by a full event queue leaves the printed answer behind
+	// the stored one. The tail is recovered here: a one-shot run's stdout is
+	// the product, and a silently truncated answer is indistinguishable from a
+	// model that stopped mid-sentence.
+	if tail := missingAnswerTail(sessionLastAnswer(application), printer.answer.String()); tail != "" {
+		fmt.Fprint(out, tail)
+		printer.lastLine = true
+	}
 	if printer.lastLine {
 		fmt.Fprintln(out)
 	}
@@ -441,6 +468,25 @@ func runOnceWithOptions(ctx context.Context, application *app.App, prompt string
 		return err
 	}
 	return printer.failure
+}
+
+// sessionLastAnswer returns the newest non-empty assistant answer of the live
+// session, or "" when there is none.
+func sessionLastAnswer(application *app.App) string {
+	if session := application.Session(); session != nil {
+		return session.LastAssistantText()
+	}
+	return ""
+}
+
+// missingAnswerTail returns the part of the stored answer the printer has not
+// written yet, or "" when the printed text is not a prefix (a provider that
+// streamed something else entirely) or is already complete.
+func missingAnswerTail(stored, printed string) string {
+	if stored == "" || !strings.HasPrefix(stored, printed) || len(stored) <= len(printed) {
+		return ""
+	}
+	return stored[len(printed):]
 }
 
 func printPlainWelcome(application *app.App, out io.Writer, colored bool) {
