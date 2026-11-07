@@ -44,9 +44,12 @@ if (-not $Destination) {
 Say "Termixgo uninstaller"
 Say ""
 
-$running = Get-Process -Name "termixgo" -ErrorAction SilentlyContinue
+$target = Join-Path $Destination "termixgo.exe"
+$running = Get-Process -Name "termixgo" -ErrorAction SilentlyContinue | Where-Object {
+    try { $_.Path -and [System.IO.Path]::GetFullPath($_.Path) -eq [System.IO.Path]::GetFullPath($target) } catch { $false }
+}
 if ($running) {
-    throw "Termixgo is running (pid $($running.Id -join ', ')). Quit it and run the uninstaller again."
+    throw "Termixgo is running from $target (pid $($running.Id -join ', ')). Quit it and run the uninstaller again."
 }
 
 # The install directory is removed last, after the shortcut and the registry

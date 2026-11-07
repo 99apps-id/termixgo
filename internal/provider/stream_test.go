@@ -386,3 +386,82 @@ func TestGooglePromptFeedbackBlockIsNamed(t *testing.T) {
 		t.Errorf("error = %v, want it to name the block", err)
 	}
 }
+
+func TestOpenAIStreamEmitsIncompleteOnLength(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		chunks := []string{
+			`{"choices":[{"delta":{"content":"partial answer"}}]}`,
+			`{"choices":[{"delta":{},"finish_reason":"length"}]}`,
+			`[DONE]`,
+		}
+		for _, chunk := range chunks {
+			fmt.Fprintf(writer, "data: %s\n\n", chunk)
+		}
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "openai", Label: "OpenAI", Kind: KindOpenAI}, server.URL, "test-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	events := collect(t, client, ChatRequest{Model: "gpt", Messages: []Message{{Role: RoleUser, Content: "hi"}}})
+	hasIncomplete := false
+	for _, event := range events {
+		if event.Type == EventIncomplete && event.IncompleteReason == "length" {
+			hasIncomplete = true
+			break
+		}
+	}
+	if !hasIncomplete {
+		t.Errorf("expected EventIncomplete with reason 'length', got %v", events)
+	}
+}
+
+func TestAnthropicStreamEmitsIncompleteOnMaxTokens(t *testing.T) {
+	server := newTestServer(t, streamFrames(
+		`{"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":1}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":5}}`,
+		`{"type":"message_stop"}`,
+	))
+
+	client, err := newHTTPClient(Provider{ID: "anthropic", Label: "Anthropic", Kind: KindAnthropic}, server.URL, "test-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	events := collect(t, client, ChatRequest{Model: "claude", Messages: []Message{{Role: RoleUser, Content: "hi"}}})
+	hasIncomplete := false
+	for _, event := range events {
+		if event.Type == EventIncomplete && event.IncompleteReason == "max_tokens" {
+			hasIncomplete = true
+			break
+		}
+	}
+	if !hasIncomplete {
+		t.Errorf("expected EventIncomplete with reason 'max_tokens', got %v", events)
+	}
+}
+
+func TestGoogleStreamEmitsIncompleteOnMaxTokens(t *testing.T) {
+	url := googleUsageServer(t, []string{
+		`{"candidates":[{"content":{"parts":[{"text":"partial"}]},"finishReason":"MAX_TOKENS"}]}`,
+	})
+	client, err := newHTTPClient(Provider{ID: "google", Label: "Google", Kind: KindGoogle}, url, "google-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	events := collect(t, client, ChatRequest{Model: "gemini", Messages: []Message{{Role: RoleUser, Content: "hi"}}})
+	hasIncomplete := false
+	for _, event := range events {
+		if event.Type == EventIncomplete && event.IncompleteReason == "max_tokens" {
+			hasIncomplete = true
+			break
+		}
+	}
+	if !hasIncomplete {
+		t.Errorf("expected EventIncomplete with reason 'max_tokens', got %v", events)
+	}
+}

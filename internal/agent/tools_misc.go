@@ -967,6 +967,8 @@ func isBlockedIP(ip net.IP) bool {
 // project's own tests fetch from one.
 func isBlockedHost(host string) bool {
 	trimmed := strings.ToLower(strings.TrimSpace(host))
+	trimmed = strings.TrimPrefix(trimmed, "[")
+	trimmed = strings.TrimSuffix(trimmed, "]")
 	if trimmed == "169.254.169.254" || trimmed == "metadata.google.internal" ||
 		trimmed == "metadata.goog" || trimmed == "fd00:ec2::254" || trimmed == "100.100.100.200" {
 		return true

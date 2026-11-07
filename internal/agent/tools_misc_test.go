@@ -330,6 +330,7 @@ func TestWebFetchRefusesMetadataAddresses(t *testing.T) {
 		"metadata.google.internal",
 		"169.254.1.1",
 		"[fe80::1]",
+		"[fd00:ec2::254]",
 	} {
 		result, err := tool.Run(context.Background(), env, map[string]any{"url": "http://" + host + "/latest/meta-data/"})
 		if err != nil {

@@ -120,6 +120,11 @@ func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers ma
 			if choice.FinishReason != "" {
 				finishReason = choice.FinishReason
 			}
+			if choice.FinishReason == "length" {
+				if err := emit(StreamEvent{Type: EventIncomplete, IncompleteReason: "length"}); err != nil {
+					return err
+				}
+			}
 			delta := choice.Delta
 			if thinking := delta.thinking(); thinking != "" {
 				reasoned = true

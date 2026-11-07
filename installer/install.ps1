@@ -94,19 +94,20 @@ if (-not (Test-Path $binary -PathType Leaf)) {
 Write-Host "Termixgo installer"
 Write-Host ""
 
-# A running copy cannot be replaced on Windows, and a half-replaced install is
-# worse than a refused one, so this stops before touching anything.
-$running = Get-Process -Name "termixgo" -ErrorAction SilentlyContinue
-if ($running) {
-    throw "Termixgo is running (pid $($running.Id -join ', ')). Close its window and run the installer again."
-}
-
-Write-Host "== install =="
 if (-not (Test-Path $Destination)) {
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     Write-Step "created $Destination"
 }
 $target = Join-Path $Destination "termixgo.exe"
+
+# A running copy cannot be replaced on Windows, and a half-replaced install is
+# worse than a refused one, so this stops before touching anything.
+$running = Get-Process -Name "termixgo" -ErrorAction SilentlyContinue | Where-Object {
+    try { $_.Path -and [System.IO.Path]::GetFullPath($_.Path) -eq [System.IO.Path]::GetFullPath($target) } catch { $false }
+}
+if ($running) {
+    throw "Termixgo is running from $target (pid $($running.Id -join ', ')). Close its window and run the installer again."
+}
 
 # Copy through a temporary name and then move it over the old one, so an
 # interrupted install leaves either the old binary or the new one and never a

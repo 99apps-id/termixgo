@@ -23,7 +23,7 @@ var embeddedBinary []byte
 var embeddedUninstaller []byte
 
 const appName = "Termixgo"
-const defaultVersion = "0.2.0"
+var Version = "0.2.5"
 const publisher = "99apps-id"
 
 func main() {
@@ -41,6 +41,9 @@ func main() {
 		case (arg == "-d" || arg == "--dir" || arg == "--destination") && i+1 < len(os.Args):
 			i++
 			targetDir = os.Args[i]
+		case arg == "-v" || arg == "--version":
+			fmt.Printf("%s Windows Setup %s\n", appName, Version)
+			return
 		case arg == "-h" || arg == "--help":
 			printUsage()
 			return
@@ -107,9 +110,10 @@ func runInstall(targetDir string, silent bool) error {
 		embeddedBinary = data
 	}
 
-	// 2. Check if termixgo is currently running
-	if isProcessRunning("termixgo.exe") {
-		return fmt.Errorf("termixgo.exe is currently running; please close it before proceeding")
+	// 2. Check if the target termixgo executable is currently running
+	targetExe := filepath.Join(targetDir, "termixgo.exe")
+	if isTargetExecutableInUse(targetExe) {
+		return fmt.Errorf("%s is currently running; please close it before proceeding", targetExe)
 	}
 
 	step(silent, fmt.Sprintf("Preparing destination: %s", targetDir))
@@ -118,7 +122,6 @@ func runInstall(targetDir string, silent bool) error {
 	}
 
 	// 3. Write binary atomically
-	targetExe := filepath.Join(targetDir, "termixgo.exe")
 	stagingExe := targetExe + ".new"
 
 	step(silent, "Extracting executable...")
@@ -183,8 +186,9 @@ func runUninstall(targetDir string, silent bool) error {
 		fmt.Printf("Uninstalling %s...\n", appName)
 	}
 
-	if isProcessRunning("termixgo.exe") {
-		return fmt.Errorf("termixgo.exe is currently running; close it before uninstalling")
+	targetExe := filepath.Join(targetDir, "termixgo.exe")
+	if isTargetExecutableInUse(targetExe) {
+		return fmt.Errorf("%s is currently running; close it before uninstalling", targetExe)
 	}
 
 	// 1. Remove Start Menu shortcut
@@ -226,13 +230,16 @@ func pauseIfInteractive(silent bool) {
 	_, _ = os.Stdin.Read(b[:])
 }
 
-func isProcessRunning(name string) bool {
-	cmd := exec.Command("tasklist", "/FI", "IMAGENAME eq "+name, "/NH")
-	out, err := cmd.Output()
-	if err != nil {
+func isTargetExecutableInUse(targetExe string) bool {
+	if _, err := os.Stat(targetExe); os.IsNotExist(err) {
 		return false
 	}
-	return strings.Contains(strings.ToLower(string(out)), strings.ToLower(name))
+	f, err := os.OpenFile(targetExe, os.O_WRONLY, 0)
+	if err != nil {
+		return true
+	}
+	_ = f.Close()
+	return false
 }
 
 func appendUserPath(dir string) error {
@@ -359,7 +366,7 @@ func registerUninstallKey(installDir, targetExe string) error {
 	}
 	defer k.Close()
 
-	version := defaultVersion
+	version := Version
 	cmd := exec.Command(targetExe, "version")
 	if out, err := cmd.Output(); err == nil {
 		s := strings.TrimSpace(string(out))

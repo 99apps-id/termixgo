@@ -103,7 +103,7 @@ try {
 
     $setupOut = Join-Path $dist "TermixgoSetup.exe"
     try {
-        & go build -trimpath -ldflags "-s -w" -o $setupOut ./cmd/termixgo-setup
+        & go build -trimpath -ldflags "-s -w -X main.Version=$Version" -o $setupOut ./cmd/termixgo-setup
         if ($LASTEXITCODE -ne 0) { throw "go build failed for cmd/termixgo-setup" }
         $sizeSetup = (Get-Item $setupOut).Length
         Write-Host ("  {0} ({1:N0} bytes)" -f (Split-Path $setupOut -Leaf), $sizeSetup)

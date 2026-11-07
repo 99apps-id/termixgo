@@ -475,7 +475,9 @@ var geminiUnsupportedKeys = map[string]bool{
 	"deprecated": true, "readOnly": true, "writeOnly": true,
 	"uniqueItems": true, "const": true, "oneOf": true, "anyOf": true, "allOf": true, "not": true,
 	"if": true, "then": true, "else": true,
-	"exclusiveMinimum": true, "exclusiveMaximum": true, "multipleOf": true,
+	"exclusiveMinimum": true, "exclusiveMaximum": true, "minimum": true, "maximum": true,
+	"multipleOf": true, "minLength": true, "maxLength": true, "pattern": true,
+	"minItems": true, "maxItems": true, "minProperties": true, "maxProperties": true,
 	"contentEncoding": true, "contentMediaType": true, "contentSchema": true,
 }
 
@@ -524,6 +526,9 @@ func stripSchemaKeys(value any) any {
 				if items, ok := out["items"].(map[string]any); !ok || len(items) == 0 {
 					out["items"] = map[string]any{"type": "string"}
 				}
+			}
+			if t != "object" {
+				delete(out, "properties")
 			}
 		}
 		return out
