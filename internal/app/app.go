@@ -2326,6 +2326,9 @@ type runOptions struct {
 	// priority orders this caller against the other surfaces that share the
 	// single run slot. Zero means the operator.
 	priority RunPriority
+	// observer receives agent events for this specific run directly, ensuring
+	// progress streaming works even during concurrent runs across profiles.
+	observer func(agent.Event)
 }
 
 // runOn is the single run path for a caller that only knows the session it
@@ -2456,6 +2459,16 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 		// emitter that does not fold its usage into the operator's live
 		// session; the owned session still accounts for itself.
 		runEnv = a.isolatedEnvForRun(agentName, opts.guest)
+	}
+	if opts.observer != nil {
+		origEmit := runEnv.Emit
+		obs := opts.observer
+		runEnv.Emit = func(event agent.Event) {
+			obs(event)
+			if origEmit != nil {
+				origEmit(event)
+			}
+		}
 	}
 	runEnv.CallerName = opts.callerName
 	runEnv.CallerChannel = opts.callerChannel
@@ -2629,11 +2642,12 @@ func (a *App) RunPrompt(ctx context.Context, prompt string, progress func(string
 	notice := ""
 	stopReason := ""
 	var captureMu sync.Mutex
+	var progressObserver func(agent.Event)
 	if progress != nil {
 		// The opening line is part of the contract: the caller shows it at once,
 		// before the first event arrives.
 		progress("Working...")
-		claim := a.SetObserver(func(event agent.Event) {
+		progressObserver = func(event agent.Event) {
 			switch {
 			case event.Kind == agent.EventNotice && strings.TrimSpace(event.Text) != "":
 				captureMu.Lock()
@@ -2651,12 +2665,13 @@ func (a *App) RunPrompt(ctx context.Context, prompt string, progress func(string
 			if line := telegramProgressLine(event); line != "" {
 				progress(line)
 			}
-		})
+		}
+		claim := a.SetObserver(progressObserver)
 		defer a.ClearObserver(claim)
 	}
 	session := a.currentSession()
 	mark := session.MessageCount()
-	if err := a.runTurn(ctx, prompt); err != nil {
+	if err := a.runWithOptions(ctx, prompt, runOptions{observer: progressObserver}); err != nil {
 		return "", err
 	}
 	// Report only what this turn produced. Falling back to the session's last
@@ -2681,9 +2696,10 @@ func (a *App) RunPromptWithImage(ctx context.Context, prompt, mediaType, data st
 	notice := ""
 	stopReason := ""
 	var captureMu sync.Mutex
+	var progressObserver func(agent.Event)
 	if progress != nil {
 		progress("Working...")
-		claim := a.SetObserver(func(event agent.Event) {
+		progressObserver = func(event agent.Event) {
 			switch {
 			case event.Kind == agent.EventNotice && strings.TrimSpace(event.Text) != "":
 				captureMu.Lock()
@@ -2701,7 +2717,8 @@ func (a *App) RunPromptWithImage(ctx context.Context, prompt, mediaType, data st
 			if line := telegramProgressLine(event); line != "" {
 				progress(line)
 			}
-		})
+		}
+		claim := a.SetObserver(progressObserver)
 		defer a.ClearObserver(claim)
 	}
 	// A photo can be larger than a provider accepts. Scale it down before the
@@ -2716,7 +2733,7 @@ func (a *App) RunPromptWithImage(ctx context.Context, prompt, mediaType, data st
 	images := []provider.Image{{MediaType: mediaType, Data: data}}
 	session := a.currentSession()
 	mark := session.MessageCount()
-	if err := a.runTurnWithImages(ctx, prompt, images); err != nil {
+	if err := a.runWithOptions(ctx, prompt, runOptions{images: images, observer: progressObserver}); err != nil {
 		return "", err
 	}
 	if answer := strings.TrimSpace(session.LastAssistantTextSince(mark)); answer != "" {
@@ -2937,12 +2954,23 @@ func (a *App) ActiveProviders() []provider.Provider {
 func telegramProgressLine(event agent.Event) string {
 	switch event.Kind {
 	case agent.EventToolStart:
-		return event.ToolLabel
-	case agent.EventToolEnd:
-		if !event.ToolOK {
-			return event.ToolLabel + " (failed)"
+		if event.ToolLabel != "" {
+			return event.ToolLabel
 		}
-		return event.ToolLabel
+		if event.ToolName != "" {
+			return "Running " + event.ToolName + "..."
+		}
+	case agent.EventToolEnd:
+		label := event.ToolLabel
+		if label == "" && event.ToolName != "" {
+			label = "Ran " + event.ToolName
+		}
+		if label != "" {
+			if !event.ToolOK {
+				return label + " (failed)"
+			}
+			return label
+		}
 	case agent.EventNotice:
 		return event.Text
 	case agent.EventError:

@@ -658,15 +658,27 @@ func TestEncodeGoogleContentsMergesConsecutiveUserTurnsAndImages(t *testing.T) {
 	}
 
 	encoded := encodeGoogleContents(messages)
-	if len(encoded) != 3 {
-		t.Fatalf("expected 3 alternating turns (user, model, user), got %d turns", len(encoded))
+	if len(encoded) != 5 {
+		t.Fatalf("expected 5 alternating turns (user, model, user, model, user), got %d turns", len(encoded))
 	}
-	if encoded[0]["role"] != "user" || encoded[1]["role"] != "model" || encoded[2]["role"] != "user" {
-		t.Fatalf("roles must alternate between user and model: got %v, %v, %v", encoded[0]["role"], encoded[1]["role"], encoded[2]["role"])
+	if encoded[0]["role"] != "user" || encoded[1]["role"] != "model" || encoded[2]["role"] != "user" || encoded[3]["role"] != "model" || encoded[4]["role"] != "user" {
+		t.Fatalf("roles must alternate between user and model: got %v", encoded)
 	}
 	parts := encoded[2]["parts"].([]map[string]any)
-	if len(parts) != 2 {
-		t.Fatalf("expected merged parts (functionResponse + text), got %d parts: %#v", len(parts), parts)
+	if len(parts) != 1 {
+		t.Fatalf("expected pure functionResponse, got %d parts: %#v", len(parts), parts)
+	}
+
+	consecutive := []Message{
+		{Role: RoleUser, Content: "first"},
+		{Role: RoleUser, Content: "second"},
+	}
+	merged := encodeGoogleContents(consecutive)
+	if len(merged) != 1 {
+		t.Fatalf("expected 1 merged user turn, got %d turns", len(merged))
+	}
+	if len(merged[0]["parts"].([]map[string]any)) != 2 {
+		t.Fatalf("expected 2 parts in merged user turn, got %v", merged[0]["parts"])
 	}
 }
 

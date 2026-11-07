@@ -380,21 +380,25 @@ func (c *antigravityClient) encodeContents(req ChatRequest) []map[string]any {
 	// turn right after its results, and an image turn split from the answers
 	// it belongs to leaves the same dangling functionCall behind.
 	appendUser := func(parts []map[string]any) {
-		// A turn that encodes to nothing still has to stand on its own.
 		if len(parts) == 0 {
-			contents = append(contents, map[string]any{"role": "user", "parts": []map[string]any{{"text": ""}}})
-			return
+			parts = []map[string]any{{"text": ""}}
 		}
 		if len(contents) > 0 && contents[len(contents)-1]["role"] == "user" {
+			// If the previous user turn is a function response and this turn is regular user content
+			// (or vice versa), Gemini strictly forbids consecutive user turns. Every function response
+			// must be followed by a model turn before the user can speak again. Two consecutive user
+			// turns (function response followed by user text) trigger Google 400 INVALID_ARGUMENT.
+			if antigravityHasFunctionResponse(contents[len(contents)-1]) != antigravityPartsHaveFunctionResponse(parts) {
+				contents = append(contents, map[string]any{
+					"role":  "model",
+					"parts": []map[string]any{{"text": "(acknowledged)"}},
+				})
+				contents = append(contents, map[string]any{"role": "user", "parts": parts})
+				return
+			}
 			if previous, ok := contents[len(contents)-1]["parts"].([]map[string]any); ok {
-				// Only fold together if both are function responses, or both are regular user content.
-				// A regular user prompt (e.g. text/image) must never be mixed into a functionResponse turn,
-				// and vice versa. Google Cloud Code requires function responses to stand in their own user
-				// turn; combining them violates the turn contract with HTTP 400.
-				if antigravityHasFunctionResponse(contents[len(contents)-1]) == antigravityPartsHaveFunctionResponse(parts) {
-					contents[len(contents)-1]["parts"] = append(previous, parts...)
-					return
-				}
+				contents[len(contents)-1]["parts"] = append(previous, parts...)
+				return
 			}
 		}
 		contents = append(contents, map[string]any{"role": "user", "parts": parts})
@@ -449,7 +453,26 @@ func (c *antigravityClient) encodeContents(req ChatRequest) []map[string]any {
 // did, so a continuation turn goes in front of the pair instead of dropping it:
 // a 400 here ends the conversation, a turn that says nothing costs one step.
 func antigravityAnchorFunctionCalls(contents []map[string]any) []map[string]any {
+	if len(contents) == 0 {
+		return []map[string]any{{"role": "user", "parts": []map[string]any{{"text": ""}}}}
+	}
+
+	// Gemini conversation history MUST begin with a user turn.
+	if contents[0]["role"] != "user" {
+		contents = append([]map[string]any{{"role": "user", "parts": []map[string]any{{"text": "(continued)"}}}}, contents...)
+	}
+
 	for index := 0; index < len(contents); index++ {
+		// Consecutive model turns violate Gemini alternation; insert a user continuation turn.
+		if index > 0 && contents[index]["role"] == "model" && contents[index-1]["role"] == "model" {
+			repaired := make([]map[string]any, 0, len(contents)+1)
+			repaired = append(repaired, contents[:index]...)
+			repaired = append(repaired, map[string]any{"role": "user", "parts": []map[string]any{{"text": "(continued)"}}})
+			repaired = append(repaired, contents[index:]...)
+			contents = repaired
+			index++
+		}
+
 		if !antigravityHasFunctionCall(contents[index]) {
 			continue
 		}
@@ -491,16 +514,42 @@ func antigravityAnchorFunctionCalls(contents []map[string]any) []map[string]any 
 				}
 			}
 			if len(respParts) > 0 {
-				repaired := make([]map[string]any, 0, len(contents)+1)
+				repaired := make([]map[string]any, 0, len(contents)+2)
 				repaired = append(repaired, contents[:index+1]...)
 				repaired = append(repaired, map[string]any{"role": "user", "parts": respParts})
+				if index+1 < len(contents) && contents[index+1]["role"] == "user" {
+					repaired = append(repaired, map[string]any{"role": "model", "parts": []map[string]any{{"text": "(acknowledged)"}}})
+				}
 				repaired = append(repaired, contents[index+1:]...)
 				contents = repaired
 				index++
 			}
 		}
 	}
-	return contents
+
+	// Final pass: ensure strict Gemini alternation across all turns.
+	var alternated []map[string]any
+	for _, turn := range contents {
+		if len(alternated) > 0 {
+			lastRole, _ := alternated[len(alternated)-1]["role"].(string)
+			curRole, _ := turn["role"].(string)
+			if lastRole == curRole {
+				if curRole == "user" {
+					alternated = append(alternated, map[string]any{
+						"role":  "model",
+						"parts": []map[string]any{{"text": "(acknowledged)"}},
+					})
+				} else {
+					alternated = append(alternated, map[string]any{
+						"role":  "user",
+						"parts": []map[string]any{{"text": "(continued)"}},
+					})
+				}
+			}
+		}
+		alternated = append(alternated, turn)
+	}
+	return alternated
 }
 
 func antigravityHasFunctionCall(turn map[string]any) bool {

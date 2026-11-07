@@ -100,15 +100,15 @@ func (a *App) envForRun(agentName string, guest bool) *agent.Env {
 		// unsupported answer in a public chat is a promise nobody verified.
 		runEnv.Grounding = config.GroundingStrict
 		runEnv.Secrets = nil
-		// SendChannel is retained for guests because send_channel restricts delivery
-		// strictly to the guest's own chat.
-		runEnv.AlwaysAllowed = map[string]bool{
+		// Safe document creation and delivery tools are permitted for guests.
+		allowed := map[string]bool{
 			"create_office_document": true,
 			"convert_pdf_to_excel":   true,
 			"send_channel":           true,
 			"send_file":              true,
 		}
-		runEnv.SessionAllowed = map[string]bool{}
+		runEnv.AlwaysAllowed = allowed
+		runEnv.SessionAllowed = allowed
 	}
 	return runEnv
 }

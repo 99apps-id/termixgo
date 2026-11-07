@@ -32,12 +32,14 @@ func TestCanonicalToolNameFoldsSpellings(t *testing.T) {
 func TestRegistryLookupFoldsCamelAndHyphenSpellings(t *testing.T) {
 	registry := DefaultRegistry()
 	folded := map[string]string{
-		"ReadFile":       "read_file",
-		"gitDiff":        "git_diff",
-		"multi-edit":     "multi_edit",
-		"runCommand":     "run_command",
-		"GIT_STATUS":     "git_status",
-		"Review Changes": "review_changes",
+		"ReadFile":              "read_file",
+		"gitDiff":               "git_diff",
+		"multi-edit":            "multi_edit",
+		"runCommand":            "run_command",
+		"GIT_STATUS":            "git_status",
+		"Review Changes":        "review_changes",
+		"default_api:read_file": "read_file",
+		"functions.edit":        "edit",
 	}
 	for input, wantName := range folded {
 		tool, ok := registry.Lookup(input)

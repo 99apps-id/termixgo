@@ -777,13 +777,18 @@ func (r *Runner) needsApprovalFor(tool Tool) bool {
 
 // execute runs one tool call, applying the approval policy first.
 func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
+	emit := r.emit
 	args, err := decodeToolArguments(call.Arguments)
 	if err != nil {
+		emit(Event{Kind: EventToolStart, ToolName: call.Name, ToolLabel: call.Name, ToolArgs: Shorten(call.Arguments, 240)})
+		emit(Event{Kind: EventToolEnd, ToolName: call.Name, ToolLabel: call.Name, ToolResult: "invalid arguments", ToolOK: false})
 		return Result{Output: fmt.Sprintf("Could not read the arguments for %s: %v. Fix the JSON arguments and call it again", call.Name, err), IsError: true}
 	}
 
 	tool, ok := r.Tools.Lookup(call.Name)
 	if !ok {
+		emit(Event{Kind: EventToolStart, ToolName: call.Name, ToolLabel: call.Name, ToolArgs: Shorten(call.Arguments, 240)})
+		emit(Event{Kind: EventToolEnd, ToolName: call.Name, ToolLabel: call.Name, ToolResult: "unknown tool", ToolOK: false})
 		return Result{
 			Output:  unknownToolMessage(call.Name, r.toolNamesList(), r.ToolSearch),
 			IsError: true,
@@ -791,7 +796,6 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 	}
 
 	startLabel := tool.Label(args)
-	emit := r.emit
 	// The diff preview is computed before the run, not after: it locates
 	// old_string in the file as it is now, and a successful edit makes that
 	// text history. Tools outside the edit family answer with an empty
@@ -970,12 +974,43 @@ func decodeToolArguments(raw string) (map[string]any, error) {
 	if trimmed == "" {
 		return map[string]any{}, nil
 	}
+	if strings.HasPrefix(trimmed, "```") {
+		trimmed = strings.TrimPrefix(trimmed, "```")
+		if idx := strings.Index(trimmed, "\n"); idx != -1 {
+			trimmed = trimmed[idx+1:]
+		}
+		trimmed = strings.TrimSuffix(trimmed, "```")
+		trimmed = strings.TrimSpace(trimmed)
+	}
 	var decoded map[string]any
-	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
-		return nil, fmt.Errorf("arguments are not a JSON object")
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
+		if decoded == nil {
+			decoded = map[string]any{}
+		}
+		return decoded, nil
 	}
-	if decoded == nil {
-		decoded = map[string]any{}
+	if strings.HasPrefix(trimmed, "\"") && strings.HasSuffix(trimmed, "\"") {
+		var unquoted string
+		if err := json.Unmarshal([]byte(trimmed), &unquoted); err == nil {
+			var inner map[string]any
+			if err := json.Unmarshal([]byte(strings.TrimSpace(unquoted)), &inner); err == nil {
+				if inner == nil {
+					inner = map[string]any{}
+				}
+				return inner, nil
+			}
+		}
 	}
-	return decoded, nil
+	first := strings.Index(trimmed, "{")
+	last := strings.LastIndex(trimmed, "}")
+	if first != -1 && last > first {
+		var sliceDecoded map[string]any
+		if err := json.Unmarshal([]byte(trimmed[first:last+1]), &sliceDecoded); err == nil {
+			if sliceDecoded == nil {
+				sliceDecoded = map[string]any{}
+			}
+			return sliceDecoded, nil
+		}
+	}
+	return nil, fmt.Errorf("arguments are not a JSON object")
 }

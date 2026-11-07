@@ -110,3 +110,16 @@ func TestGuestEnvironmentWithholdsSecrets(t *testing.T) {
 		t.Errorf("the operator environment keeps the secret store")
 	}
 }
+
+func TestGuestEnvironmentAllowsOfficeDocumentTools(t *testing.T) {
+	application := newTestApp(t)
+	guest := application.envForRun(config.FinalAgentName, true)
+	for _, tool := range []string{"create_office_document", "convert_pdf_to_excel", "send_channel", "send_file"} {
+		if !guest.AlwaysAllowed[tool] {
+			t.Errorf("AlwaysAllowed must include %s for guest", tool)
+		}
+		if !guest.SessionAllowed[tool] {
+			t.Errorf("SessionAllowed must include %s for guest so folder gate does not block it", tool)
+		}
+	}
+}

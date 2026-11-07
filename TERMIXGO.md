@@ -602,6 +602,24 @@ Findings from running Termixgo autonomously on production Linux VPS environments
    fetch and search tools, ensuring resolved addresses cannot reach cloud metadata
    endpoints (`169.254.169.254`, `fd00:ec2::254`) or link-local targets through
    DNS rebinding.
+9. Gemini Turn Alternation and Function Calling Contract:
+   Google Antigravity and Gemini Cloud Code APIs enforce strict alternating turn
+   order (`user` -> `model` -> `user` -> `model`) and require that every
+   `functionCall` turn is immediately answered by a pure `functionResponse` turn
+   and every `functionResponse` turn is followed by a `model` turn before another
+   `user` turn. Encoder synthesizes acknowledging model turns and strictly alternates
+   turns to prevent HTTP 400 `INVALID_ARGUMENT`. Tool argument decoding tolerates
+   markdown code blocks, stringified JSON, and embedded JSON objects in surrounding
+   text. Tool lookup resolves namespaced prefixes (`default_api:`, `functions.`).
+10. Per-Run Channel Observer Isolation:
+   Channel runs (WhatsApp, Telegram, cron, webhooks) register per-run observers in
+   `runOptions` rather than competing for a single global observer slot, ensuring
+   function progress is streamed in real time during concurrent channel executions.
+11. Guest Office Document Creation:
+   Guest environments pre-allow safe office document creation and delivery tools
+   (`create_office_document`, `convert_pdf_to_excel`, `send_channel`, `send_file`)
+   in `SessionAllowed`, permitting guest chats to generate and receive documents
+   without tripping untrusted folder confirmation gates.
 
 ## Checks
 

@@ -432,6 +432,16 @@ func TestDecodeArgumentsHandlesBlankAndMalformedInput(t *testing.T) {
 	if err != nil || decoded["path"] != "a.go" {
 		t.Errorf("decoded = %v, err = %v", decoded, err)
 	}
+
+	// Code block and stringified support
+	fenced, err := decodeArguments("```json\n{\"path\":\"b.go\"}\n```")
+	if err != nil || fenced["path"] != "b.go" {
+		t.Errorf("fenced = %v, err = %v", fenced, err)
+	}
+	stringified, err := decodeArguments(`"{\"path\":\"c.go\"}"`)
+	if err != nil || stringified["path"] != "c.go" {
+		t.Errorf("stringified = %v, err = %v", stringified, err)
+	}
 }
 
 func TestAnthropicToolResultPlacesFalseForAnEmptyResult(t *testing.T) {

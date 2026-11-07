@@ -310,6 +310,29 @@ func TestDecodeToolArgumentsAcceptsTheShapesModelsSend(t *testing.T) {
 	}
 }
 
+func TestDecodeToolArgumentsResilience(t *testing.T) {
+	// Markdown fences
+	fenced := "```json\n{\"command\":\"ls -la\",\"timeout\":10}\n```"
+	got, err := decodeToolArguments(fenced)
+	if err != nil || got["command"] != "ls -la" {
+		t.Errorf("fenced decode failed: %v, got %v", err, got)
+	}
+
+	// Stringified JSON
+	stringified := `"{\"path\":\"main.go\",\"content\":\"hello\"}"`
+	got, err = decodeToolArguments(stringified)
+	if err != nil || got["path"] != "main.go" {
+		t.Errorf("stringified decode failed: %v, got %v", err, got)
+	}
+
+	// Embedded JSON with surrounding text
+	embedded := `I am calling the tool now: {"path":"foo.txt"} Thank you.`
+	got, err = decodeToolArguments(embedded)
+	if err != nil || got["path"] != "foo.txt" {
+		t.Errorf("embedded decode failed: %v, got %v", err, got)
+	}
+}
+
 // ------------------------------------------------- todos
 
 func TestParseTodosAcceptsAJSONString(t *testing.T) {

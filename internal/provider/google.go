@@ -234,6 +234,11 @@ func encodeGoogleContents(messages []Message) []map[string]any {
 		case RoleUser:
 			parts := googleUserParts(message)
 			if len(out) > 0 && out[len(out)-1]["role"] == "user" {
+				if antigravityHasFunctionResponse(out[len(out)-1]) {
+					out = append(out, map[string]any{"role": "model", "parts": []map[string]any{{"text": "(acknowledged)"}}})
+					out = append(out, map[string]any{"role": "user", "parts": parts})
+					continue
+				}
 				prevParts := out[len(out)-1]["parts"].([]map[string]any)
 				out[len(out)-1]["parts"] = append(prevParts, parts...)
 				continue
@@ -261,15 +266,10 @@ func encodeGoogleContents(messages []Message) []map[string]any {
 				index++
 				parts = append(parts, googleFunctionResponse(messages[index]))
 			}
-			if len(out) > 0 && out[len(out)-1]["role"] == "user" {
-				prevParts := out[len(out)-1]["parts"].([]map[string]any)
-				out[len(out)-1]["parts"] = append(prevParts, parts...)
-				continue
-			}
 			out = append(out, map[string]any{"role": "user", "parts": parts})
 		}
 	}
-	return out
+	return antigravityAnchorFunctionCalls(out)
 }
 
 func googleUserParts(message Message) []map[string]any {

@@ -16,7 +16,11 @@ func baseConfig() config.Sandbox {
 
 func TestCommandBuildsAContainedInvocation(t *testing.T) {
 	workspace := t.TempDir()
-	engine := filepath.Join(t.TempDir(), "podman")
+	engineName := "podman"
+	if runtime.GOOS == "windows" {
+		engineName = "podman.exe"
+	}
+	engine := filepath.Join(t.TempDir(), engineName)
 	if err := os.WriteFile(engine, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Skipf("cannot create a fake engine here: %v", err)
 	}
@@ -58,7 +62,11 @@ func TestCommandBuildsAContainedInvocation(t *testing.T) {
 }
 
 func TestCommandRespectsNetworkAndMountMode(t *testing.T) {
-	engine := filepath.Join(t.TempDir(), "docker")
+	engineName := "docker"
+	if runtime.GOOS == "windows" {
+		engineName = "docker.exe"
+	}
+	engine := filepath.Join(t.TempDir(), engineName)
 	if err := os.WriteFile(engine, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Skipf("cannot create a fake engine here: %v", err)
 	}

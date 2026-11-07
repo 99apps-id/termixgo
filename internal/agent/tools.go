@@ -308,8 +308,15 @@ func (r *Registry) Lookup(name string) (Tool, bool) {
 		return tool, true
 	}
 	if canonical := canonicalToolName(trimmed); canonical != strings.ToLower(trimmed) {
-		tool, ok := r.byName[canonical]
-		return tool, ok
+		if tool, ok := r.byName[canonical]; ok {
+			return tool, true
+		}
+	}
+	if idx := strings.LastIndexAny(trimmed, ":."); idx != -1 && idx+1 < len(trimmed) {
+		base := trimmed[idx+1:]
+		if tool, ok := r.Lookup(base); ok {
+			return tool, true
+		}
 	}
 	return nil, false
 }

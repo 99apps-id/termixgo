@@ -426,8 +426,11 @@ func checkAntigravityTurnOrder(t *testing.T, contents []map[string]any) {
 	for index, turn := range contents {
 		role, _ := turn["role"].(string)
 		parts, _ := turn["parts"].([]map[string]any)
-		if role != "user" && role != "model" {
-			t.Fatalf("turn %d has role %q, want user or model", index, role)
+		if index > 0 {
+			prevRole, _ := contents[index-1]["role"].(string)
+			if prevRole == role {
+				t.Fatalf("consecutive turns of role %q at index %d and %d violate Gemini alternating turn rules", role, index-1, index)
+			}
 		}
 		if len(parts) == 0 {
 			t.Fatalf("turn %d (%s) carries no parts: a dropped turn is what leaves a functionCall unanchored", index, role)
@@ -502,10 +505,10 @@ func TestAntigravityKeepsATurnThatEncodesToNothing(t *testing.T) {
 		{Role: RoleTool, ToolID: "c2", Name: "edit", Content: "done"},
 	}})
 	checkAntigravityTurnOrder(t, contents)
-	if len(contents) != 6 {
-		t.Fatalf("turn count = %d, want 6: the blank user turn must survive as a placeholder", len(contents))
+	if len(contents) != 7 {
+		t.Fatalf("turn count = %d, want 7: the blank user turn must survive as a placeholder with an acknowledging model turn before it", len(contents))
 	}
-	if parts, _ := contents[3]["parts"].([]map[string]any); len(parts) != 1 {
+	if parts, _ := contents[4]["parts"].([]map[string]any); len(parts) != 1 {
 		t.Fatalf("placeholder turn parts = %#v, want one", parts)
 	}
 }
@@ -525,9 +528,10 @@ func TestAntigravityFoldsAnImageTurnIntoTheAnsweringTurn(t *testing.T) {
 	checkAntigravityTurnOrder(t, contents)
 
 	// Google Cloud Code forbids mixing functionResponse and user prompt text/images
-	// in the same turn. The functionResponse must stand in its own user turn,
-	// followed by the user prompt turn with the image.
-	want := []string{"user", "model", "user", "user", "model"}
+	// in the same turn, and forbids consecutive user turns. The functionResponse
+	// stands in its own user turn, followed by an acknowledging model turn,
+	// and then the user prompt turn with the image.
+	want := []string{"user", "model", "user", "model", "user", "model"}
 	if len(contents) != len(want) {
 		t.Fatalf("turn count = %d, want %d: %#v", len(contents), len(want), contents)
 	}
@@ -535,7 +539,7 @@ func TestAntigravityFoldsAnImageTurnIntoTheAnsweringTurn(t *testing.T) {
 	if _, ok := fnParts[0]["functionResponse"]; !ok {
 		t.Fatalf("first part = %#v, want the functionResponse", fnParts[0])
 	}
-	userParts, _ := contents[3]["parts"].([]map[string]any)
+	userParts, _ := contents[4]["parts"].([]map[string]any)
 	if _, ok := userParts[1]["inlineData"]; !ok {
 		t.Fatalf("last part = %#v, want the image", userParts[1])
 	}
@@ -556,10 +560,15 @@ func TestAntigravityInterruptedCallFollowedByUserMessage(t *testing.T) {
 	if _, ok := fnParts[0]["functionResponse"]; !ok {
 		t.Fatalf("expected functionResponse in turn 2, got: %#v", fnParts)
 	}
-	// contents[3] must be the user turn with "selamat siang"
-	userParts, _ := contents[3]["parts"].([]map[string]any)
+	// contents[3] is the acknowledging model turn
+	modelParts, _ := contents[3]["parts"].([]map[string]any)
+	if text, _ := modelParts[0]["text"].(string); text != "(acknowledged)" {
+		t.Fatalf("expected acknowledging model text in turn 3, got: %#v", modelParts)
+	}
+	// contents[4] must be the user turn with "selamat siang"
+	userParts, _ := contents[4]["parts"].([]map[string]any)
 	if text, _ := userParts[0]["text"].(string); text != "selamat siang" {
-		t.Fatalf("expected user text in turn 3, got: %#v", userParts)
+		t.Fatalf("expected user text in turn 4, got: %#v", userParts)
 	}
 }
 

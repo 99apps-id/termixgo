@@ -61,12 +61,43 @@ func decodeArguments(raw string) (map[string]any, error) {
 	if trimmed == "" {
 		return map[string]any{}, nil
 	}
+	if strings.HasPrefix(trimmed, "```") {
+		trimmed = strings.TrimPrefix(trimmed, "```")
+		if idx := strings.Index(trimmed, "\n"); idx != -1 {
+			trimmed = trimmed[idx+1:]
+		}
+		trimmed = strings.TrimSuffix(trimmed, "```")
+		trimmed = strings.TrimSpace(trimmed)
+	}
 	var decoded map[string]any
-	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
-		return nil, fmt.Errorf("arguments are not a JSON object: %w", err)
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err == nil {
+		if decoded == nil {
+			decoded = map[string]any{}
+		}
+		return decoded, nil
 	}
-	if decoded == nil {
-		decoded = map[string]any{}
+	if strings.HasPrefix(trimmed, "\"") && strings.HasSuffix(trimmed, "\"") {
+		var unquoted string
+		if err := json.Unmarshal([]byte(trimmed), &unquoted); err == nil {
+			var inner map[string]any
+			if err := json.Unmarshal([]byte(strings.TrimSpace(unquoted)), &inner); err == nil {
+				if inner == nil {
+					inner = map[string]any{}
+				}
+				return inner, nil
+			}
+		}
 	}
-	return decoded, nil
+	first := strings.Index(trimmed, "{")
+	last := strings.LastIndex(trimmed, "}")
+	if first != -1 && last > first {
+		var sliceDecoded map[string]any
+		if err := json.Unmarshal([]byte(trimmed[first:last+1]), &sliceDecoded); err == nil {
+			if sliceDecoded == nil {
+				sliceDecoded = map[string]any{}
+			}
+			return sliceDecoded, nil
+		}
+	}
+	return nil, fmt.Errorf("arguments are not a JSON object")
 }

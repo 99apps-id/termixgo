@@ -264,11 +264,12 @@ func (a *App) runChannelTurn(ctx context.Context, agentName string, session *age
 	// The emitter also runs on the process manager's goroutine, so the
 	// captured notice and stop reason are guarded rather than plain vars.
 	var captureMu sync.Mutex
+	var channelObserver func(agent.Event)
 	if progress != nil {
 		// The opening line is part of the contract: the caller shows it at
 		// once, before the first event arrives.
 		progress("Working...")
-		claim := a.SetObserver(func(event agent.Event) {
+		channelObserver = func(event agent.Event) {
 			switch {
 			case event.Kind == agent.EventNotice && strings.TrimSpace(event.Text) != "":
 				captureMu.Lock()
@@ -286,7 +287,8 @@ func (a *App) runChannelTurn(ctx context.Context, agentName string, session *age
 			if line := telegramProgressLine(event); line != "" {
 				progress(line)
 			}
-		})
+		}
+		claim := a.SetObserver(channelObserver)
 		defer a.ClearObserver(claim)
 	}
 	options := runOptions{
@@ -302,6 +304,7 @@ func (a *App) runChannelTurn(ctx context.Context, agentName string, session *age
 		maxSteps:      maxSteps,
 		costBudgetUSD: costBudgetUSD,
 		priority:      PriorityChannel,
+		observer:      channelObserver,
 	}
 	mark := session.MessageCount()
 	if err := a.runWithOptions(ctx, prompt, options); err != nil {
