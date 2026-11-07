@@ -355,30 +355,65 @@ func (c *antigravityClient) signatureFor(callID string) string {
 }
 
 // encodeContents maps the shared message list to Gemini contents.
+//
+// The backend holds function calling to a stricter contract than the shared
+// list this is built from: a model turn carrying a functionCall must be
+// answered by the very next turn, and that turn has to be one user turn
+// holding a functionResponse for every call the model turn made. A
+// functionCall turn must itself come straight after a user turn or a function
+// response turn. Google answers a history that breaks either rule with a 400
+// "Please ensure that function call turn comes immediately after a user turn
+// or after a function response turn."
+//
+// The shared list stores one message per tool result, so a step that called
+// three tools arrives as three RoleTool messages. Emitting each as its own
+// user turn left the second and third answers standing behind an answer the
+// backend had already consumed, which is the shape it refuses: consecutive
+// results are folded into the single user turn that answers the call. A turn
+// that would encode to no parts at all keeps a placeholder part instead of
+// vanishing, because dropping a user turn from between two model turns breaks
+// the same rule from the other side.
 func (c *antigravityClient) encodeContents(req ChatRequest) []map[string]any {
 	contents := make([]map[string]any, 0, len(req.Messages))
-	for _, message := range req.Messages {
+	// appendUser places a user turn, folding it into the one already at the
+	// end when there is one. A tool that also produced an image adds a user
+	// turn right after its results, and an image turn split from the answers
+	// it belongs to leaves the same dangling functionCall behind.
+	appendUser := func(parts []map[string]any) {
+		// A turn that encodes to nothing still has to stand on its own.
+		if len(parts) == 0 {
+			contents = append(contents, map[string]any{"role": "user", "parts": []map[string]any{{"text": ""}}})
+			return
+		}
+		if len(contents) > 0 && contents[len(contents)-1]["role"] == "user" {
+			if previous, ok := contents[len(contents)-1]["parts"].([]map[string]any); ok {
+				// Only fold together if both are function responses, or both are regular user content.
+				// A regular user prompt (e.g. text/image) must never be mixed into a functionResponse turn,
+				// and vice versa. Google Cloud Code requires function responses to stand in their own user
+				// turn; combining them violates the turn contract with HTTP 400.
+				if antigravityHasFunctionResponse(contents[len(contents)-1]) == antigravityPartsHaveFunctionResponse(parts) {
+					contents[len(contents)-1]["parts"] = append(previous, parts...)
+					return
+				}
+			}
+		}
+		contents = append(contents, map[string]any{"role": "user", "parts": parts})
+	}
+	for index := 0; index < len(req.Messages); index++ {
+		message := req.Messages[index]
 		switch message.Role {
 		case RoleUser:
-			parts := make([]map[string]any, 0, len(message.Images)+1)
-			if strings.TrimSpace(message.Content) != "" {
-				parts = append(parts, map[string]any{"text": message.Content})
-			}
-			for _, image := range message.Images {
-				parts = append(parts, map[string]any{"inlineData": map[string]any{"mimeType": image.MediaType, "data": image.Data}})
-			}
-			if len(parts) == 0 {
-				continue
-			}
-			contents = append(contents, map[string]any{"role": "user", "parts": parts})
+			appendUser(antigravityUserParts(message))
 		case RoleAssistant:
 			parts := make([]map[string]any, 0, len(message.ToolCalls)+1)
 			if strings.TrimSpace(message.Content) != "" {
 				parts = append(parts, map[string]any{"text": message.Content})
 			}
 			for _, call := range message.ToolCalls {
-				args := map[string]any{}
-				_ = json.Unmarshal([]byte(call.Arguments), &args)
+				args, err := decodeArguments(call.Arguments)
+				if err != nil {
+					args = map[string]any{}
+				}
 				part := map[string]any{"functionCall": map[string]any{"id": call.ID, "name": call.Name, "args": args}}
 				if signature := c.signatureFor(call.ID); signature != "" {
 					part["thoughtSignature"] = signature
@@ -386,21 +421,136 @@ func (c *antigravityClient) encodeContents(req ChatRequest) []map[string]any {
 				parts = append(parts, part)
 			}
 			if len(parts) == 0 {
-				continue
+				parts = append(parts, map[string]any{"text": ""})
 			}
 			contents = append(contents, map[string]any{"role": "model", "parts": parts})
 		case RoleTool:
-			// Gemini answers a functionCall with a functionResponse on a user turn.
-			contents = append(contents, map[string]any{"role": "user", "parts": []map[string]any{{
-				"functionResponse": map[string]any{
-					"id":       message.ToolID,
-					"name":     message.Name,
-					"response": map[string]any{"result": message.Content},
-				},
-			}}})
+			// Every result a step produced belongs to the one user turn that
+			// answers it, so the whole run of them is collected before that
+			// turn is placed.
+			parts := []map[string]any{antigravityFunctionResponse(message)}
+			for index+1 < len(req.Messages) && req.Messages[index+1].Role == RoleTool {
+				index++
+				parts = append(parts, antigravityFunctionResponse(req.Messages[index]))
+			}
+			appendUser(parts)
+		}
+	}
+	return antigravityAnchorFunctionCalls(contents)
+}
+
+// antigravityAnchorFunctionCalls repairs the other half of the rule: a model
+// turn carrying a functionCall has to come straight after a user turn or a
+// function response turn, so it may not stand first or follow another model
+// turn. History can produce exactly that. Compact refuses to leave a tool
+// result at the head, so a drop may take the user turn that opened the turn and
+// leave the assistant's call standing first, and the loader only closes off the
+// calls of the last step. The call and its answer still carry what the model
+// did, so a continuation turn goes in front of the pair instead of dropping it:
+// a 400 here ends the conversation, a turn that says nothing costs one step.
+func antigravityAnchorFunctionCalls(contents []map[string]any) []map[string]any {
+	for index := 0; index < len(contents); index++ {
+		if !antigravityHasFunctionCall(contents[index]) {
+			continue
+		}
+		// A functionCall must follow a user turn or a function response turn,
+		// never stand first or follow another model turn.
+		if index == 0 || contents[index-1]["role"] != "user" {
+			repaired := make([]map[string]any, 0, len(contents)+1)
+			repaired = append(repaired, contents[:index]...)
+			repaired = append(repaired, map[string]any{"role": "user", "parts": []map[string]any{{"text": "(continued)"}}})
+			repaired = append(repaired, contents[index:]...)
+			contents = repaired
+			index++
+		}
+
+		// A functionCall must also be answered by the immediately following turn,
+		// and that turn must contain a functionResponse for the call.
+		// If the call is followed by another model turn, or a plain user text turn, or is the last turn:
+		// synthesize the missing functionResponse so Google Cloud Code's invariant is satisfied.
+		hasAnswer := false
+		if index+1 < len(contents) && contents[index+1]["role"] == "user" {
+			if antigravityHasFunctionResponse(contents[index+1]) {
+				hasAnswer = true
+			}
+		}
+		if !hasAnswer {
+			parts, _ := contents[index]["parts"].([]map[string]any)
+			var respParts []map[string]any
+			for _, part := range parts {
+				if fc, ok := part["functionCall"].(map[string]any); ok {
+					id, _ := fc["id"].(string)
+					name, _ := fc["name"].(string)
+					respParts = append(respParts, map[string]any{
+						"functionResponse": map[string]any{
+							"id":       id,
+							"name":     name,
+							"response": map[string]any{"result": "(interrupted)"},
+						},
+					})
+				}
+			}
+			if len(respParts) > 0 {
+				repaired := make([]map[string]any, 0, len(contents)+1)
+				repaired = append(repaired, contents[:index+1]...)
+				repaired = append(repaired, map[string]any{"role": "user", "parts": respParts})
+				repaired = append(repaired, contents[index+1:]...)
+				contents = repaired
+				index++
+			}
 		}
 	}
 	return contents
+}
+
+func antigravityHasFunctionCall(turn map[string]any) bool {
+	parts, _ := turn["parts"].([]map[string]any)
+	for _, part := range parts {
+		if _, ok := part["functionCall"]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func antigravityHasFunctionResponse(turn map[string]any) bool {
+	parts, _ := turn["parts"].([]map[string]any)
+	return antigravityPartsHaveFunctionResponse(parts)
+}
+
+func antigravityPartsHaveFunctionResponse(parts []map[string]any) bool {
+	for _, part := range parts {
+		if _, ok := part["functionResponse"]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func antigravityUserParts(message Message) []map[string]any {
+	parts := make([]map[string]any, 0, len(message.Images)+1)
+	if strings.TrimSpace(message.Content) != "" {
+		parts = append(parts, map[string]any{"text": message.Content})
+	}
+	for _, image := range message.Images {
+		parts = append(parts, map[string]any{"inlineData": map[string]any{"mimeType": image.MediaType, "data": image.Data}})
+	}
+	return parts
+}
+
+// antigravityFunctionResponse answers one tool call. An empty result is
+// replaced because the backend reads a blank response as a call that was never
+// answered, which is the same rejection as a missing turn.
+func antigravityFunctionResponse(message Message) map[string]any {
+	content := message.Content
+	if strings.TrimSpace(content) == "" {
+		content = "(no output)"
+	}
+	return map[string]any{"functionResponse": map[string]any{
+		"id":       message.ToolID,
+		"name":     message.Name,
+		"response": map[string]any{"result": content},
+	}}
 }
 
 func agGenerationConfig(req ChatRequest) map[string]any {

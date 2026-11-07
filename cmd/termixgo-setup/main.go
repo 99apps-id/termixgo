@@ -23,7 +23,9 @@ var embeddedBinary []byte
 var embeddedUninstaller []byte
 
 const appName = "Termixgo"
+
 var Version = "0.2.5"
+
 const publisher = "99apps-id"
 
 func main() {

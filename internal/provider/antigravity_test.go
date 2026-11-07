@@ -390,3 +390,242 @@ func TestAntigravityRetriesOn401WithRefreshedKey(t *testing.T) {
 		t.Errorf("attempts = %d, want 2", attempts)
 	}
 }
+
+// antigravityToolLoop is a history the agent loop actually produces: one user
+// turn, a step that called three tools at once, their results, and a second
+// step that called one more. The shared list holds one message per result, so
+// this is the shape the encoder has to fold back into Gemini's contract.
+func antigravityToolLoop() []Message {
+	return []Message{
+		{Role: RoleUser, Content: "selamat siang"},
+		{Role: RoleAssistant, Content: "I will look around.", ToolCalls: []ToolCall{
+			{ID: "call_1", Name: "read_file", Arguments: `{"path":"main.go"}`},
+			{ID: "call_2", Name: "glob", Arguments: `{"pattern":"**/*.go"}`},
+			{ID: "call_3", Name: "list_directory", Arguments: `{"path":"."}`},
+		}},
+		{Role: RoleTool, ToolID: "call_1", Name: "read_file", Content: "package main"},
+		{Role: RoleTool, ToolID: "call_2", Name: "glob", Content: "main.go"},
+		{Role: RoleTool, ToolID: "call_3", Name: "list_directory", Content: "cmd/"},
+		{Role: RoleAssistant, Content: "Now editing.", ToolCalls: []ToolCall{
+			{ID: "call_4", Name: "edit", Arguments: `{"path":"main.go"}`},
+		}},
+		{Role: RoleTool, ToolID: "call_4", Name: "edit", Content: "edited"},
+	}
+}
+
+// checkAntigravityTurnOrder walks encoded contents and reports the first place
+// the Gemini function-calling contract is broken. The backend answers such a
+// history with 400 "Please ensure that function call turn comes immediately
+// after a user turn or after a function response turn", which is the error
+// this pins.
+func checkAntigravityTurnOrder(t *testing.T, contents []map[string]any) {
+	t.Helper()
+	if len(contents) == 0 {
+		t.Fatalf("encodeContents returned no contents")
+	}
+	for index, turn := range contents {
+		role, _ := turn["role"].(string)
+		parts, _ := turn["parts"].([]map[string]any)
+		if role != "user" && role != "model" {
+			t.Fatalf("turn %d has role %q, want user or model", index, role)
+		}
+		if len(parts) == 0 {
+			t.Fatalf("turn %d (%s) carries no parts: a dropped turn is what leaves a functionCall unanchored", index, role)
+		}
+		for _, part := range parts {
+			if _, ok := part["functionCall"]; !ok {
+				continue
+			}
+			// A functionCall turn must follow a user turn or a function
+			// response turn, never another model turn.
+			if index == 0 {
+				t.Fatalf("turn 0 carries a functionCall with no turn before it")
+			}
+			previousRole, _ := contents[index-1]["role"].(string)
+			if previousRole != "user" {
+				t.Fatalf("turn %d carries a functionCall after a %s turn", index, previousRole)
+			}
+			// And it must be answered by the immediately following turn.
+			if index+1 >= len(contents) {
+				t.Fatalf("turn %d carries a functionCall that no turn answers", index)
+			}
+			answerRole, _ := contents[index+1]["role"].(string)
+			if answerRole != "user" {
+				t.Fatalf("turn %d carries a functionCall answered by a %s turn", index, answerRole)
+			}
+		}
+	}
+}
+
+func TestAntigravityFoldsToolResultsIntoOneUserTurn(t *testing.T) {
+	client := &antigravityClient{httpClient: &httpClient{}}
+	contents := client.encodeContents(ChatRequest{Messages: antigravityToolLoop()})
+	checkAntigravityTurnOrder(t, contents)
+
+	// user, model(3 calls), user(3 answers), model(1 call), user(1 answer).
+	want := []string{"user", "model", "user", "model", "user"}
+	if len(contents) != len(want) {
+		t.Fatalf("turn count = %d, want %d: %#v", len(contents), len(want), contents)
+	}
+	for index, role := range want {
+		if got, _ := contents[index]["role"].(string); got != role {
+			t.Fatalf("turn %d role = %q, want %q", index, got, role)
+		}
+	}
+
+	answers, _ := contents[2]["parts"].([]map[string]any)
+	if len(answers) != 3 {
+		t.Fatalf("the answering turn carries %d parts, want one functionResponse per call", len(answers))
+	}
+	for index, part := range answers {
+		response, ok := part["functionResponse"].(map[string]any)
+		if !ok {
+			t.Fatalf("part %d = %#v, want a functionResponse", index, part)
+		}
+		if response["name"] == "" || response["name"] == nil {
+			t.Fatalf("part %d names no call: %#v", index, response)
+		}
+	}
+}
+
+// TestAntigravityKeepsATurnThatEncodesToNothing pins the other half of the
+// rule: dropping a user turn from between two model turns puts a functionCall
+// straight after another model turn, which is the same 400.
+func TestAntigravityKeepsATurnThatEncodesToNothing(t *testing.T) {
+	client := &antigravityClient{httpClient: &httpClient{}}
+	contents := client.encodeContents(ChatRequest{Messages: []Message{
+		{Role: RoleUser, Content: "hi"},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "read_file", Arguments: "{}"}}},
+		{Role: RoleTool, ToolID: "c1", Name: "read_file", Content: "out"},
+		{Role: RoleUser, Content: "   "},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c2", Name: "edit", Arguments: "{}"}}},
+		{Role: RoleTool, ToolID: "c2", Name: "edit", Content: "done"},
+	}})
+	checkAntigravityTurnOrder(t, contents)
+	if len(contents) != 6 {
+		t.Fatalf("turn count = %d, want 6: the blank user turn must survive as a placeholder", len(contents))
+	}
+	if parts, _ := contents[3]["parts"].([]map[string]any); len(parts) != 1 {
+		t.Fatalf("placeholder turn parts = %#v, want one", parts)
+	}
+}
+
+// TestAntigravityFoldsAnImageTurnIntoTheAnsweringTurn covers a tool that
+// produced an image: the agent follows the result with a user turn carrying
+// the attachment, and that turn must not be split away from the answers.
+func TestAntigravityFoldsAnImageTurnIntoTheAnsweringTurn(t *testing.T) {
+	client := &antigravityClient{httpClient: &httpClient{}}
+	contents := client.encodeContents(ChatRequest{Messages: []Message{
+		{Role: RoleUser, Content: "show me main.go"},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "read_image", Arguments: "{}"}}},
+		{Role: RoleTool, ToolID: "c1", Name: "read_image", Content: "read the image"},
+		{Role: RoleUser, Content: "Here is the image.", Images: []Image{{MediaType: "image/png", Data: "AAAA"}}},
+		{Role: RoleAssistant, Content: "I see a function."},
+	}})
+	checkAntigravityTurnOrder(t, contents)
+
+	// Google Cloud Code forbids mixing functionResponse and user prompt text/images
+	// in the same turn. The functionResponse must stand in its own user turn,
+	// followed by the user prompt turn with the image.
+	want := []string{"user", "model", "user", "user", "model"}
+	if len(contents) != len(want) {
+		t.Fatalf("turn count = %d, want %d: %#v", len(contents), len(want), contents)
+	}
+	fnParts, _ := contents[2]["parts"].([]map[string]any)
+	if _, ok := fnParts[0]["functionResponse"]; !ok {
+		t.Fatalf("first part = %#v, want the functionResponse", fnParts[0])
+	}
+	userParts, _ := contents[3]["parts"].([]map[string]any)
+	if _, ok := userParts[1]["inlineData"]; !ok {
+		t.Fatalf("last part = %#v, want the image", userParts[1])
+	}
+}
+
+func TestAntigravityInterruptedCallFollowedByUserMessage(t *testing.T) {
+	client := &antigravityClient{httpClient: &httpClient{}}
+	contents := client.encodeContents(ChatRequest{Messages: []Message{
+		{Role: RoleUser, Content: "build installer"},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call_1", Name: "run_wait", Arguments: "{}"}}},
+		{Role: RoleTool, ToolID: "call_1", Name: "run_wait", Content: "The process restarted while this call was in flight. (recovered after a restart)"},
+		{Role: RoleUser, Content: "selamat siang"},
+	}})
+	checkAntigravityTurnOrder(t, contents)
+
+	// contents[2] must be functionResponse ONLY
+	fnParts, _ := contents[2]["parts"].([]map[string]any)
+	if _, ok := fnParts[0]["functionResponse"]; !ok {
+		t.Fatalf("expected functionResponse in turn 2, got: %#v", fnParts)
+	}
+	// contents[3] must be the user turn with "selamat siang"
+	userParts, _ := contents[3]["parts"].([]map[string]any)
+	if text, _ := userParts[0]["text"].(string); text != "selamat siang" {
+		t.Fatalf("expected user text in turn 3, got: %#v", userParts)
+	}
+}
+
+func TestAntigravityEncodesAnEmptyToolResult(t *testing.T) {
+	client := &antigravityClient{httpClient: &httpClient{}}
+	contents := client.encodeContents(ChatRequest{Messages: []Message{
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "run_command", Arguments: "{}"}}},
+		{Role: RoleTool, ToolID: "c1", Name: "run_command", Content: ""},
+	}})
+	checkAntigravityTurnOrder(t, contents)
+	parts, _ := contents[len(contents)-1]["parts"].([]map[string]any)
+	response, _ := parts[0]["functionResponse"].(map[string]any)
+	body, _ := response["response"].(map[string]any)
+	if body["result"] == "" || body["result"] == nil {
+		t.Fatalf("an empty result reads as an unanswered call: %#v", response)
+	}
+}
+
+// TestAntigravityAnchorsAFunctionCallThatOpensTheHistory covers the shape
+// Compact can leave behind: it refuses to put a tool result at the head, so a
+// drop may take the user turn and leave the assistant's call standing first.
+// The backend rejects a history that opens with a functionCall, so a
+// continuation turn has to go in front of the pair rather than the pair being
+// dropped.
+func TestAntigravityAnchorsAFunctionCallThatOpensTheHistory(t *testing.T) {
+	client := &antigravityClient{httpClient: &httpClient{}}
+	contents := client.encodeContents(ChatRequest{Messages: []Message{
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "read_file", Arguments: `{"path":"main.go"}`}}},
+		{Role: RoleTool, ToolID: "c1", Name: "read_file", Content: "package main"},
+		{Role: RoleAssistant, Content: "It builds."},
+	}})
+	checkAntigravityTurnOrder(t, contents)
+
+	want := []string{"user", "model", "user", "model"}
+	if len(contents) != len(want) {
+		t.Fatalf("turn count = %d, want %d: %#v", len(contents), len(want), contents)
+	}
+	for index, role := range want {
+		if got, _ := contents[index]["role"].(string); got != role {
+			t.Fatalf("turn %d role = %q, want %q", index, got, role)
+		}
+	}
+	// The call and its answer survive the repair, not just the anchoring turn.
+	callParts, _ := contents[1]["parts"].([]map[string]any)
+	if _, ok := callParts[0]["functionCall"]; !ok {
+		t.Fatalf("the call was lost in the repair: %#v", callParts)
+	}
+	answerParts, _ := contents[2]["parts"].([]map[string]any)
+	if _, ok := answerParts[0]["functionResponse"]; !ok {
+		t.Fatalf("the answer was lost in the repair: %#v", answerParts)
+	}
+}
+
+// TestAntigravityLeavesAWellFormedHistoryUntouched is the guard against the
+// repair above firing on a history that needs none: a continuation turn the
+// backend did not ask for is a turn the model has to explain to itself.
+func TestAntigravityLeavesAWellFormedHistoryUntouched(t *testing.T) {
+	client := &antigravityClient{httpClient: &httpClient{}}
+	contents := client.encodeContents(ChatRequest{Messages: antigravityToolLoop()})
+	for index, turn := range contents {
+		parts, _ := turn["parts"].([]map[string]any)
+		for _, part := range parts {
+			text, _ := part["text"].(string)
+			if text == "(continued)" {
+				t.Fatalf("turn %d gained a synthetic continuation turn: %#v", index, turn)
+			}
+		}
+	}
+}
