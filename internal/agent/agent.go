@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -796,6 +797,13 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 	}
 
 	startLabel := tool.Label(args)
+	if strings.TrimSpace(startLabel) == "" {
+		startLabel = "Running " + tool.Name() + "..."
+	}
+	doneLabel := tool.DoneLabel(args)
+	if strings.TrimSpace(doneLabel) == "" {
+		doneLabel = "Ran " + tool.Name()
+	}
 	// The diff preview is computed before the run, not after: it locates
 	// old_string in the file as it is now, and a successful edit makes that
 	// text history. Tools outside the edit family answer with an empty
@@ -811,7 +819,7 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 	// on every write would defeat the mode: the operator chose it to explore
 	// without changing anything, so the denial names the way back.
 	if r.Policy != nil && r.Policy.Mode == ApprovalPlan && tool.Mutating() {
-		emit(Event{Kind: EventToolEnd, ToolName: tool.Name(), ToolLabel: tool.DoneLabel(args), ToolResult: "blocked by plan mode", ToolOK: false})
+		emit(Event{Kind: EventToolEnd, ToolName: tool.Name(), ToolLabel: doneLabel, ToolResult: "blocked by plan mode", ToolOK: false})
 		return Result{
 			Output:  "Plan mode is on: read-only investigation is allowed, but this mutating tool call was blocked. Switch back with /approval ask to allow changes.",
 			IsError: true,
@@ -822,7 +830,7 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 	// should not first ask the operator to approve a call that is going to be
 	// refused anyway.
 	if reason, blocked := r.runPreHooks(ctx, tool.Name(), call.Arguments); blocked {
-		emit(Event{Kind: EventToolEnd, ToolName: tool.Name(), ToolLabel: tool.DoneLabel(args), ToolResult: "blocked by hook", ToolOK: false})
+		emit(Event{Kind: EventToolEnd, ToolName: tool.Name(), ToolLabel: doneLabel, ToolResult: "blocked by hook", ToolOK: false})
 		return Result{
 			Output:  "A pre_tool hook blocked this call: " + reason + "\nDo not retry the same call. Change the approach or ask the operator.",
 			IsError: true,
@@ -840,7 +848,7 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 			})
 		}
 		if !decision.Allowed() {
-			emit(Event{Kind: EventToolEnd, ToolName: tool.Name(), ToolLabel: tool.DoneLabel(args), ToolResult: "denied by the operator", ToolOK: false})
+			emit(Event{Kind: EventToolEnd, ToolName: tool.Name(), ToolLabel: doneLabel, ToolResult: "denied by the operator", ToolOK: false})
 			return Result{
 				Output:  "The operator denied this tool call. Ask before retrying or choose a different approach.",
 				IsError: true,
@@ -887,10 +895,18 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 	if strings.TrimSpace(display) == "" {
 		display = Shorten(result.Output, 240)
 	}
+	endLabel := tool.DoneLabel(args)
+	if strings.TrimSpace(endLabel) == "" {
+		if result.IsError {
+			endLabel = "Failed " + tool.Name()
+		} else {
+			endLabel = "Ran " + tool.Name()
+		}
+	}
 	emit(Event{
 		Kind:       EventToolEnd,
 		ToolName:   tool.Name(),
-		ToolLabel:  tool.DoneLabel(args),
+		ToolLabel:  endLabel,
 		ToolResult: display,
 		ToolOK:     !result.IsError,
 		ToolMillis: elapsed,
@@ -968,6 +984,14 @@ func (r *Runner) persist() {
 	}
 }
 
+var (
+	reTrailingCommas = regexp.MustCompile(`,\s*([}\]])`)
+	rePythonTrue     = regexp.MustCompile(`:\s*True\b`)
+	rePythonFalse    = regexp.MustCompile(`:\s*False\b`)
+	rePythonNone     = regexp.MustCompile(`:\s*None\b`)
+	reSingleQuoted   = regexp.MustCompile(`'([^'\\]*(?:\\.[^'\\]*)*)'`)
+)
+
 // decodeToolArguments parses a tool call's argument object.
 func decodeToolArguments(raw string) (map[string]any, error) {
 	trimmed := strings.TrimSpace(raw)
@@ -1004,8 +1028,26 @@ func decodeToolArguments(raw string) (map[string]any, error) {
 	first := strings.Index(trimmed, "{")
 	last := strings.LastIndex(trimmed, "}")
 	if first != -1 && last > first {
+		slice := trimmed[first : last+1]
 		var sliceDecoded map[string]any
-		if err := json.Unmarshal([]byte(trimmed[first:last+1]), &sliceDecoded); err == nil {
+		if err := json.Unmarshal([]byte(slice), &sliceDecoded); err == nil {
+			if sliceDecoded == nil {
+				sliceDecoded = map[string]any{}
+			}
+			return sliceDecoded, nil
+		}
+		repaired := reTrailingCommas.ReplaceAllString(slice, "$1")
+		repaired = rePythonTrue.ReplaceAllString(repaired, ": true")
+		repaired = rePythonFalse.ReplaceAllString(repaired, ": false")
+		repaired = rePythonNone.ReplaceAllString(repaired, ": null")
+		if err := json.Unmarshal([]byte(repaired), &sliceDecoded); err == nil {
+			if sliceDecoded == nil {
+				sliceDecoded = map[string]any{}
+			}
+			return sliceDecoded, nil
+		}
+		singleQuoted := reSingleQuoted.ReplaceAllString(repaired, `"$1"`)
+		if err := json.Unmarshal([]byte(singleQuoted), &sliceDecoded); err == nil {
 			if sliceDecoded == nil {
 				sliceDecoded = map[string]any{}
 			}

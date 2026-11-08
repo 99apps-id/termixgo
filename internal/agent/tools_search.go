@@ -25,10 +25,10 @@ func (t *grepTool) Aliases() []string { return []string{"search", "search_files"
 func (t *grepTool) Mutating() bool    { return false }
 func (t *grepTool) Risk() Risk        { return RiskEdit }
 func (t *grepTool) Label(a map[string]any) string {
-	return "Searching " + Shorten(argString(a, "pattern", "query"), 40)
+	return "Searching " + Shorten(argString(a, "pattern", "query", "search", "regex", "keyword", "text"), 40)
 }
 func (t *grepTool) DoneLabel(a map[string]any) string {
-	return "Searched " + Shorten(argString(a, "pattern", "query"), 40)
+	return "Searched " + Shorten(argString(a, "pattern", "query", "search", "regex", "keyword", "text"), 40)
 }
 func (t *grepTool) Description() string {
 	return "Search file contents with a regular expression (RE2 syntax). Skips .git, node_modules and other generated trees. Returns path, line number and the matching line."
@@ -44,9 +44,9 @@ func (t *grepTool) Schema() map[string]any {
 }
 
 func (t *grepTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
-	pattern := argString(args, "pattern", "query")
+	pattern := argString(args, "pattern", "query", "search", "regex", "keyword", "text")
 	if strings.TrimSpace(pattern) == "" {
-		return Result{Output: "pattern is required", IsError: true}, nil
+		return Result{Output: `pattern is required (received empty pattern; pass a JSON object such as {"pattern": "search_regex"})`, IsError: true}, nil
 	}
 	expression := pattern
 	if argBool(args, "case_insensitive", false) {
@@ -150,10 +150,10 @@ func (t *globTool) Aliases() []string { return []string{"find_files", "ls_files"
 func (t *globTool) Mutating() bool    { return false }
 func (t *globTool) Risk() Risk        { return RiskEdit }
 func (t *globTool) Label(a map[string]any) string {
-	return "Globbing " + Shorten(argString(a, "pattern", "query"), 40)
+	return "Globbing " + Shorten(argString(a, "pattern", "query", "glob", "file_pattern", "filter"), 40)
 }
 func (t *globTool) DoneLabel(a map[string]any) string {
-	return "Globbed " + Shorten(argString(a, "pattern", "query"), 40)
+	return "Globbed " + Shorten(argString(a, "pattern", "query", "glob", "file_pattern", "filter"), 40)
 }
 func (t *globTool) Description() string {
 	return "Find files by glob pattern, for example **/*.go, src/**/*.ts or *.json. Supports ** for any depth. Skips generated trees."
@@ -167,9 +167,9 @@ func (t *globTool) Schema() map[string]any {
 }
 
 func (t *globTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
-	pattern := argString(args, "pattern", "query")
+	pattern := argString(args, "pattern", "query", "glob", "file_pattern", "filter")
 	if strings.TrimSpace(pattern) == "" {
-		return Result{Output: "pattern is required", IsError: true}, nil
+		return Result{Output: `pattern is required (received empty pattern; pass a JSON object such as {"pattern": "**/*.go"})`, IsError: true}, nil
 	}
 	root := resolvePath(env, argString(args, "path", "root"))
 	if root == "" {

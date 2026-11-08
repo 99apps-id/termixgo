@@ -89,13 +89,25 @@ func (p *plainPrinter) print(event agent.Event) {
 			fmt.Fprintln(p.out)
 			p.lastLine = false
 		}
-		fmt.Fprintln(p.out, p.color(ansiYellow, "  > "+event.ToolLabel))
+		label := event.ToolLabel
+		if strings.TrimSpace(label) == "" {
+			label = "Running " + event.ToolName + "..."
+		}
+		fmt.Fprintln(p.out, p.color(ansiYellow, "  > "+label))
 	case agent.EventToolEnd:
 		marker := p.color(ansiGreen, "  + ")
 		if !event.ToolOK {
 			marker = p.color(ansiRed, "  x ")
 		}
-		fmt.Fprintln(p.out, marker+event.ToolLabel)
+		label := event.ToolLabel
+		if strings.TrimSpace(label) == "" {
+			if event.ToolOK {
+				label = "Ran " + event.ToolName
+			} else {
+				label = "Failed " + event.ToolName
+			}
+		}
+		fmt.Fprintln(p.out, marker+label)
 	case agent.EventPlan:
 		fmt.Fprintln(p.out)
 		for _, todo := range event.Plan {

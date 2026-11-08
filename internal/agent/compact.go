@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/99apps-id/termixgo/internal/provider"
 )
@@ -62,6 +63,7 @@ func EstimateMessages(messages []provider.Message) int {
 // head is always a user or assistant turn, never a tool result, because a
 // leading tool result is an invalid sequence.
 func Compact(messages []provider.Message, budgetTokens int) []provider.Message {
+	messages = repairElidedToolCallsInHistory(messages)
 	if budgetTokens <= 0 || EstimateMessages(messages) <= budgetTokens {
 		return messages
 	}
@@ -86,17 +88,23 @@ func Compact(messages []provider.Message, budgetTokens int) []provider.Message {
 	}
 
 	// Still over budget: drop the oldest messages, but never into the protected
-	// turn. A request may not begin with a tool result, so a drop that would
-	// put one at the head is refused and the head stays on the assistant turn
-	// that owns those results. Being a little over budget is a smaller problem
-	// than a sequence the provider rejects.
+	// turn. A request must always begin with a user turn or plain assistant turn,
+	// never an orphaned tool call or tool result, because leading tool sequences
+	// are rejected by LLM backends (Gemini 400 INVALID_ARGUMENT). Dropping
+	// advances by complete exchanges up to the next user turn.
 	for EstimateMessages(trimmed) > budgetTokens && protected > 0 && len(trimmed) > keepMinMessages {
-		candidate := trimmed[1:]
-		if len(candidate) == 0 || candidate[0].Role == provider.RoleTool {
+		nextUser := -1
+		for i := 1; i < len(trimmed) && i <= protected; i++ {
+			if trimmed[i].Role == provider.RoleUser {
+				nextUser = i
+				break
+			}
+		}
+		if nextUser == -1 || len(trimmed)-nextUser < keepMinMessages {
 			break
 		}
-		trimmed = candidate
-		protected--
+		trimmed = trimmed[nextUser:]
+		protected -= nextUser
 	}
 
 	// The protected turn alone can still be over budget, which the provider
@@ -136,14 +144,20 @@ func hardFit(messages []provider.Message, budgetTokens int) []provider.Message {
 	}
 	// Fewer messages first. By now no single payload is large, so it is the
 	// count that is over budget, and the oldest turn tells the model least about
-	// finishing the newest one. A request may not begin with a tool result, which
-	// is also what stops an assistant turn from being split from the results it
-	// asked for.
+	// finishing the newest one. Advance by whole user-initiated exchanges so
+	// a request never begins with an orphaned tool call or tool result.
 	for EstimateMessages(messages) > budgetTokens && len(messages) > keepMinMessages {
-		if len(messages) < 2 || messages[1].Role == provider.RoleTool {
+		nextUser := -1
+		for i := 1; i < len(messages); i++ {
+			if messages[i].Role == provider.RoleUser {
+				nextUser = i
+				break
+			}
+		}
+		if nextUser == -1 || len(messages)-nextUser < keepMinMessages {
 			break
 		}
-		messages = messages[1:]
+		messages = messages[nextUser:]
 	}
 	if EstimateMessages(messages) <= budgetTokens {
 		return messages
@@ -227,7 +241,7 @@ func elide(message provider.Message) provider.Message {
 			cloned := make([]provider.ToolCall, len(message.ToolCalls))
 			copy(cloned, message.ToolCalls)
 			for index := range cloned {
-				cloned[index].Arguments = "{}"
+				cloned[index].Arguments = elideToolArguments(cloned[index].Name, cloned[index].Arguments)
 			}
 			message.ToolCalls = cloned
 		}
@@ -236,6 +250,166 @@ func elide(message provider.Message) provider.Message {
 	}
 	message.Images = nil
 	return message
+}
+
+// elideToolArguments trims large tool-call argument payloads while keeping
+// the required parameter keys (such as path, pattern, command or todos) intact.
+// Replacing arguments wholesale with "{}" poisoned the conversation history:
+// models imitated the empty "{}" calls in earlier turns and began emitting
+// schema-invalid empty tool calls on live steps.
+func elideToolArguments(toolName, raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "{}" || trimmed == "null" {
+		return placeholderToolArguments(toolName)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		if len(trimmed) <= 240 {
+			return trimmed
+		}
+		return placeholderToolArguments(toolName)
+	}
+	if len(parsed) == 0 {
+		return placeholderToolArguments(toolName)
+	}
+	if len(trimmed) <= 300 {
+		return trimmed
+	}
+	shortened := shrinkArgumentValue(parsed, 0).(map[string]any)
+	encoded, err := json.Marshal(shortened)
+	if err != nil {
+		return placeholderToolArguments(toolName)
+	}
+	return string(encoded)
+}
+
+// repairElidedToolCallsInHistory replaces legacy empty "{}" tool arguments on
+// earlier elided turns with schema-valid placeholders without mutating the
+// caller's backing slices.
+func repairElidedToolCallsInHistory(messages []provider.Message) []provider.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	turnStart := currentTurnStart(messages)
+	copied := false
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+		if msg.Role != provider.RoleAssistant || len(msg.ToolCalls) == 0 {
+			continue
+		}
+		// Repair any historical turn before the current turn, or any turn whose
+		// following tool result was already elided.
+		isElidedTurn := i < turnStart || (i+1 < len(messages) && messages[i+1].Role == provider.RoleTool && messages[i+1].Content == elidedToolBody)
+		if !isElidedTurn {
+			continue
+		}
+		needsRepair := false
+		for _, call := range msg.ToolCalls {
+			trimmed := strings.TrimSpace(call.Arguments)
+			if (trimmed == "" || trimmed == "{}" || trimmed == "null") && placeholderToolArguments(call.Name) != "{}" {
+				needsRepair = true
+				break
+			}
+		}
+		if !needsRepair {
+			continue
+		}
+		if !copied {
+			next := make([]provider.Message, len(messages))
+			copy(next, messages)
+			messages = next
+			copied = true
+		}
+		clonedCalls := make([]provider.ToolCall, len(msg.ToolCalls))
+		copy(clonedCalls, msg.ToolCalls)
+		for j := range clonedCalls {
+			trimmed := strings.TrimSpace(clonedCalls[j].Arguments)
+			if trimmed == "" || trimmed == "{}" || trimmed == "null" {
+				clonedCalls[j].Arguments = placeholderToolArguments(clonedCalls[j].Name)
+			}
+		}
+		messages[i].ToolCalls = clonedCalls
+	}
+	return messages
+}
+
+func shrinkArgumentValue(value any, depth int) any {
+	if depth > 3 {
+		return "[elided]"
+	}
+	switch typed := value.(type) {
+	case string:
+		if len(typed) > 160 {
+			return clipBytes(typed, 160) + "... [trimmed]"
+		}
+		return typed
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for k, v := range typed {
+			out[k] = shrinkArgumentValue(v, depth+1)
+		}
+		return out
+	case []any:
+		limit := len(typed)
+		if limit > 6 {
+			limit = 6
+		}
+		out := make([]any, 0, limit+1)
+		for i := 0; i < limit; i++ {
+			out = append(out, shrinkArgumentValue(typed[i], depth+1))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+// placeholderToolArguments returns a minimal schema-valid JSON argument object
+// for a tool whose stored arguments were previously blanked to "{}".
+func placeholderToolArguments(toolName string) string {
+	switch canonicalToolName(toolName) {
+	case "read_file", "read", "cat", "code_outline", "outline", "symbols",
+		"list_directory", "ls", "dir", "create_directory", "mkdir",
+		"delete_file", "rm", "remove", "read_pdf", "read_image", "read_document":
+		return `{"path":"[elided]"}`
+	case "write_file", "write", "create_file":
+		return `{"path":"[elided]","content":"[elided]"}`
+	case "edit", "replace":
+		return `{"path":"[elided]","old_string":"[elided]","new_string":"[elided]"}`
+	case "multi_edit", "multi_replace":
+		return `{"path":"[elided]","edits":[]}`
+	case "apply_patch", "patch":
+		return `{"patch":"*** Begin Patch\n*** End Patch"}`
+	case "move_file", "mv", "rename":
+		return `{"from":"[elided]","to":"[elided]"}`
+	case "grep", "search", "search_files", "glob", "find_files", "ls_files":
+		return `{"pattern":"[elided]"}`
+	case "symbol_search", "find_symbol", "search_memory", "fts_search", "memory_search",
+		"web_search", "find_skill", "search_skills", "find_tools":
+		return `{"query":"[elided]"}`
+	case "symbol_references", "find_references":
+		return `{"symbol":"[elided]"}`
+	case "run_command", "bash", "bash_run", "shell", "exec", "run_background":
+		return `{"command":"[elided]"}`
+	case "todo_write", "update_plan", "write_todos":
+		return `{"todos":[{"id":"t1","title":"[elided]","status":"completed"}]}`
+	case "todo_update", "update_todo", "set_todo_status":
+		return `{"id":"t1","status":"completed"}`
+	case "remember", "learn":
+		return `{"fact":"[elided]"}`
+	case "use_skill", "load_skill":
+		return `{"name":"[elided]"}`
+	case "ask_user", "ask", "elicitation":
+		return `{"question":"[elided]"}`
+	case "think", "reason":
+		return `{"thoughts":"[elided]"}`
+	case "run_subagent", "task", "delegate":
+		return `{"prompt":"[elided]"}`
+	case "web_fetch", "fetch_url", "http_get", "probe_url", "browser_open", "browser_navigate":
+		return `{"url":"https://example.com"}`
+	default:
+		return "{}"
+	}
 }
 
 func clipText(text string) string {

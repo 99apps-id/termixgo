@@ -24,10 +24,10 @@ func (t *codeOutlineTool) Aliases() []string { return []string{"outline", "symbo
 func (t *codeOutlineTool) Mutating() bool    { return false }
 func (t *codeOutlineTool) Risk() Risk        { return RiskEdit }
 func (t *codeOutlineTool) Label(a map[string]any) string {
-	return "Extracting outline from " + Shorten(argString(a, "path", "file"), 40)
+	return "Extracting outline from " + Shorten(argString(a, "path", "file", "file_path", "filepath", "filename", "target"), 40)
 }
 func (t *codeOutlineTool) DoneLabel(a map[string]any) string {
-	return "Extracted outline from " + Shorten(argString(a, "path", "file"), 40)
+	return "Extracted outline from " + Shorten(argString(a, "path", "file", "file_path", "filepath", "filename", "target"), 40)
 }
 func (t *codeOutlineTool) Description() string {
 	return "Extract structural outline and symbol declarations (functions, methods, types, classes, interfaces, or markdown headings) with line numbers from a file without reading the full implementation body."
@@ -40,9 +40,9 @@ func (t *codeOutlineTool) Schema() map[string]any {
 }
 
 func (t *codeOutlineTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
-	path := argString(args, "path", "file", "filename")
+	path := argString(args, "path", "file", "file_path", "filepath", "filename", "target")
 	if strings.TrimSpace(path) == "" {
-		return Result{Output: "Path is required.", IsError: true}, nil
+		return Result{Output: `Path is required (received empty path; pass a JSON object such as {"path": "relative/path/to/file.go"}).`, IsError: true}, nil
 	}
 
 	resolved := resolvePath(env, path)

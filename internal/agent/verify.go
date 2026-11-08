@@ -52,7 +52,16 @@ func ClaimsVerification(text string) bool {
 // IsNonCodePath reports whether a path carries no verifiable runtime
 // behavior, so editing it alone never demands verification.
 func IsNonCodePath(raw string) bool {
-	base := strings.ToLower(filepath.Base(strings.ReplaceAll(raw, "\\", "/")))
+	norm := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(raw, "\\", "/")))
+	norm = strings.TrimPrefix(norm, "./")
+	if norm == "" {
+		return true
+	}
+	if strings.HasPrefix(norm, ".termixgo/") || strings.HasPrefix(norm, ".termigo/") ||
+		strings.Contains(norm, "/.termixgo/") || strings.Contains(norm, "/.termigo/") {
+		return true
+	}
+	base := filepath.Base(norm)
 	if base == "" {
 		return true
 	}

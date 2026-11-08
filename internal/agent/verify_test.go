@@ -31,9 +31,9 @@ func TestVerifyLedgerNudgesAfterACodeEdit(t *testing.T) {
 // TestVerifyLedgerIgnoresProseEdits keeps docs cheap: editing only prose
 // never demands a test run.
 func TestVerifyLedgerIgnoresProseEdits(t *testing.T) {
-	ledger := NewVerifyLedger().RecordEdit("README.md")
+	ledger := NewVerifyLedger().RecordEdit("README.md").RecordEdit(".termixgo/tmp/inspect_invoice.py")
 	if ledger.ShouldNudgeVerification(false) {
-		t.Errorf("a prose edit alone must not nudge")
+		t.Errorf("a prose or scratch edit alone must not nudge")
 	}
 }
 

@@ -22,7 +22,7 @@ if (Test-Path $envFile) {
 $verMod = "github.com/99apps-id/termixgo/internal/version"
 $oauthMod = "github.com/99apps-id/termixgo/internal/oauth"
 
-$ldflags = "-s -w -X $verMod.Version=$version -X $verMod.Commit=$commit -X $verMod.BuildTime=$buildTime"
+$ldflags = "-s -w -X $verMod.Version=$version -X $verMod.Commit=$commit -X $verMod.BuildDate=$buildTime"
 if ($env:TERMIXGO_ANTIGRAVITY_CLIENT_ID) {
     $ldflags += " -X $oauthMod.AntigravityClientID=$($env:TERMIXGO_ANTIGRAVITY_CLIENT_ID)"
 }

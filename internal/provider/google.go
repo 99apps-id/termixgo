@@ -257,7 +257,13 @@ func encodeGoogleContents(messages []Message) []map[string]any {
 				parts = append(parts, map[string]any{"functionCall": map[string]any{"name": call.Name, "args": args}})
 			}
 			if len(parts) == 0 {
-				parts = append(parts, map[string]any{"text": ""})
+				parts = append(parts, map[string]any{"text": "(acknowledged)"})
+			}
+			if len(out) > 0 && out[len(out)-1]["role"] == "model" {
+				if prevParts, ok := out[len(out)-1]["parts"].([]map[string]any); ok {
+					out[len(out)-1]["parts"] = append(prevParts, parts...)
+					continue
+				}
 			}
 			out = append(out, map[string]any{"role": "model", "parts": parts})
 		case RoleTool:

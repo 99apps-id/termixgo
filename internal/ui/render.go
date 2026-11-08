@@ -214,11 +214,21 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 		marker = "x"
 		style = styles.ToolError
 	}
+	label := item.toolLabel
+	if strings.TrimSpace(label) == "" {
+		if item.running {
+			label = "Running " + item.toolName + "..."
+		} else if item.toolOK {
+			label = "Ran " + item.toolName
+		} else {
+			label = "Failed " + item.toolName
+		}
+	}
 	if !showDetails {
 		// Compact: marker and label on one line - plus a few lines of the
 		// diff when this tool changed a file for real, so the operator sees
 		// what changed without opening the details view.
-		line := truncate(fmt.Sprintf("  %s %s", marker, item.toolLabel), width)
+		line := truncate(fmt.Sprintf("  %s %s", marker, label), width)
 		if item.running {
 			return shimmerTool(line, styles)
 		}
@@ -238,7 +248,7 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 	if room < 0 {
 		room = 0
 	}
-	line := truncate(fmt.Sprintf("  %s %s", marker, item.toolLabel), room)
+	line := truncate(fmt.Sprintf("  %s %s", marker, label), room)
 	if item.running {
 		return shimmerTool(line, styles)
 	}

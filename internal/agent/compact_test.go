@@ -97,6 +97,32 @@ func TestCompactNeverLeavesAToolResultAtTheHead(t *testing.T) {
 	}
 }
 
+// TestCompactNeverLeavesAnOrphanedToolCallAtTheHead ensures that compaction
+// always leaves a valid user turn at the head, never an orphaned assistant tool call.
+func TestCompactNeverLeavesAnOrphanedToolCallAtTheHead(t *testing.T) {
+	messages := []provider.Message{
+		{Role: provider.RoleUser, Content: "first question"},
+		{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "1", Name: "read_file", Arguments: "{}"}}},
+		{Role: provider.RoleTool, ToolID: "1", Name: "read_file", Content: "file content"},
+		{Role: provider.RoleAssistant, Content: "first answer"},
+		{Role: provider.RoleUser, Content: "second question"},
+		{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "2", Name: "glob", Arguments: "{}"}}},
+		{Role: provider.RoleTool, ToolID: "2", Name: "glob", Content: "glob result"},
+		{Role: provider.RoleAssistant, Content: "second answer"},
+		{Role: provider.RoleUser, Content: "third question"},
+	}
+	trimmed := Compact(messages, 50)
+	if len(trimmed) == 0 {
+		t.Fatal("expected messages, got none")
+	}
+	if trimmed[0].Role != provider.RoleUser {
+		t.Fatalf("compacted conversation head must be RoleUser, got %s", trimmed[0].Role)
+	}
+	if len(trimmed[0].ToolCalls) > 0 {
+		t.Fatalf("compacted conversation head must not carry ToolCalls")
+	}
+}
+
 // TestCompactKeepsTheCurrentTurnIntact is the fix for a long turn: the turn
 // being answered must not lose its own earlier tool results to compaction while
 // it is still running. Only the turns before it may be trimmed.
@@ -170,8 +196,8 @@ func TestElidePreservesRoles(t *testing.T) {
 	if len(elided.Reasoning) != 0 {
 		t.Errorf("reasoning should be dropped to save context")
 	}
-	if elided.ToolCalls[0].Arguments != "{}" {
-		t.Errorf("tool arguments should be collapsed, got %q", elided.ToolCalls[0].Arguments)
+	if elided.ToolCalls[0].Arguments != `{"path":"[elided]"}` {
+		t.Errorf("tool arguments should collapse to a schema-valid placeholder, got %q", elided.ToolCalls[0].Arguments)
 	}
 	if len(elided.Content) > elidedTextLimit+32 {
 		t.Errorf("text should be clipped, got %d chars", len(elided.Content))
@@ -183,35 +209,60 @@ func TestElidePreservesRoles(t *testing.T) {
 // request must not blank the arguments of the stored history. Writing through
 // the shared array would lose those arguments from the session file too.
 func TestElideDoesNotMutateTheStoredMessage(t *testing.T) {
+	longContent := strings.Repeat("y", 400)
+	origArgs := `{"path":"main.go","content":"` + longContent + `"}`
 	original := provider.Message{
 		Role:      provider.RoleAssistant,
 		Content:   strings.Repeat("x", 2000),
-		ToolCalls: []provider.ToolCall{{ID: "1", Name: "read_file", Arguments: `{"path":"main.go"}`}},
+		ToolCalls: []provider.ToolCall{{ID: "1", Name: "write_file", Arguments: origArgs}},
 	}
 	messages := []provider.Message{
 		{Role: provider.RoleUser, Content: "hello"},
 		original,
 	}
 	elided := elide(messages[1])
-	if elided.ToolCalls[0].Arguments != "{}" {
-		t.Fatalf("the elided copy should collapse its arguments, got %q", elided.ToolCalls[0].Arguments)
+	if elided.ToolCalls[0].Arguments == origArgs {
+		t.Fatalf("the elided copy should trim oversized arguments, got %q", elided.ToolCalls[0].Arguments)
 	}
-	if got := messages[1].ToolCalls[0].Arguments; got != `{"path":"main.go"}` {
+	if !strings.Contains(elided.ToolCalls[0].Arguments, `"path":"main.go"`) {
+		t.Fatalf("the elided copy must keep short required arguments intact, got %q", elided.ToolCalls[0].Arguments)
+	}
+	if got := messages[1].ToolCalls[0].Arguments; got != origArgs {
 		t.Fatalf("the stored message was mutated: arguments = %q, want the original JSON", got)
+	}
+
+	// Short arguments on read_file stay verbatim during elision so history
+	// never teaches the model to emit read_file({}).
+	shortRead := provider.Message{
+		Role:      provider.RoleAssistant,
+		ToolCalls: []provider.ToolCall{{ID: "2", Name: "read_file", Arguments: `{"path":"main.go"}`}},
+	}
+	if got := elide(shortRead).ToolCalls[0].Arguments; got != `{"path":"main.go"}` {
+		t.Fatalf("short read_file arguments should survive elision, got %q", got)
+	}
+
+	// Legacy empty "{}" arguments on elided history turns are repaired to
+	// schema-valid placeholders so models do not imitate empty tool calls.
+	legacyEmpty := provider.Message{
+		Role:      provider.RoleAssistant,
+		ToolCalls: []provider.ToolCall{{ID: "3", Name: "read_file", Arguments: `{}`}},
+	}
+	if got := elide(legacyEmpty).ToolCalls[0].Arguments; got != `{"path":"[elided]"}` {
+		t.Fatalf("legacy empty read_file arguments should be repaired to placeholder, got %q", got)
 	}
 
 	// The whole compact path must preserve the source as well, since it is the
 	// session's own message list that is passed in.
 	session := NewSession("ws", "model")
 	session.AddUser("hello")
-	session.AddAssistant("calling", "", []provider.ToolCall{{ID: "1", Name: "read_file", Arguments: `{"path":"main.go"}`}}, nil)
-	session.AddToolResult("1", "read_file", "content")
+	session.AddAssistant("calling", "", []provider.ToolCall{{ID: "1", Name: "write_file", Arguments: origArgs}}, nil)
+	session.AddToolResult("1", "write_file", "content")
 	for index := 0; index < 30; index++ {
 		session.AddUser("filler message with enough text to consume the token budget")
 		session.AddAssistant("acknowledged", "", nil, nil)
 	}
 	_ = Compact(session.Messages(), 200)
-	if got := session.Messages()[1].ToolCalls[0].Arguments; got != `{"path":"main.go"}` {
+	if got := session.Messages()[1].ToolCalls[0].Arguments; got != origArgs {
 		t.Fatalf("Compact mutated the session history: arguments = %q", got)
 	}
 }

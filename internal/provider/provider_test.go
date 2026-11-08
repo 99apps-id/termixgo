@@ -10,14 +10,8 @@ import (
 
 func TestToolCallAccumulatorRebuildsFragments(t *testing.T) {
 	accumulator := newToolCallAccumulator()
-	accumulator.add(openAIToolDelta{Index: 0, ID: "call_1", Function: struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	}{Name: "read_file", Arguments: `{"pa`}})
-	accumulator.add(openAIToolDelta{Index: 0, Function: struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	}{Arguments: `th":"a.go"}`}})
+	accumulator.add(openAIToolDelta{Index: 0, ID: "call_1", Function: openAIToolFunctionDelta{Name: "read_file", Arguments: `{"pa`}})
+	accumulator.add(openAIToolDelta{Index: 0, Function: openAIToolFunctionDelta{Arguments: `th":"a.go"}`}})
 
 	calls := accumulator.finish()
 	if len(calls) != 1 {
@@ -33,10 +27,7 @@ func TestToolCallAccumulatorRebuildsFragments(t *testing.T) {
 
 func TestToolCallAccumulatorNormalises(t *testing.T) {
 	accumulator := newToolCallAccumulator()
-	accumulator.add(openAIToolDelta{Index: 3, Function: struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	}{Name: "grep"}})
+	accumulator.add(openAIToolDelta{Index: 3, Function: openAIToolFunctionDelta{Name: "grep"}})
 	calls := accumulator.finish()
 	if calls[0].ID != "call_3" {
 		t.Errorf("a missing id should be synthesised, got %q", calls[0].ID)
@@ -48,10 +39,7 @@ func TestToolCallAccumulatorNormalises(t *testing.T) {
 
 func TestToolCallAccumulatorSkipsNamelessFragments(t *testing.T) {
 	accumulator := newToolCallAccumulator()
-	accumulator.add(openAIToolDelta{Index: 0, Function: struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	}{Arguments: "{}"}})
+	accumulator.add(openAIToolDelta{Index: 0, Function: openAIToolFunctionDelta{Arguments: "{}"}})
 	if calls := accumulator.finish(); len(calls) != 0 {
 		t.Fatalf("a call without a name cannot be executed, got %+v", calls)
 	}

@@ -381,7 +381,7 @@ func (c *antigravityClient) encodeContents(req ChatRequest) []map[string]any {
 	// it belongs to leaves the same dangling functionCall behind.
 	appendUser := func(parts []map[string]any) {
 		if len(parts) == 0 {
-			parts = []map[string]any{{"text": ""}}
+			parts = []map[string]any{{"text": "(empty)"}}
 		}
 		if len(contents) > 0 && contents[len(contents)-1]["role"] == "user" {
 			// If the previous user turn is a function response and this turn is regular user content
@@ -425,7 +425,15 @@ func (c *antigravityClient) encodeContents(req ChatRequest) []map[string]any {
 				parts = append(parts, part)
 			}
 			if len(parts) == 0 {
-				parts = append(parts, map[string]any{"text": ""})
+				parts = append(parts, map[string]any{"text": "(acknowledged)"})
+			}
+			// If previous turn was also a model turn, fold parts together so we don't
+			// create consecutive model turns or inject artificial user continuation turns.
+			if len(contents) > 0 && contents[len(contents)-1]["role"] == "model" {
+				if prevParts, ok := contents[len(contents)-1]["parts"].([]map[string]any); ok {
+					contents[len(contents)-1]["parts"] = append(prevParts, parts...)
+					continue
+				}
 			}
 			contents = append(contents, map[string]any{"role": "model", "parts": parts})
 		case RoleTool:
@@ -454,7 +462,7 @@ func (c *antigravityClient) encodeContents(req ChatRequest) []map[string]any {
 // a 400 here ends the conversation, a turn that says nothing costs one step.
 func antigravityAnchorFunctionCalls(contents []map[string]any) []map[string]any {
 	if len(contents) == 0 {
-		return []map[string]any{{"role": "user", "parts": []map[string]any{{"text": ""}}}}
+		return []map[string]any{{"role": "user", "parts": []map[string]any{{"text": "(empty)"}}}}
 	}
 
 	// Gemini conversation history MUST begin with a user turn.
@@ -463,14 +471,16 @@ func antigravityAnchorFunctionCalls(contents []map[string]any) []map[string]any 
 	}
 
 	for index := 0; index < len(contents); index++ {
-		// Consecutive model turns violate Gemini alternation; insert a user continuation turn.
+		// Consecutive model turns violate Gemini alternation; fold into previous model turn.
 		if index > 0 && contents[index]["role"] == "model" && contents[index-1]["role"] == "model" {
-			repaired := make([]map[string]any, 0, len(contents)+1)
-			repaired = append(repaired, contents[:index]...)
-			repaired = append(repaired, map[string]any{"role": "user", "parts": []map[string]any{{"text": "(continued)"}}})
-			repaired = append(repaired, contents[index:]...)
-			contents = repaired
-			index++
+			prevParts, ok1 := contents[index-1]["parts"].([]map[string]any)
+			curParts, ok2 := contents[index]["parts"].([]map[string]any)
+			if ok1 && ok2 {
+				contents[index-1]["parts"] = append(prevParts, curParts...)
+				contents = append(contents[:index], contents[index+1:]...)
+				index--
+				continue
+			}
 		}
 
 		if !antigravityHasFunctionCall(contents[index]) {
@@ -583,6 +593,9 @@ func antigravityUserParts(message Message) []map[string]any {
 	}
 	for _, image := range message.Images {
 		parts = append(parts, map[string]any{"inlineData": map[string]any{"mimeType": image.MediaType, "data": image.Data}})
+	}
+	if len(parts) == 0 {
+		parts = append(parts, map[string]any{"text": "(empty)"})
 	}
 	return parts
 }

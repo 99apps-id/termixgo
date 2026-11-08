@@ -10,9 +10,9 @@ import (
 )
 
 func (t *readFileTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
-	raw := argString(args, "path", "file")
+	raw := argString(args, "path", "file", "file_path", "filepath", "filename", "target", "target_file")
 	if raw == "" {
-		return Result{Output: "path is required", IsError: true}, nil
+		return Result{Output: `path is required (received empty path; pass a JSON object such as {"path": "relative/path/to/file"})`, IsError: true}, nil
 	}
 	path := resolvePath(env, raw)
 	if err := checkWorkspacePath(env, path); err != nil {
@@ -244,9 +244,9 @@ func (t *listDirectoryTool) Run(ctx context.Context, env *Env, args map[string]a
 }
 
 func (t *writeFileTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
-	raw := argString(args, "path", "file")
+	raw := argString(args, "path", "file", "file_path", "filepath", "filename", "target", "target_file")
 	if raw == "" {
-		return Result{Output: "path is required", IsError: true}, nil
+		return Result{Output: `path is required (pass {"path": "relative/path/to/file", "content": "..."})`, IsError: true}, nil
 	}
 	content, ok := args["content"]
 	if !ok {

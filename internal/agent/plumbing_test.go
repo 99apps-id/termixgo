@@ -331,6 +331,27 @@ func TestDecodeToolArgumentsResilience(t *testing.T) {
 	if err != nil || got["path"] != "foo.txt" {
 		t.Errorf("embedded decode failed: %v, got %v", err, got)
 	}
+
+	// Trailing commas
+	trailing := `{"path":"main.go", "timeout":10,}`
+	got, err = decodeToolArguments(trailing)
+	if err != nil || got["path"] != "main.go" {
+		t.Errorf("trailing comma decode failed: %v, got %v", err, got)
+	}
+
+	// Python literals
+	pyLiterals := `{"path":"test.go", "dryRun": True, "force": False, "extra": None}`
+	got, err = decodeToolArguments(pyLiterals)
+	if err != nil || got["dryRun"] != true || got["force"] != false || got["extra"] != nil {
+		t.Errorf("python literals decode failed: %v, got %v", err, got)
+	}
+
+	// Single quoted
+	singleQuoted := `{'path':'main.go', 'count':3}`
+	got, err = decodeToolArguments(singleQuoted)
+	if err != nil || got["path"] != "main.go" {
+		t.Errorf("single quoted decode failed: %v, got %v", err, got)
+	}
 }
 
 // ------------------------------------------------- todos

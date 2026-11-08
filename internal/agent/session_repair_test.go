@@ -56,3 +56,37 @@ func TestLoadKeepsAPlausibleUsage(t *testing.T) {
 		t.Errorf("cost = %v, want the stored 0.0125 kept", cost)
 	}
 }
+
+func TestLoadSessionRepairsLegacyEmptyToolArguments(t *testing.T) {
+	withState(t)
+	session := NewSession("/work", "stepfun-plan/step-3.7-flash")
+	session.AddUser("first turn")
+	session.AddAssistant("", "", []provider.ToolCall{
+		{ID: "c1", Name: "read_file", Arguments: "{}"},
+		{ID: "c2", Name: "grep", Arguments: "{}"},
+		{ID: "c3", Name: "code_outline", Arguments: "{}"},
+	}, nil)
+	session.AddToolResult("c1", "read_file", elidedToolBody)
+	session.AddToolResult("c2", "grep", elidedToolBody)
+	session.AddToolResult("c3", "code_outline", elidedToolBody)
+	session.AddAssistant("done", "", nil, nil)
+	session.AddUser("second turn")
+	if err := session.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := LoadSession(session.ID())
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	calls := loaded.Messages()[1].ToolCalls
+	if calls[0].Arguments != `{"path":"[elided]"}` {
+		t.Errorf("read_file arguments = %q, want placeholder", calls[0].Arguments)
+	}
+	if calls[1].Arguments != `{"pattern":"[elided]"}` {
+		t.Errorf("grep arguments = %q, want placeholder", calls[1].Arguments)
+	}
+	if calls[2].Arguments != `{"path":"[elided]"}` {
+		t.Errorf("code_outline arguments = %q, want placeholder", calls[2].Arguments)
+	}
+}

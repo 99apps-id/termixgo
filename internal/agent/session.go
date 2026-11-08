@@ -813,6 +813,7 @@ func LoadSessionIn(dir, id string) (*Session, error) {
 	session.adoptID(id)
 	session.SetStoreDir(dir)
 	repairImpossibleUsage(session)
+	session.messages = repairElidedToolCallsInHistory(session.messages)
 	// A stored turn still marked in flight means the process did not finish it.
 	// Closing it here makes every load path safe, including a channel session
 	// and a resumed terminal session, without a model call.

@@ -426,7 +426,7 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 
 	done := make(chan struct{})
 	go b.keepTyping(ctx, request.ChatID, done)
-	answer, err := b.agent.RunPrompt(ctx, request, prompt, nil)
+	answer, err := b.agent.RunPrompt(ctx, request, prompt, b.channelProgress(ctx, request.ChatID))
 	close(done)
 	if err != nil {
 		b.reply(ctx, request.ChatID, naturalError(err, lang))
@@ -533,9 +533,9 @@ func (b *Bot) runImage(ctx context.Context, request channel.Request, imageMsg *w
 	var answer string
 	var runErr error
 	if imgAgent, ok := b.agent.(ImageAgent); ok {
-		answer, runErr = imgAgent.RunPromptWithImage(ctx, request, prompt, mediaType, encoded, nil)
+		answer, runErr = imgAgent.RunPromptWithImage(ctx, request, prompt, mediaType, encoded, b.channelProgress(ctx, request.ChatID))
 	} else {
-		answer, runErr = b.agent.RunPrompt(ctx, request, prompt, nil)
+		answer, runErr = b.agent.RunPrompt(ctx, request, prompt, b.channelProgress(ctx, request.ChatID))
 	}
 	close(done)
 
@@ -595,9 +595,9 @@ func (b *Bot) runDocument(ctx context.Context, request channel.Request, docMsg *
 		var answer string
 		var runErr error
 		if imgAgent, ok := b.agent.(ImageAgent); ok {
-			answer, runErr = imgAgent.RunPromptWithImage(ctx, request, prompt, mediaType, encoded, nil)
+			answer, runErr = imgAgent.RunPromptWithImage(ctx, request, prompt, mediaType, encoded, b.channelProgress(ctx, request.ChatID))
 		} else {
-			answer, runErr = b.agent.RunPrompt(ctx, request, prompt, nil)
+			answer, runErr = b.agent.RunPrompt(ctx, request, prompt, b.channelProgress(ctx, request.ChatID))
 		}
 		close(done)
 		if runErr != nil {
@@ -647,9 +647,9 @@ func (b *Bot) runDocument(ctx context.Context, request channel.Request, docMsg *
 		var answer string
 		var runErr error
 		if imgAgent, ok := b.agent.(ImageAgent); ok {
-			answer, runErr = imgAgent.RunPromptWithImage(ctx, request, builder.String(), "application/pdf", encoded, nil)
+			answer, runErr = imgAgent.RunPromptWithImage(ctx, request, builder.String(), "application/pdf", encoded, b.channelProgress(ctx, request.ChatID))
 		} else {
-			answer, runErr = b.agent.RunPrompt(ctx, request, builder.String(), nil)
+			answer, runErr = b.agent.RunPrompt(ctx, request, builder.String(), b.channelProgress(ctx, request.ChatID))
 		}
 		close(done)
 		if runErr != nil {
@@ -706,7 +706,7 @@ func (b *Bot) runDocument(ctx context.Context, request channel.Request, docMsg *
 
 	done := make(chan struct{})
 	go b.keepTyping(ctx, request.ChatID, done)
-	answer, err := b.agent.RunPrompt(ctx, request, finalPrompt, nil)
+	answer, err := b.agent.RunPrompt(ctx, request, finalPrompt, b.channelProgress(ctx, request.ChatID))
 	close(done)
 	if err != nil {
 		b.reply(ctx, request.ChatID, naturalError(err, lang))
@@ -805,9 +805,9 @@ func (b *Bot) runAudio(ctx context.Context, request channel.Request, audioMsg *w
 	var answer string
 	var runErr error
 	if vr, ok := b.agent.(VoicePromptRunner); ok {
-		answer, runErr = vr.RunVoicePrompt(ctx, request, prompt, nil)
+		answer, runErr = vr.RunVoicePrompt(ctx, request, prompt, b.channelProgress(ctx, request.ChatID))
 	} else {
-		answer, runErr = b.agent.RunPrompt(ctx, request, prompt, nil)
+		answer, runErr = b.agent.RunPrompt(ctx, request, prompt, b.channelProgress(ctx, request.ChatID))
 	}
 	close(done)
 	if runErr != nil {
@@ -1192,6 +1192,17 @@ func (b *Bot) keepTyping(ctx context.Context, chatID string, done <-chan struct{
 			return
 		case <-ticker.C:
 			compose()
+		}
+	}
+}
+
+// channelProgress renews the composing presence whenever a progress event arrives.
+func (b *Bot) channelProgress(ctx context.Context, chatID string) func(string) {
+	return func(line string) {
+		if b.client != nil && chatID != "" {
+			if jid, err := types.ParseJID(chatID); err == nil {
+				_ = b.client.SendChatPresence(ctx, jid, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+			}
 		}
 	}
 }

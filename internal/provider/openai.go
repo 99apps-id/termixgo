@@ -146,6 +146,13 @@ func (c *openAIClient) streamWithURL(ctx context.Context, url string, headers ma
 			for _, call := range delta.ToolCalls {
 				accumulator.add(call)
 			}
+			if len(delta.ToolCalls) == 0 && delta.FunctionCall != nil {
+				var td openAIToolDelta
+				td.Function.Name = delta.FunctionCall.Name
+				td.Function.RawArgs = delta.FunctionCall.Arguments
+				td.Function.Parameters = delta.FunctionCall.Parameters
+				accumulator.add(td)
+			}
 		}
 	}
 
@@ -248,16 +255,15 @@ func emitOpenAIUsage(report *openAIUsage, usage *cumulativeUsage, emit func(Stre
 type wholeChatCompletion struct {
 	Choices []struct {
 		Message struct {
-			Content          string `json:"content"`
-			ReasoningContent string `json:"reasoning_content"`
-			Reasoning        string `json:"reasoning"`
-			ToolCalls        []struct {
-				ID       string `json:"id"`
-				Function struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				} `json:"function"`
-			} `json:"tool_calls"`
+			Content          string            `json:"content"`
+			ReasoningContent string            `json:"reasoning_content"`
+			Reasoning        string            `json:"reasoning"`
+			ToolCalls        []openAIToolDelta `json:"tool_calls"`
+			FunctionCall     *struct {
+				Name       string          `json:"name"`
+				Arguments  json.RawMessage `json:"arguments"`
+				Parameters json.RawMessage `json:"parameters"`
+			} `json:"function_call"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -301,17 +307,26 @@ func (c *openAIClient) decodeWholeResponse(body io.Reader, emit func(StreamEvent
 				return err
 			}
 		}
-		for _, call := range message.ToolCalls {
+		calls := message.ToolCalls
+		if len(calls) == 0 && message.FunctionCall != nil && strings.TrimSpace(message.FunctionCall.Name) != "" {
+			var td openAIToolDelta
+			td.Function.Name = message.FunctionCall.Name
+			td.Function.RawArgs = message.FunctionCall.Arguments
+			td.Function.Parameters = message.FunctionCall.Parameters
+			calls = []openAIToolDelta{td}
+		}
+		for idx, call := range calls {
 			emitted = true
-			arguments := call.Function.Arguments
+			name := call.resolvedName()
+			arguments := call.resolvedArguments()
 			if strings.TrimSpace(arguments) == "" {
 				arguments = "{}"
 			}
 			id := call.ID
 			if strings.TrimSpace(id) == "" {
-				id = fmt.Sprintf("call_%d", len(call.Function.Name))
+				id = fmt.Sprintf("call_%d", idx)
 			}
-			toolCall := ToolCall{ID: id, Name: call.Function.Name, Arguments: arguments}
+			toolCall := ToolCall{ID: id, Name: name, Arguments: arguments}
 			if err := emit(StreamEvent{Type: EventToolCall, ToolCall: &toolCall}); err != nil {
 				return err
 			}
@@ -555,6 +570,11 @@ type openAIDelta struct {
 	ReasoningContent string            `json:"reasoning_content"`
 	Reasoning        string            `json:"reasoning"`
 	ToolCalls        []openAIToolDelta `json:"tool_calls"`
+	FunctionCall     *struct {
+		Name       string          `json:"name"`
+		Arguments  json.RawMessage `json:"arguments"`
+		Parameters json.RawMessage `json:"parameters"`
+	} `json:"function_call"`
 }
 
 func (d openAIDelta) thinking() string {
@@ -564,14 +584,116 @@ func (d openAIDelta) thinking() string {
 	return d.Reasoning
 }
 
+type openAIToolFunctionDelta struct {
+	Name       string          `json:"name"`
+	Arguments  string          `json:"arguments"`
+	RawArgs    json.RawMessage `json:"-"`
+	Parameters json.RawMessage `json:"-"`
+	Input      json.RawMessage `json:"-"`
+}
+
+func (f *openAIToolFunctionDelta) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Name       string          `json:"name"`
+		Arguments  json.RawMessage `json:"arguments"`
+		Parameters json.RawMessage `json:"parameters"`
+		Input      json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	f.Name = wire.Name
+	f.RawArgs = wire.Arguments
+	f.Parameters = wire.Parameters
+	f.Input = wire.Input
+	f.Arguments = decodeRawArgumentFragment(wire.Arguments)
+	return nil
+}
+
 type openAIToolDelta struct {
-	Index    int    `json:"index"`
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
+	Index      int                     `json:"index"`
+	HasIndex   bool                    `json:"-"`
+	ID         string                  `json:"id"`
+	Type       string                  `json:"type"`
+	Name       string                  `json:"name"`
+	Arguments  json.RawMessage         `json:"arguments"`
+	Parameters json.RawMessage         `json:"parameters"`
+	Input      json.RawMessage         `json:"input"`
+	Function   openAIToolFunctionDelta `json:"function"`
+}
+
+func (d *openAIToolDelta) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Index      *int                    `json:"index"`
+		ID         string                  `json:"id"`
+		Type       string                  `json:"type"`
+		Name       string                  `json:"name"`
+		Arguments  json.RawMessage         `json:"arguments"`
+		Parameters json.RawMessage         `json:"parameters"`
+		Input      json.RawMessage         `json:"input"`
+		Function   openAIToolFunctionDelta `json:"function"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if wire.Index != nil {
+		d.Index = *wire.Index
+		d.HasIndex = true
+	}
+	d.ID = wire.ID
+	d.Type = wire.Type
+	d.Name = wire.Name
+	d.Arguments = wire.Arguments
+	d.Parameters = wire.Parameters
+	d.Input = wire.Input
+	d.Function = wire.Function
+	return nil
+}
+
+func (d openAIToolDelta) resolvedName() string {
+	if d.Function.Name != "" {
+		return d.Function.Name
+	}
+	return d.Name
+}
+
+func (d openAIToolDelta) resolvedArguments() string {
+	if d.Function.Arguments != "" {
+		return d.Function.Arguments
+	}
+	for _, raw := range []json.RawMessage{
+		d.Function.RawArgs,
+		d.Function.Parameters,
+		d.Function.Input,
+		d.Arguments,
+		d.Parameters,
+		d.Input,
+	} {
+		if s := decodeRawArgumentFragment(raw); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// decodeRawArgumentFragment extracts a string fragment from a JSON value that
+// may be a JSON string (standard OpenAI delta) or a direct JSON object/array
+// (non-standard OpenAI-compatible gateways).
+func decodeRawArgumentFragment(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, `"`) {
+		var str string
+		if err := json.Unmarshal(raw, &str); err == nil {
+			return str
+		}
+	}
+	return trimmed
 }
 
 type openAIChunk struct {

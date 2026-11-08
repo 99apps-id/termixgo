@@ -442,6 +442,20 @@ func TestDecodeArgumentsHandlesBlankAndMalformedInput(t *testing.T) {
 	if err != nil || stringified["path"] != "c.go" {
 		t.Errorf("stringified = %v, err = %v", stringified, err)
 	}
+
+	// Trailing comma, python literals and single quotes support
+	trailing, err := decodeArguments(`{"path":"d.go", "timeout":10,}`)
+	if err != nil || trailing["path"] != "d.go" {
+		t.Errorf("trailing = %v, err = %v", trailing, err)
+	}
+	pyLiterals, err := decodeArguments(`{"path":"e.go", "dryRun": True, "force": False, "extra": None}`)
+	if err != nil || pyLiterals["dryRun"] != true || pyLiterals["force"] != false || pyLiterals["extra"] != nil {
+		t.Errorf("pyLiterals = %v, err = %v", pyLiterals, err)
+	}
+	singleQuoted, err := decodeArguments(`{'path':'f.go', 'count':3}`)
+	if err != nil || singleQuoted["path"] != "f.go" {
+		t.Errorf("singleQuoted = %v, err = %v", singleQuoted, err)
+	}
 }
 
 func TestAnthropicToolResultPlacesFalseForAnEmptyResult(t *testing.T) {
@@ -499,5 +513,46 @@ func TestNewClientBuildsTheRightKindForEachProvider(t *testing.T) {
 		if got := client.ID(); got != testCase.id {
 			t.Errorf("ID() = %q, want %q", got, testCase.id)
 		}
+	}
+}
+
+func TestOpenAIStreamHandlesObjectArgumentsAndDuplicateZeroIndices(t *testing.T) {
+	stream := strings.Join([]string{
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"read_file","arguments":{"path":"a.go"}}}]}}]}`,
+		"",
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"grep","parameters":{"pattern":"foo"}}}]}}]}`,
+		"",
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, stream)
+	}))
+	defer server.Close()
+
+	client, err := NewClient("openai-compatible", server.URL, func(string) string { return "k" })
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	var calls []ToolCall
+	err = client.Stream(context.Background(), ChatRequest{Model: "test-model"}, func(ev StreamEvent) error {
+		if ev.Type == EventToolCall && ev.ToolCall != nil {
+			calls = append(calls, *ev.ToolCall)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("len(calls) = %d, want 2: %+v", len(calls), calls)
+	}
+	if calls[0].Name != "read_file" || !strings.Contains(calls[0].Arguments, `"path":"a.go"`) {
+		t.Errorf("calls[0] = %+v, want read_file with path a.go", calls[0])
+	}
+	if calls[1].Name != "grep" || !strings.Contains(calls[1].Arguments, `"pattern":"foo"`) {
+		t.Errorf("calls[1] = %+v, want grep with pattern foo", calls[1])
 	}
 }

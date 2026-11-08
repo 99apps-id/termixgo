@@ -337,15 +337,19 @@ func (t *moveFileTool) Schema() map[string]any {
 
 // BaseName is the last path element, for compact labels.
 func BaseName(path string) string {
-	return filepath.Base(filepath.FromSlash(strings.TrimSpace(path)))
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	return filepath.Base(filepath.FromSlash(trimmed))
 }
 
 func displayName(args map[string]any) string {
-	return BaseName(argString(args, "path", "file"))
+	return BaseName(argString(args, "path", "file", "file_path", "filepath", "filename", "target", "target_file"))
 }
 
 func pathOrDot(args map[string]any) string {
-	value := argString(args, "path", "dir", "directory")
+	value := argString(args, "path", "dir", "directory", "file", "file_path", "filepath", "target")
 	if strings.TrimSpace(value) == "" {
 		return "."
 	}
