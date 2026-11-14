@@ -58,11 +58,7 @@ func TestTranscribeAudioPlainTextFallback(t *testing.T) {
 }
 
 func TestTranscribeAudioFailsWhenNoKey(t *testing.T) {
-	app, err := New(t.TempDir())
-	if err != nil {
-		t.Fatalf("New app: %v", err)
-	}
-	defer app.Shutdown()
+	app := newTestApp(t)
 
 	// Clear groq and openai secrets in store
 	_ = app.store.Delete(secrets.ProviderKey("groq"))
@@ -71,7 +67,7 @@ func TestTranscribeAudioFailsWhenNoKey(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
 
-	_, err = app.TranscribeAudio(context.Background(), []byte("audio"), "voice.ogg")
+	_, err := app.TranscribeAudio(context.Background(), []byte("audio"), "voice.ogg")
 	if err == nil {
 		t.Fatalf("expected error when no speech-to-text key is configured")
 	}

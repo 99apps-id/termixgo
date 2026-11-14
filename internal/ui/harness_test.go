@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/app"
+	"github.com/99apps-id/termixgo/internal/config"
 )
 
 // testApp builds an app for a UI test and registers its shutdown.
@@ -15,6 +17,9 @@ import (
 // open. Registering it here keeps every call site from having to remember.
 func testApp(t *testing.T) *app.App {
 	t.Helper()
+	if os.Getenv(config.EnvHome) == "" {
+		t.Setenv(config.EnvHome, t.TempDir())
+	}
 	application, err := app.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("app.New: %v", err)
