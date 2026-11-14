@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 )
 
 // PKCEFlow is an OAuth 2.0 authorization-code flow with PKCE and a loopback
@@ -28,6 +29,7 @@ type PKCEFlow struct {
 	RedirectHost string
 	RedirectPort int
 	RedirectPath string
+	UserAgent    string
 	ExtraAuth    map[string]string
 	// ExchangeJSON and RefreshJSON send the token request as JSON instead of a
 	// form, which the Anthropic endpoint expects.
@@ -62,11 +64,36 @@ func pkceChallenge(verifier string) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
+// pkceWaiter defines the contract for awaiting an OAuth code exchange.
+type pkceWaiter interface {
+	Wait(ctx context.Context, clock Clock, in io.Reader) (Token, error)
+	Close()
+}
+
+func listenLoopback(host string, port int, retries int, retryDelay time.Duration) (net.Listener, error) {
+	if retries <= 0 {
+		retries = 1
+	}
+	var lastErr error
+	for attempt := 0; attempt < retries; attempt++ {
+		listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, port))
+		if err == nil {
+			return listener, nil
+		}
+		lastErr = err
+		if port != 0 && attempt+1 < retries {
+			time.Sleep(retryDelay)
+		}
+	}
+	return nil, lastErr
+}
+
 // StartPKCE opens the loopback listener and returns the URL to visit.
 func StartPKCE(flow PKCEFlow) (*pkceSession, string, error) {
-	host := strings.TrimSpace(flow.RedirectHost)
-	if host == "" {
-		host = "127.0.0.1"
+	bindHost := "127.0.0.1"
+	redirectHost := strings.TrimSpace(flow.RedirectHost)
+	if redirectHost == "" {
+		redirectHost = bindHost
 	}
 	path := strings.TrimSpace(flow.RedirectPath)
 	if path == "" {
@@ -76,11 +103,15 @@ func StartPKCE(flow PKCEFlow) (*pkceSession, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	state, err := randomURLSafe(16)
+	state, err := randomURLSafe(32)
 	if err != nil {
 		return nil, "", err
 	}
-	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, flow.RedirectPort))
+	retries := 1
+	if flow.RedirectPort != 0 {
+		retries = 6
+	}
+	listener, err := listenLoopback(bindHost, flow.RedirectPort, retries, 150*time.Millisecond)
 	if err != nil {
 		return nil, "", fmt.Errorf("open the login callback port: %w", err)
 	}
@@ -89,7 +120,7 @@ func StartPKCE(flow PKCEFlow) (*pkceSession, string, error) {
 		flow:        flow,
 		verifier:    verifier,
 		state:       state,
-		redirectURI: fmt.Sprintf("http://%s:%d%s", host, port, path),
+		redirectURI: fmt.Sprintf("http://%s:%d%s", redirectHost, port, path),
 		listener:    listener,
 		codeCh:      make(chan string, 1),
 		errCh:       make(chan error, 1),
@@ -271,7 +302,7 @@ func (s *pkceSession) exchange(ctx context.Context, code string, clock Clock) (T
 	if s.flow.ClientSecret != "" {
 		payload["client_secret"] = s.flow.ClientSecret
 	}
-	return tokenRequest(ctx, s.flow.TokenURL, payload, s.flow.ExchangeJSON, clock)
+	return tokenRequest(ctx, s.flow.TokenURL, payload, s.flow.ExchangeJSON, s.flow.UserAgent, clock)
 }
 
 // Close stops the callback server.
@@ -281,6 +312,105 @@ func (s *pkceSession) Close() {
 			_ = s.server.Close()
 		}
 	})
+}
+
+const (
+	ClaudeManualAuthorizeURL = "https://platform.claude.com/oauth/authorize"
+	ClaudeManualRedirectURI  = "https://platform.claude.com/oauth/code/callback"
+)
+
+// ManualSession drives a pasted-code OAuth flow (used when the fixed loopback
+// port is unavailable or in headless environments).
+type ManualSession struct {
+	flow        PKCEFlow
+	verifier    string
+	state       string
+	redirectURI string
+}
+
+func StartClaudeManual(flow PKCEFlow) (*ManualSession, string, error) {
+	verifier, err := randomURLSafe(32)
+	if err != nil {
+		return nil, "", err
+	}
+	state, err := randomURLSafe(32)
+	if err != nil {
+		return nil, "", err
+	}
+	endpoint, err := url.Parse(ClaudeManualAuthorizeURL)
+	if err != nil {
+		return nil, "", err
+	}
+	query := endpoint.Query()
+	query.Set("response_type", "code")
+	query.Set("client_id", flow.ClientID)
+	query.Set("redirect_uri", ClaudeManualRedirectURI)
+	query.Set("state", state)
+	query.Set("code_challenge", pkceChallenge(verifier))
+	query.Set("code_challenge_method", "S256")
+	if len(flow.Scopes) > 0 {
+		query.Set("scope", strings.Join(flow.Scopes, " "))
+	}
+	for key, value := range flow.ExtraAuth {
+		query.Set(key, value)
+	}
+	endpoint.RawQuery = strings.ReplaceAll(query.Encode(), "+", "%20")
+	return &ManualSession{
+		flow:        flow,
+		verifier:    verifier,
+		state:       state,
+		redirectURI: ClaudeManualRedirectURI,
+	}, endpoint.String(), nil
+}
+
+func (s *ManualSession) Close() {}
+
+func (s *ManualSession) Wait(ctx context.Context, clock Clock, in io.Reader) (Token, error) {
+	if in == nil {
+		return Token{}, errors.New("paste the authorization code shown after sign-in")
+	}
+	pasted := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(in)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			pasted <- line
+			return
+		}
+		if err := scanner.Err(); err != nil {
+			errCh <- err
+		} else {
+			errCh <- errors.New("input closed without code")
+		}
+	}()
+
+	select {
+	case line := <-pasted:
+		parsedCode, state, ok := extractPastedCode(line)
+		if !ok || parsedCode == "" {
+			return Token{}, errors.New("the pasted value has no authorization code")
+		}
+		if state != "" && state != s.state {
+			return Token{}, errors.New("authorization state does not match this login; start the sign-in again")
+		}
+		payload := map[string]string{
+			"grant_type":    "authorization_code",
+			"code":          parsedCode,
+			"redirect_uri":  s.redirectURI,
+			"client_id":     s.flow.ClientID,
+			"code_verifier": s.verifier,
+			"state":         s.state,
+		}
+		return tokenRequest(ctx, s.flow.TokenURL, payload, s.flow.ExchangeJSON, s.flow.UserAgent, clock)
+	case err := <-errCh:
+		return Token{}, err
+	case <-ctx.Done():
+		return Token{}, ctx.Err()
+	}
 }
 
 // RefreshPKCE renews a PKCE token.
@@ -296,7 +426,7 @@ func RefreshPKCE(ctx context.Context, flow PKCEFlow, refreshToken string, clock 
 	if strings.TrimSpace(flow.RefreshScope) != "" {
 		payload["scope"] = flow.RefreshScope
 	}
-	token, err := tokenRequest(ctx, flow.TokenURL, payload, flow.RefreshJSON, clock)
+	token, err := tokenRequest(ctx, flow.TokenURL, payload, flow.RefreshJSON, flow.UserAgent, clock)
 	if err != nil {
 		return Token{}, err
 	}
@@ -306,18 +436,22 @@ func RefreshPKCE(ctx context.Context, flow PKCEFlow, refreshToken string, clock 
 	return token, nil
 }
 
-func tokenRequest(ctx context.Context, endpoint string, payload map[string]string, asJSON bool, clock Clock) (Token, error) {
+func tokenRequest(ctx context.Context, endpoint string, payload map[string]string, asJSON bool, userAgent string, clock Clock) (Token, error) {
 	var body []byte
 	var status int
 	var err error
+	headers := make(map[string]string)
+	if strings.TrimSpace(userAgent) != "" {
+		headers["User-Agent"] = userAgent
+	}
 	if asJSON {
 		object := make(map[string]any, len(payload))
 		for key, value := range payload {
 			object[key] = value
 		}
-		body, status, err = requestJSON(ctx, http.MethodPost, endpoint, nil, object)
+		body, status, err = requestJSON(ctx, http.MethodPost, endpoint, headers, object)
 	} else {
-		body, status, err = requestForm(ctx, endpoint, payload)
+		body, status, err = requestFormWithHeaders(ctx, endpoint, payload, headers)
 	}
 	if err != nil {
 		return Token{}, err

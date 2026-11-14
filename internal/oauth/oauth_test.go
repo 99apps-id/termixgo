@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -422,5 +423,106 @@ func TestReadEnvLocalAntigravity(t *testing.T) {
 	id, secret := readEnvLocalAntigravity()
 	if id != "test-client-id" || secret != "test-secret" {
 		t.Errorf("readEnvLocalAntigravity() = (%q, %q), want (test-client-id, test-secret)", id, secret)
+	}
+}
+
+func TestClaudeOAuthSpec(t *testing.T) {
+	for _, name := range []string{"claude-oauth", "claude", "claude-code"} {
+		spec, ok := SpecFor(name)
+		if !ok {
+			t.Fatalf("SpecFor(%q) not found", name)
+		}
+		if spec.RedirectHost != "localhost" {
+			t.Errorf("spec.RedirectHost = %q, want 'localhost'", spec.RedirectHost)
+		}
+		if !strings.Contains(spec.UserAgent, "claude-cli/2.1.290") {
+			t.Errorf("spec.UserAgent = %q, want to contain claude-cli/2.1.290", spec.UserAgent)
+		}
+		if !spec.ExchangeJSON || !spec.RefreshJSON {
+			t.Errorf("spec JSON flags: exchange=%v refresh=%v, want true", spec.ExchangeJSON, spec.RefreshJSON)
+		}
+	}
+}
+
+func TestClaudeOAuthStartPKCEUsesLocalhostRedirect(t *testing.T) {
+	flow := PKCEFlow{
+		ClientID:     "test-client",
+		AuthorizeURL: "https://claude.ai/oauth/authorize",
+		TokenURL:     "https://api.anthropic.com/v1/oauth/token",
+		RedirectPort: 0,
+		RedirectHost: "localhost",
+		RedirectPath: "/callback",
+		UserAgent:    "claude-cli/2.1.290 (external, sdk-cli)",
+	}
+	session, authURL, err := StartPKCE(flow)
+	if err != nil {
+		t.Fatalf("StartPKCE: %v", err)
+	}
+	defer session.Close()
+
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("url.Parse: %v", err)
+	}
+	redirectURI := parsed.Query().Get("redirect_uri")
+	if !strings.HasPrefix(redirectURI, "http://localhost:") || !strings.HasSuffix(redirectURI, "/callback") {
+		t.Errorf("redirect_uri = %q, want http://localhost:<port>/callback", redirectURI)
+	}
+}
+
+func TestClaudeManualFlow(t *testing.T) {
+	var gotHeaders http.Header
+	var gotPayload map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"claude-manual-access","refresh_token":"claude-manual-refresh","expires_in":14400}`)
+	}))
+	defer server.Close()
+
+	flow := PKCEFlow{
+		ClientID:     "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+		TokenURL:     server.URL,
+		Scopes:       []string{"org:create_api_key", "user:profile", "user:inference"},
+		ExchangeJSON: true,
+		UserAgent:    "claude-cli/2.1.290 (external, sdk-cli)",
+		ExtraAuth:    map[string]string{"code": "true"},
+	}
+
+	session, authURL, err := StartClaudeManual(flow)
+	if err != nil {
+		t.Fatalf("StartClaudeManual: %v", err)
+	}
+
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("url.Parse: %v", err)
+	}
+	if parsed.Host != "platform.claude.com" || parsed.Path != "/oauth/authorize" {
+		t.Errorf("authURL host/path = %s%s, want platform.claude.com/oauth/authorize", parsed.Host, parsed.Path)
+	}
+	if parsed.Query().Get("redirect_uri") != ClaudeManualRedirectURI {
+		t.Errorf("redirect_uri = %q, want %q", parsed.Query().Get("redirect_uri"), ClaudeManualRedirectURI)
+	}
+	state := parsed.Query().Get("state")
+
+	input := strings.NewReader("manual-auth-code#" + state + "\n")
+	token, err := session.Wait(context.Background(), noWaitClock(), input)
+	if err != nil {
+		t.Fatalf("session.Wait: %v", err)
+	}
+	if token.Access != "claude-manual-access" || token.Refresh != "claude-manual-refresh" {
+		t.Errorf("token = %+v", token)
+	}
+	if gotHeaders.Get("User-Agent") != "claude-cli/2.1.290 (external, sdk-cli)" {
+		t.Errorf("User-Agent = %q, want claude-cli/2.1.290", gotHeaders.Get("User-Agent"))
+	}
+	if gotPayload["redirect_uri"] != ClaudeManualRedirectURI {
+		t.Errorf("payload redirect_uri = %v, want %q", gotPayload["redirect_uri"], ClaudeManualRedirectURI)
+	}
+	if gotPayload["code"] != "manual-auth-code" {
+		t.Errorf("payload code = %v, want 'manual-auth-code'", gotPayload["code"])
 	}
 }

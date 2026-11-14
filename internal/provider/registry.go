@@ -65,7 +65,10 @@ var contextWindows = map[string]int{
 	"gpt-5.3-codex": 400000,
 
 	// Anthropic: everything current is 1M.
+	"claude-fable-5-2":              1000000,
+	"claude-fable-5.2":              1000000,
 	"claude-fable-5-1":              1000000,
+	"claude-fable-5":                1000000,
 	"claude-opus-5-5":               1000000,
 	"claude-opus-5":                 1000000,
 	"claude-sonnet-5":               1000000,
@@ -73,6 +76,8 @@ var contextWindows = map[string]int{
 	"claude-haiku-4-5":              200000,
 	"claude-oauth-opus-5-5":         1000000,
 	"claude-oauth-opus-5":           1000000,
+	"claude-oauth-fable-5-2":        1000000,
+	"claude-oauth-fable-5.2":        1000000,
 	"claude-oauth-fable-5-1":        1000000,
 	"claude-oauth-fable-5":          1000000,
 	"claude-oauth-sonnet-5-5":       1000000,
@@ -445,6 +450,7 @@ func Models() []Model {
 		{ID: "codex-gpt-5-codex", Provider: "openai-codex", Label: "GPT-5 Codex", APIID: "gpt-5-codex", Description: "First Codex generation.", Tags: []string{"coding", "tools"}},
 
 		// Anthropic. Fable is the Mythos tier, above Opus.
+		{ID: "claude-fable-5-2", Provider: "anthropic", Label: "Claude Fable 5.2", Description: "Flagship deep reasoning and long-horizon agentic work.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-fable-5-1", Provider: "anthropic", Label: "Claude Fable 5.1", Description: "Deepest reasoning and long-horizon agentic work.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-opus-5-5", Provider: "anthropic", Label: "Claude Opus 5.5", Description: "Long-running agentic coding and knowledge work.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-sonnet-5", Provider: "anthropic", Label: "Claude Sonnet 5", Description: "Best combination of speed and intelligence.", Tags: []string{"reasoning", "tools", "coding"}},
@@ -452,6 +458,7 @@ func Models() []Model {
 		// The Claude models served through a Claude login (OAuth).
 		{ID: "claude-oauth-opus-5-5", Provider: "claude-oauth", Label: "Claude Opus 5.5 (OAuth)", APIID: "claude-opus-5-5", Description: "Flagship reasoning and coding through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-oauth-opus-5", Provider: "claude-oauth", Label: "Claude Opus 5 (OAuth)", APIID: "claude-opus-5", Description: "Previous flagship through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "claude-oauth-fable-5-2", Provider: "claude-oauth", Label: "Claude Fable 5.2 (OAuth)", APIID: "claude-fable-5-2", Description: "Flagship deep reasoning and agentic work through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-oauth-fable-5-1", Provider: "claude-oauth", Label: "Claude Fable 5.1 (OAuth)", APIID: "claude-fable-5-1", Description: "Deepest reasoning and agentic work through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-oauth-fable-5", Provider: "claude-oauth", Label: "Claude Fable 5 (OAuth)", APIID: "claude-fable-5", Description: "Mythos tier reasoning through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-oauth-sonnet-5-5", Provider: "claude-oauth", Label: "Claude Sonnet 5.5 (OAuth)", APIID: "claude-sonnet-5-5", Description: "Frontier speed and intelligence through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},

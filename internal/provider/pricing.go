@@ -51,6 +51,8 @@ var pricingTable = map[string]Pricing{
 	"gpt-5.3-codex": {InputPerMillion: 1.75, OutputPerMillion: 14.00},
 
 	// Anthropic.
+	"claude-fable-5-2":  {InputPerMillion: 10.00, OutputPerMillion: 50.00},
+	"claude-fable-5.2":  {InputPerMillion: 10.00, OutputPerMillion: 50.00},
 	"claude-fable-5-1":  {InputPerMillion: 10.00, OutputPerMillion: 50.00},
 	"claude-opus-5-5":   {InputPerMillion: 4.00, OutputPerMillion: 20.00},
 	"claude-opus-5":     {InputPerMillion: 5.00, OutputPerMillion: 25.00},

@@ -7,16 +7,43 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 )
 
 // The Claude Code CLI identity an OAuth token is entitled to. The beta list
 // matches what the current CLI sends; the first entry is what unlocks an
 // OAuth bearer at all.
-const (
-	claudeCLIVersion   = "2.1.280"
+const defaultClaudeCLIVersion = "2.1.290"
+
+var (
+	claudeCLIVersion   = defaultClaudeCLIVersion
 	claudeCLIUserAgent = "claude-cli/" + claudeCLIVersion + " (external, sdk-cli)"
-	claudeOAuthBeta    = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24,structured-outputs-2025-12-15,fast-mode-2026-02-01,redact-thinking-2026-02-12,token-efficient-tools-2026-03-28"
+)
+
+func resolveClaudeCLIVersion() string {
+	if v := strings.TrimSpace(os.Getenv("ODON_CLAUDE_CLI_VERSION")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv("TERMIXGO_CLAUDE_CLI_VERSION")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv("CLAUDE_CLI_VERSION")); v != "" {
+		return v
+	}
+	return defaultClaudeCLIVersion
+}
+
+func currentClaudeCLIUserAgent() string {
+	ver := resolveClaudeCLIVersion()
+	if ver == defaultClaudeCLIVersion {
+		return claudeCLIUserAgent
+	}
+	return "claude-cli/" + ver + " (external, sdk-cli)"
+}
+
+const (
+	claudeOAuthBeta = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24,structured-outputs-2025-12-15,fast-mode-2026-02-01,redact-thinking-2026-02-12,token-efficient-tools-2026-03-28"
 )
 
 // anthropicClient speaks the Messages streaming protocol.
@@ -28,8 +55,15 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 		maxTokens = 8192
 	}
 	messages := encodeAnthropicMessages(req.Messages)
+	model := req.Model
+	if c.info.OAuth && strings.HasPrefix(model, "claude-oauth-") {
+		model = strings.TrimPrefix(model, "claude-oauth-")
+	}
+	if model == "claude-fable-5.2" {
+		model = "claude-fable-5-2"
+	}
 	payload := map[string]any{
-		"model":      req.Model,
+		"model":      model,
 		"max_tokens": maxTokens,
 		"stream":     true,
 		"messages":   messages,
@@ -66,6 +100,19 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 
 	applyPromptCacheToMessages(messages)
 
+	hasPDF := false
+	for _, m := range req.Messages {
+		for _, img := range m.Images {
+			if img.MediaType == "application/pdf" {
+				hasPDF = true
+				break
+			}
+		}
+		if hasPDF {
+			break
+		}
+	}
+
 	headers := map[string]string{"anthropic-version": "2023-06-01"}
 	url := c.baseURL + "/v1/messages"
 	key := c.currentKey()
@@ -75,10 +122,14 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 		// identity and needs the beta query plus the claude-code beta header;
 		// the API key header is not used.
 		headers["Authorization"] = "Bearer " + key
-		headers["anthropic-beta"] = claudeOAuthBeta
+		beta := claudeOAuthBeta
+		if hasPDF {
+			beta += ",pdfs-2024-09-25"
+		}
+		headers["anthropic-beta"] = beta
 		headers["anthropic-dangerous-direct-browser-access"] = "true"
 		headers["x-app"] = "cli"
-		headers["User-Agent"] = claudeCLIUserAgent
+		headers["User-Agent"] = currentClaudeCLIUserAgent()
 		headers["X-Stainless-Helper-Method"] = "stream"
 		headers["X-Stainless-Retry-Count"] = "0"
 		headers["X-Stainless-Runtime-Version"] = "v24.14.0"
@@ -107,7 +158,11 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 		url += "?beta=true"
 	} else {
 		headers["x-api-key"] = key
-		headers["anthropic-beta"] = "prompt-caching-2024-07-31"
+		beta := "prompt-caching-2024-07-31"
+		if hasPDF {
+			beta += ",pdfs-2024-09-25"
+		}
+		headers["anthropic-beta"] = beta
 		if len(req.Tools) > 0 {
 			tools := encodeAnthropicTools(req.Tools)
 			if len(tools) > 0 {
@@ -551,7 +606,7 @@ func withClaudeBillingHeader(system any, payload map[string]any) any {
 	encoded, _ := json.Marshal(payload)
 	sum := sha256.Sum256(encoded)
 	text := fmt.Sprintf("x-anthropic-billing-header: cc_version=%s.%s; cc_entrypoint=sdk-cli; cch=%s;",
-		claudeCLIVersion, randomHex(2)[:3], hex.EncodeToString(sum[:])[:5])
+		resolveClaudeCLIVersion(), randomHex(2)[:3], hex.EncodeToString(sum[:])[:5])
 	billing := map[string]any{"type": "text", "text": text}
 	switch value := system.(type) {
 	case []map[string]any:

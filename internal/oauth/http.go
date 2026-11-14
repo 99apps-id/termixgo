@@ -19,6 +19,11 @@ var client = &http.Client{Timeout: 30 * time.Second}
 // even for a 4xx, because a device poll answers "authorization_pending" with a
 // 400 that the caller must read rather than treat as a hard failure.
 func requestForm(ctx context.Context, endpoint string, form map[string]string) ([]byte, int, error) {
+	return requestFormWithHeaders(ctx, endpoint, form, nil)
+}
+
+// requestFormWithHeaders posts url-encoded form data with optional headers.
+func requestFormWithHeaders(ctx context.Context, endpoint string, form map[string]string, headers map[string]string) ([]byte, int, error) {
 	values := url.Values{}
 	for key, value := range form {
 		values.Set(key, value)
@@ -29,6 +34,9 @@ func requestForm(ctx context.Context, endpoint string, form map[string]string) (
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("Accept", "application/json")
+	for key, value := range headers {
+		request.Header.Set(key, value)
+	}
 	return send(request)
 }
 

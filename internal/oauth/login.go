@@ -61,9 +61,13 @@ func Login(ctx context.Context, store *Store, provider string, in io.Reader, out
 		// from a build that carries no stamp (a plain go build or an older
 		// binary) without asking the operator to log in again.
 		persistClientCredentials(store, provider, flow)
-		var session *pkceSession
+		var session pkceWaiter
 		var authURL string
 		session, authURL, err = StartPKCE(flow)
+		if err != nil && provider == "claude-oauth" {
+			fmt.Fprintf(out, "Notice: loopback port %d is unavailable; switching to manual sign-in.\n", flow.RedirectPort)
+			session, authURL, err = StartClaudeManual(flow)
+		}
 		if err == nil {
 			fmt.Fprintf(out, "Open this URL to log in:\n%s\n", authURL)
 			openBrowser(authURL)
@@ -190,7 +194,9 @@ func pkceFlowFromSpec(spec Spec, store *Store) PKCEFlow {
 		TokenURL:     spec.TokenURL,
 		Scopes:       spec.Scopes,
 		RedirectPort: spec.RedirectPort,
+		RedirectHost: spec.RedirectHost,
 		RedirectPath: spec.RedirectPath,
+		UserAgent:    spec.UserAgent,
 		ExtraAuth:    spec.ExtraAuth,
 		ExchangeJSON: spec.ExchangeJSON,
 		RefreshJSON:  spec.RefreshJSON,

@@ -31,7 +31,9 @@ type Spec struct {
 	AuthorizeURL    string
 	Scopes          []string
 	RedirectPort    int
+	RedirectHost    string
 	RedirectPath    string
+	UserAgent       string
 	ExtraAuth       map[string]string
 	ExchangeJSON    bool
 	RefreshJSON     bool
@@ -82,6 +84,7 @@ var specs = map[string]Spec{
 		TokenURL:     "https://auth.openai.com/oauth/token",
 		Scopes:       []string{"openid", "profile", "email", "offline_access"},
 		RedirectPort: 1455,
+		RedirectHost: "localhost",
 		RedirectPath: "/auth/callback",
 		ExtraAuth: map[string]string{
 			"id_token_add_organizations": "true",
@@ -102,7 +105,9 @@ var specs = map[string]Spec{
 		TokenURL:     "https://api.anthropic.com/v1/oauth/token",
 		Scopes:       []string{"org:create_api_key", "user:profile", "user:inference"},
 		RedirectPort: 54545,
+		RedirectHost: "localhost",
 		RedirectPath: "/callback",
+		UserAgent:    defaultClaudeUserAgent(),
 		ExtraAuth:    map[string]string{"code": "true"},
 		ExchangeJSON: true,
 		RefreshJSON:  true,
@@ -126,6 +131,7 @@ var specs = map[string]Spec{
 			"https://www.googleapis.com/auth/cclog",
 			"https://www.googleapis.com/auth/experimentsandconfigs",
 		},
+		RedirectHost: "localhost",
 		RedirectPath: "/auth/callback",
 		ExtraAuth:    map[string]string{"access_type": "offline", "prompt": "consent"},
 	},
@@ -173,6 +179,20 @@ var (
 	AntigravityClientSecret string
 )
 
+const defaultClaudeCLIVersion = "2.1.290"
+
+func defaultClaudeUserAgent() string {
+	ver := defaultClaudeCLIVersion
+	if v := strings.TrimSpace(os.Getenv("ODON_CLAUDE_CLI_VERSION")); v != "" {
+		ver = v
+	} else if v := strings.TrimSpace(os.Getenv("TERMIXGO_CLAUDE_CLI_VERSION")); v != "" {
+		ver = v
+	} else if v := strings.TrimSpace(os.Getenv("CLAUDE_CLI_VERSION")); v != "" {
+		ver = v
+	}
+	return "claude-cli/" + ver + " (external, sdk-cli)"
+}
+
 // SpecFor returns the login spec for a provider, filling the Antigravity client
 // pair from the build stamp when the binary carried one.
 func SpecFor(provider string) (Spec, bool) {
@@ -180,8 +200,14 @@ func SpecFor(provider string) (Spec, bool) {
 	if !ok && provider == "github" {
 		spec, ok = specs["github-copilot"]
 	}
+	if !ok && (provider == "claude" || provider == "claude-code") {
+		spec, ok = specs["claude-oauth"]
+	}
 	if !ok {
 		return Spec{}, false
+	}
+	if spec.Provider == "claude-oauth" {
+		spec.UserAgent = defaultClaudeUserAgent()
 	}
 	if provider == "antigravity" {
 		if strings.TrimSpace(spec.ClientID) == "" {

@@ -301,3 +301,36 @@ func TestSecretsPathIsNotTheRealOne(t *testing.T) {
 		t.Errorf("the store should be inside the temporary directory: %v", err)
 	}
 }
+
+func TestFable52Support(t *testing.T) {
+	m1, ok1 := ModelByID("claude-fable-5-2")
+	if !ok1 {
+		t.Fatalf("ModelByID(claude-fable-5-2) not found")
+	}
+	if m1.Window() != 1000000 {
+		t.Errorf("m1.Window() = %d, want 1000000", m1.Window())
+	}
+	if !m1.Pricing().Known() {
+		t.Errorf("m1 pricing is unknown")
+	}
+
+	m2, ok2 := ModelByID("claude-oauth-fable-5-2")
+	if !ok2 {
+		t.Fatalf("ModelByID(claude-oauth-fable-5-2) not found")
+	}
+	if m2.Window() != 1000000 {
+		t.Errorf("m2.Window() = %d, want 1000000", m2.Window())
+	}
+	if m2.WireID() != "claude-fable-5-2" {
+		t.Errorf("m2.WireID() = %q, want 'claude-fable-5-2'", m2.WireID())
+	}
+
+	// Test default version and environment override
+	if v := resolveClaudeCLIVersion(); v != "2.1.290" {
+		t.Errorf("resolveClaudeCLIVersion() = %q, want '2.1.290'", v)
+	}
+	t.Setenv("ODON_CLAUDE_CLI_VERSION", "2.1.300")
+	if v := resolveClaudeCLIVersion(); v != "2.1.300" {
+		t.Errorf("resolveClaudeCLIVersion() with env = %q, want '2.1.300'", v)
+	}
+}
