@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -530,6 +531,29 @@ func (s *Store) waitForIndexing() {
 	}
 }
 
+// maxIndexReadBytes bounds how much of one workspace file the walk reads. The
+// index keeps only the first 64 KB anyway, so a larger read is pure cost: the
+// old code slurped a whole multi-gigabyte log into memory before clamping it,
+// which is exactly the allocation a 2 GB machine cannot afford.
+const maxIndexReadBytes = 1 << 20
+
+// readIndexFile reads at most maxIndexReadBytes of one file. Stat follows a
+// symlink so a linked source file is indexed like the file it names, while a
+// link to a fifo, socket or device is refused: opening those blocks or reads
+// forever, and the walk must never hang on one entry.
+func readIndexFile(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, errors.New("not a regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(io.LimitReader(file, maxIndexReadBytes))
+}
+
 // indexWorkspace walks the root and indexes the text files it finds. The caller
 // owns the indexing flag, so this does not take the lock itself.
 func (s *Store) indexWorkspace() {
@@ -568,12 +592,11 @@ func (s *Store) indexWorkspace() {
 	})
 
 	for _, path := range files {
-		data, err := os.ReadFile(path)
+		data, err := readIndexFile(path)
 		if err != nil {
 			continue
 		}
-		text := clampIndexBytes(string(data))
 		rel, _ := filepath.Rel(s.root, path)
-		_ = s.Index("workspace", rel, filepath.Base(path), text)
+		_ = s.Index("workspace", rel, filepath.Base(path), clampIndexBytes(string(data)))
 	}
 }

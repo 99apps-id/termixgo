@@ -2,9 +2,12 @@ package search
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOpenAndSearch(t *testing.T) {
@@ -196,5 +199,64 @@ func TestIndexWorkspaceFiles(t *testing.T) {
 	}
 	if len(results) == 0 {
 		t.Errorf("expected results for 'terminal', got none")
+	}
+}
+
+// TestIndexWalkBoundsOneFileRead keeps the workspace walk inside the memory
+// budget: a file far larger than the index keeps is read capped, not slurped
+// whole, and a fifo in the tree is refused rather than opened, because opening
+// one blocks forever and would hang every search behind it.
+func TestIndexWalkBoundsOneFileRead(t *testing.T) {
+	root := t.TempDir()
+	big := make([]byte, maxIndexReadBytes+512<<10)
+	copy(big, "needlehead ")
+	for i := len("needlehead "); i < len(big); i++ {
+		big[i] = 'a'
+	}
+	if err := os.WriteFile(filepath.Join(root, "big.txt"), big, 0o644); err != nil {
+		t.Fatalf("write big file: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	store.SyncRefreshWorkspace()
+	results, err := store.Search("needlehead", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) == 0 || filepath.ToSlash(results[0].Path) != "big.txt" {
+		t.Fatalf("the head of a large file must be indexed, got %+v", results)
+	}
+
+	if runtime.GOOS == "windows" {
+		return
+	}
+	// A fifo named like a source file must be refused, not opened. The walk
+	// would hang forever on an open that no writer will ever complete, which
+	// is why the refusal is part of the contract and not just a nicety.
+	fifo := filepath.Join(root, "pipe.txt")
+	if err := exec.Command("mkfifo", fifo).Run(); err != nil {
+		t.Skipf("mkfifo is not available: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		store.SyncRefreshWorkspace()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the walk hung on a fifo: readIndexFile must refuse non-regular files")
+	}
+	results, err = store.Search("needlehead", 10)
+	if err != nil {
+		t.Fatalf("Search after the fifo: %v", err)
+	}
+	if len(results) == 0 {
+		t.Errorf("the fifo must not have poisoned the index")
 	}
 }
