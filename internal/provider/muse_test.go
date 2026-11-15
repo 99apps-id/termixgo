@@ -32,10 +32,16 @@ func TestMuseStreamUsesTheResponsesAPI(t *testing.T) {
 		gotPath = request.URL.Path
 		gotAuth = request.Header.Get("Authorization")
 		gotAgent = request.Header.Get("User-Agent")
-		if request.Header.Get("X-Client-Id") != "" || request.Header.Get("x-api-version") != "" {
-			t.Errorf("Muse must not send the old client-id headers")
+		if request.Header.Get("X-Client-Id") != "tbh:exec" {
+			t.Errorf("X-Client-Id = %q, want the CLI tbh client id", request.Header.Get("X-Client-Id"))
 		}
-		gotSessionID = request.Header.Get("session_id")
+		if request.Header.Get("x-api-version") != "" {
+			t.Errorf("Muse must not send the old api-version header")
+		}
+		gotSessionID = request.Header.Get("x-tbh-session-id")
+		if request.Header.Get("x-tbh-agent-role") != "main" || request.Header.Get("x-meta-ai-gateway-session-id") != gotSessionID {
+			t.Errorf("tbh headers = %v, want the session and main role set", request.Header)
+		}
 		raw, _ := io.ReadAll(request.Body)
 		_ = json.Unmarshal(raw, &gotBody)
 
@@ -93,7 +99,21 @@ func TestMuseStreamUsesTheResponsesAPI(t *testing.T) {
 		t.Errorf("User-Agent = %q, want %q", gotAgent, museUserAgent)
 	}
 	if gotSessionID == "" {
-		t.Errorf("session_id should not be empty")
+		t.Errorf("x-tbh-session-id should not be empty")
+	}
+	tools, ok := gotBody["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %v, want one namespace tool", gotBody["tools"])
+	}
+	namespace, _ := tools[0].(map[string]any)
+	if namespace["type"] != "namespace" || namespace["name"] != "muse" {
+		t.Errorf("tools[0] = %v, want the muse namespace tool", namespace)
+	}
+	if inner, _ := namespace["tools"].([]any); len(inner) != 1 {
+		t.Errorf("namespace tools = %v, want the one function", namespace["tools"])
+	}
+	if _, present := gotBody["tool_choice"]; present {
+		t.Errorf("the CLI sends no tool_choice: %v", gotBody)
 	}
 	if gotBody["model"] != "muse-spark-1.3" || gotBody["instructions"] != "be brief" {
 		t.Errorf("body = %v", gotBody)
@@ -259,7 +279,7 @@ func TestMuseResetsSessionAndRetriesOnSessionError(t *testing.T) {
 	var sessions []string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		hits++
-		sessions = append(sessions, request.Header.Get("session_id"))
+		sessions = append(sessions, request.Header.Get("x-tbh-session-id"))
 		if hits == 1 {
 			writer.WriteHeader(http.StatusUnauthorized)
 			_, _ = writer.Write([]byte(`{"error":{"message":"session expired or invalid"}}`))
@@ -293,7 +313,7 @@ func TestMuseResetsSessionAndRetriesOnSessionError(t *testing.T) {
 		t.Fatalf("hits = %d, want 2 (retry on session error)", hits)
 	}
 	if len(sessions) != 2 || sessions[0] == sessions[1] {
-		t.Errorf("session_id should have changed across retry, got: %v", sessions)
+		t.Errorf("x-tbh-session-id should have changed across retry, got: %v", sessions)
 	}
 	if text.String() != "resumed" {
 		t.Errorf("text = %q, want resumed", text.String())

@@ -273,6 +273,14 @@ func encodeResponsesInput(req ChatRequest) []map[string]any {
 			// calls: they are the thought that produced them, and a
 			// stateless backend has no other way to recover it.
 			for _, item := range message.ReasoningItems {
+				// An item another backend issued with no encrypted
+				// content and an id this API cannot carry (Meta joins
+				// two ids with a colon) cannot be resumed here: the
+				// backend rejects the whole request over its id, so
+				// the item is dropped instead of replayed.
+				if strings.TrimSpace(item.EncryptedContent) == "" && !validResponsesID(item.ID) {
+					continue
+				}
 				items = append(items, reasoningItemInput(item))
 			}
 			if strings.TrimSpace(message.Content) != "" {
@@ -286,7 +294,7 @@ func encodeResponsesInput(req ChatRequest) []map[string]any {
 				items = append(items, map[string]any{
 					"type":      "function_call",
 					"call_id":   call.ID,
-					"name":      call.Name,
+					"name":      responsesFunctionName(call.Name),
 					"arguments": responsesArguments(call.Arguments),
 				})
 			}
@@ -449,6 +457,7 @@ type responsesEvent struct {
 		Type             string `json:"type"`
 		CallID           string `json:"call_id"`
 		Name             string `json:"name"`
+		Namespace        string `json:"namespace"`
 		Arguments        string `json:"arguments"`
 		EncryptedContent string `json:"encrypted_content"`
 		Summary          []struct {

@@ -535,6 +535,39 @@ func TestResponsesFunctionNameSanitizesProviderInvalidCharacters(t *testing.T) {
 	}
 }
 
+// TestCodexInputDropsUnreplayableReasoningItems proves a reasoning item
+// another backend issued (Meta joins two ids with a colon and returns no
+// encrypted content) is dropped on replay instead of failing the request
+// with an invalid input id, and that a stored tool call whose name carries
+// characters this API forbids is replayed under a sanitized name.
+func TestCodexInputDropsUnreplayableReasoningItems(t *testing.T) {
+	input := encodeResponsesInput(ChatRequest{Messages: []Message{
+		{Role: RoleAssistant, Content: "working", ReasoningItems: []ReasoningItem{
+			{ID: "rs_6af9963ede4b22a2dd364581:rs_01a1def2e58774f28782785f96d54236"},
+			{ID: "rs_2", EncryptedContent: "enc_def"},
+		}, ToolCalls: []ToolCall{{ID: "call_1", Name: "run_appc_3</arg_value>", Arguments: "{}"}}},
+	}})
+	for _, item := range input {
+		if item["type"] == "reasoning" {
+			if id, _ := item["id"].(string); strings.Contains(id, ":") {
+				t.Fatalf("colon reasoning id replayed: %v", item)
+			}
+		}
+		if item["type"] == "function_call" && item["name"] != "run_appc_3__arg_value_" {
+			t.Fatalf("function_call name = %v, want sanitized", item["name"])
+		}
+	}
+	reasoning := 0
+	for _, item := range input {
+		if item["type"] == "reasoning" {
+			reasoning++
+		}
+	}
+	if reasoning != 1 {
+		t.Fatalf("reasoning items = %d, want only the encrypted one kept", reasoning)
+	}
+}
+
 func TestReasoningItemInputOmitsMalformedProviderID(t *testing.T) {
 	got := reasoningItemInput(ReasoningItem{
 		ID:               "rs_valid:rs_other",

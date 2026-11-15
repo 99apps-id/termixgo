@@ -9,14 +9,29 @@ import (
 	"math/rand"
 	"net/http"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 )
 
-// museUserAgent is the identity Meta's Muse backend expects. It gates access,
-// so the official CLI's build string is reused rather than the Termixgo agent.
-const museUserAgent = "muse-code/1.0.2"
+// museCLIVersion is the Muse Code CLI release whose identity Meta's backend
+// gates on, verified against the installed CLI (1.4.20). Native tool calls
+// are only served to a client carrying this build identity, so it travels
+// in the User-Agent on every Muse request.
+const museCLIVersion = "1.4.20"
+
+// museUserAgent is the build identity the official CLI sends: muse-build,
+// the CLI version, the run mode and the host platform.
+var museUserAgent = museBuildUserAgent()
+
+func museBuildUserAgent() string {
+	arch := runtime.GOARCH
+	if arch == "amd64" {
+		arch = "x86_64"
+	}
+	return fmt.Sprintf("muse-build/%s (non-interactive; %s-%s)", museCLIVersion, runtime.GOOS, arch)
+}
 
 // museRetryAttempts bounds how many times a transient Muse failure is retried
 // with the same key before the key is treated as stale and re-minted. Meta is
@@ -183,6 +198,7 @@ func (c *museClient) catalogue(ctx context.Context) ([]string, error) {
 	}
 	request.Header.Set("Authorization", "Bearer "+c.currentKey())
 	request.Header.Set("User-Agent", museUserAgent)
+	request.Header.Set("x-client-id", "tbh:exec")
 	response, err := c.http.Do(request)
 	if err != nil {
 		return nil, err
@@ -248,12 +264,21 @@ func (c *museClient) modelHint(ctx context.Context, model string, err error) err
 	}
 }
 
-// send posts a Responses request with the Muse identity headers.
+// send posts a Responses request with the Muse identity headers. The set
+// mirrors the official CLI: the tbh client id, the session and thread ids
+// and the agent role are what Meta's gateway routes (and attests) on, and a
+// request without them is served as plain chat without native tools.
 func (c *museClient) send(ctx context.Context, key string, payload map[string]any) (*http.Response, error) {
+	session := c.session()
 	headers := map[string]string{
-		"Authorization": "Bearer " + key,
-		"User-Agent":    museUserAgent,
-		"session_id":    c.session(),
+		"Authorization":                "Bearer " + key,
+		"User-Agent":                   museUserAgent,
+		"x-client-id":                  "tbh:exec",
+		"x-tbh-session-id":             session,
+		"x-meta-ai-gateway-session-id": session,
+		"x-tbh-thread-id":              session,
+		"x-tbh-root-session-id":        session,
+		"x-tbh-agent-role":             "main",
 	}
 	return c.post(ctx, c.baseURL+"/responses", headers, payload)
 }
@@ -335,23 +360,49 @@ func (c *museClient) payload(req ChatRequest) map[string]any {
 	if len(req.SystemParts) > 0 {
 		instructions = strings.TrimSpace(joinSystemParts(req.SystemParts))
 	}
-	var tools []map[string]any
-	if len(req.Tools) > 0 {
-		tools = encodeResponsesTools(req.Tools)
-	}
 	payload := map[string]any{
 		"model":  req.Model,
 		"stream": true,
+		"store":  false,
 		"input":  input,
 	}
 	if instructions != "" {
 		payload["instructions"] = instructions
 	}
-	if len(tools) > 0 {
-		payload["tools"] = tools
-		payload["tool_choice"] = "auto"
+	if len(req.Tools) > 0 {
+		// The official CLI registers its tools as one namespace tool, not
+		// as a flat function list, and Meta serves native calls in that
+		// shape to a Muse Code client. A flat list from another shape of
+		// client is what the attestation refusal answers.
+		payload["tools"] = []map[string]any{{
+			"type":        "namespace",
+			"name":        "muse",
+			"description": "Muse Code tool set.",
+			"tools":       encodeResponsesTools(req.Tools),
+		}}
+	}
+	// The CLI asks for a reasoning summary and the encrypted reasoning
+	// content on every request: without the summary a thinking step can
+	// stream nothing the loop can see, and with store: false the items
+	// cannot be recovered on the next step unless they are handed back.
+	payload["reasoning"] = map[string]any{"summary": "auto", "effort": museEffort(req.Effort)}
+	payload["include"] = []string{"reasoning.encrypted_content"}
+	if c.httpClient != nil {
+		payload["prompt_cache_key"] = "tbh:main:" + c.session()
 	}
 	return payload
+}
+
+// museEffort maps the shared effort levels onto Meta's reasoning effort.
+// The official CLI defaults to high, so an unset level lands there too.
+func museEffort(effort string) string {
+	switch effort {
+	case EffortLow, EffortMedium, EffortHigh:
+		return effort
+	case EffortMax:
+		return "max"
+	}
+	return "high"
 }
 
 // streamTextTools runs one step without a native tools field, carrying
