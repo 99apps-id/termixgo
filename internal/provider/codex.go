@@ -111,7 +111,7 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 	if rl := ParseOpenAIRateLimit(response.Header); rl != nil {
 		_ = emit(StreamEvent{Type: EventRateLimit, RateLimit: rl})
 	}
-	return decodeResponsesStream(c.info.Label, response.Body, emit)
+	return decodeResponsesStream(c.info.Label, response.Body, withResponseToolNames(req.Tools, emit))
 }
 
 // decodeResponsesStream turns the OpenAI Responses event feed into StreamEvents.
@@ -371,6 +371,24 @@ func validResponsesID(id string) bool {
 		}
 	}
 	return true
+}
+
+func withResponseToolNames(tools []ToolDef, emit func(StreamEvent) error) func(StreamEvent) error {
+	aliases := make(map[string]string, len(tools))
+	for _, tool := range tools {
+		wireName := responsesFunctionName(tool.Name)
+		if _, exists := aliases[wireName]; !exists {
+			aliases[wireName] = tool.Name
+		}
+	}
+	return func(event StreamEvent) error {
+		if event.ToolCall != nil {
+			if internalName, ok := aliases[event.ToolCall.Name]; ok {
+				event.ToolCall.Name = internalName
+			}
+		}
+		return emit(event)
+	}
 }
 
 func responsesFunctionName(name string) string {

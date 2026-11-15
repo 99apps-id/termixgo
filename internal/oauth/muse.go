@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"runtime"
 	"strings"
+
+	"github.com/99apps-id/termixgo/internal/museidentity"
 	"time"
 )
 
@@ -27,15 +28,7 @@ const metaDefaultMintURL = "https://api.meta.ai/muse-code/key"
 // metaUserAgent identifies the caller as the Muse CLI. Meta gates the mint and
 // the Responses endpoint on this identity, so the official CLI build string
 // (verified against CLI 1.4.20) is reused rather than the Termixgo agent.
-var metaUserAgent = museBuildUserAgent()
-
-func museBuildUserAgent() string {
-	arch := runtime.GOARCH
-	if arch == "amd64" {
-		arch = "x86_64"
-	}
-	return fmt.Sprintf("muse-build/%s (non-interactive; %s-%s)", "1.4.20", runtime.GOOS, arch)
-}
+var metaUserAgent = museidentity.UserAgent()
 
 // metaMintedKey is the subset of the mint response Termixgo needs.
 type metaMintedKey struct {

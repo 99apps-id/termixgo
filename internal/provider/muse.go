@@ -9,8 +9,9 @@ import (
 	"math/rand"
 	"net/http"
 	"regexp"
-	"runtime"
 	"strings"
+
+	"github.com/99apps-id/termixgo/internal/museidentity"
 	"sync"
 	"time"
 )
@@ -19,19 +20,9 @@ import (
 // gates on, verified against the installed CLI (1.4.20). Native tool calls
 // are only served to a client carrying this build identity, so it travels
 // in the User-Agent on every Muse request.
-const museCLIVersion = "1.4.20"
-
 // museUserAgent is the build identity the official CLI sends: muse-build,
 // the CLI version, the run mode and the host platform.
-var museUserAgent = museBuildUserAgent()
-
-func museBuildUserAgent() string {
-	arch := runtime.GOARCH
-	if arch == "amd64" {
-		arch = "x86_64"
-	}
-	return fmt.Sprintf("muse-build/%s (non-interactive; %s-%s)", museCLIVersion, runtime.GOOS, arch)
-}
+var museUserAgent = museidentity.UserAgent()
 
 // museRetryAttempts bounds how many times a transient Muse failure is retried
 // with the same key before the key is treated as stale and re-minted. Meta is
@@ -110,7 +101,7 @@ func (c *museClient) Stream(ctx context.Context, req ChatRequest, emit func(Stre
 		if rl := ParseGenericRateLimit(response.Header); rl != nil {
 			_ = emit(StreamEvent{Type: EventRateLimit, RateLimit: rl})
 		}
-		return decodeResponsesStream(c.info.Label, response.Body, emit)
+		return decodeResponsesStream(c.info.Label, response.Body, withResponseToolNames(req.Tools, emit))
 	}
 
 	// A client-attestation refusal is a policy answer about the native
@@ -146,7 +137,7 @@ func (c *museClient) Stream(ctx context.Context, req ChatRequest, emit func(Stre
 	if rl := ParseGenericRateLimit(response.Header); rl != nil {
 		_ = emit(StreamEvent{Type: EventRateLimit, RateLimit: rl})
 	}
-	return decodeResponsesStream(c.info.Label, response.Body, emit)
+	return decodeResponsesStream(c.info.Label, response.Body, withResponseToolNames(req.Tools, emit))
 }
 
 // museCatalogueTimeout bounds the model-list probe. It runs only on a failure
