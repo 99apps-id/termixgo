@@ -810,6 +810,9 @@ func (a *App) SetEphemeral(ephemeral bool) {
 	a.mu.Lock()
 	a.ephemeral = ephemeral
 	a.mu.Unlock()
+	if ephemeral {
+		a.session = a.newSessionForAgent(a.ActiveAgent())
+	}
 }
 
 // Ephemeral reports whether session files are disabled.
