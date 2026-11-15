@@ -260,6 +260,7 @@ func decodeResponsesStream(label string, body io.Reader, emit func(StreamEvent) 
 
 func encodeResponsesInput(req ChatRequest) []map[string]any {
 	items := make([]map[string]any, 0, len(req.Messages))
+	seenToolOutputs := make(map[string]struct{})
 	for _, message := range req.Messages {
 		switch message.Role {
 		case RoleUser:
@@ -299,6 +300,12 @@ func encodeResponsesInput(req ChatRequest) []map[string]any {
 				})
 			}
 		case RoleTool:
+			if message.ToolID != "" {
+				if _, seen := seenToolOutputs[message.ToolID]; seen {
+					continue
+				}
+				seenToolOutputs[message.ToolID] = struct{}{}
+			}
 			items = append(items, map[string]any{
 				"type":    "function_call_output",
 				"call_id": message.ToolID,
