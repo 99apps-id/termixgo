@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -530,35 +531,36 @@ func quoteJSONString(value string) string {
 	return string(encoded)
 }
 
-// parseTextToolCalls splits a model reply into the prose around the
-// tool_call blocks and the calls themselves. A block that does not parse
-// is not a call: the whole reply then stays prose, so a model that talks
-// about the protocol in a code sample is not mistaken for one using it.
+// parseTextToolCalls splits a model reply into the prose around tool-call
+// blocks and the calls themselves. Muse models have emitted several equivalent
+// wrappers, so accept the documented fence, an XML-style tag, and a JSON fence
+// while requiring a valid call-shaped JSON object.
 func parseTextToolCalls(text string) (string, []ToolCall) {
-	const fence = "```tool_call"
+	blockRE := regexp.MustCompile("(?s)(```(?:tool_call|tool-call|json)\\s*(.*?)```|<tool_call>\\s*(.*?)\\s*</tool_call>)")
+	matches := blockRE.FindAllStringSubmatchIndex(text, -1)
+	if len(matches) == 0 {
+		return strings.TrimSpace(text), nil
+	}
 	var prose strings.Builder
 	var calls []ToolCall
-	rest := text
-	for {
-		start := strings.Index(rest, fence)
-		if start < 0 {
-			prose.WriteString(rest)
-			break
+	cursor := 0
+	for _, match := range matches {
+		prose.WriteString(text[cursor:match[0]])
+		bodyStart, bodyEnd := match[4], match[5]
+		if bodyStart < 0 {
+			bodyStart, bodyEnd = match[6], match[7]
 		}
-		end := strings.Index(rest[start+len(fence):], "```")
-		if end < 0 {
-			return text, nil
-		}
-		raw := strings.TrimSpace(rest[start+len(fence) : start+len(fence)+end])
 		var parsed struct {
 			Name      string          `json:"name"`
 			Arguments json.RawMessage `json:"arguments"`
 		}
-		if err := json.Unmarshal([]byte(raw), &parsed); err != nil || strings.TrimSpace(parsed.Name) == "" {
-			return text, nil
+		if bodyStart < 0 || json.Unmarshal([]byte(strings.TrimSpace(text[bodyStart:bodyEnd])), &parsed) != nil || strings.TrimSpace(parsed.Name) == "" {
+			prose.WriteString(text[match[0]:match[1]])
+			cursor = match[1]
+			continue
 		}
 		arguments := strings.TrimSpace(string(parsed.Arguments))
-		if arguments == "" {
+		if arguments == "" || arguments == "null" {
 			arguments = "{}"
 		}
 		var asString string
@@ -566,20 +568,22 @@ func parseTextToolCalls(text string) (string, []ToolCall) {
 			arguments = asString
 		}
 		if !json.Valid([]byte(arguments)) {
-			return text, nil
+			prose.WriteString(text[match[0]:match[1]])
+			cursor = match[1]
+			continue
 		}
-		prose.WriteString(rest[:start])
 		calls = append(calls, ToolCall{
 			ID:        fmt.Sprintf("call_muse_%d", sessionSeq.Add(1)),
 			Name:      strings.TrimSpace(parsed.Name),
 			Arguments: arguments,
 		})
-		rest = rest[start+len(fence)+end+len("```"):]
+		cursor = match[1]
 	}
+	prose.WriteString(text[cursor:])
 	if len(calls) == 0 {
 		return text, nil
 	}
-	return prose.String(), calls
+	return strings.TrimSpace(prose.String()), calls
 }
 
 // isAttestationDenied reports whether an error is Meta's client

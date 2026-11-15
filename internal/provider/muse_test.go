@@ -799,3 +799,32 @@ func TestMuseAttestationDeniedNamesThePolicy(t *testing.T) {
 		t.Fatalf("error %q must not blame a valid key for a policy refusal", err)
 	}
 }
+
+func TestParseMuseTextToolCallVariants(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		text string
+	}{
+		{name: "documented fence", text: "before\n```tool_call\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"a.go\"}}\n```\nafter"},
+		{name: "xml tag", text: "before <tool_call>{\"name\":\"read_file\",\"arguments\":{\"path\":\"a.go\"}}</tool_call> after"},
+		{name: "json fence", text: "```json\n{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"a.go\\\"}\"}\n```"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prose, calls := parseTextToolCalls(test.text)
+			if len(calls) != 1 || calls[0].Name != "read_file" || calls[0].Arguments != `{"path":"a.go"}` {
+				t.Fatalf("parsed prose=%q calls=%+v, want one read_file call", prose, calls)
+			}
+			if strings.Contains(prose, "tool_call") {
+				t.Fatalf("tool block leaked into prose: %q", prose)
+			}
+		})
+	}
+}
+
+func TestParseMuseTextToolCallLeavesOrdinaryJSONAlone(t *testing.T) {
+	text := "```json\n{\"status\":\"done\"}\n```"
+	prose, calls := parseTextToolCalls(text)
+	if len(calls) != 0 || prose != text {
+		t.Fatalf("ordinary JSON changed: prose=%q calls=%+v", prose, calls)
+	}
+}
