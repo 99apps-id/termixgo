@@ -132,6 +132,8 @@ func output(ctx context.Context, binary string, args ...string) (string, error) 
 
 // outputEnv runs one helper with an extra environment entry, which is how text
 // reaches a PowerShell script without becoming script text.
+//
+//lint:ignore U1000 used in windows.go
 func outputEnv(ctx context.Context, binary string, env []string, args ...string) (string, error) {
 	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()

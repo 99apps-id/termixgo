@@ -637,6 +637,9 @@ func TestRunPlainSlashCdChangesCurrentFolder(t *testing.T) {
 	}
 
 	target := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(target); err == nil {
+		target = resolved
+	}
 	if _, err := runPlainSlash(context.Background(), model.app, "cd", target, &bytes.Buffer{}); err != nil {
 		t.Fatalf("/cd target: %v", err)
 	}

@@ -335,7 +335,7 @@ func browserScreenshotPath(env *Env, args map[string]any) (string, error) {
 		outPath = filepath.Join(dir, fmt.Sprintf("shot-%d.png", time.Now().Unix()))
 	}
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
-		return "", fmt.Errorf("Failed to create directory: %v", err)
+		return "", fmt.Errorf("failed to create directory: %v", err)
 	}
 	return outPath, nil
 }
