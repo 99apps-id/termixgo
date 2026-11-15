@@ -527,3 +527,23 @@ func TestDecodeResponsesStreamErrorsOnOtherIncompleteReasons(t *testing.T) {
 		t.Errorf("usage events = %d, want the incomplete response's usage harvested once", usages)
 	}
 }
+
+func TestResponsesFunctionNameSanitizesProviderInvalidCharacters(t *testing.T) {
+	tools := encodeResponsesTools([]ToolDef{{Name: "mcp.files/read", Description: "read"}})
+	if got := tools[0]["name"]; got != "mcp_files_read" {
+		t.Fatalf("encoded tool name = %q, want provider-safe name", got)
+	}
+}
+
+func TestReasoningItemInputOmitsMalformedProviderID(t *testing.T) {
+	got := reasoningItemInput(ReasoningItem{
+		ID:               "rs_valid:rs_other",
+		EncryptedContent: "encrypted",
+	})
+	if _, ok := got["id"]; ok {
+		t.Fatalf("malformed reasoning ID must not be replayed: %v", got)
+	}
+	if got["encrypted_content"] != "encrypted" {
+		t.Fatalf("encrypted content = %v, want preserved content", got["encrypted_content"])
+	}
+}

@@ -313,7 +313,7 @@ func encodeResponsesInput(req ChatRequest) []map[string]any {
 // originally did.
 func reasoningItemInput(item ReasoningItem) map[string]any {
 	out := map[string]any{"type": "reasoning", "encrypted_content": item.EncryptedContent}
-	if item.ID != "" {
+	if validResponsesID(item.ID) {
 		out["id"] = item.ID
 	}
 	// The summary key is required on a replayed reasoning item even when
@@ -353,6 +353,34 @@ func responsesUserContent(message Message) []map[string]any {
 	return parts
 }
 
+func validResponsesID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, r := range id {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func responsesFunctionName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	clean := b.String()
+	if clean == "" {
+		return "unknown_tool"
+	}
+	return clean
+}
+
 func encodeResponsesTools(tools []ToolDef) []map[string]any {
 	out := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
@@ -362,7 +390,7 @@ func encodeResponsesTools(tools []ToolDef) []map[string]any {
 		}
 		out = append(out, map[string]any{
 			"type":        "function",
-			"name":        tool.Name,
+			"name":        responsesFunctionName(tool.Name),
 			"description": tool.Description,
 			"parameters":  schema,
 		})
