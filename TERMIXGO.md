@@ -436,11 +436,17 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   a datacenter one. So a persistent 404 is explained by reading `GET /v1/models`
   before naming a cause, and the registry states what the wire accepts, never
   what a given account or address is entitled to.
-- A provider's policy refusal is reported as policy, not as a bad key. Meta now
-  requires the official Muse Code client's attestation when a request carries
-  a native tools field: a subscription key answers a plain request but returns
-  403 `client_attestation_denied` for any native tool call, with quota still
-  available. The Muse client answers that refusal by switching the client
+- A provider's policy refusal is reported as policy, not as a bad key. Meta
+  gates native tools on the official Muse Code client's identity: a request
+  carrying the old `muse-code/1.0.2` identity answers plain chat but returns
+  403 `client_attestation_denied` (or silence on tools) for a native tools
+  field. The Muse client therefore sends the installed CLI's identity
+  (verified against CLI 1.4.20 by capturing its request to a local endpoint):
+  the `muse-build/1.4.20 (non-interactive; <os>-<arch>)` user agent, the
+  `x-client-id: tbh:exec` and `x-tbh-*` session headers, and its tools as one
+  `muse` namespace tool with no `tool_choice`. With that identity a
+  subscription login executes native tool calls. If a refusal still arrives,
+  the Muse client answers it by switching the client
   (once, sticky) to a text tool protocol: the tools are listed in the
   instructions, the model replies with `tool_call` blocks, the parsed calls
   are emitted as ordinary tool calls so Termixgo executes them locally under
