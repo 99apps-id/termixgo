@@ -562,6 +562,7 @@ A full login on a machine with a browser, then pick a model and start:
 
 ```sh
 termixgo login antigravity                    # opens the Google consent page
+termixgo model antigravity/antigravity-gemini-4-hydrogen
 termixgo model antigravity/antigravity-gemini-3.8-flash
 termixgo
 ```

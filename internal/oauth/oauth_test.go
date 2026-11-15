@@ -526,3 +526,35 @@ func TestClaudeManualFlow(t *testing.T) {
 		t.Errorf("payload code = %v, want 'manual-auth-code'", gotPayload["code"])
 	}
 }
+
+func TestSpecForAliasesAndUserAgents(t *testing.T) {
+	for _, alias := range []string{"claude-oauth", "claude", "claude-code"} {
+		spec, ok := SpecFor(alias)
+		if !ok {
+			t.Fatalf("SpecFor(%q) not found", alias)
+		}
+		if spec.Provider != "claude-oauth" {
+			t.Errorf("SpecFor(%q).Provider = %q, want claude-oauth", alias, spec.Provider)
+		}
+		if !strings.HasPrefix(spec.UserAgent, "claude-cli/") {
+			t.Errorf("SpecFor(%q).UserAgent = %q, want claude-cli/ prefix", alias, spec.UserAgent)
+		}
+	}
+
+	ag, ok := SpecFor("antigravity")
+	if !ok {
+		t.Fatal("SpecFor(antigravity) not found")
+	}
+	if !strings.HasPrefix(ag.UserAgent, "antigravity/cli/1.5.9 ") {
+		t.Errorf("SpecFor(antigravity).UserAgent = %q, want antigravity/cli/1.5.9 prefix", ag.UserAgent)
+	}
+
+	t.Setenv("TERMIXGO_CLAUDE_CLI_VERSION", "invalid..ver")
+	if got := defaultClaudeUserAgent(); !strings.HasPrefix(got, "claude-cli/2.1.290 ") {
+		t.Errorf("defaultClaudeUserAgent() with invalid env = %q, want fallback 2.1.290", got)
+	}
+	t.Setenv("TERMIXGO_CLAUDE_CLI_VERSION", "2.1.300")
+	if got := defaultClaudeUserAgent(); !strings.HasPrefix(got, "claude-cli/2.1.300 ") {
+		t.Errorf("defaultClaudeUserAgent() with valid env = %q, want 2.1.300", got)
+	}
+}

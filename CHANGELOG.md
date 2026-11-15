@@ -4,9 +4,11 @@ All notable changes to Termixgo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.2.6 - 2026-11-15
 
 ### Added
+- Antigravity Gemini 4 models (`antigravity-gemini-4-hydrogen`, `antigravity-gemini-4-argon`, `antigravity-gemini-4-carbon`) and `antigravity-gemini-3.8-flash-high` in the model catalogue with 1M context windows, effort-mapped wire IDs (`gemini-4-hydrogen-{low,medium,high,xhigh}`, `gemini-4-{argon,carbon}-{low,medium,high}`), and automatic one-shot fallback to bare `gemini-4-*` IDs on 400/404.
+- Claude OAuth auto-refresh on 401 and automatic `claude_code_version_too_old` version learning and retry on 400.
 - StepFun Plan model `step-5-preview` (`stepfun-plan/step-5-preview`) in the model catalogue, selectable through `/model` and the picker like the other plan models.
 - Multiple named OpenAI-compatible endpoints: `termixgo endpoint add <name> <url>` and `termixgo endpoint rm <name>`. Each is an `openai-compatible/<name>` provider with its own URL, key and models, so registering a new endpoint no longer overwrites the previous one.
 - `muse-wonder-1.0` and its contributor variant are in the Muse catalogue, with a 1M-token window.
@@ -18,6 +20,8 @@ All notable changes to Termixgo are recorded here. The format follows
 - `read_pdf` extracts text via `pdftotext` (poppler) with a Python `pypdf`/`PyPDF2`/`pdfminer` fallback; `list_policies`, `pin_invariant` and `list_invariants` manage operator guardrails in a `0600` `~/.termixgo/policies.txt`; `todo_update` updates one todo item (status or title) in place through the in-memory `TodoStore`.
 
 ### Fixed
+- Claude Code OAuth requests now place `"You are Claude Code, Anthropic's official CLI for Claude."` as the first standalone `system` block (preventing `429 rate_limit_error` refusals), send `X-Claude-Code-Session-Id` and host-accurate `X-Stainless-Os`/`X-Stainless-Arch` headers, use the dynamic CLI User-Agent on `/api/oauth/usage`, and trigger the manual pasted-code fallback when port `54545` is busy even for `claude` and `claude-code` aliases.
+- Antigravity requests, quota fetches, and OAuth token exchanges now present as `antigravity/cli/1.5.9 <os>/<arch>` (instead of `antigravity/ide/2.11.0 darwin/arm64`) with `X-Client-Version: 1.5.9`, matching Termigo and ODON so Gemini 4 Hydrogen, Argon, and Carbon are served by Cloud Code.
 - History compaction now preserves compact tool-call arguments (`<= 300` bytes) and clips only oversized string values instead of overwriting `ToolCall.Arguments` with `"{}"`, and `LoadSessionIn`/`Compact` automatically repair legacy elided `"{}"` tool calls in saved sessions into schema-valid placeholders so models are never poisoned into calling `read_file`, `grep`, `glob`, or `code_outline` with empty arguments.
 - OpenAI-compatible streaming and whole-body decoders now accept raw JSON objects on `function.arguments`, `parameters`, and `input` deltas and split tool calls when a gateway reuses `index: 0` across multiple tool calls in a single response.
 - `BaseName("")` now returns `""` instead of `"."` so failed `read_file` calls with an empty path no longer render as `x Read .`, tool parameter aliases are expanded across file/search/outline tools, and scratch edits under `.termixgo/` or `.termigo/` no longer trigger false-positive `verify-on-stop` nudges.
