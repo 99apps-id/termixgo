@@ -63,7 +63,7 @@ func (f *claudeQuotaFetcher) fetch(ctx context.Context) *QuotaSnapshot {
 		"anthropic-version": "2023-06-01",
 		"anthropic-dangerous-direct-browser-access": "true",
 		"x-app":      "cli",
-		"User-Agent": claudeCLIUserAgent,
+		"User-Agent": currentClaudeCLIUserAgent(),
 		"Accept":     "application/json",
 	}
 	body, status, err := quotaGET(ctx, f.http.http, claudeOAuthUsageURL, headers)

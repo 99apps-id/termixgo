@@ -191,6 +191,20 @@ func TestAnthropicOAuthUsesTheClaudeCodeIdentity(t *testing.T) {
 	if meta, ok := recorder.body["metadata"].(map[string]any); !ok || !strings.Contains(fmt.Sprint(meta["user_id"]), "device_id") {
 		t.Errorf("expected metadata.user_id in payload, got %v", recorder.body["metadata"])
 	}
+	sysBlocks, ok := recorder.body["system"].([]any)
+	if !ok || len(sysBlocks) == 0 {
+		t.Fatalf("system = %#v, want array with Claude Code identity", recorder.body["system"])
+	}
+	firstBlock, _ := sysBlocks[0].(map[string]any)
+	if firstBlock["text"] != claudeCodeIdentity {
+		t.Errorf("first system block = %#v, want %q", firstBlock, claudeCodeIdentity)
+	}
+	if _, hasCache := firstBlock["cache_control"]; hasCache {
+		t.Errorf("first system identity block must not carry cache_control")
+	}
+	if recorder.headers.Get("X-Claude-Code-Session-Id") == "" {
+		t.Errorf("X-Claude-Code-Session-Id header missing")
+	}
 }
 
 // TestAnthropicDefaultsMaxTokens guards the value that keeps a thinking model
@@ -696,5 +710,55 @@ func TestSanitizeGoogleSchemaStringifiesNumericEnums(t *testing.T) {
 	enumSlice, ok := res["enum"].([]string)
 	if !ok || len(enumSlice) != 3 || enumSlice[0] != "720" || enumSlice[1] != "1080" || enumSlice[2] != "1440" {
 		t.Errorf("enum = %#v, want [720 1080 1440]", res["enum"])
+	}
+}
+
+func TestAnthropicOAuthRetriesOnClaudeCodeVersionTooOld(t *testing.T) {
+	learnedClaudeCLIVersionMu.Lock()
+	prevLearned := learnedClaudeCLIVersion
+	learnedClaudeCLIVersion = ""
+	learnedClaudeCLIVersionMu.Unlock()
+	t.Cleanup(func() {
+		learnedClaudeCLIVersionMu.Lock()
+		learnedClaudeCLIVersion = prevLearned
+		learnedClaudeCLIVersionMu.Unlock()
+	})
+
+	var userAgents []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		ua := request.Header.Get("User-Agent")
+		userAgents = append(userAgents, ua)
+		if len(userAgents) == 1 {
+			writer.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(writer, `{"error":{"type":"invalid_request_error","message":"claude_code_version_too_old: version 2.1.320 or newer is required."}}`)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(writer, "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n")
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "claude-oauth", Label: "Claude (OAuth)", Kind: KindAnthropic, OAuth: true}, server.URL, "oauth-token")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	var out strings.Builder
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "claude-sonnet-5",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	}, func(event StreamEvent) error {
+		if event.Type == EventTextDelta {
+			out.WriteString(event.Text)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if out.String() != "ok" {
+		t.Errorf("text = %q, want ok", out.String())
+	}
+	if len(userAgents) != 2 || userAgents[1] != "claude-cli/2.1.320 (external, sdk-cli)" {
+		t.Errorf("userAgents = %v", userAgents)
 	}
 }

@@ -64,7 +64,7 @@ func Login(ctx context.Context, store *Store, provider string, in io.Reader, out
 		var session pkceWaiter
 		var authURL string
 		session, authURL, err = StartPKCE(flow)
-		if err != nil && provider == "claude-oauth" {
+		if err != nil && spec.Provider == "claude-oauth" {
 			fmt.Fprintf(out, "Notice: loopback port %d is unavailable; switching to manual sign-in.\n", flow.RedirectPort)
 			session, authURL, err = StartClaudeManual(flow)
 		}

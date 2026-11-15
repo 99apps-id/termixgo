@@ -8,9 +8,11 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -37,9 +39,137 @@ type antigravityClient struct {
 }
 
 const (
-	agUserAgent      = "antigravity/ide/2.11.0 darwin/arm64"
-	agMaxOutputToken = 64000
+	defaultAGCLIVersion = "1.5.9"
+	agMaxOutputToken    = 64000
 )
+
+func agCLIVersion() string {
+	for _, key := range []string{"TERMIXGO_ANTIGRAVITY_CLI_VERSION", "ANTIGRAVITY_CLI_VERSION", "ODON_ANTIGRAVITY_CLI_VERSION"} {
+		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+			return v
+		}
+	}
+	return defaultAGCLIVersion
+}
+
+// agUserAgent returns the Antigravity CLI identity. Cloud Code lists Gemini 4
+// (Hydrogen, Argon, Carbon) only for the CLI identity; the IDE identity gets
+// 404 for those models.
+func agUserAgent() string {
+	platform := "linux"
+	switch runtime.GOOS {
+	case "darwin":
+		platform = "darwin"
+	case "windows":
+		platform = "windows"
+	}
+	arch := runtime.GOARCH
+	switch arch {
+	case "amd64":
+		arch = "x64"
+	case "386":
+		arch = "x86"
+	case "arm64":
+		arch = "arm64"
+	case "arm":
+		arch = "arm"
+	}
+	return fmt.Sprintf("antigravity/cli/%s %s/%s", agCLIVersion(), platform, arch)
+}
+
+func gemini4Family(model string) string {
+	id := strings.TrimPrefix(model, "antigravity-")
+	rest, ok := strings.CutPrefix(id, "gemini-4-")
+	if !ok {
+		return ""
+	}
+	family := strings.SplitN(rest, "-", 2)[0]
+	switch family {
+	case "hydrogen", "argon", "carbon":
+		return family
+	default:
+		return ""
+	}
+}
+
+func gemini4Levels(family string) []string {
+	if family == "hydrogen" {
+		return []string{"low", "medium", "high", "xhigh"}
+	}
+	return []string{"low", "medium", "high"}
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+// gemini4WireModel maps a Gemini 4 model id and optional effort level to the
+// wire id expected by the Antigravity CLI 1.5.9 backend.
+func gemini4WireModel(model, effort string) string {
+	id := strings.TrimPrefix(model, "antigravity-")
+	family := gemini4Family(id)
+	if family == "" {
+		return model
+	}
+	levels := gemini4Levels(family)
+	base := "gemini-4-" + family
+	if effort == "" {
+		if suffix, ok := strings.CutPrefix(id, base+"-"); ok && containsString(levels, suffix) {
+			return id
+		}
+		if family == "hydrogen" {
+			return base + "-high"
+		}
+		return base + "-medium"
+	}
+	wanted := "high"
+	switch effort {
+	case EffortLow:
+		wanted = "low"
+	case EffortMedium:
+		wanted = "medium"
+	case EffortHigh:
+		wanted = "high"
+	case EffortMax, "xhigh":
+		wanted = "xhigh"
+	}
+	if !containsString(levels, wanted) {
+		wanted = levels[len(levels)-1]
+	}
+	return base + "-" + wanted
+}
+
+func gemini4BareModel(wireModel string) string {
+	family := gemini4Family(wireModel)
+	if family == "" {
+		return ""
+	}
+	bare := "gemini-4-" + family
+	if bare == wireModel {
+		return ""
+	}
+	return bare
+}
+
+func isGemini4ModelNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var statusErr *providerStatusError
+	if errors.As(err, &statusErr) && statusErr.status != http.StatusBadRequest && statusErr.status != http.StatusNotFound {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "not found") ||
+		strings.Contains(lower, "not_found") ||
+		strings.Contains(lower, "not supported") ||
+		strings.Contains(lower, "invalid")
+}
 
 // The onboarding endpoints are variables so tests can point them at a server.
 var (
@@ -53,9 +183,10 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 		return err
 	}
 	session := c.session()
+	wireModel := gemini4WireModel(req.Model, req.Effort)
 	body := map[string]any{
 		"project":   project,
-		"model":     req.Model,
+		"model":     wireModel,
 		"userAgent": "antigravity",
 		"requestId": agRequestID(len(req.Messages)),
 		"request": map[string]any{
@@ -79,7 +210,7 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 	key := c.currentKey()
 	headers := map[string]string{
 		"Authorization":        "Bearer " + key,
-		"User-Agent":           agUserAgent,
+		"User-Agent":           agUserAgent(),
 		"X-Machine-Session-Id": session,
 	}
 	endpoint := c.baseURL + "/v1internal:streamGenerateContent?alt=sse"
@@ -95,6 +226,13 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 			reqMap["sessionId"] = newSession
 			body["requestId"] = agRequestID(len(req.Messages))
 			response, err = c.post(ctx, endpoint, headers, body)
+		}
+		if err != nil {
+			if bareModel := gemini4BareModel(wireModel); bareModel != "" && isGemini4ModelNotFound(err) {
+				body["model"] = bareModel
+				body["requestId"] = agRequestID(len(req.Messages))
+				response, err = c.post(ctx, endpoint, headers, body)
+			}
 		}
 		// The daily host is the chat host; when it fails at the endpoint level,
 		// retry once on the prod host. The check must name the daily host,
@@ -298,7 +436,7 @@ func (c *antigravityClient) doJSONWithKey(ctx context.Context, endpoint string, 
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+key)
-	request.Header.Set("User-Agent", agUserAgent)
+	request.Header.Set("User-Agent", agUserAgent())
 	response, err := c.http.Do(request)
 	if err != nil {
 		return nil, 0, err

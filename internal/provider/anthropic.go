@@ -5,31 +5,69 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 )
 
 // The Claude Code CLI identity an OAuth token is entitled to. The beta list
 // matches what the current CLI sends; the first entry is what unlocks an
 // OAuth bearer at all.
-const defaultClaudeCLIVersion = "2.1.290"
+const (
+	defaultClaudeCLIVersion = "2.1.290"
+	claudeCodeIdentity      = "You are Claude Code, Anthropic's official CLI for Claude."
+)
 
 var (
 	claudeCLIVersion   = defaultClaudeCLIVersion
 	claudeCLIUserAgent = "claude-cli/" + claudeCLIVersion + " (external, sdk-cli)"
+
+	learnedClaudeCLIVersionMu sync.Mutex
+	learnedClaudeCLIVersion   string
 )
 
+func isDottedVersion(value string) bool {
+	if value == "" || strings.HasSuffix(value, ".") || strings.Contains(value, "..") {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if !((c >= '0' && c <= '9') || c == '.') {
+			return false
+		}
+		if i == 0 && !(c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return strings.Contains(value, ".")
+}
+
+func rememberClaudeCLIVersion(version string) {
+	v := strings.TrimSpace(version)
+	if !isDottedVersion(v) {
+		return
+	}
+	learnedClaudeCLIVersionMu.Lock()
+	learnedClaudeCLIVersion = v
+	learnedClaudeCLIVersionMu.Unlock()
+}
+
 func resolveClaudeCLIVersion() string {
-	if v := strings.TrimSpace(os.Getenv("ODON_CLAUDE_CLI_VERSION")); v != "" {
-		return v
+	for _, key := range []string{"ODON_CLAUDE_CLI_VERSION", "TERMIXGO_CLAUDE_CLI_VERSION", "CLAUDE_CLI_VERSION"} {
+		if v := strings.TrimSpace(os.Getenv(key)); isDottedVersion(v) {
+			return v
+		}
 	}
-	if v := strings.TrimSpace(os.Getenv("TERMIXGO_CLAUDE_CLI_VERSION")); v != "" {
-		return v
-	}
-	if v := strings.TrimSpace(os.Getenv("CLAUDE_CLI_VERSION")); v != "" {
-		return v
+	learnedClaudeCLIVersionMu.Lock()
+	learned := learnedClaudeCLIVersion
+	learnedClaudeCLIVersionMu.Unlock()
+	if learned != "" {
+		return learned
 	}
 	return defaultClaudeCLIVersion
 }
@@ -40,6 +78,48 @@ func currentClaudeCLIUserAgent() string {
 		return claudeCLIUserAgent
 	}
 	return "claude-cli/" + ver + " (external, sdk-cli)"
+}
+
+func claudeCLIVersionFromError(body string) string {
+	const marker = "version "
+	rest := body
+	for {
+		idx := strings.Index(rest, marker)
+		if idx < 0 {
+			return ""
+		}
+		rest = rest[idx+len(marker):]
+		end := 0
+		for end < len(rest) && ((rest[end] >= '0' && rest[end] <= '9') || rest[end] == '.') {
+			end++
+		}
+		candidate := strings.TrimRight(rest[:end], ".")
+		if isDottedVersion(candidate) {
+			return candidate
+		}
+	}
+}
+
+func stainlessOS() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "MacOS"
+	case "windows":
+		return "Windows"
+	default:
+		return "Linux"
+	}
+}
+
+func stainlessArch() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "x64"
+	case "arm64":
+		return "arm64"
+	default:
+		return runtime.GOARCH
+	}
 }
 
 const (
@@ -130,14 +210,17 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 		headers["anthropic-dangerous-direct-browser-access"] = "true"
 		headers["x-app"] = "cli"
 		headers["User-Agent"] = currentClaudeCLIUserAgent()
+		if sid := strings.TrimSpace(c.SessionID()); sid != "" {
+			headers["X-Claude-Code-Session-Id"] = deriveUUIDFromSeed("session:" + sid)
+		}
 		headers["X-Stainless-Helper-Method"] = "stream"
 		headers["X-Stainless-Retry-Count"] = "0"
 		headers["X-Stainless-Runtime-Version"] = "v24.14.0"
 		headers["X-Stainless-Package-Version"] = "0.80.0"
 		headers["X-Stainless-Runtime"] = "node"
 		headers["X-Stainless-Lang"] = "js"
-		headers["X-Stainless-Arch"] = "arm64"
-		headers["X-Stainless-Os"] = "MacOS"
+		headers["X-Stainless-Arch"] = stainlessArch()
+		headers["X-Stainless-Os"] = stainlessOS()
 		headers["X-Stainless-Timeout"] = "600"
 		// The endpoint expects the Claude Code tool names, so client tools are
 		// suffixed and the CLI's own tools are offered as unavailable decoys.
@@ -151,7 +234,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 			aliases = names
 			cloakClaudeMessages(messages)
 		}
-		payload["system"] = withClaudeBillingHeader(payload["system"], payload)
+		payload["system"] = withClaudeCodeIdentity(payload["system"])
 		payload["metadata"] = map[string]any{
 			"user_id": claudeUserID(key, c.SessionID()),
 		}
@@ -176,6 +259,25 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 
 func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers map[string]string, payload map[string]any, emit func(StreamEvent) error, aliases map[string]string) error {
 	response, err := c.post(ctx, url, headers, payload)
+	if err != nil && c.info.OAuth {
+		var statusErr *providerStatusError
+		if errors.As(err, &statusErr) && statusErr.status == http.StatusUnauthorized {
+			if newKey := c.refreshKey(); newKey != "" {
+				headers["Authorization"] = "Bearer " + newKey
+				response, err = c.post(ctx, url, headers, payload)
+			}
+		}
+	}
+	if err != nil && c.info.OAuth {
+		var statusErr *providerStatusError
+		if errors.As(err, &statusErr) && statusErr.status == http.StatusBadRequest && strings.Contains(statusErr.message, "claude_code_version_too_old") {
+			if required := claudeCLIVersionFromError(statusErr.message); required != "" && required != resolveClaudeCLIVersion() {
+				rememberClaudeCLIVersion(required)
+				headers["User-Agent"] = "claude-cli/" + required + " (external, sdk-cli)"
+				response, err = c.post(ctx, url, headers, payload)
+			}
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -600,29 +702,37 @@ func cloakClaudeMessages(messages []map[string]any) {
 	}
 }
 
-// withClaudeBillingHeader prepends the billing line the current Claude Code
-// client sends. The hash is taken over the body before the header is added.
-func withClaudeBillingHeader(system any, payload map[string]any) any {
-	encoded, _ := json.Marshal(payload)
-	sum := sha256.Sum256(encoded)
-	text := fmt.Sprintf("x-anthropic-billing-header: cc_version=%s.%s; cc_entrypoint=sdk-cli; cch=%s;",
-		resolveClaudeCLIVersion(), randomHex(2)[:3], hex.EncodeToString(sum[:])[:5])
-	billing := map[string]any{"type": "text", "text": text}
+// withClaudeCodeIdentity ensures the first system block is the exact Claude
+// Code identity on its own (without cache_control), and removes duplicate
+// copies of it from subsequent blocks. Anthropic rejects OAuth subscription
+// requests with 429 rate_limit_error when another block precedes it.
+func withClaudeCodeIdentity(system any) []map[string]any {
+	identity := map[string]any{"type": "text", "text": claudeCodeIdentity}
 	switch value := system.(type) {
 	case []map[string]any:
-		if len(value) > 0 {
-			if existing, ok := value[0]["text"].(string); ok && strings.HasPrefix(existing, "x-anthropic-billing-header:") {
-				return value
+		out := make([]map[string]any, 0, len(value)+1)
+		out = append(out, identity)
+		for _, block := range value {
+			if text, ok := block["text"].(string); ok && strings.TrimSpace(text) == claudeCodeIdentity {
+				continue
 			}
+			out = append(out, block)
 		}
-		return append([]map[string]any{billing}, value...)
+		return out
 	case string:
-		if strings.TrimSpace(value) == "" {
-			return []map[string]any{billing}
+		rest := strings.TrimSpace(value)
+		if rest == "" || rest == claudeCodeIdentity {
+			return []map[string]any{identity}
 		}
-		return []map[string]any{billing, {"type": "text", "text": value}}
+		if strings.HasPrefix(rest, claudeCodeIdentity) {
+			rest = strings.TrimSpace(rest[len(claudeCodeIdentity):])
+		}
+		if rest == "" {
+			return []map[string]any{identity}
+		}
+		return []map[string]any{identity, {"type": "text", "text": rest}}
 	default:
-		return []map[string]any{billing}
+		return []map[string]any{identity}
 	}
 }
 

@@ -3,6 +3,7 @@ package oauth
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -133,6 +134,7 @@ var specs = map[string]Spec{
 		},
 		RedirectHost: "localhost",
 		RedirectPath: "/auth/callback",
+		UserAgent:    defaultAntigravityUserAgent(),
 		ExtraAuth:    map[string]string{"access_type": "offline", "prompt": "consent"},
 	},
 	"github-copilot": {
@@ -179,18 +181,65 @@ var (
 	AntigravityClientSecret string
 )
 
-const defaultClaudeCLIVersion = "2.1.290"
+const (
+	defaultClaudeCLIVersion      = "2.1.290"
+	defaultAntigravityCLIVersion = "1.5.9"
+)
+
+func isDottedVersion(value string) bool {
+	if value == "" || strings.HasSuffix(value, ".") || strings.Contains(value, "..") {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if !((c >= '0' && c <= '9') || c == '.') {
+			return false
+		}
+		if i == 0 && !(c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return strings.Contains(value, ".")
+}
 
 func defaultClaudeUserAgent() string {
 	ver := defaultClaudeCLIVersion
-	if v := strings.TrimSpace(os.Getenv("ODON_CLAUDE_CLI_VERSION")); v != "" {
-		ver = v
-	} else if v := strings.TrimSpace(os.Getenv("TERMIXGO_CLAUDE_CLI_VERSION")); v != "" {
-		ver = v
-	} else if v := strings.TrimSpace(os.Getenv("CLAUDE_CLI_VERSION")); v != "" {
-		ver = v
+	for _, key := range []string{"ODON_CLAUDE_CLI_VERSION", "TERMIXGO_CLAUDE_CLI_VERSION", "CLAUDE_CLI_VERSION"} {
+		if v := strings.TrimSpace(os.Getenv(key)); isDottedVersion(v) {
+			ver = v
+			break
+		}
 	}
 	return "claude-cli/" + ver + " (external, sdk-cli)"
+}
+
+func defaultAntigravityUserAgent() string {
+	ver := defaultAntigravityCLIVersion
+	for _, key := range []string{"TERMIXGO_ANTIGRAVITY_CLI_VERSION", "ANTIGRAVITY_CLI_VERSION", "ODON_ANTIGRAVITY_CLI_VERSION"} {
+		if v := strings.TrimSpace(os.Getenv(key)); isDottedVersion(v) {
+			ver = v
+			break
+		}
+	}
+	platform := "linux"
+	switch runtime.GOOS {
+	case "darwin":
+		platform = "darwin"
+	case "windows":
+		platform = "windows"
+	}
+	arch := runtime.GOARCH
+	switch arch {
+	case "amd64":
+		arch = "x64"
+	case "386":
+		arch = "x86"
+	case "arm64":
+		arch = "arm64"
+	case "arm":
+		arch = "arm"
+	}
+	return "antigravity/cli/" + ver + " " + platform + "/" + arch
 }
 
 // SpecFor returns the login spec for a provider, filling the Antigravity client
@@ -208,6 +257,9 @@ func SpecFor(provider string) (Spec, bool) {
 	}
 	if spec.Provider == "claude-oauth" {
 		spec.UserAgent = defaultClaudeUserAgent()
+	}
+	if spec.Provider == "antigravity" {
+		spec.UserAgent = defaultAntigravityUserAgent()
 	}
 	if provider == "antigravity" {
 		if strings.TrimSpace(spec.ClientID) == "" {

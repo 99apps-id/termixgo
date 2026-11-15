@@ -56,10 +56,10 @@ func (f *antigravityQuotaFetcher) fetch(ctx context.Context) *QuotaSnapshot {
 	project := f.projectID(ctx)
 	headers := map[string]string{
 		"Authorization":    "Bearer " + key,
-		"User-Agent":       agUserAgent,
+		"User-Agent":       agUserAgent(),
 		"Content-Type":     "application/json",
 		"X-Client-Name":    "antigravity",
-		"X-Client-Version": "2.11.0",
+		"X-Client-Version": agCLIVersion(),
 	}
 	payload := "{}"
 	if strings.TrimSpace(project) != "" {

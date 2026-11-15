@@ -70,7 +70,7 @@ func TestAntigravityStreamOnboardsAndDecodes(t *testing.T) {
 	if gotPath != "/v1internal:streamGenerateContent" {
 		t.Errorf("path = %q", gotPath)
 	}
-	if gotAuth != "Bearer oauth-token" || gotUA != agUserAgent {
+	if gotAuth != "Bearer oauth-token" || gotUA != agUserAgent() {
 		t.Errorf("headers: auth=%q ua=%q", gotAuth, gotUA)
 	}
 	if gotBody["project"] != "proj-1" || gotBody["model"] != "gemini-3.8-flash" {
@@ -96,11 +96,13 @@ func TestAntigravityStreamOnboardsAndDecodes(t *testing.T) {
 // thinking tier, and a mismatch is a 404 "check the model id and base URL".
 func TestAntigravityModelsUseUpstreamIDs(t *testing.T) {
 	cases := map[string]string{
-		"antigravity-gemini-3.8-flash":  "gemini-3.8-flash-medium",
-		"antigravity-gemini-3.5-flash":  "gemini-3.5-flash-low",
-		"antigravity-gemini-pro":        "gemini-pro-agent",
-		"antigravity-claude-opus-5-5":   "claude-opus-5-5-high",
-		"antigravity-claude-sonnet-5-5": "claude-sonnet-5-5-medium",
+		"antigravity-gemini-4-hydrogen":     "gemini-4-hydrogen-high",
+		"antigravity-gemini-4-argon":        "gemini-4-argon-medium",
+		"antigravity-gemini-4-carbon":       "gemini-4-carbon-medium",
+		"antigravity-gemini-3.8-flash":      "gemini-3.8-flash-medium",
+		"antigravity-gemini-3.8-flash-high": "gemini-3.8-flash-high",
+		"antigravity-claude-opus-5-5":       "claude-opus-5-5-medium",
+		"antigravity-claude-sonnet-5-5":     "claude-sonnet-5-5-medium",
 	}
 	for id, want := range cases {
 		model, ok := ModelByID(id)
@@ -636,5 +638,90 @@ func TestAntigravityLeavesAWellFormedHistoryUntouched(t *testing.T) {
 				t.Fatalf("turn %d gained a synthetic continuation turn: %#v", index, turn)
 			}
 		}
+	}
+}
+
+func TestAntigravityUserAgentUsesCLIVersion(t *testing.T) {
+	ua := agUserAgent()
+	if !strings.HasPrefix(ua, "antigravity/cli/1.5.9 ") {
+		t.Errorf("agUserAgent() = %q, want prefix antigravity/cli/1.5.9 ", ua)
+	}
+}
+
+func TestAntigravityGemini4WireModels(t *testing.T) {
+	cases := []struct {
+		model  string
+		effort string
+		want   string
+	}{
+		{"gemini-4-hydrogen-high", "", "gemini-4-hydrogen-high"},
+		{"antigravity-gemini-4-hydrogen", EffortLow, "gemini-4-hydrogen-low"},
+		{"antigravity-gemini-4-hydrogen", EffortMax, "gemini-4-hydrogen-xhigh"},
+		{"gemini-4-argon-medium", "", "gemini-4-argon-medium"},
+		{"antigravity-gemini-4-argon", EffortHigh, "gemini-4-argon-high"},
+		{"antigravity-gemini-4-argon", EffortMax, "gemini-4-argon-high"},
+		{"gemini-4-carbon-medium", "", "gemini-4-carbon-medium"},
+		{"antigravity-gemini-4-carbon", EffortMax, "gemini-4-carbon-high"},
+		{"gemini-3.8-flash-medium", EffortHigh, "gemini-3.8-flash-medium"},
+	}
+	for _, tc := range cases {
+		if got := gemini4WireModel(tc.model, tc.effort); got != tc.want {
+			t.Errorf("gemini4WireModel(%q, %q) = %q, want %q", tc.model, tc.effort, got, tc.want)
+		}
+	}
+}
+
+func TestAntigravityGemini4FallsBackToBareIDOn404(t *testing.T) {
+	var seenModels []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case strings.Contains(request.URL.Path, "loadCodeAssist"):
+			writer.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(writer, `{"cloudaicompanionProject":"proj-1","allowedTiers":[{"id":"free-tier","isDefault":true}]}`)
+		case strings.Contains(request.URL.Path, "streamGenerateContent"):
+			raw, _ := io.ReadAll(request.Body)
+			var body map[string]any
+			_ = json.Unmarshal(raw, &body)
+			model, _ := body["model"].(string)
+			seenModels = append(seenModels, model)
+			if model == "gemini-4-carbon-medium" {
+				writer.WriteHeader(http.StatusNotFound)
+				fmt.Fprint(writer, `{"error":{"message":"Requested entity was not found."}}`)
+				return
+			}
+			writer.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(writer, `data: {"response":{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}}`+"\n\n")
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	original := agLoadAssistURL
+	agLoadAssistURL = server.URL + "/v1internal:loadCodeAssist"
+	t.Cleanup(func() { agLoadAssistURL = original })
+
+	client, err := newHTTPClient(Provider{ID: "antigravity", Label: "Antigravity", Kind: KindAntigravity}, server.URL, "oauth-token")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	var out strings.Builder
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "gemini-4-carbon-medium",
+		Messages: []Message{{Role: RoleUser, Content: "hello"}},
+	}, func(event StreamEvent) error {
+		if event.Type == EventTextDelta {
+			out.WriteString(event.Text)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if out.String() != "ok" {
+		t.Errorf("text = %q, want ok", out.String())
+	}
+	if !reflect.DeepEqual(seenModels, []string{"gemini-4-carbon-medium", "gemini-4-carbon"}) {
+		t.Errorf("seenModels = %v, want [gemini-4-carbon-medium gemini-4-carbon]", seenModels)
 	}
 }
