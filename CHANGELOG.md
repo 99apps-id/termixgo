@@ -4,6 +4,13 @@ All notable changes to Termixgo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.7 - 2026-11-16
+
+### Fixed
+- Per-step token waste: turns now defer to tool search once the registry passes 40 tools instead of 128, so the default 122-tool registry no longer resends about 23.5k tokens of tool schemas on every step (the deferred always-on set measures about 6.8k). Subagent runs apply the same rule instead of inheriting only the config flag. One `read_file` result is capped at 32 KB instead of 64 KB, because a tool result stays in the history every later step resends; `offset` and `limit` page through the rest, and the clipped marker is derived from the cap instead of a hardcoded size.
+- Muse OAuth identity now presents the official `muse-build/1.4.20` client string for the host platform, shared between the key mint and the provider through `internal/museidentity`.
+- Codex and Muse Responses streams keep tool names attached to decoded calls and tolerate reasoning items issued by another backend without encrypted content.
+
 ## 0.2.6 - 2026-11-15
 
 ### Added
