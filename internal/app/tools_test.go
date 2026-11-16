@@ -25,6 +25,17 @@ func TestBuildDefaultToolsFollowsDesktopControl(t *testing.T) {
 	}
 }
 
+// TestDefaultRegistryDefersToToolSearch pins the token fix: the built-in
+// registry is large enough that sending every schema on every step costs
+// tens of thousands of tokens per step, so a default turn must defer to
+// tool search instead of staying under a too-high inline cap.
+func TestDefaultRegistryDefersToToolSearch(t *testing.T) {
+	count := len(buildDefaultTools(config.Config{}).Tools())
+	if !shouldDeferTools(count) {
+		t.Fatalf("default registry of %d tools must defer to tool search, not send every schema inline", count)
+	}
+}
+
 func TestShouldDeferToolsAboveTheInlineCap(t *testing.T) {
 	if shouldDeferTools(maxInlineTools) {
 		t.Fatalf("%d tools still fit inline", maxInlineTools)

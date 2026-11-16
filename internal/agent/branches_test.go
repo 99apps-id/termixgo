@@ -157,7 +157,7 @@ func TestReadFileClipsAVeryLongWindow(t *testing.T) {
 	if err != nil || result.IsError {
 		t.Fatalf("Run: err=%v result=%+v", err, result)
 	}
-	if !strings.Contains(result.Output, "clipped at 64 KB") {
+	if !strings.Contains(result.Output, "clipped at 32 KB") {
 		t.Errorf("output should say it was clipped")
 	}
 	if len(result.Output) > maxReadBytes+200 {

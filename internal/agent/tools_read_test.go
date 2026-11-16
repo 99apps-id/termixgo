@@ -100,11 +100,11 @@ func TestReadFileStreamsAGiantLine(t *testing.T) {
 	if err != nil || result.IsError {
 		t.Fatalf("giant line read: err=%v result=%+v", err, result)
 	}
-	if !strings.Contains(result.Output, "[clipped at 64 KB]") {
+	if !strings.Contains(result.Output, "[clipped at 32 KB]") {
 		t.Errorf("a giant line must be clipped visibly: %q", headerLine(result.Output))
 	}
 	if len(result.Output) > maxReadBytes+512 {
-		t.Errorf("output length = %d, want it near the 64 KB cap", len(result.Output))
+		t.Errorf("output length = %d, want it near the 32 KB cap", len(result.Output))
 	}
 }
 

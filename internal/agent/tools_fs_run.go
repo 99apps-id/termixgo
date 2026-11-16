@@ -73,7 +73,7 @@ func formatReadWindow(env *Env, path string, lines []string, total, offset, limi
 
 	header := fmt.Sprintf("%s (lines %d-%d of %d)", displayPath(env, path), offset, end, total)
 	if truncatedByBytes {
-		header += " [clipped at 64 KB]"
+		header += fmt.Sprintf(" [clipped at %d KB]", maxReadBytes/1024)
 	}
 	if end < total && !truncatedByBytes {
 		header += fmt.Sprintf(" [more below; next offset %d]", end+1)
@@ -188,7 +188,7 @@ func readFileWindowed(env *Env, path string, offset, limit int) (Result, error) 
 
 	header := fmt.Sprintf("%s (lines %d-%d of %d)", display, offset, end, total)
 	if truncatedByBytes {
-		header += " [clipped at 64 KB]"
+		header += fmt.Sprintf(" [clipped at %d KB]", maxReadBytes/1024)
 	}
 	if end < total && !truncatedByBytes {
 		header += fmt.Sprintf(" [more below; next offset %d]", end+1)

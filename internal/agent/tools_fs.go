@@ -211,10 +211,12 @@ func (t *readFileTool) Schema() map[string]any {
 }
 
 // maxReadLines and maxReadBytes bound one read so a huge file cannot flood
-// the model context in a single call.
+// the model context in a single call. The byte cap also bounds every later
+// step, because the result stays in the history those steps resend: 32 KB
+// is one large file window, and offset plus limit page through the rest.
 const (
 	maxReadLines = 2000
-	maxReadBytes = 64 * 1024
+	maxReadBytes = 32 * 1024
 )
 
 // maxReadDirectBytes bounds the whole-file read behind read_file. A file at

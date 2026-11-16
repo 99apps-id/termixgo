@@ -17,18 +17,16 @@ func buildDefaultTools(cfg config.Config) *agent.Registry {
 	return registry
 }
 
-// maxInlineTools is the largest schema set a turn sends inline. OpenAI
-// documents a 128-function limit for function calling, and a larger set makes
-// every step expensive; a reserve-capacity model starts answering with no
-// output at all around 150 tools. Above the cap the turn uses tool search: the
-// core set stays visible and find_tools loads the rest on demand. A large MCP
-// installation is the usual way to cross it, since one server can contribute
-// hundreds of tools.
-const maxInlineTools = 128
+// maxInlineTools is the shared cost bound from the agent package: above it
+// every step resends and rebills the whole catalogue, so the turn uses tool
+// search instead. The core set stays visible and find_tools loads the rest
+// on demand. It sits well under the provider hard limits (OpenAI documents
+// 128 functions) because cost, not refusal, is what binds first.
+const maxInlineTools = agent.MaxInlineTools
 
 // shouldDeferTools reports whether the registry is large enough that the turn
 // should send the core set plus find_tools instead of every schema.
-func shouldDeferTools(count int) bool { return count > maxInlineTools }
+func shouldDeferTools(count int) bool { return agent.ShouldDeferTools(count) }
 
 // SetDesktopControl turns the local desktop tools on or off and saves the
 // setting. The live registry changes with it, so /desktop on takes effect on

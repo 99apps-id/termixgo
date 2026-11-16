@@ -11,6 +11,17 @@ import (
 // message and by the runner's always-on set.
 const findToolsName = "find_tools"
 
+// MaxInlineTools is the largest schema set a step sends inline. Every schema
+// is resent and billed on every step, so the cap is a cost bound, not the
+// provider hard limit: the built-in catalogue measures about 23k tokens
+// inline against about 7k for the always-on set, and one discovery call
+// loads the rest for the remainder of the turn.
+const MaxInlineTools = 40
+
+// ShouldDeferTools reports whether a registry of this size should defer to
+// tool search instead of sending every schema on every step.
+func ShouldDeferTools(count int) bool { return count > MaxInlineTools }
+
 // toolSearchAlwaysOn is the coding loop: the tools every request keeps while
 // tool search is on. The ecosystem tools (GitHub, pipelines, images, skills,
 // memory, web) are loaded on demand by find_tools.

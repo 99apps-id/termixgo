@@ -383,7 +383,7 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		Pricing:       pricing,
 		CostKnown:     costKnown,
 		CostBudgetUSD: parent.Config.CostBudgetUSD,
-		ToolSearch:    parent.Config.ToolSearchEnabled,
+		ToolSearch:    parent.Config.ToolSearchEnabled || ShouldDeferTools(len(tools.Tools())),
 		Effort:        parent.Config.EffortFor(model.ID),
 		System:        def.SystemPrompt,
 	}
