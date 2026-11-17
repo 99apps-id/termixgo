@@ -209,9 +209,8 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 
 	key := c.currentKey()
 	headers := map[string]string{
-		"Authorization":        "Bearer " + key,
-		"User-Agent":           agUserAgent(),
-		"X-Machine-Session-Id": session,
+		"Authorization": "Bearer " + key,
+		"User-Agent":    agUserAgent(),
 	}
 	endpoint := c.baseURL + "/v1internal:streamGenerateContent?alt=sse"
 	response, err := c.post(ctx, endpoint, headers, body)
@@ -221,7 +220,6 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 			newKey := c.refreshKey()
 			newSession := c.resetSession()
 			headers["Authorization"] = "Bearer " + newKey
-			headers["X-Machine-Session-Id"] = newSession
 			reqMap := body["request"].(map[string]any)
 			reqMap["sessionId"] = newSession
 			body["requestId"] = agRequestID(len(req.Messages))

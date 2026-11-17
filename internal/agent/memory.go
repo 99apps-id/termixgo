@@ -177,9 +177,11 @@ func (m *Memory) PromptBlock() string {
 	return builder.String()
 }
 
-// RecordApprovalDecision appends one approval decision to the project memory.
-// It is a short machine-readable line so the agent can reuse the pattern
-// without asking again.
+// RecordApprovalDecision appends one permanent (always-allow) approval
+// decision to the project memory. It is a short machine-readable line so the
+// agent can reuse the pattern without asking again. The caller records only
+// always-allow: one-time, session, and denied answers are not durable, so
+// they must never become facts that later sessions inherit.
 func (m *Memory) RecordApprovalDecision(tool string, decision Decision) {
 	fact := fmt.Sprintf("approval %s %s", decisionWord(decision), tool)
 	_ = m.Remember(fact, "project")
