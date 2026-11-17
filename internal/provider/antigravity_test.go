@@ -15,7 +15,7 @@ import (
 // TestAntigravityStreamOnboardsAndDecodes proves the client discovers the
 // project, builds the Cloud Code envelope, and decodes the wrapped stream.
 func TestAntigravityStreamOnboardsAndDecodes(t *testing.T) {
-	var gotPath, gotAuth, gotUA string
+	var gotPath, gotAuth, gotUA, gotMachineSession string
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch {
@@ -26,6 +26,7 @@ func TestAntigravityStreamOnboardsAndDecodes(t *testing.T) {
 			gotPath = request.URL.Path
 			gotAuth = request.Header.Get("Authorization")
 			gotUA = request.Header.Get("User-Agent")
+			gotMachineSession = request.Header.Get("X-Machine-Session-Id")
 			raw, _ := io.ReadAll(request.Body)
 			_ = json.Unmarshal(raw, &gotBody)
 			writer.Header().Set("Content-Type", "text/event-stream")
@@ -69,6 +70,12 @@ func TestAntigravityStreamOnboardsAndDecodes(t *testing.T) {
 
 	if gotPath != "/v1internal:streamGenerateContent" {
 		t.Errorf("path = %q", gotPath)
+	}
+	// Neither the installed 1.5.9 CLI nor the bundled 1.4.6 binary sends an
+	// X-Machine-Session-Id header, so the client must not send one either:
+	// an extra header is a third-party fingerprint.
+	if gotMachineSession != "" {
+		t.Errorf("X-Machine-Session-Id = %q, want it absent", gotMachineSession)
 	}
 	if gotAuth != "Bearer oauth-token" || gotUA != agUserAgent() {
 		t.Errorf("headers: auth=%q ua=%q", gotAuth, gotUA)
