@@ -2354,20 +2354,6 @@ func (m *Model) lastBlock() *block {
 	return &m.blocks[len(m.blocks)-1]
 }
 
-// lastOpenThinking finds the most recent thinking block that the closing
-// EventReasoned has not finalized yet. The block is not necessarily the last
-// one: answer text is streamed before the closing event, so the answer block
-// sits on top of it by then.
-func (m *Model) lastOpenThinking() *block {
-	for index := len(m.blocks) - 1; index >= 0; index-- {
-		item := &m.blocks[index]
-		if item.kind == blockThinking && !item.finalized {
-			return item
-		}
-	}
-	return nil
-}
-
 // lastUnreasonedThinking finds this turn's newest thinking block that the
 // closing EventReasoned has not updated yet. The search stops at the turn's
 // prompt, so a late event never lands on an earlier turn's reasoning.
