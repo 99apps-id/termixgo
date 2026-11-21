@@ -3174,13 +3174,16 @@ func (a *App) contextUsage() string {
 	}
 	// The numerator is the whole request estimate, not just the stored
 	// messages: the system prompt and the tool schemas are sent (and
-	// billed) on every step. The schema figure counts the full catalogue;
-	// with tool search on, a request carries only the always-on and
-	// discovered subset, so the gauge reads as an upper bound rather than
-	// understating the request.
+	// billed) on every step. Only the schemas a request actually carries
+	// are counted: with tool search on (always past the defer threshold)
+	// that is the always-on set plus what this session discovered, and
+	// counting the whole catalogue made an empty session read as 44% full.
 	overhead := agent.EstimateTokens(agent.BuildSystem(a.env(), model.ID))
 	if a.tools != nil {
-		overhead += agent.EstimateToolSchemas(a.tools.Definitions())
+		toolSearch := a.Config().ToolSearchEnabled || shouldDeferTools(len(a.tools.Tools()))
+		if advertised := agent.AdvertisedTools(a.tools, toolSearch, session.DiscoveredTools()); advertised != nil {
+			overhead += agent.EstimateToolSchemas(advertised.Definitions())
+		}
 	}
 	// The model is named in the header already; repeating it here took the
 	// status line's room.

@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"fmt"
 	"os"
+	"runtime"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -113,6 +116,69 @@ func (m *Model) flushSettled() {
 	if strings.TrimSpace(rendered) != "" {
 		m.pendingPrint = append(m.pendingPrint, rendered)
 	}
+}
+
+// imagePasteKey names the key that pastes an image. Windows Terminal keeps
+// Ctrl+V (and Ctrl+Shift+V) for its own text paste and sends nothing when the
+// clipboard holds only an image, so on Windows the key that reaches the
+// program is Alt+V.
+func imagePasteKey() string {
+	if runtime.GOOS == "windows" {
+		return "Alt+V"
+	}
+	return "Ctrl+V"
+}
+
+// resizeSettleDelay is how long the width must stay still before the
+// transcript is printed again at the new width.
+const resizeSettleDelay = 150 * time.Millisecond
+
+// reprintBlockCap bounds a reprint, so a resize in a very long session does
+// not stall on printing every block again.
+const reprintBlockCap = 400
+
+type resizeSettledMsg struct{ seq int }
+
+func resizeSettleCmd(seq int) tea.Cmd {
+	return tea.Tick(resizeSettleDelay, func(time.Time) tea.Msg { return resizeSettledMsg{seq: seq} })
+}
+
+// reprintAll clears the screen and the scrollback and prints the transcript
+// again at the current width. A resize leaves the printed blocks wrapped at
+// the old width, and a narrower terminal turns their full-width lines into
+// broken ones; printing them again is the only way to tidy what the terminal
+// already holds.
+func (m *Model) reprintAll() tea.Cmd {
+	start := 0
+	if len(m.blocks) > reprintBlockCap {
+		start = len(m.blocks) - reprintBlockCap
+	}
+	m.printed = start
+	m.pendingPrint = nil
+	m.flushSettled()
+	text := strings.Join(m.pendingPrint, "\n\n")
+	m.pendingPrint = nil
+	if start > 0 {
+		text = m.styles.Dim.Render(fmt.Sprintf("  ... %d earlier blocks, Ctrl+O shows the whole transcript", start)) + "\n\n" + text
+	}
+	cmds := []tea.Cmd{}
+	if m.realTerminal {
+		cmds = append(cmds, clearScrollback)
+	}
+	cmds = append(cmds, tea.ClearScreen)
+	if strings.TrimSpace(text) != "" {
+		cmds = append(cmds, tea.Println(text+"\n"))
+	}
+	return tea.Sequence(cmds...)
+}
+
+// clearScrollback erases the terminal's scrollback (ED 3) and the screen.
+// Bubble Tea has no command for the scrollback, so the sequence is written to
+// the terminal directly; the ClearScreen that follows makes the renderer
+// repaint its frame.
+func clearScrollback() tea.Msg {
+	fmt.Fprint(os.Stdout, "\x1b[3J\x1b[2J\x1b[H")
+	return nil
 }
 
 // takePrints wraps cmd so the queued blocks are printed above the live area

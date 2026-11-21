@@ -150,6 +150,11 @@ type Model struct {
 	inline       bool
 	printed      int
 	pendingPrint []string
+	// realTerminal is set when the program draws on the process's own
+	// stdout, the only case where the scrollback may be cleared directly.
+	// resizeSeq numbers width changes so only the last one of a drag redraws.
+	realTerminal bool
+	resizeSeq    int
 
 	// history is the input history Up and Down walk; turnStats measures the
 	// turn in flight for the summary shown when it ends.
@@ -494,6 +499,7 @@ func RunWithOptions(application *app.App, options Options) error {
 	default:
 		model.inline = options.Input == nil && options.Output == nil && inlineLayout(application.Config())
 	}
+	model.realTerminal = options.Output == nil
 
 	var programOptions []tea.ProgramOption
 	if model.inline {
@@ -692,14 +698,27 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.layout()
 		}
 		m.ready = true
-		if m.inline && prevWidth > 0 && typed.Width > 0 && typed.Width < prevWidth {
-			// In inline mode, shrinking the terminal wraps already-drawn lines
-			// past Bubble Tea's linesRendered count, leaving duplicate frames
-			// cascading down the scrollback. Clearing the viewport lets the
-			// narrower frame repaint once cleanly.
-			return m, tea.ClearScreen
+		if m.inline && prevWidth > 0 && typed.Width > 0 && typed.Width != prevWidth {
+			// The printed messages were wrapped at the old width, and a drag
+			// sends a burst of sizes. Once the width has been still for
+			// resizeSettleDelay the scrollback is cleared and the transcript
+			// printed again at the new width, as Claude Code does.
+			//
+			// The screen is also cleared at once, in both directions. Windows
+			// Terminal reflows what is already drawn before the program hears
+			// of the new size: narrowing wraps the old frame onto more lines
+			// than Bubble Tea counted, so its erase leaves copies behind, and
+			// widening unwraps it onto fewer, so the erase eats printed lines.
+			m.resizeSeq++
+			return m, tea.Batch(tea.ClearScreen, resizeSettleCmd(m.resizeSeq))
 		}
 		return m, nil
+
+	case resizeSettledMsg:
+		if !m.inline || typed.seq != m.resizeSeq || m.current == modeTranscript {
+			return m, nil
+		}
+		return m, m.reprintAll()
 
 	case tea.KeyMsg:
 		// While a lone Escape is held for settlement, the next key burst
@@ -2839,7 +2858,7 @@ func (m *Model) viewHints() string {
 			text = fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C copy | Ctrl+X quit", m.spin.View(), elapsed)
 		}
 	} else {
-		text = " Enter send | Up history | Ctrl+R search | Shift+Tab " + string(m.appConfig().ApprovalMode) + " | Esc×2 rewind | Ctrl+O transcript | Ctrl+L model | Ctrl+X quit"
+		text = " Enter send | " + imagePasteKey() + " image | Up history | Ctrl+R search | Shift+Tab " + string(m.appConfig().ApprovalMode) + " | Esc×2 rewind | Ctrl+O transcript | Ctrl+L model | Ctrl+X quit"
 	}
 	// Pending files own the first columns of the hint row: what will be sent
 	// matters more than the key reminder, and the row never grows, so the

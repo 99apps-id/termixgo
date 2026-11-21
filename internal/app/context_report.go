@@ -27,8 +27,10 @@ func (a *App) ContextReport() string {
 	memoryTokens := agent.EstimateTokens(memory)
 	toolTokens := 0
 	toolCount := 0
+	toolSearch := false
 	if a.tools != nil {
-		definitions := a.tools.Definitions()
+		toolSearch = a.Config().ToolSearchEnabled || shouldDeferTools(len(a.tools.Tools()))
+		definitions := agent.AdvertisedTools(a.tools, toolSearch, session.DiscoveredTools()).Definitions()
 		toolCount = len(definitions)
 		toolTokens = agent.EstimateToolSchemas(definitions)
 	}
@@ -72,8 +74,8 @@ func (a *App) ContextReport() string {
 	fmt.Fprintf(&b, "  system prompt     %8s%s\n", thousands(systemTokens), percent(systemTokens))
 	fmt.Fprintf(&b, "  learned memory    %8s%s\n", thousands(memoryTokens), percent(memoryTokens))
 	toolNote := ""
-	if a.Config().ToolSearchEnabled {
-		toolNote = "  (upper bound: tool search sends only the loaded subset)"
+	if toolSearch {
+		toolNote = "  (tool search: the always-on set plus tools loaded this session)"
 	}
 	fmt.Fprintf(&b, "  tool schemas      %8s%s  %d tools%s\n", thousands(toolTokens), percent(toolTokens), toolCount, toolNote)
 	fmt.Fprintf(&b, "  your messages     %8s%s  %d\n", thousands(userTokens), percent(userTokens), userCount)
