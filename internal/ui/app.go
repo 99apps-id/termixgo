@@ -227,6 +227,9 @@ type Model struct {
 	// queues the composer text instead of refusing it, and each runDone
 	// starts the next queued input, so a steer message is never lost.
 	queue []string
+	// autoWakes counts turns background work started since the operator last
+	// typed, so a chatty monitor cannot run turns unattended forever.
+	autoWakes int
 	// queueAttachments runs parallel to queue, one entry per queued input, so
 	// a file attached while a turn is running reaches the turn it was queued
 	// for rather than the one already in flight.
@@ -764,6 +767,9 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	case eventMsg:
 		event := agent.Event(typed)
+		if event.Kind == agent.EventWake {
+			return m.handleWake(event)
+		}
 		m.applyEvent(event)
 		// Text deltas arrive in bursts during a fast stream, and every
 		// repaint rebuilds the whole transcript. Painting each one flickers
@@ -877,6 +883,12 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.notice = ""
 			m.refresh()
+			// A wake the finished turn never folded in runs under its notice,
+			// not as a user message showing the raw event markup.
+			if isWakePrompt(next) {
+				updated, cmd := m.startRunBlock(block{kind: blockNotice, text: wakeHeadline(strings.TrimPrefix(next, "<background-event>\n"))}, next, nil)
+				return updated, tea.Batch(cmd, doneCmd)
+			}
 			updated, cmd := m.submitWith(next, nextAttachments)
 			return updated, tea.Batch(cmd, doneCmd)
 		}
@@ -1608,6 +1620,7 @@ func (m *Model) submitComposerValue(raw string) (tea.Model, tea.Cmd) {
 	}
 	m.escArmedAt = time.Time{}
 	m.escRewindArmedAt = time.Time{}
+	m.autoWakes = 0
 	if m.history != nil && value != "/" {
 		m.history.add(value)
 	}
@@ -2127,7 +2140,13 @@ func (m *Model) startRun(input string) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) startRunWith(display, prompt string, images []provider.Image) (tea.Model, tea.Cmd) {
-	m.blocks = append(m.blocks, block{kind: blockUser, text: displayInput(display)})
+	return m.startRunBlock(block{kind: blockUser, text: displayInput(display)}, prompt, images)
+}
+
+// startRunBlock begins a turn whose transcript entry is head: the operator's
+// message, or a notice for a turn background work started.
+func (m *Model) startRunBlock(head block, prompt string, images []provider.Image) (tea.Model, tea.Cmd) {
+	m.blocks = append(m.blocks, head)
 	m.running = true
 	m.runStarted = time.Now()
 	m.beginTurnStats()

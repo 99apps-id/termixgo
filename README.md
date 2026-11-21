@@ -743,6 +743,7 @@ ecosystem tools out of every request and loads them on demand through
 | `audit_code` | static code and security audit (vulnerabilities, secrets, concurrency) |
 | `repo_map` | token-efficient structural symbol map of codebase architecture |
 | `run_background`, `run_logs`, `run_wait`, `run_list`, `run_kill` | managed background processes |
+| `run_monitor` | watch a background process and get notified when an output line matches a pattern, and when it exits |
 
 | Tool | Purpose |
 | --- | --- |
@@ -761,7 +762,8 @@ ecosystem tools out of every request and loads them on demand through
 | `use_skill`, `find_skill`, `install_skill`, `propose_skill` | load, install or propose skills |
 | `ask_user` | ask a question when a decision cannot be made from the code |
 | `think` | reason without acting |
-| `subagent` | delegate a typed, self-contained task |
+| `run_subagent` | delegate a typed, self-contained task, in the foreground or with `background` while the main turn continues |
+| `send_subagent`, `subagent_status` | continue a subagent with its full context; list, wait for, read or stop one |
 | `orchestrate`, `list_pipelines` | run a multi-agent pipeline |
 | `code_worker` | hand a coding task to a background agent (termixgo, claude, codex, opencode, muse) in its own worktree |
 

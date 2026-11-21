@@ -666,13 +666,14 @@ func (t *subagentTool) DoneLabel(a map[string]any) string {
 	return "Delegated (" + LookupSubagent(argString(a, "type")).Label + "): " + Shorten(argString(a, "prompt", "description"), 50)
 }
 func (t *subagentTool) Description() string {
-	return "Spawn a subagent worker (explore, general, builder, code-review, security, image, vision, pentest, pentest-recon, pentest-web, pentest-network) with the full toolset and no sandbox. Use it for a self-contained task so the main context stays lean. Review types only read."
+	return "Spawn a subagent worker (explore, general, builder, code-review, security, image, vision, pentest, pentest-recon, pentest-web, pentest-network) with the full toolset and no sandbox. Use it for a self-contained task so the main context stays lean. Review types only read. The result names the subagent id: continue it with send_subagent; with background it runs while you work and subagent_status reads its report."
 }
 func (t *subagentTool) Schema() map[string]any {
 	return object(map[string]any{
 		"prompt":      strProp("The task to carry out, stated precisely."),
 		"description": strProp("Three to five words naming the task."),
 		"type":        strProp("Worker type: explore, general, builder, code-review, security, image, vision, pentest, pentest-recon, pentest-web, pentest-network. Defaults to general."),
+		"background":  boolProp("Run it in the background and keep working; you are notified when it finishes."),
 	}, "prompt")
 }
 
@@ -690,6 +691,12 @@ func (t *subagentTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	subType := strings.TrimSpace(argString(args, "type"))
 	if subType == "" {
 		subType = string(SubagentGeneral)
+	}
+	// With a pool the worker keeps its session, so it can be continued with
+	// send_subagent, and it may run in the background.
+	if env.Subagents != nil {
+		entry := env.Subagents.create(subType, argString(args, "description"))
+		return runPooled(ctx, env, entry, prompt, argBool(args, "background", false))
 	}
 	report, spend, err := env.RunSubagent(ctx, subType, prompt)
 	if err != nil {

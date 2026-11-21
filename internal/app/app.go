@@ -86,6 +86,9 @@ type App struct {
 	// run's environment, because a dev server must outlive the turn that
 	// started it.
 	processes *agent.ProcessManager
+	// subagents keeps subagent sessions for send_subagent and runs the
+	// background ones; like processes it outlives any one turn.
+	subagents *agent.SubagentPool
 
 	client    provider.Client
 	model     provider.Model
@@ -266,6 +269,7 @@ func New(workspace string) (*App, error) {
 		tools:           buildDefaultTools(cfg),
 		runQueue:        newRunQueue(),
 		processes:       agent.NewProcessManager(),
+		subagents:       agent.NewSubagentPool(),
 		events:          make(chan agent.Event, eventBuffer),
 		activeAgent:     cfg.ActiveAgent,
 		agentSessions:   map[string]*agent.Session{},
@@ -285,6 +289,7 @@ func New(workspace string) (*App, error) {
 	// The manager outlives a turn, so its emitter is installed once here rather
 	// than being handed a per-run environment.
 	instance.processes.SetEmitter(instance.emit)
+	instance.subagents.SetEmitter(instance.emit)
 	instance.policy = &agent.ApprovalPolicy{
 		Mode:           agent.ApprovalModeOrDefault(cfg),
 		AlwaysAllowed:  stringSet(cfg.AlwaysAllowedTools),
@@ -1662,6 +1667,7 @@ func (a *App) envFor(agentName string) *agent.Env {
 		Todos:     a.todos,
 		Trusted:   ctx.trusted,
 		Processes: a.processes,
+		Subagents: a.subagents,
 		// The journal is shared with the runner, which records into it, and read
 		// back by search_memory, which is why the same store is passed here.
 		Journal: ctx.journal,
@@ -1865,6 +1871,7 @@ func (a *App) Shutdown() {
 
 	if a.processes != nil {
 		a.processes.Shutdown()
+		a.subagents.StopAll()
 	}
 	a.mu.Lock()
 	pool := a.mcp
@@ -2618,6 +2625,12 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 	// terminal's active agent.
 	runEnv.RunSubagent = func(runCtx context.Context, subType, prompt string) (string, agent.SubagentSpend, error) {
 		return a.runSubagentFor(runCtx, runEnv, agentName, opts.guest, subType, prompt)
+	}
+	// A channel turn keeps one-shot subagents: a background worker's wake goes
+	// to the terminal's event stream, never to the chat that started it, and a
+	// chat must not continue a worker the terminal owns.
+	if opts.session != nil {
+		runEnv.Subagents = nil
 	}
 
 	// A best-effort snapshot before the turn, so a bad edit can be undone

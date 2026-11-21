@@ -118,6 +118,9 @@ type Env struct {
 	// Processes owns the background processes. It is shared across turns
 	// because a background process must outlive the turn that started it.
 	Processes *ProcessManager
+	// Subagents keeps subagent sessions for send_subagent and runs background
+	// ones. Nil makes every subagent a one-shot foreground run.
+	Subagents *SubagentPool
 	// Search provides full-text search over memory, journal and workspace.
 	Search *search.Store
 	// Journal records recurring tool failures for self-correction.
@@ -215,6 +218,7 @@ func DefaultRegistry() *Registry {
 		&backgroundTool{},
 		&logsTool{},
 		&waitTool{},
+		&monitorTool{},
 		&listProcessesTool{},
 		&killTool{},
 		&envGetTool{},
@@ -286,6 +290,8 @@ func DefaultRegistry() *Registry {
 		&githubMergePRTool{},
 		&thinkTool{},
 		&subagentTool{},
+		&sendSubagentTool{},
+		&subagentStatusTool{},
 		&reviewChangesTool{},
 		&gitStatusTool{},
 		&gitDiffTool{},

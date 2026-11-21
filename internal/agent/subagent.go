@@ -390,7 +390,21 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		Effort:        parent.Config.EffortFor(model.ID),
 		System:        def.SystemPrompt,
 	}
-	session := NewSessionFor(parent.AgentName, parent.Workspace, model.ID)
+	// A pooled subagent brings its session in through the context: the first
+	// pass fills the slot, a send_subagent continuation reuses it.
+	var session *Session
+	slot := subagentSlotFrom(ctx)
+	// The slot is this pass's alone: a grandchild spawned inside the run must
+	// start its own session, not continue this one.
+	ctx = withSubagentSlot(ctx, nil)
+	if slot != nil && slot.session != nil {
+		session = slot.session
+	} else {
+		session = NewSessionFor(parent.AgentName, parent.Workspace, model.ID)
+		if slot != nil {
+			slot.session = session
+		}
+	}
 	if err := runner.Run(ctx, session, prompt); err != nil {
 		return "", spend, err
 	}

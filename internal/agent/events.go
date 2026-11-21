@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"strings"
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/provider"
@@ -46,7 +47,20 @@ const (
 	EventContext EventKind = "context"
 	// EventRateLimit reports rate limit and quota information from the provider.
 	EventRateLimit EventKind = "rate-limit"
+	// EventWake is background work asking for the model's attention: a
+	// background subagent finished or a process monitor matched. Text is the
+	// notification; ToolName names its source handle. An idle terminal starts a
+	// turn with it, a running one folds it in as a steer.
+	EventWake EventKind = "wake"
 )
+
+// WakePrompt is the turn text a wake event becomes. It is marked as an
+// automatic notification so the model never mistakes it for the operator.
+func WakePrompt(text string) string {
+	return "<background-event>\n" + strings.TrimSpace(text) + "\n</background-event>\n" +
+		"This is an automatic notification from background work, not a message from the operator. " +
+		"Act on it if it matters to the current task; otherwise acknowledge it in one line."
+}
 
 // Event is one unit of agent activity.
 type Event struct {
