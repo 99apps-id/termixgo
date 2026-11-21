@@ -120,7 +120,7 @@ func (p *plainPrinter) print(event agent.Event) {
 			}
 			fmt.Fprintf(p.out, "  %s %s\n", mark, todo.Title)
 		}
-	case agent.EventNotice:
+	case agent.EventNotice, agent.EventWake:
 		fmt.Fprintln(p.out)
 		fmt.Fprintln(p.out, p.color(ansiDim, event.Text))
 	case agent.EventError:

@@ -236,7 +236,7 @@ func execute(ctx context.Context, env *Env, command, dir string, timeout time.Du
 	runErr := process.Wait()
 	text, _, _ := buffer.ReadSince(0)
 	output := truncateOutput(text, maxOutputChars)
-	label := displayPath(env, dir)
+	label := dirLabel(displayPath(env, dir))
 
 	if errors.Is(runErr, exec.ErrWaitDelay) {
 		// WaitDelay closes pipes a surviving grandchild still held, not the
@@ -280,6 +280,16 @@ func execute(ctx context.Context, env *Env, command, dir string, timeout time.Du
 		output = "(no output)"
 	}
 	return Result{Output: fmt.Sprintf("Command succeeded in %s\n%s", label, output)}, nil
+}
+
+// dirLabel names the working directory in a command result. The relative path
+// of the workspace root is ".", which read as a missing duration in
+// "Command succeeded in .".
+func dirLabel(label string) string {
+	if label == "" || label == "." {
+		return "the workspace root"
+	}
+	return label
 }
 
 // shellInvocation picks the interpreter that matches the platform.

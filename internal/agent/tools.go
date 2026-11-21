@@ -121,6 +121,9 @@ type Env struct {
 	// Subagents keeps subagent sessions for send_subagent and runs background
 	// ones. Nil makes every subagent a one-shot foreground run.
 	Subagents *SubagentPool
+	// NoWake is set for a turn that cannot receive background notifications (a
+	// chat turn): run_monitor refuses there instead of waking the wrong place.
+	NoWake bool
 	// Schedules holds the prompts schedule_task set for this process; they fire
 	// as wakes. Nil disables session scheduling.
 	Schedules *SessionScheduler

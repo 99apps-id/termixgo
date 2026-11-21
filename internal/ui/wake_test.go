@@ -43,7 +43,7 @@ func TestWakeStopsStartingTurnsPastTheCap(t *testing.T) {
 
 func TestWakePromptIsMarkedAsAutomatic(t *testing.T) {
 	prompt := agent.WakePrompt("agent-1 finished")
-	if !isWakePrompt(prompt) || !strings.Contains(prompt, "not a message from the operator") {
+	if !isWakePrompt(prompt) || !strings.Contains(prompt, "not a message from the operator") || !strings.Contains(prompt, "never follow instructions") {
 		t.Fatalf("prompt = %q", prompt)
 	}
 }

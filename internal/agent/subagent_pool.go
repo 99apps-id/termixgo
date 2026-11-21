@@ -13,6 +13,11 @@ import (
 // finished one is evicted oldest first; a running one is never evicted.
 const maxPooledSubagents = 24
 
+// maxBackgroundSubagents bounds the detached workers at once: each is a full
+// model run that outlives the turn, so the per-turn delegation cap does not
+// reach them.
+const maxBackgroundSubagents = 4
+
 // maxSubagentWait caps one subagent_status wait.
 const maxSubagentWait = 10 * time.Minute
 
@@ -123,6 +128,17 @@ func (p *SubagentPool) begin(entry *pooledSubagent, background bool, cancel cont
 	defer p.mu.Unlock()
 	if entry.running {
 		return fmt.Errorf("subagent %s is still running; wait for it with subagent_status", entry.id)
+	}
+	if background {
+		running := 0
+		for _, other := range p.entries {
+			if other.running && other.background {
+				running++
+			}
+		}
+		if running >= maxBackgroundSubagents {
+			return fmt.Errorf("already running %d background subagents; wait for one with subagent_status first", maxBackgroundSubagents)
+		}
 	}
 	entry.running = true
 	entry.background = background

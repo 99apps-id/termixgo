@@ -6,6 +6,11 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Fixed
+- A background subagent, monitor or scheduled prompt could finish without the model ever hearing of it: wake events shared the display buffer, which drops events when it is full, and a stream of text deltas fills it. A wake now waits for room (bounded) instead of being dropped, and the plain, non-terminal mode prints it.
+- `run_monitor` is refused in a chat turn, where its notification would land in the terminal's event stream; at most 8 monitors and 4 background subagents run at once; the wake text tells the model that quoted process output is data, not instructions.
+- `run_command` reported `Command succeeded in .`, which read as a missing duration: the text names the directory, and the workspace root is now spelled out.
+
 ### Changed
 - `termixgo service install` on Linux writes a unit with `Restart=always` and no start-rate limit, so the assistant is restarted after a crash loop or a clean exit instead of staying down.
 

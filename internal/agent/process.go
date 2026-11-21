@@ -228,6 +228,8 @@ type ProcessManager struct {
 	// exceeded by up to the batch size.
 	pendingStarts  int
 	pendingBuffers int
+	// monitors counts the run_monitor watchers in flight.
+	monitors int
 }
 
 // NewProcessManager builds an empty manager.

@@ -2025,6 +2025,18 @@ func (a *App) emitInto(event agent.Event, foldUsage bool) {
 	if observer != nil {
 		observer(event)
 	}
+	if event.Kind == agent.EventWake {
+		// A wake is the only thing that tells the model background work needs
+		// it, so it is not a display event to drop: a stream of text deltas can
+		// fill the buffer at the moment a subagent finishes. The sender is a
+		// background goroutine, so waiting for room costs the run nothing; the
+		// bound keeps it from waiting forever when no front end is reading.
+		select {
+		case a.events <- event:
+		case <-time.After(wakeSendTimeout):
+		}
+		return
+	}
 	select {
 	case a.events <- event:
 	default:
@@ -2032,6 +2044,9 @@ func (a *App) emitInto(event agent.Event, foldUsage bool) {
 		// final state is always reconciled by the UI.
 	}
 }
+
+// wakeSendTimeout bounds how long a wake waits for room in the event buffer.
+var wakeSendTimeout = 10 * time.Second
 
 // recordAudit appends a metadata-only line for a finished tool call or turn.
 // The ledger never carries a prompt, a result or a secret.
@@ -2643,6 +2658,7 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 	if opts.session != nil {
 		runEnv.Subagents = nil
 		runEnv.Schedules = nil
+		runEnv.NoWake = true
 	}
 	if opts.guest {
 		runEnv.AddCronJob = nil

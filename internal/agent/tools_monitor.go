@@ -56,7 +56,35 @@ func (t *monitorTool) Schema() map[string]any {
 	}, "handle", "pattern")
 }
 
+// maxMonitors bounds the watchers running at once. Each polls its process every
+// half second for up to four hours, so an unbounded number is a slow leak.
+const maxMonitors = 8
+
+// acquireMonitor reserves a watcher slot, reporting false when all are taken.
+func (m *ProcessManager) acquireMonitor() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.monitors >= maxMonitors {
+		return false
+	}
+	m.monitors++
+	return true
+}
+
+func (m *ProcessManager) releaseMonitor() {
+	m.mu.Lock()
+	if m.monitors > 0 {
+		m.monitors--
+	}
+	m.mu.Unlock()
+}
+
 func (t *monitorTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	if env.NoWake {
+		// A chat turn has no way to receive the notification: it would land in
+		// the terminal's event stream, in a conversation the chat never sees.
+		return Result{Output: "Monitoring is not available in this conversation; use run_wait or run_logs to check the process.", IsError: true}, nil
+	}
 	if env.Processes == nil {
 		return Result{Output: "Background processes are not available in this session.", IsError: true}, nil
 	}
@@ -91,7 +119,13 @@ func (t *monitorTool) Run(ctx context.Context, env *Env, args map[string]any) (R
 	if process.Exited() && !argBool(args, "from_start", false) {
 		return Result{Output: fmt.Sprintf("%s has already exited with code %d; read its output with run_logs.", id, process.ExitCode()), IsError: true}, nil
 	}
-	go watch.run()
+	if !env.Processes.acquireMonitor() {
+		return Result{Output: fmt.Sprintf("Already watching %d processes; wait for one to finish its notifications first.", maxMonitors), IsError: true}, nil
+	}
+	go func() {
+		defer env.Processes.releaseMonitor()
+		watch.run()
+	}()
 	return Result{Output: fmt.Sprintf(
 		"Watching %s for /%s/ (up to %d notifications). You will be notified as matches arrive; carry on with other work or end your turn.",
 		id, raw, watch.maxEvents)}, nil
