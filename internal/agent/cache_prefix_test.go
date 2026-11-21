@@ -39,7 +39,7 @@ func TestTodoWriteResultCarriesThePlan(t *testing.T) {
 		map[string]any{"id": "1", "title": "Write tests", "status": "in_progress"},
 		map[string]any{"id": "2", "title": "Ship", "status": "pending"},
 	}})
-	if result.IsError || !strings.Contains(result.Output, "[>] Write tests") || !strings.Contains(result.Output, "[ ] Ship") {
+	if result.IsError || !strings.Contains(result.Output, "[>] 1: Write tests") || !strings.Contains(result.Output, "[ ] 2: Ship") {
 		t.Fatalf("result = %+v", result)
 	}
 }

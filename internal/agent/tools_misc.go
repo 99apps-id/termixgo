@@ -386,7 +386,7 @@ func (t *todoWriteTool) Label(a map[string]any) string {
 }
 func (t *todoWriteTool) DoneLabel(a map[string]any) string { return "Updated plan" }
 func (t *todoWriteTool) Description() string {
-	return "Replace the task plan. Keep exactly one item in_progress. Use this for any task with three or more steps so progress stays visible."
+	return "Replace the task plan. Keep exactly one item in_progress. Use this for any task with three or more steps so progress stays visible. To tick one item off, todo_update by id is cheaper than rewriting the plan."
 }
 func (t *todoWriteTool) Schema() map[string]any {
 	return object(map[string]any{
@@ -403,7 +403,8 @@ func (t *todoWriteTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	if err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
-	if err := env.Todos.Write(items); err != nil {
+	notes, err := env.Todos.WriteNoting(items)
+	if err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
 	plan := env.Todos.Items()
@@ -414,9 +415,16 @@ func (t *todoWriteTool) Run(ctx context.Context, env *Env, args map[string]any) 
 	// The whole list is in the result: the plan is no longer repeated in the
 	// system prompt, so this is where the model reads the current state.
 	return Result{
-		Output: fmt.Sprintf("Plan updated: %d of %d complete.%s", done, total, env.Todos.PromptBlock()),
+		Output: fmt.Sprintf("Plan updated: %d of %d complete.%s%s", done, total, todoNotes(notes), env.Todos.PromptBlock()),
 		Plan:   plan,
 	}, nil
+}
+
+func todoNotes(notes []string) string {
+	if len(notes) == 0 {
+		return ""
+	}
+	return "\n" + strings.Join(notes, "\n")
 }
 
 // todoReadTool lists the plan.
@@ -442,7 +450,7 @@ func (t *todoReadTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	}
 	var builder strings.Builder
 	for _, item := range items {
-		fmt.Fprintf(&builder, "- [%s] %s\n", item.Status, item.Title)
+		fmt.Fprintf(&builder, "- %s %s: %s (%s)\n", todoMarker(item.Status), item.ID, item.Title, item.Status)
 	}
 	return Result{Output: strings.TrimRight(builder.String(), "\n")}, nil
 }

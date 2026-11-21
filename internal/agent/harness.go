@@ -65,7 +65,7 @@ var BuiltinHarnessProfiles = map[string]HarnessProfile{
 		ID:          "no_todo",
 		Label:       "No todo overhead",
 		Description: "Hide the todo tools for lighter tasks.",
-		HideTools:   []string{"todo_write", "todo_read"},
+		HideTools:   []string{"todo_write", "todo_read", "todo_update"},
 	},
 	"autonomous": {
 		ID:          "autonomous",

@@ -227,11 +227,13 @@ func TestTodoWriteEnforcesSingleActiveItem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.IsError {
-		t.Fatalf("two in_progress items must be refused")
+	// Two active items are settled, not refused: the earlier one is marked
+	// completed and the plan keeps exactly one in_progress item.
+	if result.IsError {
+		t.Fatalf("two in_progress items should be settled: %+v", result)
 	}
-	if !strings.Contains(result.Output, "one todo may be in_progress") {
-		t.Errorf("the refusal should explain the rule, got %q", result.Output)
+	if active, ok := env.Todos.Active(); !ok || active.Title != "two" || !strings.Contains(result.Output, "t1 was marked completed") {
+		t.Errorf("the later item stays active and the note explains it, got %q", result.Output)
 	}
 
 	result, err = (&todoWriteTool{}).Run(context.Background(), env, map[string]any{

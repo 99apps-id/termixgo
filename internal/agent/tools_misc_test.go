@@ -94,7 +94,7 @@ func TestTodoReadReportsThePlan(t *testing.T) {
 	if err != nil || plan.IsError {
 		t.Fatalf("Run: err=%v result=%+v", err, plan)
 	}
-	for _, want := range []string{"[completed] read the code", "[in_progress] write the fix"} {
+	for _, want := range []string{"[x] 1: read the code (completed)", "[>] 2: write the fix (in_progress)"} {
 		if !strings.Contains(plan.Output, want) {
 			t.Errorf("output missing %q:\n%s", want, plan.Output)
 		}

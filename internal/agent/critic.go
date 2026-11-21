@@ -47,9 +47,9 @@ func ReviewFinishWithHints(todos []Todo, ledger VerifyLedger, claimedVerificatio
 	for _, item := range todos {
 		switch strings.ToLower(strings.TrimSpace(item.Status)) {
 		case "in_progress":
-			open = append(open, "- `[>] "+item.Title+"` (in_progress)")
+			open = append(open, "- `[>] "+item.ID+": "+item.Title+"` (in_progress)")
 		case "pending":
-			open = append(open, "- `[ ] "+item.Title+"` (pending)")
+			open = append(open, "- `[ ] "+item.ID+": "+item.Title+"` (pending)")
 		}
 	}
 	needsVerify := ledger.ShouldNudgeVerification(claimedVerification)
@@ -59,7 +59,7 @@ func ReviewFinishWithHints(todos []Todo, ledger VerifyLedger, claimedVerificatio
 	var builder strings.Builder
 	builder.WriteString(CriticNudgePrefix + " Before finishing, the critic review found open work:")
 	if len(open) > 0 {
-		builder.WriteString("\n\nUnfinished plan items:\n" + strings.Join(open, "\n"))
+		builder.WriteString("\n\nUnfinished plan items:\n" + strings.Join(open, "\n") + "\n\nFor every item above that you already finished, call todo_update with its id and status completed (ids takes several at once). Finish any item that is really still open.")
 	}
 	if needsVerify {
 		builder.WriteString("\n\nVerification gap: code was edited (or verification was claimed) without fresh passing evidence since the last edit.")
@@ -71,7 +71,7 @@ func ReviewFinishWithHints(todos []Todo, ledger VerifyLedger, claimedVerificatio
 		detail := strings.TrimPrefix(verdict, VerifyNudgePrefix)
 		builder.WriteString("\n\nWhat to do next:" + detail)
 	} else {
-		builder.WriteString("\n\nFinish the open items or mark them complete with todo_write, run the smallest relevant verification (the run_checks tool, or the project test, lint or build command), then summarize what is verified.")
+		builder.WriteString("\n\nFinish the open items or mark them complete with todo_update, run the smallest relevant verification (the run_checks tool, or the project test, lint or build command), then summarize what is verified.")
 	}
 	if learned := formatLearnedFixes(hints); learned != "" {
 		builder.WriteString("\n\nKnown fixes from earlier runs:\n" + learned)

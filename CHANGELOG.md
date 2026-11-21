@@ -20,6 +20,9 @@ All notable changes to Termixgo are recorded here. The format follows
 - `ask_user` takes `questions`, up to four asked in one call, answered in order.
 
 ### Fixed
+- Todo items stayed unchecked: the plan the model reads showed no ids while `todo_update` matched ids only, so the model guessed and missed; `todo_update` was not offered when tool search was on; and starting the next item while one was in progress failed the whole update. The plan now shows ids, `todo_update` matches an id in any case, a number or a title and takes `ids` for several items, starting an item marks the active one completed (with a note), and the critic names the ids and the call to make.
+- A Telegram or WhatsApp turn started with an empty plan and never saved it, so a chat could not tick off an item from an earlier turn, and `/plan` in a chat fell back to the terminal's plan. Each chat now keeps its own plan.
+- Windows notifications never appeared (unregistered app id) and broke on `<` or `&`; the resize reprint's scrollback erase raced the renderer.
 - The guest deny-list named five tools by old names (`logs`, `wait`, `list_processes`, `kill`, `subagent`), so a chat guest could read and kill background processes and spawn subagents. It now uses the real names and also covers SSH, `dev_server`, `env_list`, `browser_run_steps`, scheduling and the new subagent tools; a test fails if a listed name stops matching a tool.
 - Guest steer messages on Telegram and WhatsApp reach the running turn wrapped as untrusted data, like the guest's prompt.
 - With tool search on, `run_subagent` was deferred because the always-on list named it `subagent`.

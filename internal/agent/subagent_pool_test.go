@@ -171,8 +171,8 @@ func TestMonitorWakesOnAMatchAndOnExit(t *testing.T) {
 func TestMonitorRejectsABadPattern(t *testing.T) {
 	manager := NewProcessManager()
 	manager.SetEmitter(func(Event) {})
-	t.Cleanup(manager.Shutdown)
 	env := testEnv(t)
+	t.Cleanup(manager.Shutdown)
 	env.Processes = manager
 	process, err := manager.Start(context.Background(), longRunningCommand(), env.Workspace)
 	if err != nil {

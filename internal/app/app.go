@@ -2573,6 +2573,10 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 		// emitter that does not fold its usage into the operator's live
 		// session; the owned session still accounts for itself.
 		runEnv = a.isolatedEnvForRun(agentName, opts.guest)
+		// The store is the run's own, but the plan is the chat's: it starts
+		// from what the session saved, so an item from the last turn can
+		// still be checked off, and it is saved back when the turn ends.
+		runEnv.Todos.Set(opts.session.Todos())
 	}
 	if opts.observer != nil {
 		origEmit := runEnv.Emit
@@ -2713,6 +2717,8 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 	}
 	if opts.session == nil {
 		session.SetTodos(a.todos.Items())
+	} else {
+		session.SetTodos(runEnv.Todos.Items())
 	}
 	if opts.isolated || a.Ephemeral() {
 		return nil

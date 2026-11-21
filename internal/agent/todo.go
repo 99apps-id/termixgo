@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -27,6 +28,16 @@ func NewTodoStore() *TodoStore { return &TodoStore{} }
 
 // Write replaces the plan, validating statuses and the single active item.
 func (s *TodoStore) Write(items []Todo) error {
+	_, err := s.WriteNoting(items)
+	return err
+}
+
+// WriteNoting is Write that settles a plan with more than one in_progress item
+// instead of refusing it, and says what it changed. A model that starts the
+// next item before closing the current one has moved on from it: refusing the
+// whole write left the finished item unchecked, so the earlier active items
+// are marked completed and the last one stays active.
+func (s *TodoStore) WriteNoting(items []Todo) ([]string, error) {
 	normalised := make([]Todo, 0, len(items))
 	active := 0
 	for index, item := range items {
@@ -37,8 +48,14 @@ func (s *TodoStore) Write(items []Todo) error {
 		status := strings.ToLower(strings.TrimSpace(item.Status))
 		switch status {
 		case "pending", "in_progress", "completed":
+		case "done", "complete", "finished":
+			status = "completed"
+		case "in-progress", "active", "doing":
+			status = "in_progress"
+		case "todo", "open", "":
+			status = "pending"
 		default:
-			return fmt.Errorf("todo %d has status %q; use pending, in_progress or completed", index+1, item.Status)
+			return nil, fmt.Errorf("todo %d has status %q; use pending, in_progress or completed", index+1, item.Status)
 		}
 		if status == "in_progress" {
 			active++
@@ -49,13 +66,25 @@ func (s *TodoStore) Write(items []Todo) error {
 		}
 		normalised = append(normalised, Todo{ID: id, Title: title, Status: status, Parent: item.Parent})
 	}
+	var notes []string
 	if active > 1 {
-		return fmt.Errorf("only one todo may be in_progress, found %d", active)
+		last := -1
+		for index := range normalised {
+			if normalised[index].Status == "in_progress" {
+				last = index
+			}
+		}
+		for index := range normalised {
+			if index != last && normalised[index].Status == "in_progress" {
+				normalised[index].Status = "completed"
+				notes = append(notes, fmt.Sprintf("%s was marked completed because %s is now in progress; set it back to pending if it is not done.", normalised[index].ID, normalised[last].ID))
+			}
+		}
 	}
 	s.mu.Lock()
 	s.items = normalised
 	s.mu.Unlock()
-	return nil
+	return notes, nil
 }
 
 // Items returns a copy of the plan.
@@ -82,18 +111,61 @@ func (s *TodoStore) PromptBlock() string {
 		return ""
 	}
 	var builder strings.Builder
-	builder.WriteString("\n\n## CURRENT PLAN\nKeep this list accurate; mark one item in_progress at a time.\n")
+	builder.WriteString("\n\n## CURRENT PLAN\nMark each item completed with todo_update (by its id) as soon as it is done, and keep one item in_progress at a time.\n")
 	for _, item := range items {
-		marker := "[ ]"
-		switch item.Status {
-		case "in_progress":
-			marker = "[>]"
-		case "completed":
-			marker = "[x]"
-		}
-		fmt.Fprintf(&builder, "- %s %s\n", marker, item.Title)
+		fmt.Fprintf(&builder, "- %s %s: %s\n", todoMarker(item.Status), item.ID, item.Title)
 	}
 	return builder.String()
+}
+
+func todoMarker(status string) string {
+	switch status {
+	case "in_progress":
+		return "[>]"
+	case "completed":
+		return "[x]"
+	}
+	return "[ ]"
+}
+
+// findTodo resolves how a model names an item: its id in any case, a bare number
+// for t<n> or the n-th item, or its title. A miss returns -1.
+func findTodo(items []Todo, ref string) int {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return -1
+	}
+	lower := strings.ToLower(ref)
+	for index, item := range items {
+		if strings.ToLower(item.ID) == lower {
+			return index
+		}
+	}
+	trimmed := strings.TrimLeft(strings.TrimPrefix(strings.TrimPrefix(lower, "task"), "t"), "-_# ")
+	if number, err := strconv.Atoi(trimmed); err == nil {
+		for index, item := range items {
+			if strings.ToLower(item.ID) == fmt.Sprintf("t%d", number) {
+				return index
+			}
+		}
+		if number >= 1 && number <= len(items) {
+			return number - 1
+		}
+	}
+	match := -1
+	for index, item := range items {
+		title := strings.ToLower(item.Title)
+		if title == lower {
+			return index
+		}
+		if strings.Contains(title, lower) {
+			if match >= 0 {
+				return -1
+			}
+			match = index
+		}
+	}
+	return match
 }
 
 // Progress counts completed and total items.

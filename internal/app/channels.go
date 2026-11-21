@@ -1036,11 +1036,10 @@ func (a *App) sessionCostInfo(session *agent.Session, lang string) string {
 // sessionPlanInfo formats the active plan/todos for one channel session.
 func (a *App) sessionPlanInfo(session *agent.Session, lang string) string {
 	var todos []agent.Todo
+	// Only the chat's own plan: falling back to the terminal's store showed the
+	// operator's terminal plan in a chat that had none.
 	if session != nil {
 		todos = session.Todos()
-	}
-	if len(todos) == 0 && a.Todos() != nil {
-		todos = a.Todos().Items()
 	}
 	if len(todos) == 0 {
 		if lang == "id" {

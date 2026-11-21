@@ -32,7 +32,7 @@ var toolSearchAlwaysOn = map[string]bool{
 	"grep": true, "glob": true, "code_outline": true, "symbol_search": true,
 	"run_command": true, "run_checks": true,
 	"run_background": true, "run_logs": true, "run_wait": true, "run_list": true, "run_kill": true,
-	"todo_write": true, "todo_read": true, "submit_plan": true,
+	"todo_write": true, "todo_read": true, "todo_update": true, "submit_plan": true,
 	"think": true, "run_subagent": true, "send_subagent": true, "subagent_status": true,
 	"run_monitor": true,
 	"ask_user":    true,
