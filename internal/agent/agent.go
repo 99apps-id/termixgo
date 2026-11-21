@@ -809,6 +809,28 @@ func toolOutputPreview(tool Tool, result Result) (string, int) {
 	return clipBytes(strings.Join(head, "\n"), toolPreviewBytes), len(lines)
 }
 
+// ToolOutputPreview is toolOutputPreview for a restored session, where only
+// the stored output and the failure guess are known.
+func ToolOutputPreview(tool Tool, output string, failed bool) (string, int) {
+	return toolOutputPreview(tool, Result{Output: output, IsError: failed})
+}
+
+// LooksLikeToolFailure guesses whether a stored tool result was an error. A
+// session keeps the text the model saw, not the flag, and every failure the
+// loop itself produces starts with one of these shapes.
+func LooksLikeToolFailure(name, output string) bool {
+	trimmed := strings.TrimSpace(output)
+	for _, prefix := range []string{
+		name + " failed:", "Error", "error:", "The operator denied", "Plan mode is on",
+		"A pre_tool hook blocked", "Could not read the arguments", "Unknown tool",
+	} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // callApprover is a tool that is safe for ordinary calls but must ask the
 // operator for some argument combinations, such as a send to a stranger.
 type callApprover interface {

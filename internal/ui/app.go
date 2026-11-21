@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -477,6 +478,14 @@ func (m *Model) restoreSession(session *agent.Session) {
 		return
 	}
 	m.blocks = nil
+	// A tool call is matched to its stored result by id, so the restored
+	// transcript shows each call's label, outcome and output preview the way
+	// the live turn did, instead of every call as a bare success.
+	callBlock := map[string]int{}
+	var registry *agent.Registry
+	if m.app != nil {
+		registry = m.app.Tools()
+	}
 	for _, msg := range session.Messages() {
 		switch msg.Role {
 		case provider.RoleUser:
@@ -491,7 +500,31 @@ func (m *Model) restoreSession(session *agent.Session) {
 				m.blocks = append(m.blocks, block{kind: blockAssistant, text: msg.Content})
 			}
 			for _, tc := range msg.ToolCalls {
-				m.blocks = append(m.blocks, block{kind: blockTool, toolName: tc.Name, toolArgs: tc.Arguments, toolOK: true})
+				item := block{kind: blockTool, toolName: tc.Name, toolArgs: tc.Arguments, toolOK: true}
+				if registry != nil {
+					if tool, ok := registry.Lookup(tc.Name); ok {
+						var args map[string]any
+						_ = json.Unmarshal([]byte(tc.Arguments), &args)
+						item.toolLabel = tool.DoneLabel(args)
+					}
+				}
+				m.blocks = append(m.blocks, item)
+				if tc.ID != "" {
+					callBlock[tc.ID] = len(m.blocks) - 1
+				}
+			}
+		case provider.RoleTool:
+			index, ok := callBlock[msg.ToolID]
+			if !ok {
+				continue
+			}
+			item := &m.blocks[index]
+			item.toolOK = !agent.LooksLikeToolFailure(item.toolName, msg.Content)
+			item.toolResult = agent.Shorten(msg.Content, 240)
+			if registry != nil {
+				if tool, found := registry.Lookup(item.toolName); found {
+					item.toolOutput, item.toolOutputLines = agent.ToolOutputPreview(tool, msg.Content, !item.toolOK)
+				}
 			}
 		}
 	}
@@ -2048,6 +2081,9 @@ func (m *Model) reconcileAnswerText() {
 	// The block has to belong to this turn: rewriting the previous turn's
 	// answer when every delta of the current one was dropped would move text
 	// under the wrong prompt.
+	// A steer block counts as the boundary too: the stored answer is the
+	// newest one, which the model wrote after reading the steer, so it
+	// replaces only text after it and the answer before the steer is kept.
 	lastUser := -1
 	for index := len(m.blocks) - 1; index >= 0; index-- {
 		if m.blocks[index].kind == blockUser {

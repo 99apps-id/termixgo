@@ -14,6 +14,15 @@ All notable changes to Termixgo are recorded here. The format follows
 - `browser_run_steps` runs a multi-step browser flow (navigate, click, type, press, wait, scroll, read, screenshot) in one call, stops at the first failing step, saves flows with `save_as` and replays them with `{{name}}` variables. Typed values are never echoed or saved. `browser_fill_form` now points here instead of at `browser_click`.
 - `/endpoint list|add|rm|models` manages several OpenAI-compatible servers from the TUI; `termixgo endpoint models <name>` fetches a server's model list from `GET /models` (OpenAI and Ollama shapes).
 
+### Changed
+- TUI keys follow Claude Code: Esc closes a menu, then interrupts a turn, and clears a draft only on a second press; Ctrl+C copies a selection, else interrupts or clears the draft, and exits on a second press; Ctrl+X asks before quitting with a run or a draft.
+- The composer grows with its draft from 3 to 12 rows (at most a third of the window).
+- Long pastes collapse to `[Pasted text #N +X lines]`; the turn receives the whole text.
+- The transcript starts compact: commands and failed tools show 3 output lines under the tool line with `… +N lines (ctrl+o to expand)`, thinking collapses to `Thought for Ns`; Ctrl+O shows 40 output lines and the full reasoning instead of 8 trimmed lines.
+- Markdown in the TUI renders tables, quotes, rules, nested lists, links and `~~~` fences, and wraps long code lines instead of clipping them.
+- The context gauge uses the provider's reported prompt tokens once a step has run (an estimate is marked `ctx: ~`), and no longer repeats the model name.
+- A resumed session shows each tool call's label, real outcome and output preview.
+
 ### Fixed
 - A launch starts a fresh session instead of silently loading the newest saved one, so the model no longer resumes another project's pending work; switching agents only resumes a session from that agent's workspace, and `/new` clears the old transcript.
 - `send_channel` asks before sending a file from outside the workspace or a message to anyone but the caller.
