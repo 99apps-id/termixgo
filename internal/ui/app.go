@@ -2148,23 +2148,28 @@ func (m *Model) applyEvent(event agent.Event) {
 			last.reasoning += event.Text
 			return
 		}
-		m.blocks = append(m.blocks, block{kind: blockThinking, running: true, text: event.Text, reasoning: event.Text})
+		m.blocks = append(m.blocks, block{kind: blockThinking, running: true, text: event.Text, reasoning: event.Text, started: time.Now()})
 	case agent.EventReasoned:
 		// The closing event arrives after the whole stream, so answer text has
 		// already started and the thinking block is no longer the last one. It
-		// is found by scanning back for the open block instead: checking only
-		// the tail appended a duplicate thinking block below the answer, which
-		// is what read as the reasoning and the reply being swapped.
-		if target := m.lastOpenThinking(); target != nil {
+		// is found by scanning back for the block of this turn it has not yet
+		// updated: checking only the tail appended a duplicate thinking block
+		// below the answer, which is what read as the reasoning and the reply
+		// being swapped. The block was usually closed already, with its own
+		// duration, when the answer began; this only refines it.
+		if target := m.lastUnreasonedThinking(); target != nil {
 			target.running = false
 			target.finalized = true
-			target.seconds = event.ToolMillis / 1000
+			target.reasoned = true
+			if seconds := event.ToolMillis / 1000; seconds > 0 {
+				target.seconds = seconds
+			}
 			if strings.TrimSpace(event.Text) != "" {
 				target.reasoning = event.Text
 			}
 			return
 		}
-		m.blocks = append(m.blocks, block{kind: blockThinking, finalized: true, reasoning: event.Text, seconds: event.ToolMillis / 1000})
+		m.blocks = append(m.blocks, block{kind: blockThinking, finalized: true, reasoned: true, reasoning: event.Text, seconds: event.ToolMillis / 1000})
 	case agent.EventText:
 		m.turnStats.streamed += len(event.Text)
 		closeOpenThinking(m.blocks)
@@ -2314,6 +2319,22 @@ func (m *Model) lastOpenThinking() *block {
 	return nil
 }
 
+// lastUnreasonedThinking finds this turn's newest thinking block that the
+// closing EventReasoned has not updated yet. The search stops at the turn's
+// prompt, so a late event never lands on an earlier turn's reasoning.
+func (m *Model) lastUnreasonedThinking() *block {
+	for index := len(m.blocks) - 1; index >= 0; index-- {
+		item := &m.blocks[index]
+		if item.kind == blockUser {
+			return nil
+		}
+		if item.kind == blockThinking && !item.reasoned {
+			return item
+		}
+	}
+	return nil
+}
+
 func (m *Model) lastRunningTool(name string) *block {
 	for index := len(m.blocks) - 1; index >= 0; index-- {
 		item := &m.blocks[index]
@@ -2324,10 +2345,20 @@ func (m *Model) lastRunningTool(name string) *block {
 	return nil
 }
 
+// closeOpenThinking ends the reasoning when the answer or a tool starts. The
+// block is final from here, with the duration it measured itself, so the
+// inline layout can print it and the answer below it right away instead of
+// holding both until the closing EventReasoned arrives after the stream.
 func closeOpenThinking(blocks []block) {
 	for index := range blocks {
-		if blocks[index].kind == blockThinking {
-			blocks[index].running = false
+		item := &blocks[index]
+		if item.kind != blockThinking || !item.running {
+			continue
+		}
+		item.running = false
+		item.finalized = true
+		if item.seconds == 0 && !item.started.IsZero() {
+			item.seconds = int64(time.Since(item.started) / time.Second)
 		}
 	}
 }

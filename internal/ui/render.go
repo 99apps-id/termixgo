@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -46,6 +47,11 @@ type block struct {
 	// the rest of an answer whose start was printed, so it carries no marker.
 	streamed     int
 	continuation bool
+	// started is when a thinking block began, so it can be closed with its
+	// own duration as soon as the answer or a tool starts; reasoned marks the
+	// block the late EventReasoned already updated.
+	started  time.Time
+	reasoned bool
 
 	toolName   string
 	toolLabel  string
