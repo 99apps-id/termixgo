@@ -201,6 +201,11 @@ type Config struct {
 	Language      string       `json:"language"`
 	// Theme selects the terminal palette: dark (default) or light.
 	Theme string `json:"theme,omitempty"`
+	// TUILayout is "inline" (default: finished messages go to the terminal's
+	// own scrollback, as in Claude Code, so scrolling, selecting and copying
+	// are the terminal's) or "fullscreen" (the alternate screen with an
+	// in-app transcript and mouse selection).
+	TUILayout string `json:"tuiLayout,omitempty"`
 	// LSPServers overrides the language server for a file extension, for
 	// example {".py": ["pylsp"]}. An extension that is not listed uses the
 	// built-in choice.

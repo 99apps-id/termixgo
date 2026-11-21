@@ -138,6 +138,13 @@ type Model struct {
 	pastes   map[string]string
 	pasteSeq int
 
+	// inline selects the inline layout (see inline.go). printed counts the
+	// blocks already written to the scrollback and pendingPrint holds the
+	// rendered blocks waiting for the next update to print them.
+	inline       bool
+	printed      int
+	pendingPrint []string
+
 	slashMatches []SlashCommand
 	slashCursor  int
 
@@ -272,6 +279,11 @@ type Options struct {
 
 	// InitialPrompt starts the first turn immediately upon launch with this input.
 	InitialPrompt string
+
+	// Layout is "inline" or "fullscreen". Empty follows the configuration,
+	// which defaults to inline, for the real terminal; a caller that supplies
+	// its own Input or Output gets the fullscreen layout unless it asks.
+	Layout string
 }
 
 // composerHeight is the composer rows. Five fits a two-line prompt plus a
@@ -454,10 +466,25 @@ func (l *lockedWriter) Write(data []byte) (int, error) {
 // RunWithOptions starts the program with explicit options.
 func RunWithOptions(application *app.App, options Options) error {
 	model := NewWithOptions(application, options)
+	switch strings.ToLower(strings.TrimSpace(options.Layout)) {
+	case "inline":
+		model.inline = true
+	case "fullscreen":
+		model.inline = false
+	default:
+		model.inline = options.Input == nil && options.Output == nil && inlineLayout(application.Config())
+	}
 
-	programOptions := []tea.ProgramOption{tea.WithMouseCellMotion()}
-	if !options.NoAlternateScreen {
-		programOptions = append(programOptions, tea.WithAltScreen())
+	var programOptions []tea.ProgramOption
+	if model.inline {
+		// No alternate screen and no mouse capture: the terminal keeps its
+		// own scrollback, wheel and selection.
+		model.refresh()
+	} else {
+		programOptions = append(programOptions, tea.WithMouseCellMotion())
+		if !options.NoAlternateScreen {
+			programOptions = append(programOptions, tea.WithAltScreen())
+		}
 	}
 	if options.Input != nil {
 		programOptions = append(programOptions, tea.WithInput(options.Input))
@@ -594,7 +621,8 @@ func (m *Model) Init() tea.Cmd {
 	// eventMsg re-arms it, and startRun does not start another: two readers on
 	// one channel race, and the deltas of a turn are then applied out of order,
 	// which is what made the tail of an answer look scrambled.
-	cmds := []tea.Cmd{textarea.Blink, m.spin.Tick, tea.SetWindowTitle(m.windowTitle()), waitForEvent(m.app.Events())}
+	m.flushSettled()
+	cmds := []tea.Cmd{m.takePrints(textarea.Blink), m.spin.Tick, tea.SetWindowTitle(m.windowTitle()), waitForEvent(m.app.Events())}
 	if m.initialPrompt != "" {
 		prompt := m.initialPrompt
 		m.initialPrompt = ""
@@ -623,8 +651,18 @@ func (m *Model) windowTitle() string {
 	}
 }
 
-// Update implements tea.Model.
+// Update implements tea.Model. In the inline layout every update also prints
+// the blocks that became final into the scrollback.
 func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	updated, cmd := m.update(message)
+	if model, ok := updated.(*Model); ok && model.inline {
+		model.flushSettled()
+		return model, model.takePrints(cmd)
+	}
+	return updated, cmd
+}
+
+func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch typed := message.(type) {
 	case tea.WindowSizeMsg:
 		if typed.Width > 0 && typed.Height > 0 {
@@ -2225,6 +2263,12 @@ func (m *Model) refresh() {
 	if m.current == modeChat {
 		m.fitComposer()
 	}
+	if m.inline {
+		// The scrollback holds the finished transcript, so the in-app
+		// viewport is not rebuilt; the live area is rendered by View.
+		m.flushSettled()
+		return
+	}
 	blocks := m.blocks
 	if len(blocks) > transcriptWindowBlocks {
 		blocks = append([]block{{
@@ -2305,6 +2349,9 @@ func (m *Model) View() string {
 	}
 	if m.width < m.limits.MinWidth || m.height < m.limits.MinHeight {
 		return fmt.Sprintf("Terminal too small. Resize to at least %dx%d.", m.limits.MinWidth, m.limits.MinHeight)
+	}
+	if m.inline && m.current == modeChat {
+		return fitFrame(m.inlineView(), m.width, m.height)
 	}
 	return fitFrame(m.screen(), m.width, m.height)
 }

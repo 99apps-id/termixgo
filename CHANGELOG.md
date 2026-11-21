@@ -15,6 +15,7 @@ All notable changes to Termixgo are recorded here. The format follows
 - `/endpoint list|add|rm|models` manages several OpenAI-compatible servers from the TUI; `termixgo endpoint models <name>` fetches a server's model list from `GET /models` (OpenAI and Ollama shapes).
 
 ### Changed
+- The TUI runs inline by default, as Claude Code does: finished messages are printed once into the terminal's own scrollback and only the turn in flight, the status line and the composer are redrawn, with no alternate screen and no mouse capture, so the terminal's scrolling, selection and copy work. `"tuiLayout": "fullscreen"` or `TERMIXGO_FULLSCREEN=1` restores the previous full-screen layout. In the inline layout Ctrl+O affects what has not been printed yet.
 - TUI keys follow Claude Code: Esc closes a menu, then interrupts a turn, and clears a draft only on a second press; Ctrl+C copies a selection, else interrupts or clears the draft, and exits on a second press; Ctrl+X asks before quitting with a run or a draft.
 - The composer grows with its draft from 3 to 12 rows (at most a third of the window).
 - Long pastes collapse to `[Pasted text #N +X lines]`; the turn receives the whole text.
