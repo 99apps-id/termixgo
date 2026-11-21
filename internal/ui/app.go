@@ -915,6 +915,15 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		return m.handleMouse(typed)
 
+	case animationTickMsg:
+		// The live area is rendered from the blocks on every View, so a tick
+		// is all the shimmer and the spinner glyph need to move. It stops
+		// with the turn.
+		if m.running && m.inline {
+			return m, animationTick()
+		}
+		return m, nil
+
 	case scrollTickMsg:
 		m.stepScroll()
 		if m.viewport.YOffset == m.scrollTarget {
@@ -2109,7 +2118,12 @@ func (m *Model) startRunWith(display, prompt string, images []provider.Image) (t
 	// The single event reader from Init (re-armed by each eventMsg) keeps
 	// draining the channel; starting another here would make two readers fight
 	// over the stream and reorder its deltas.
-	return m, tea.Batch(m.spin.Tick, tick(), tea.SetWindowTitle(m.windowTitle()))
+	cmds := []tea.Cmd{m.spin.Tick, tick(), tea.SetWindowTitle(m.windowTitle())}
+	if m.inline {
+		// The inline live area animates on its own faster tick.
+		cmds = append(cmds, animationTick())
+	}
+	return m, tea.Batch(cmds...)
 }
 
 // waitForEvent reads one agent event off the channel.

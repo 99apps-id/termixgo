@@ -64,7 +64,7 @@ func (m *Model) activityLine() string {
 	details = append(details, "esc to interrupt")
 	verb := m.activityVerb() + "…"
 	line := m.styles.Plan.Render(activityGlyph(time.Now())) + " " +
-		shimmerWith(verb, m.styles.Plan, shimmerFrame()) + " " +
+		shimmerGradient(verb, m.styles.Plan, shimmerPeak(m.styles), shimmerFrame()) + " " +
 		m.styles.Dim.Render("("+strings.Join(details, " · ")+")")
 	return truncateANSI(line, m.renderWidth())
 }
