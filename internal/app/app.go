@@ -741,6 +741,20 @@ func (a *App) Session() *agent.Session {
 	return a.session
 }
 
+// RewindLastTurn drops the most recent user turn and any replies after it from
+// the live session, persists the session, and returns the popped user prompt.
+func (a *App) RewindLastTurn() (string, bool, error) {
+	session := a.Session()
+	if session == nil {
+		return "", false, nil
+	}
+	prompt, ok := session.PopLastTurn()
+	if !ok {
+		return "", false, nil
+	}
+	return prompt, true, session.Save()
+}
+
 // currentSession is the unlocked read used from inside a turn, where the
 // caller has already decided the session cannot be swapped underneath it.
 func (a *App) currentSession() *agent.Session {

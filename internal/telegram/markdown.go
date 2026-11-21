@@ -7,16 +7,16 @@ import (
 )
 
 var (
-	codeSpanPattern     = regexp.MustCompile("`([^`\n]+)`")
-	boldItalicPattern   = regexp.MustCompile(`\*\*\*([^*\n]+)\*\*\*`)
-	boldPattern         = regexp.MustCompile(`\*\*([^*\n]+)\*\*`)
-	underscoreBold      = regexp.MustCompile(`__([^_\n]+)__`)
-	italicAsterisk      = regexp.MustCompile(`\*([^\s*](?:[^*\n]*?[^\s*])?)\*`)
-	italicUnderscore    = regexp.MustCompile(`\b_([^_]+)_\b`)
-	strikePattern       = regexp.MustCompile(`~~([^~\n]+)~~`)
-	linkPattern         = regexp.MustCompile(`\[([^\]\n]+)\]\(([^)\s]+)\)`)
-	tableRowPattern     = regexp.MustCompile(`^\|?[ \t]*([^|\r\n]+(?:[ \t]*\|[ \t]*[^|\r\n]+)*)\|?[ \t]*$`)
-	tableCellSplitter   = regexp.MustCompile(`[ \t]*\|[ \t]*`)
+	codeSpanPattern   = regexp.MustCompile("`([^`\n]+)`")
+	boldItalicPattern = regexp.MustCompile(`\*\*\*([^*\n]+)\*\*\*`)
+	boldPattern       = regexp.MustCompile(`\*\*([^*\n]+)\*\*`)
+	underscoreBold    = regexp.MustCompile(`__([^_\n]+)__`)
+	italicAsterisk    = regexp.MustCompile(`\*([^\s*](?:[^*\n]*?[^\s*])?)\*`)
+	italicUnderscore  = regexp.MustCompile(`\b_([^_]+)_\b`)
+	strikePattern     = regexp.MustCompile(`~~([^~\n]+)~~`)
+	linkPattern       = regexp.MustCompile(`\[([^\]\n]+)\]\(([^)\s]+)\)`)
+	tableRowPattern   = regexp.MustCompile(`^\|?[ \t]*([^|\r\n]+(?:[ \t]*\|[ \t]*[^|\r\n]+)*)\|?[ \t]*$`)
+	tableCellSplitter = regexp.MustCompile(`[ \t]*\|[ \t]*`)
 )
 
 // markdownToTelegramHTML renders a small, deliberate subset of Markdown as the

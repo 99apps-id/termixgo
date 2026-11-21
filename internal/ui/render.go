@@ -65,13 +65,29 @@ type block struct {
 
 // transcript renders a sequence of blocks at a width. When showDetails is
 // false the thinking and tool blocks are collapsed to a single status line,
-// keeping the transcript focused on the conversation.
+// and consecutive finished read/search tool blocks are grouped into one
+// summary line, keeping the transcript focused on the conversation.
 func transcript(blocks []block, styles Styles, width int, showDetails bool) string {
 	if width < 24 {
 		width = 24
 	}
 	parts := make([]string, 0, len(blocks))
-	for _, item := range blocks {
+	for i := 0; i < len(blocks); {
+		if !showDetails && isCompactGroupableTool(blocks[i]) {
+			j := i + 1
+			for j < len(blocks) && isCompactGroupableTool(blocks[j]) {
+				j++
+			}
+			if j-i >= 2 {
+				if grouped := renderToolGroup(blocks[i:j], styles, width); strings.TrimSpace(grouped) != "" {
+					parts = append(parts, grouped)
+				}
+				i = j
+				continue
+			}
+		}
+		item := blocks[i]
+		i++
 		// Model and tool text can carry terminal control characters. They are
 		// dropped before any styling so the terminal never obeys a sequence the
 		// agent happened to print, which is what scrambled the frame.
@@ -91,6 +107,75 @@ func transcript(blocks []block, styles Styles, width int, showDetails bool) stri
 	}
 	// A blank line between blocks keeps the transcript readable.
 	return strings.Join(parts, "\n\n")
+}
+
+func isCompactGroupableTool(item block) bool {
+	if item.kind != blockTool || item.running || !item.toolOK {
+		return false
+	}
+	if item.preview != "" || strings.TrimSpace(item.toolOutput) != "" {
+		return false
+	}
+	switch item.toolName {
+	case "read_file", "read_document", "read_image",
+		"list_directory",
+		"grep", "glob", "code_outline", "symbol_search", "symbol_references", "search_memory",
+		"web_search", "web_fetch", "lookup":
+		return true
+	default:
+		return false
+	}
+}
+
+func renderToolGroup(items []block, styles Styles, width int) string {
+	var reads, lists, searches, web int
+	for _, item := range items {
+		switch item.toolName {
+		case "read_file", "read_document", "read_image":
+			reads++
+		case "list_directory":
+			lists++
+		case "grep", "glob", "code_outline", "symbol_search", "symbol_references", "search_memory":
+			searches++
+		case "web_search", "web_fetch", "lookup":
+			web++
+		}
+	}
+	var segments []string
+	if reads > 0 {
+		segments = append(segments, pluralCount(reads, "read", "file", "files"))
+	}
+	if searches > 0 {
+		segments = append(segments, pluralCount(searches, "searched", "pattern", "patterns"))
+	}
+	if lists > 0 {
+		segments = append(segments, pluralCount(lists, "listed", "dir", "dirs"))
+	}
+	if web > 0 {
+		segments = append(segments, pluralCount(web, "checked", "source", "sources"))
+	}
+	summary := strings.Join(segments, ", ")
+	if summary != "" {
+		summary = strings.ToUpper(summary[:1]) + summary[1:]
+	} else {
+		summary = fmt.Sprintf("Ran %d read tools", len(items))
+	}
+	line := truncate("  + "+summary+" (ctrl+o to expand)", width)
+	hintIdx := strings.LastIndex(line, " (ctrl+o to expand)")
+	if hintIdx > 0 {
+		head := line[:hintIdx]
+		tail := line[hintIdx:]
+		return styles.ToolDone.Render(head) + styles.Dim.Render(tail)
+	}
+	return styles.ToolDone.Render(line)
+}
+
+func pluralCount(n int, verb, singular, plural string) string {
+	unit := singular
+	if n != 1 {
+		unit = plural
+	}
+	return fmt.Sprintf("%s %d %s", verb, n, unit)
 }
 
 func renderBlock(item block, styles Styles, width int, showDetails bool) string {

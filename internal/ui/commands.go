@@ -152,6 +152,8 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m.slashPermissions(args)
 	case "rename":
 		return m.slashRename(args)
+	case "transcript":
+		return m.slashTranscript()
 	case "status":
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: m.app.Status()})
 		m.refresh()

@@ -217,6 +217,8 @@ func (m *Model) applyPickerChoice(action string, item pickerItem) (tea.Model, te
 		m.app.LoadSession(session)
 		m.restoreSession(session)
 		return m, m.enterChat()
+	case "rewind":
+		return m.applyRewindChoice(item.ID)
 	case "setup-provider":
 		m.setup.providerID = item.ID
 		m.setup.message = ""

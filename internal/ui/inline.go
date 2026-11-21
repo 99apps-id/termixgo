@@ -42,8 +42,39 @@ func (m *Model) settledCount() int {
 		if index == total-1 || item.running || (item.kind == blockThinking && !item.finalized) {
 			return index
 		}
+		if !m.showDetails && isCompactGroupableTool(item) && allTrailingGroupableTools(m.blocks[index+1:]) {
+			return index
+		}
 	}
 	return total
+}
+
+func allTrailingGroupableTools(tail []block) bool {
+	if len(tail) == 0 {
+		return false
+	}
+	for _, item := range tail {
+		if item.kind != blockTool {
+			return false
+		}
+		if item.running {
+			// A running read/search tool may finish and join this group; a
+			// running mutating tool will not, so let earlier reads settle.
+			switch item.toolName {
+			case "read_file", "read_document", "read_image",
+				"list_directory",
+				"grep", "glob", "code_outline", "symbol_search", "symbol_references", "search_memory",
+				"web_search", "web_fetch", "lookup":
+				continue
+			default:
+				return false
+			}
+		}
+		if !isCompactGroupableTool(item) {
+			return false
+		}
+	}
+	return true
 }
 
 // flushSettled queues every newly final block for printing into the
@@ -62,11 +93,25 @@ func (m *Model) flushSettled() {
 		return
 	}
 	hide := m.app != nil && !m.app.Config().ShowReasoning
-	for ; m.printed < end; m.printed++ {
-		rendered := transcript(hideReasoning(m.blocks[m.printed:m.printed+1], hide), m.styles, m.width, m.showDetails)
-		if strings.TrimSpace(rendered) != "" {
-			m.pendingPrint = append(m.pendingPrint, rendered)
+	slice := m.blocks[m.printed:end]
+	if m.running {
+		filtered := make([]block, 0, len(slice))
+		for _, item := range slice {
+			// While a turn is running, the live plan stays pinned above the
+			// status bar rather than scrolling away mid-turn.
+			if item.kind != blockPlan {
+				filtered = append(filtered, item)
+			}
 		}
+		slice = filtered
+	}
+	m.printed = end
+	if len(slice) == 0 {
+		return
+	}
+	rendered := transcript(hideReasoning(slice, hide), m.styles, m.width, m.showDetails)
+	if strings.TrimSpace(rendered) != "" {
+		m.pendingPrint = append(m.pendingPrint, rendered)
 	}
 }
 
@@ -84,9 +129,8 @@ func (m *Model) takePrints(cmd tea.Cmd) tea.Cmd {
 	return tea.Sequence(tea.Println(text), cmd)
 }
 
-// inlineView renders the live area: the blocks not yet printed, the status
-// line and the composer or the open overlay. The live blocks keep their
-// newest lines when they would not fit.
+// inlineView renders the live area: the blocks not yet printed, the pinned live
+// plan (if any), the status line and the composer or the open overlay.
 func (m *Model) inlineView() string {
 	overlay := ""
 	switch {
@@ -94,12 +138,22 @@ func (m *Model) inlineView() string {
 		overlay = m.viewApproval()
 	case m.pendingAsk != nil:
 		overlay = m.viewAsk()
+	case m.historySearchActive:
+		overlay = m.viewHistorySearch()
 	case m.slashMenuOpen():
 		overlay = m.viewSlashMenu()
 	case len(m.mentionMatches) > 0:
 		overlay = m.viewMentionMenu()
 	}
-	bottom := []string{m.viewStatus()}
+	var bottom []string
+	if m.running && m.app != nil {
+		if todos := m.app.Todos().Items(); len(todos) > 0 {
+			if planView := strings.TrimSpace(renderPlanBlock(block{kind: blockPlan, plan: todos}, m.styles, m.width)); planView != "" {
+				bottom = append(bottom, planView)
+			}
+		}
+	}
+	bottom = append(bottom, m.viewStatus())
 	if overlay != "" {
 		bottom = append(bottom, overlay)
 	} else {
@@ -110,7 +164,17 @@ func (m *Model) inlineView() string {
 	var sections []string
 	if m.printed < len(m.blocks) {
 		hide := m.app != nil && !m.app.Config().ShowReasoning
-		live := transcript(hideReasoning(m.blocks[m.printed:], hide), m.styles, m.width, m.showDetails)
+		liveBlocks := m.blocks[m.printed:]
+		if m.running {
+			filtered := make([]block, 0, len(liveBlocks))
+			for _, item := range liveBlocks {
+				if item.kind != blockPlan {
+					filtered = append(filtered, item)
+				}
+			}
+			liveBlocks = filtered
+		}
+		live := transcript(hideReasoning(liveBlocks, hide), m.styles, m.width, m.showDetails)
 		if strings.TrimSpace(live) != "" {
 			lines := strings.Split(live, "\n")
 			budget := m.height - lipgloss.Height(bottomText) - 1

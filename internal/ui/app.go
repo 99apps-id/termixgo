@@ -130,7 +130,10 @@ type Model struct {
 	// escArmedAt is when an Escape on a non-empty draft asked for a second
 	// one. Only a second Escape inside escDoubleWindow clears the draft, so a
 	// stray press never throws away what the operator typed.
-	escArmedAt time.Time
+	// escRewindArmedAt is the same double-Esc window on an empty composer to
+	// open the rewind/edit menu for the last user turn.
+	escArmedAt       time.Time
+	escRewindArmedAt time.Time
 	// quitArmedAt and quitKey record a first Ctrl+C or Ctrl+X that asked for
 	// confirmation; the same key again inside quitWindow quits.
 	quitArmedAt time.Time
@@ -150,8 +153,16 @@ type Model struct {
 
 	// history is the input history Up and Down walk; turnStats measures the
 	// turn in flight for the summary shown when it ends.
-	history   *promptHistory
-	turnStats turnStats
+	history             *promptHistory
+	historySearchActive bool
+	historySearchQuery  string
+	historySearchDraft  string
+	historySearchCursor int
+	turnStats           turnStats
+
+	// transcriptSearch holds optional "/" search state inside the Ctrl+O viewer.
+	transcriptSearchOpen  bool
+	transcriptSearchQuery string
 
 	slashMatches []SlashCommand
 	slashCursor  int
@@ -802,7 +813,7 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var doneCmd tea.Cmd
 		if elapsed >= bellAfter {
-			doneCmd = bell()
+			doneCmd = notifyTurnDone(elapsed)
 		}
 		// Anything the finished turn never took becomes the next input, in the
 		// order it was typed, so a steer that arrived too late still runs.
@@ -845,8 +856,8 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.approvalReply = typed.reply
 		m.approvalCursor = 0
 		m.refresh()
-		// A waiting approval holds the whole turn, so it rings the bell.
-		return m, tea.Batch(tea.SetWindowTitle(m.windowTitle()), bell())
+		// A waiting approval holds the whole turn, so it rings the bell and sends a toast.
+		return m, tea.Batch(tea.SetWindowTitle(m.windowTitle()), notifyApproval(request))
 
 	case askRequestMsg:
 		m.pendingAsk = &typed
@@ -1131,8 +1142,20 @@ func (m *Model) settleEscape() (*Model, tea.Cmd) {
 		return m, nil
 	}
 	if strings.TrimSpace(m.composer.Value()) == "" {
+		if !m.hasRewindableTurn() {
+			return m, nil
+		}
+		if time.Since(m.escRewindArmedAt) < escDoubleWindow {
+			m.escRewindArmedAt = time.Time{}
+			m.notice = ""
+			return m.openRewindMenu()
+		}
+		m.escRewindArmedAt = time.Now()
+		m.notice = "Press Esc again to edit or rewind the last message"
+		m.refresh()
 		return m, nil
 	}
+	m.escRewindArmedAt = time.Time{}
 	if time.Since(m.escArmedAt) < escDoubleWindow {
 		m.escArmedAt = time.Time{}
 		m.composer.SetValue("")
@@ -1310,6 +1333,9 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.slashOpen && key.String() != "esc" {
 		return m.handleSlashMenuKey(key)
 	}
+	if m.historySearchActive {
+		return m.handleHistorySearchKey(key)
+	}
 
 	// A terminal delivers a dragged image file as a bracketed paste of its
 	// path. Attaching it, rather than typing the path, is what makes drag and
@@ -1357,6 +1383,8 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+y":
 		return m.slashCopy("")
+	case "ctrl+r":
+		return m.openHistorySearch()
 	case "shift+tab":
 		return m.cycleApproval()
 	case "ctrl+o":
@@ -1402,84 +1430,7 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.escPending = true
 		return m, tea.Tick(escSettleDelay, func(time.Time) tea.Msg { return settleEscMsg{} })
 	case "enter":
-		raw := m.composer.Value()
-		value := strings.TrimSpace(raw)
-		if value == "" {
-			return m, nil
-		}
-		if m.history != nil && value != "/" {
-			m.history.add(value)
-		}
-		// A leading exclamation mark runs a local workspace shell command directly,
-		// matching OpenClaw and CommandCode (!cmd). A lone "!" is treated as text.
-		if strings.HasPrefix(value, "!") && len(value) > 1 {
-			m.composer.SetValue("")
-			m.slashMatches = nil
-			m.mentionMatches = nil
-			command := m.expandPastes(strings.TrimSpace(strings.TrimPrefix(value, "!")))
-			m.forgetPastes(value)
-			return m.runLocalCommand(command)
-		}
-		// A bare slash committed with Enter opens the command palette. A slash
-		// anywhere else is ordinary text, so typing a path such as c:/project
-		// or reading /home/user stays in the composer instead of being pulled
-		// into the menu.
-		if value == "/" {
-			m.openSlashMenu()
-			return m, nil
-		}
-		// Accept a unique slash completion: typing "/stat" and pressing Enter
-		// runs /status, not reports an unknown command. An exact trigger and
-		// text with arguments pass through untouched. No menu is on screen, so
-		// the match is computed here on demand.
-		if !strings.Contains(value, " ") && strings.HasPrefix(value, "/") {
-			if _, ok := FindSlash(value); !ok {
-				if matches := MatchSlash(value); len(matches) > 0 {
-					value = matches[0].Trigger
-				}
-			}
-		}
-		// A bare command with a closed argument set opens its choices instead of
-		// running the no-argument form, so "/approval" and "/harness" let the
-		// operator pick a mode rather than only printing the current one. The
-		// picker keeps a "(no argument)" row for the bare form, and a command
-		// typed with arguments still runs as before.
-		if strings.Count(value, " ") == 0 && strings.HasPrefix(value, "/") {
-			name := strings.TrimPrefix(value, "/")
-			if _, ok := FindSlash(name); ok && len(SlashOptions(name)) > 0 {
-				m.composer.SetValue(slashTrigger(name) + " ")
-				m.slashMatches = nil
-				m.mentionMatches = nil
-				return m.openSlashArgs(name)
-			}
-		}
-		if slashName, _, ok := ParseSlash(value); ok {
-			// Only free text can steer a running turn. A slash command is a
-			// local control, so sending it to the model as prose is wrong: the
-			// operator typed /cost and the agent read the literal text "/cost".
-			// A command that must act on the live turn runs at once, a read-only
-			// one runs at once because it cannot disturb the turn, and anything
-			// that starts work behind it is queued for the drain.
-			if m.running {
-				if liveSlashCommand(slashName) {
-					m.composer.SetValue("")
-					m.slashMatches = nil
-					m.mentionMatches = nil
-					return m.submit(value)
-				}
-				m.composer.SetValue("")
-				m.slashMatches = nil
-				m.mentionMatches = nil
-				return m.enqueue(value)
-			}
-		}
-		if m.running {
-			return m.enqueue(value)
-		}
-		m.composer.SetValue("")
-		m.slashMatches = nil
-		m.mentionMatches = nil
-		return m.submit(value)
+		return m.submitComposerValue(m.composer.Value())
 	case "up":
 		if len(m.mentionMatches) > 0 {
 			m.mentionCursor = (m.mentionCursor - 1 + len(m.mentionMatches)) % len(m.mentionMatches)
@@ -1573,6 +1524,90 @@ var approvalOptions = []struct {
 	{"s", "allow session", agent.DecisionAllowSession},
 	{"a", "always", agent.DecisionAllowAlways},
 	{"n", "deny", agent.DecisionDeny},
+}
+
+// submitComposerValue dispatches text from either the composer Enter key or
+// Ctrl+R history search confirmation.
+func (m *Model) submitComposerValue(raw string) (tea.Model, tea.Cmd) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return m, nil
+	}
+	m.escArmedAt = time.Time{}
+	m.escRewindArmedAt = time.Time{}
+	if m.history != nil && value != "/" {
+		m.history.add(value)
+	}
+	// A leading exclamation mark runs a local workspace shell command directly,
+	// matching OpenClaw and CommandCode (!cmd). A lone "!" is treated as text.
+	if strings.HasPrefix(value, "!") && len(value) > 1 {
+		m.composer.SetValue("")
+		m.slashMatches = nil
+		m.mentionMatches = nil
+		command := m.expandPastes(strings.TrimSpace(strings.TrimPrefix(value, "!")))
+		m.forgetPastes(value)
+		return m.runLocalCommand(command)
+	}
+	// A bare slash committed with Enter opens the command palette. A slash
+	// anywhere else is ordinary text, so typing a path such as c:/project
+	// or reading /home/user stays in the composer instead of being pulled
+	// into the menu.
+	if value == "/" {
+		m.openSlashMenu()
+		return m, nil
+	}
+	// Accept a unique slash completion: typing "/stat" and pressing Enter
+	// runs /status, not reports an unknown command. An exact trigger and
+	// text with arguments pass through untouched. No menu is on screen, so
+	// the match is computed here on demand.
+	if !strings.Contains(value, " ") && strings.HasPrefix(value, "/") {
+		if _, ok := FindSlash(value); !ok {
+			if matches := MatchSlash(value); len(matches) > 0 {
+				value = matches[0].Trigger
+			}
+		}
+	}
+	// A bare command with a closed argument set opens its choices instead of
+	// running the no-argument form, so "/approval" and "/harness" let the
+	// operator pick a mode rather than only printing the current one. The
+	// picker keeps a "(no argument)" row for the bare form, and a command
+	// typed with arguments still runs as before.
+	if strings.Count(value, " ") == 0 && strings.HasPrefix(value, "/") {
+		name := strings.TrimPrefix(value, "/")
+		if _, ok := FindSlash(name); ok && len(SlashOptions(name)) > 0 {
+			m.composer.SetValue(slashTrigger(name) + " ")
+			m.slashMatches = nil
+			m.mentionMatches = nil
+			return m.openSlashArgs(name)
+		}
+	}
+	if slashName, _, ok := ParseSlash(value); ok {
+		// Only free text can steer a running turn. A slash command is a
+		// local control, so sending it to the model as prose is wrong: the
+		// operator typed /cost and the agent read the literal text "/cost".
+		// A command that must act on the live turn runs at once, a read-only
+		// one runs at once because it cannot disturb the turn, and anything
+		// that starts work behind it is queued for the drain.
+		if m.running {
+			if liveSlashCommand(slashName) {
+				m.composer.SetValue("")
+				m.slashMatches = nil
+				m.mentionMatches = nil
+				return m.submit(value)
+			}
+			m.composer.SetValue("")
+			m.slashMatches = nil
+			m.mentionMatches = nil
+			return m.enqueue(value)
+		}
+	}
+	if m.running {
+		return m.enqueue(value)
+	}
+	m.composer.SetValue("")
+	m.slashMatches = nil
+	m.mentionMatches = nil
+	return m.submit(value)
 }
 
 // handleSlashMenuKey keeps slash keystrokes in the popup instead of the
@@ -2480,6 +2515,8 @@ func (m *Model) screen() string {
 		overlay = m.viewApproval()
 	case m.pendingAsk != nil:
 		overlay = m.viewAsk()
+	case m.historySearchActive:
+		overlay = m.viewHistorySearch()
 	case m.slashMenuOpen():
 		overlay = m.viewSlashMenu()
 	case len(m.mentionMatches) > 0:
@@ -2763,7 +2800,7 @@ func (m *Model) applyComposerStyle() {
 // away, so the status line has to know whether it is still there.
 func (m *Model) hintsVisible() bool {
 	return m.pendingApproval == nil && m.pendingAsk == nil &&
-		!m.slashMenuOpen() && len(m.mentionMatches) == 0
+		!m.historySearchActive && !m.slashMenuOpen() && len(m.mentionMatches) == 0
 }
 
 func (m *Model) viewHints() string {
@@ -2776,7 +2813,7 @@ func (m *Model) viewHints() string {
 			text = fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C copy | Ctrl+X quit", m.spin.View(), elapsed)
 		}
 	} else {
-		text = " Enter send | Up history | Shift+Tab " + string(m.appConfig().ApprovalMode) + " | Ctrl+V image | Ctrl+O transcript | Ctrl+L model | Ctrl+P session | !cmd exec | Ctrl+X quit"
+		text = " Enter send | Up history | Ctrl+R search | Shift+Tab " + string(m.appConfig().ApprovalMode) + " | Esc×2 rewind | Ctrl+O transcript | Ctrl+L model | Ctrl+X quit"
 	}
 	// Pending files own the first columns of the hint row: what will be sent
 	// matters more than the key reminder, and the row never grows, so the
@@ -3065,8 +3102,8 @@ func (m *Model) viewHelp() string {
 	header := []string{m.styles.BoxTitle.Render("Commands"), ""}
 	keys := []string{
 		"", m.styles.BoxTitle.Render("Keys"), "",
-		m.styles.MenuDesc.Render("  Enter send | !<cmd> exec | Ctrl+J newline | Up/Down history | Shift+Tab approval mode | Ctrl+V/Alt+V paste image | Tab complete"),
-		m.styles.MenuDesc.Render("  Ctrl+L model | Ctrl+P session | Ctrl+G agent | Ctrl+T think | Ctrl+O details | Ctrl+C copy | Ctrl+X quit"),
+		m.styles.MenuDesc.Render("  Enter send | !<cmd> exec | Ctrl+J newline | Up/Down history | Ctrl+R search | Shift+Tab approval | Esc×2 clear/rewind | Tab complete"),
+		m.styles.MenuDesc.Render("  Ctrl+L model | Ctrl+P session | Ctrl+G agent | Ctrl+T think | Ctrl+O transcript/details | Ctrl+V/Alt+V image | Ctrl+C copy | Ctrl+X quit"),
 	}
 	trailer := []string{m.styles.Hint.Render(fmt.Sprintf("Press any key to close. %d commands in total.", len(entries)))}
 

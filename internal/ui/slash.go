@@ -62,6 +62,7 @@ var slashCommands = []SlashCommand{
 		{Value: "export", Detail: "print one session as Markdown", Complete: true},
 	}},
 	{Trigger: "/rename", Args: "<title>", Summary: "Rename the current session"},
+	{Trigger: "/transcript", Args: "", Summary: "Open the full scrollable transcript with thinking and tool output"},
 	{Trigger: "/context", Args: "", Summary: "Show what fills the context window, part by part"},
 	{Trigger: "/layout", Args: "[inline|fullscreen]", Summary: "Switch between the inline and the full-screen layout", Options: []SlashOption{
 		{Value: "inline", Detail: "finished messages go to the terminal scrollback"},

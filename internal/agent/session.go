@@ -504,6 +504,56 @@ func (s *Session) Reset() {
 	s.mu.Unlock()
 }
 
+const toolImageBridgeText = "Image data read by the tools above is attached for you to see."
+
+func isRealUserTurn(msg provider.Message) bool {
+	if msg.Role != provider.RoleUser {
+		return false
+	}
+	if strings.HasPrefix(msg.Content, summaryPrefix) {
+		return false
+	}
+	if msg.Content == toolImageBridgeText {
+		return false
+	}
+	return true
+}
+
+// LastUserPrompt returns the most recent operator-authored user message, if any.
+func (s *Session) LastUserPrompt() (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.messages) - 1; i >= 0; i-- {
+		if strings.HasPrefix(s.messages[i].Content, summaryPrefix) {
+			return "", false
+		}
+		if isRealUserTurn(s.messages[i]) {
+			return s.messages[i].Content, true
+		}
+	}
+	return "", false
+}
+
+// PopLastTurn removes the most recent user turn and every assistant/tool
+// message after it, returning the popped user prompt so the UI can load it
+// back into the composer for editing.
+func (s *Session) PopLastTurn() (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.messages) - 1; i >= 0; i-- {
+		if strings.HasPrefix(s.messages[i].Content, summaryPrefix) {
+			return "", false
+		}
+		if isRealUserTurn(s.messages[i]) {
+			prompt := s.messages[i].Content
+			s.messages = s.messages[:i]
+			s.updatedAt = time.Now()
+			return prompt, true
+		}
+	}
+	return "", false
+}
+
 // summaryPrefix marks a brief that stands in for turns which are no longer in
 // the history. The model has to know the text is a record, not a fresh
 // instruction, or a summary of an old request reads as a new one.
