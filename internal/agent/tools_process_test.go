@@ -19,9 +19,12 @@ import (
 func backgroundEnv(t *testing.T) *Env {
 	t.Helper()
 	manager := newTestManager()
-	t.Cleanup(manager.Shutdown)
 
 	workspace := t.TempDir()
+	// Registered after the temp directory on purpose: cleanups run last in
+	// first out, and a child still holding the workspace as its working
+	// directory makes the removal fail on Windows.
+	t.Cleanup(manager.Shutdown)
 	return &Env{Workspace: workspace, Processes: manager, Trusted: true}
 }
 

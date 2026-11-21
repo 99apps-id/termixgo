@@ -10,9 +10,23 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 var pngBytes = []byte("\x89PNG\r\n\x1a\nfakeimagedata")
+
+// TestShortenKeepsValidUTF8 pins the cut to a character boundary. A byte
+// offset that lands inside a multi-byte rune produces invalid UTF-8, which a
+// provider rejects and a terminal paints as a replacement glyph.
+func TestShortenKeepsValidUTF8(t *testing.T) {
+	text := "Kesalahan: 日本語のドキュメントが読めません"
+	for limit := 1; limit < 40; limit++ {
+		got := shorten(text, limit)
+		if !utf8.ValidString(got) {
+			t.Fatalf("shorten(%d) = %q, which is not valid UTF-8", limit, got)
+		}
+	}
+}
 
 type recorded struct {
 	path string

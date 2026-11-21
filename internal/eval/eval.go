@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/app"
@@ -464,8 +465,23 @@ func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	if max <= 3 {
-		return s[:max]
+	if max <= 0 {
+		return ""
 	}
-	return s[:max-3] + "..."
+	if max <= 3 {
+		return s[:backToRune(s, max)]
+	}
+	return s[:backToRune(s, max-3)] + "..."
+}
+
+// backToRune walks a byte offset back to the start of a character, so a cut
+// never lands inside a multi-byte rune.
+func backToRune(s string, cut int) int {
+	if cut > len(s) {
+		cut = len(s)
+	}
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return cut
 }

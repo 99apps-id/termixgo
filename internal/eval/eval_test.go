@@ -7,9 +7,26 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/99apps-id/termixgo/internal/app"
 )
+
+// TestTruncateKeepsValidUTF8 pins the cut to a character boundary. A byte
+// offset inside a multi-byte rune yields invalid UTF-8, which a report or a
+// terminal then renders as a replacement glyph.
+func TestTruncateKeepsValidUTF8(t *testing.T) {
+	text := "laporan: 日本語のドキュメントが読めません"
+	for limit := 0; limit < 40; limit++ {
+		got := truncate(text, limit)
+		if !utf8.ValidString(got) {
+			t.Fatalf("truncate(%d) = %q, which is not valid UTF-8", limit, got)
+		}
+		if len(got) > limit+3 {
+			t.Fatalf("truncate(%d) returned %d bytes, over the bound", limit, len(got))
+		}
+	}
+}
 
 func TestBuiltinSuiteHasValidTasks(t *testing.T) {
 	suite := BuiltinSuite()

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // ImageRequest asks for one or more images.
@@ -315,5 +316,12 @@ func shorten(text string, limit int) string {
 	if len(text) <= limit {
 		return text
 	}
-	return text[:limit] + "..."
+	if limit <= 0 {
+		return ""
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "..."
 }

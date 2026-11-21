@@ -94,7 +94,7 @@ func (t *readDocumentTool) Run(ctx context.Context, env *Env, args map[string]an
 	}
 
 	if len(content) > maxChars {
-		content = content[:maxChars] + fmt.Sprintf("\n... [truncated to %d characters; total %d]", maxChars, len(content))
+		content = clipBytes(content, maxChars) + fmt.Sprintf("\n... [truncated to %d bytes; total %d]", maxChars, len(content))
 	}
 	return Result{Output: content}, nil
 }
