@@ -67,6 +67,12 @@ var slashCommands = []SlashCommand{
 		{Value: "refresh", Detail: "refetch official usage from the provider"},
 	}},
 	{Trigger: "/cd", Args: "[path]", Summary: "Show or change the current folder", Options: []SlashOption{}},
+	{Trigger: "/endpoint", Args: "[list|add|rm|models]", Summary: "Manage OpenAI-compatible endpoints (several servers side by side)", Options: []SlashOption{
+		{Value: "list", Detail: "show every endpoint with its URL, key and models"},
+		{Value: "add", Detail: "register one, then type: <name> <url> [key]", Complete: true},
+		{Value: "models", Detail: "fetch the models an endpoint serves", Complete: true},
+		{Value: "rm", Detail: "remove an endpoint with its key and models", Complete: true},
+	}},
 	{Trigger: "/trust", Args: "[on|off]", Summary: "Show or change folder trust", Options: []SlashOption{
 		{Value: "on", Detail: "writes and commands run without asking"},
 		{Value: "off", Detail: "every mutating tool asks first"},

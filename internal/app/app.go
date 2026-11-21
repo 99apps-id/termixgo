@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -551,10 +552,17 @@ func (a *App) guessProvider(modelID string) string {
 	if a.store != nil && provider.KeySource(a.store, "openai-compatible") != "" {
 		return "openai-compatible"
 	}
+	// Several named endpoints: take the first by name. Ranging over the map
+	// picked a different endpoint from one run to the next.
+	named := make([]string, 0, len(a.cfg.BaseURLs))
 	for id, endpoint := range a.cfg.BaseURLs {
 		if provider.IsCompatible(id) && id != provider.CompatibleID && strings.TrimSpace(endpoint) != "" {
-			return id
+			named = append(named, id)
 		}
+	}
+	if len(named) > 0 {
+		sort.Strings(named)
+		return named[0]
 	}
 	if a.store != nil {
 		for _, info := range provider.Providers() {

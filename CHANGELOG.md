@@ -4,6 +4,22 @@ All notable changes to Termixgo are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+- Language server tools: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_symbols`, `lsp_diagnostics` and `lsp_rename`, over gopls, typescript-language-server, pyright, rust-analyzer, clangd and others found on PATH (`lspServers` overrides per extension). A crashed server is started again on the next call.
+- `generate_image` (OpenAI gpt-image-1 and DALL-E, Gemini image models, Imagen, xAI) and `text_to_speech` (OpenAI, Gemini TTS, then the operating system voice). Files land in `.termixgo/media`; guests cannot use either.
+- TUI image paste: Ctrl+V or Alt+V attaches the clipboard image as `[Image #N]` at the cursor, an image file dragged onto the terminal is attached instead of typed, and deleting a placeholder drops its image.
+- `/endpoint list|add|rm|models` manages several OpenAI-compatible servers from the TUI; `termixgo endpoint models <name>` fetches a server's model list from `GET /models` (OpenAI and Ollama shapes).
+
+### Fixed
+- A launch starts a fresh session instead of silently loading the newest saved one, so the model no longer resumes another project's pending work; switching agents only resumes a session from that agent's workspace, and `/new` clears the old transcript.
+- `send_channel` asks before sending a file from outside the workspace or a message to anyone but the caller.
+- Escape in the approval and question dialogs is held like the chat Escape, so a mouse scroll no longer denies an approval; `!cmd` no longer freezes the UI; the idle screen stops repainting ten times a second; Ctrl+T now hides the reasoning body.
+- A crashed browser or MCP server is replaced instead of failing every later call; an MCP call interrupted by the crash is reported, not repeated.
+- Telegram keeps code spans and link URLs intact; chunked messages close and reopen code fences.
+- With several named endpoints, an unlisted model resolves to the same endpoint every time instead of a random one.
+
 ## 0.2.7 - 2026-11-16
 
 ### Fixed

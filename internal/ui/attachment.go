@@ -40,6 +40,141 @@ type attachment struct {
 	MediaType string
 	Data      []byte
 	Text      string
+	// Placeholder is the "[Image #N]" token a pasted image put in the
+	// composer. Deleting the token from the draft drops the image, the way a
+	// pasted image is removed in Claude Code. An /attach file has none.
+	Placeholder string
+}
+
+// imagePlaceholder names the next pasted image.
+func (m *Model) imagePlaceholder() string {
+	count := 0
+	for _, item := range m.attachments {
+		if item.Placeholder != "" {
+			count++
+		}
+	}
+	for _, queued := range m.queueAttachments {
+		for _, item := range queued {
+			if item.Placeholder != "" {
+				count++
+			}
+		}
+	}
+	return fmt.Sprintf("[Image #%d]", count+1)
+}
+
+// keptAttachments drops pasted images whose placeholder the operator deleted
+// from the text being sent.
+func keptAttachments(items []attachment, text string) []attachment {
+	var kept []attachment
+	for _, item := range items {
+		if item.Placeholder != "" && !strings.Contains(text, item.Placeholder) {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept
+}
+
+// clipboardPasteMsg carries a Ctrl+V clipboard read back to the event loop.
+type clipboardPasteMsg struct {
+	image []byte
+	text  string
+	err   error
+}
+
+// readClipboardForPaste reads an image first and text second. It runs as a
+// command because the Windows reader starts PowerShell, which takes a second.
+func readClipboardForPaste() tea.Msg {
+	if data, err := readClipboardImage(); err == nil && len(data) > 0 {
+		return clipboardPasteMsg{image: data}
+	}
+	text, err := readClipboardText()
+	if err != nil {
+		return clipboardPasteMsg{err: err}
+	}
+	return clipboardPasteMsg{text: text}
+}
+
+// applyClipboardPaste attaches a pasted image with a placeholder at the
+// cursor, or inserts pasted text.
+func (m *Model) applyClipboardPaste(msg clipboardPasteMsg) {
+	m.notice = ""
+	switch {
+	case len(msg.image) > 0:
+		if len(m.attachments) >= maxAttachments {
+			m.notice = fmt.Sprintf("Attachment limit is %d.", maxAttachments)
+			break
+		}
+		path, err := savePastedImage(m.app.Workspace(), msg.image)
+		if err != nil {
+			m.notice = err.Error()
+			break
+		}
+		m.attachImagePath(path)
+	case strings.TrimSpace(msg.text) != "":
+		if len(msg.text) > pasteSpoolThreshold {
+			if att, err := attachPastedText(m.app.Workspace(), msg.text); err == nil {
+				m.attachments = append(m.attachments, att)
+				m.notice = fmt.Sprintf("Pasted %d characters as an attached file.", len(msg.text))
+				break
+			}
+		}
+		m.composer.InsertString(msg.text)
+	case msg.err != nil:
+		m.notice = "Clipboard: " + msg.err.Error()
+	default:
+		m.notice = "The clipboard holds no image or text."
+	}
+	m.updateSlashMatches()
+	m.refresh()
+}
+
+// attachImagePath attaches one image file and puts its placeholder at the
+// cursor. It reports whether the file was attached.
+func (m *Model) attachImagePath(path string) bool {
+	att, err := buildAttachment(m.app.Workspace(), path)
+	if err != nil {
+		m.notice = err.Error()
+		return false
+	}
+	att.Placeholder = m.imagePlaceholder()
+	m.attachments = append(m.attachments, att)
+	m.composer.InsertString(att.Placeholder + " ")
+	return true
+}
+
+// pastedImagePaths reports the image files a bracketed paste named, which is
+// what a terminal sends when an image is dragged onto it. Every token must be
+// an existing image, or the paste is ordinary text.
+func pastedImagePaths(workspace, text string) []string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || strings.Count(trimmed, "\n") > maxAttachments {
+		return nil
+	}
+	var paths []string
+	for _, token := range splitAttachmentArgs(trimmed) {
+		token = strings.TrimPrefix(token, "file://")
+		if _, ok := agent.ImageMediaType(token); !ok {
+			return nil
+		}
+		path := expandAttachmentHome(token)
+		if !filepath.IsAbs(path) {
+			if workspace == "" {
+				return nil
+			}
+			path = filepath.Join(workspace, path)
+		}
+		if info, err := os.Stat(path); err != nil || info.IsDir() {
+			return nil
+		}
+		paths = append(paths, path)
+	}
+	if len(paths) > maxAttachments {
+		return nil
+	}
+	return paths
 }
 
 // splitAttachmentArgs splits a command line into paths, honouring a quoted
@@ -186,6 +321,9 @@ func attachmentSummary(items []attachment) string {
 	parts := make([]string, 0, len(items))
 	for _, item := range items {
 		label := item.Label
+		if item.Placeholder != "" {
+			label = item.Placeholder + " " + label
+		}
 		if item.Kind != "" {
 			label += " (" + item.Kind + ")"
 		}
@@ -198,7 +336,7 @@ func attachmentSummary(items []attachment) string {
 // them. The prompt text carries documents; images ride on the first user
 // message through RunTurnWithImages.
 func (m *Model) consumeAttachments(input string) (string, []provider.Image) {
-	items := m.attachments
+	items := keptAttachments(m.attachments, input)
 	m.attachments = nil
 	if len(items) == 0 {
 		return input, nil

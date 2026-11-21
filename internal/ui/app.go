@@ -682,6 +682,14 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyLocalCommand(typed)
 		return m, nil
 
+	case clipboardPasteMsg:
+		m.applyClipboardPaste(typed)
+		return m, nil
+
+	case endpointModelsMsg:
+		m.applyEndpointModels(typed)
+		return m, nil
+
 	case telegramPairedMsg:
 		if typed.paired {
 			m.notice = "Telegram paired."
@@ -1072,7 +1080,35 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSlashMenuKey(key)
 	}
 
+	// A terminal delivers a dragged image file as a bracketed paste of its
+	// path. Attaching it, rather than typing the path, is what makes drag and
+	// drop work.
+	if key.Paste {
+		if paths := pastedImagePaths(m.app.Workspace(), string(key.Runes)); len(paths) > 0 {
+			attached := 0
+			for _, path := range paths {
+				if len(m.attachments) >= maxAttachments || !m.attachImagePath(path) {
+					break
+				}
+				attached++
+			}
+			if attached > 0 {
+				m.notice = fmt.Sprintf("Attached %d image(s). Delete a placeholder to drop it.", attached)
+			}
+			m.updateSlashMatches()
+			m.refresh()
+			return m, nil
+		}
+	}
+
 	switch key.String() {
+	case "ctrl+v", "alt+v":
+		// A terminal paste carries text only, so an image has to be read from
+		// the host clipboard. Alt+V exists because Windows Terminal keeps
+		// Ctrl+V for its own text paste.
+		m.notice = "Reading the clipboard..."
+		m.refresh()
+		return m, readClipboardForPaste
 	case "ctrl+a":
 		if strings.TrimSpace(m.composer.Value()) == "" {
 			return m, nil
@@ -1552,7 +1588,7 @@ func (m *Model) enqueue(value string) (tea.Model, tea.Cmd) {
 		m.recordSteer(value)
 	} else {
 		m.queue = append(m.queue, value)
-		m.queueAttachments = append(m.queueAttachments, m.attachments)
+		m.queueAttachments = append(m.queueAttachments, keptAttachments(m.attachments, value))
 		m.attachments = nil
 	}
 	m.composer.SetValue("")
@@ -2435,7 +2471,7 @@ func (m *Model) viewHints() string {
 			text = fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C copy | Ctrl+X quit", m.spin.View(), elapsed)
 		}
 	} else {
-		text = " Enter send | !cmd exec | Ctrl+L model | Ctrl+P session | Ctrl+G agent | Ctrl+T think | Ctrl+O details | Ctrl+C copy | Ctrl+X quit"
+		text = " Enter send | !cmd exec | Ctrl+V image | Ctrl+L model | Ctrl+P session | Ctrl+G agent | Ctrl+T think | Ctrl+O details | Ctrl+C copy | Ctrl+X quit"
 	}
 	// Pending files own the first columns of the hint row: what will be sent
 	// matters more than the key reminder, and the row never grows, so the
@@ -2724,7 +2760,7 @@ func (m *Model) viewHelp() string {
 	header := []string{m.styles.BoxTitle.Render("Commands"), ""}
 	keys := []string{
 		"", m.styles.BoxTitle.Render("Keys"), "",
-		m.styles.MenuDesc.Render("  Enter send | !<cmd> exec | Ctrl+J newline | Tab complete | PgUp/PgDn scroll | Drag to select"),
+		m.styles.MenuDesc.Render("  Enter send | !<cmd> exec | Ctrl+J newline | Ctrl+V/Alt+V paste image | Tab complete | PgUp/PgDn scroll | Drag to select"),
 		m.styles.MenuDesc.Render("  Ctrl+L model | Ctrl+P session | Ctrl+G agent | Ctrl+T think | Ctrl+O details | Ctrl+C copy | Ctrl+X quit"),
 	}
 	trailer := []string{m.styles.Hint.Render(fmt.Sprintf("Press any key to close. %d commands in total.", len(entries)))}
