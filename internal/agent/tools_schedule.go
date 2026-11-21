@@ -165,8 +165,12 @@ type scheduleTaskTool struct{}
 
 func (t *scheduleTaskTool) Name() string      { return "schedule_task" }
 func (t *scheduleTaskTool) Aliases() []string { return []string{"cron_create", "schedule"} }
-func (t *scheduleTaskTool) Mutating() bool    { return false }
-func (t *scheduleTaskTool) Risk() Risk        { return RiskEdit }
+
+// Mutating is true on purpose: a scheduled prompt makes the agent act later
+// without anyone watching, and a durable one writes the cron store. Plan mode
+// must not create one, and the approval policy should ask first.
+func (t *scheduleTaskTool) Mutating() bool { return true }
+func (t *scheduleTaskTool) Risk() Risk     { return RiskCommand }
 func (t *scheduleTaskTool) Label(a map[string]any) string {
 	return "Scheduling " + scheduleLabel(a)
 }

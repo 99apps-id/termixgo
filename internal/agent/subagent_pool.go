@@ -211,21 +211,41 @@ func (p *SubagentPool) StopAll() {
 }
 
 func (p *SubagentPool) list() string {
+	// Everything a row needs is read under the lock: begin rewrites started and
+	// the state while a worker may be starting.
+	type row struct {
+		id, state, kind, title string
+		started                time.Time
+	}
 	p.mu.Lock()
-	entries := make([]*pooledSubagent, 0, len(p.entries))
+	rows := make([]row, 0, len(p.entries))
 	for _, entry := range p.entries {
-		entries = append(entries, entry)
+		state := "done"
+		switch {
+		case entry.running:
+			state = "running"
+		case entry.err != nil:
+			state = "failed"
+		}
+		rows = append(rows, row{entry.id, state, entry.kind, entry.title(), entry.started})
 	}
 	p.mu.Unlock()
-	if len(entries) == 0 {
+	if len(rows) == 0 {
 		return "No subagents in this session."
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].started.Before(entries[j].started) })
+	sort.Slice(rows, func(i, j int) bool { return rows[i].started.Before(rows[j].started) })
 	var out strings.Builder
-	for _, entry := range entries {
-		fmt.Fprintf(&out, "%s  %-8s %-12s %s\n", entry.id, p.state(entry), entry.kind, Shorten(entry.title(), 60))
+	for _, r := range rows {
+		fmt.Fprintf(&out, "%s  %-8s %-12s %s\n", r.id, r.state, r.kind, Shorten(r.title, 60))
 	}
 	return strings.TrimRight(out.String(), "\n")
+}
+
+// startedAt reads when an entry's current run began, under the pool lock.
+func (p *SubagentPool) startedAt(entry *pooledSubagent) time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return entry.started
 }
 
 func (p *SubagentPool) state(entry *pooledSubagent) string {
@@ -410,7 +430,7 @@ func (t *subagentStatusTool) Run(ctx context.Context, env *Env, args map[string]
 		}
 	}
 	if running {
-		return Result{Output: fmt.Sprintf("%s (%s) is still running, %s so far.", entry.id, entry.title(), time.Since(entry.started).Round(time.Second))}, nil
+		return Result{Output: fmt.Sprintf("%s (%s) is still running, %s so far.", entry.id, entry.title(), time.Since(pool.startedAt(entry)).Round(time.Second))}, nil
 	}
 	result := Result{}
 	if spend, ok := pool.takeSpend(entry); ok {
