@@ -660,3 +660,90 @@ func TestWhatsAppMarkReadOnMessage(t *testing.T) {
 		t.Errorf("markedSender = %q, want 628999@s.whatsapp.net", markedSender.String())
 	}
 }
+
+type stopChatApprovalAgent struct {
+	fakeAgent
+	stopChatResult  bool
+	stopChatCalls   int
+	pendingApproval bool
+	resolvedText    string
+}
+
+func (a *stopChatApprovalAgent) StopChat(req channel.Request) bool {
+	a.stopChatCalls++
+	return a.stopChatResult
+}
+
+func (a *stopChatApprovalAgent) HasPendingApproval(req channel.Request) bool {
+	return a.pendingApproval
+}
+
+func (a *stopChatApprovalAgent) ResolveApproval(req channel.Request, text string) bool {
+	if a.pendingApproval && (text == "y" || text == "n") {
+		a.resolvedText = text
+		a.pendingApproval = false
+		return true
+	}
+	return false
+}
+
+func TestWhatsAppAuditFixes(t *testing.T) {
+	// 1. Links containing __ must not be mangled by underscore bold rule.
+	got := formatWhatsApp("Lihat [init](https://example.com/__init__/main.py) sekarang.")
+	if !strings.Contains(got, "https://example.com/__init__/main.py") {
+		t.Errorf("URL with underscores was corrupted: %q", got)
+	}
+
+	// 2. Outbound redactor scrubs secrets in reply, SendTo, and SendFileTo.
+	var captured []string
+	var capturedCaption string
+	bot := New(nil, &fakeAgent{})
+	bot.SetRedactor(func(s string) string {
+		return strings.ReplaceAll(s, "SUPER_SECRET_KEY_1234", "[redacted]")
+	})
+	bot.sendHook = func(chatID, text string) {
+		captured = append(captured, text)
+	}
+	bot.sendFileHook = func(chatID, filename string, data []byte, caption string) {
+		capturedCaption = caption
+	}
+	bot.reply(context.Background(), "628123@s.whatsapp.net", "token=SUPER_SECRET_KEY_1234")
+	_ = bot.SendTo(context.Background(), "628123", "key=SUPER_SECRET_KEY_1234")
+	_ = bot.SendFileTo(context.Background(), "628123", "out.txt", []byte("ok"), "cap=SUPER_SECRET_KEY_1234")
+	for _, msg := range captured {
+		if strings.Contains(msg, "SUPER_SECRET_KEY_1234") {
+			t.Errorf("secret leaked in whatsapp message: %q", msg)
+		}
+	}
+	if strings.Contains(capturedCaption, "SUPER_SECRET_KEY_1234") {
+		t.Errorf("secret leaked in whatsapp file caption: %q", capturedCaption)
+	}
+
+	// 3. /stop with StopChat returning false must not fall back to global Stop().
+	stopAgent := &stopChatApprovalAgent{stopChatResult: false}
+	var stopReplies []string
+	stopBot := New(nil, stopAgent)
+	stopBot.SetAccount("default", config.ChannelAccount{
+		Enabled: true,
+		Admins:  []string{"628111@s.whatsapp.net"},
+	}, nil)
+	stopBot.sendHook = func(chatID, text string) {
+		stopReplies = append(stopReplies, text)
+	}
+	stopBot.handleCommand(context.Background(), channel.Request{
+		ChatID: "628111@s.whatsapp.net", SenderID: "628111@s.whatsapp.net", Text: "/stop", Admin: true,
+	})
+	if stopAgent.stopChatCalls != 1 || stopAgent.stopCalls != 0 {
+		t.Errorf("StopChat=%d Stop=%d, want 1 and 0", stopAgent.stopChatCalls, stopAgent.stopCalls)
+	}
+
+	// 4. /stop during pending approval denies the pending approval.
+	stopAgent.pendingApproval = true
+	evt := testEvent("/stop")
+	evt.Info.Sender = types.NewJID("628111", types.DefaultUserServer)
+	evt.Info.Chat = types.NewJID("628111", types.DefaultUserServer)
+	stopBot.handleMessage(context.Background(), evt)
+	if stopAgent.resolvedText != "n" {
+		t.Errorf("expected /stop during pending approval to deny, got resolved=%q", stopAgent.resolvedText)
+	}
+}

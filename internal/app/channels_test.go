@@ -7,6 +7,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/agenthome"
 	"github.com/99apps-id/termixgo/internal/channel"
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/telegram"
 )
 
 func TestChannelSessionIDIsStableAndSafe(t *testing.T) {
@@ -142,5 +143,52 @@ func TestStartChannelRefusesUnknownAccounts(t *testing.T) {
 		t.Errorf("an unknown WhatsApp account must be refused")
 	} else if !strings.Contains(err.Error(), "no whatsapp account") {
 		t.Errorf("the refusal must name the account: %v", err)
+	}
+}
+
+func TestTelegramBridgeGuestHasNoApprovalInteractor(t *testing.T) {
+	application := newTestApp(t)
+	bridge := &telegramBridge{
+		app:     application,
+		name:    "default",
+		account: config.TelegramAccount{ChannelAccount: config.ChannelAccount{Enabled: true}},
+		bot:     telegram.New("123:abc", nil),
+	}
+	if bridge.interactorFor(channel.Request{ChatID: "42", Admin: false}) != nil {
+		t.Errorf("guest requests must not receive an approval interactor")
+	}
+	if bridge.interactorFor(channel.Request{ChatID: "42", Admin: true}) == nil {
+		t.Errorf("admin requests must receive an approval interactor")
+	}
+}
+
+func TestRunChannelTurnStreamDoesNotDuplicateEvents(t *testing.T) {
+	application, server := readyApp(t)
+	defer server.Close()
+
+	bridge := &telegramBridge{
+		app:     application,
+		name:    "default",
+		account: config.TelegramAccount{ChannelAccount: config.ChannelAccount{Enabled: true}},
+	}
+	req := channel.Request{Channel: config.ChannelTelegram, Account: "default", ChatID: "77", Admin: true}
+	var events []telegram.StreamEvent
+	answer, err := bridge.RunPromptStream(t.Context(), req, "hello", func(ev telegram.StreamEvent) {
+		events = append(events, ev)
+	})
+	if err != nil {
+		t.Fatalf("RunPromptStream: %v", err)
+	}
+	if answer != "ok" {
+		t.Fatalf("answer = %q, want ok", answer)
+	}
+	textEvents := 0
+	for _, ev := range events {
+		if ev.Kind == "text" {
+			textEvents++
+		}
+	}
+	if textEvents != 1 {
+		t.Errorf("expected 1 text stream event (no duplicate observer emission), got %d (%+v)", textEvents, events)
 	}
 }

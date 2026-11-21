@@ -38,6 +38,7 @@ var toolSearchAlwaysOn = map[string]bool{
 	"git_status": true, "git_diff": true, "git_log": true, "git_show": true,
 	"git_blame": true,
 	"git_add":   true, "git_commit": true, "git_branch": true, "git_restore": true,
+	"web_search": true, "web_fetch": true, "lookup": true,
 	"send_channel": true, "send_file": true,
 	findToolsName: true,
 }

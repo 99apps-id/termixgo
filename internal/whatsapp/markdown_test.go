@@ -79,3 +79,23 @@ func TestFormatWhatsAppLinks(t *testing.T) {
 		t.Errorf("got: %q, want: %q", got, want)
 	}
 }
+
+func TestFormatWhatsAppEnrichedMarkdown(t *testing.T) {
+	input := "## Ringkasan 📋\n\nIni *miring*, ini **tebal**, ini ***tebal miring***, dan ~~coret~~.\n- Poin *satu*\n1. Urutan **dua**\n---\n2 * 3 * 4"
+	got := formatWhatsApp(input)
+	for _, want := range []string{
+		"*Ringkasan 📋*",
+		"_miring_",
+		"*tebal*",
+		"_*tebal miring*_",
+		"~coret~",
+		"• Poin _satu_",
+		"1. Urutan *dua*",
+		"──────────",
+		"2 * 3 * 4",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("enriched WhatsApp markdown missing %q:\ngot:\n%s", want, got)
+		}
+	}
+}

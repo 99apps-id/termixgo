@@ -12,6 +12,8 @@ var (
 	boldPattern = regexp.MustCompile(`\*\*([^*\n]+)\*\*`)
 	// underscoreBoldPattern matches __text__
 	underscoreBoldPattern = regexp.MustCompile(`__([^_\n]+)__`)
+	// italicAsteriskPattern matches single-asterisk *italic* without matching spaced multiplication
+	italicAsteriskPattern = regexp.MustCompile(`\*([^\s*](?:[^*\n]*?[^\s*])?)\*`)
 	// strikethroughPattern matches ~~text~~
 	strikethroughPattern = regexp.MustCompile(`~~([^~\n]+)~~`)
 	// markdownLinkPattern matches [text](url) -> text (url)
@@ -42,12 +44,24 @@ func formatWhatsApp(text string) string {
 		// Check fenced code block toggles
 		if strings.HasPrefix(trimmed, "```") {
 			inCode = !inCode
-			out.WriteString("```\n")
+			out.WriteString("```")
+			if i < len(lines)-1 {
+				out.WriteString("\n")
+			}
 			continue
 		}
 
 		if inCode {
 			out.WriteString(line)
+			if i < len(lines)-1 {
+				out.WriteString("\n")
+			}
+			continue
+		}
+
+		// Convert markdown horizontal rules
+		if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+			out.WriteString("──────────")
 			if i < len(lines)-1 {
 				out.WriteString("\n")
 			}
@@ -104,17 +118,47 @@ func formatWhatsAppInline(line string) string {
 }
 
 func applyWhatsAppInlineRules(s string) string {
+	// Extract markdown links first so underscores inside URLs (such as __init__)
+	// are never rewritten by the underscore-bold emphasis rule.
+	if !strings.Contains(s, "](") {
+		return applyWhatsAppEmphasis(s)
+	}
+	var out strings.Builder
+	last := 0
+	for _, loc := range markdownLinkPattern.FindAllStringSubmatchIndex(s, -1) {
+		out.WriteString(applyWhatsAppEmphasis(s[last:loc[0]]))
+		label := applyWhatsAppEmphasis(s[loc[2]:loc[3]])
+		href := s[loc[4]:loc[5]]
+		out.WriteString(label + " (" + href + ")")
+		last = loc[1]
+	}
+	out.WriteString(applyWhatsAppEmphasis(s[last:]))
+	return out.String()
+}
+
+func applyWhatsAppEmphasis(s string) string {
+	const (
+		biOpen  = "\x00BI1\x00"
+		biClose = "\x00BI2\x00"
+		bOpen   = "\x00B1\x00"
+		bClose  = "\x00B2\x00"
+	)
 	// Bold italic first: ***text*** -> _*text*_
-	s = boldItalicPattern.ReplaceAllString(s, "_*$1*_")
+	s = boldItalicPattern.ReplaceAllString(s, biOpen+"$1"+biClose)
 	// Bold: **text** -> *text*
-	s = boldPattern.ReplaceAllString(s, "*$1*")
+	s = boldPattern.ReplaceAllString(s, bOpen+"$1"+bClose)
 	// Double underscore bold: __text__ -> *text*
-	s = underscoreBoldPattern.ReplaceAllString(s, "*$1*")
+	s = underscoreBoldPattern.ReplaceAllString(s, bOpen+"$1"+bClose)
+	// Single-asterisk italic in standard Markdown: *text* -> _text_
+	s = italicAsteriskPattern.ReplaceAllString(s, "_${1}_")
 	// Strikethrough: ~~text~~ -> ~text~
 	s = strikethroughPattern.ReplaceAllString(s, "~$1~")
-	// Links: [Label](URL) -> Label (URL)
-	s = markdownLinkPattern.ReplaceAllString(s, "$1 ($2)")
-	// Clean up any remaining double asterisks that could leak into WhatsApp
+	// Clean up any remaining double asterisks before restoring WhatsApp bold markers.
 	s = strings.ReplaceAll(s, "**", "*")
-	return s
+	return strings.NewReplacer(
+		biOpen, "_*",
+		biClose, "*_",
+		bOpen, "*",
+		bClose, "*",
+	).Replace(s)
 }

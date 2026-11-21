@@ -24,6 +24,9 @@ const apiBase = "https://api.telegram.org"
 // messageLimit is Telegram's hard cap on a message body.
 const messageLimit = 4096
 
+// captionLimit is Telegram's hard cap on a media/document caption.
+const captionLimit = 1024
+
 // Client calls the Bot API for one token.
 type Client struct {
 	token   string
@@ -310,13 +313,18 @@ func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, key
 
 // SendDocument uploads and posts a file as a document via multipart/form-data.
 func (c *Client) SendDocument(ctx context.Context, chatID int64, filename string, data []byte, caption string) (Message, error) {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+	}
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 	if err := writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
 		return Message{}, err
 	}
 	if caption != "" {
-		if err := writer.WriteField("caption", clampText(caption)); err != nil {
+		if err := writer.WriteField("caption", clampCaption(validUTF8(caption))); err != nil {
 			return Message{}, err
 		}
 	}
@@ -493,6 +501,11 @@ func (c *Client) DownloadFile(ctx context.Context, filePath string) ([]byte, err
 	if strings.TrimSpace(filePath) == "" {
 		return nil, fmt.Errorf("telegram: empty file path")
 	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+	}
 	url := fmt.Sprintf("%s/file/bot%s/%s", c.baseURL, c.token, filePath)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -535,10 +548,21 @@ func (c *Client) SetMyCommands(ctx context.Context, commands []BotCommand) error
 // the middle of one makes the body invalid UTF-8, which the Bot API rejects
 // outright, so the message would never arrive.
 func clampText(text string) string {
-	if len(text) <= messageLimit {
+	return clampToLimit(text, messageLimit)
+}
+
+func clampCaption(text string) string {
+	return clampToLimit(text, captionLimit)
+}
+
+func clampToLimit(text string, limit int) string {
+	if len(text) <= limit {
 		return text
 	}
-	cut := messageLimit - 32
+	cut := limit - 32
+	if cut < 16 {
+		cut = limit
+	}
 	if index := strings.LastIndex(clipBytes(text, cut), "\n"); index > cut/2 {
 		cut = index
 	}

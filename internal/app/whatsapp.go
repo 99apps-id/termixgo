@@ -53,6 +53,7 @@ func (a *App) startWhatsAppAccount(name string) error {
 	bot := whatsapp.New(client, bridge)
 	bridge.send = bot.SendTo
 	bot.SetAccount(name, entry, a.pairingStore())
+	bot.SetRedactor(a.RedactForChannel)
 
 	key := channel.AccountID{Channel: config.ChannelWhatsApp, Account: name}
 	bot.SetLogger(func(line string) {
@@ -103,6 +104,12 @@ func (a *App) startWhatsAppAccount(name string) error {
 	return nil
 }
 
+type pendingWhatsAppApproval struct {
+	answer chan agent.Decision
+	chat   string
+	sender string
+}
+
 // whatsappBridge is the app side of one WhatsApp account. Sessions are per
 // chat, under the owning agent's home, and the turn runs through the same
 // runner as every other surface.
@@ -112,13 +119,10 @@ type whatsappBridge struct {
 	account config.ChannelAccount
 	send    func(ctx context.Context, chatID, text string) error
 
-	// pendingApproval is the one in-chat approval waiting for an answer. The
-	// run slot is single, so at most one turn blocks on approval at a time;
-	// approvalChat is the chat whose operator may answer it.
-	mu              sync.Mutex
-	pendingApproval chan agent.Decision
-	approvalChat    string
-	approvalSender  string
+	// pendingApprovals holds at most one waiting approval per chat, keyed by
+	// CanonicalID(chatID), so concurrent WhatsApp chats do not clobber each other.
+	mu               sync.Mutex
+	pendingApprovals map[string]*pendingWhatsAppApproval
 }
 
 // interactorFor returns the approval route for one chat. An admin answers in
@@ -138,7 +142,11 @@ type whatsAppApprover struct {
 }
 
 func (w *whatsAppApprover) Approve(request agent.ApprovalRequest) agent.Decision {
-	return w.bridge.askApproval(w.request, request)
+	return w.bridge.askApproval(context.Background(), w.request, request)
+}
+
+func (w *whatsAppApprover) ApproveContext(ctx context.Context, request agent.ApprovalRequest) agent.Decision {
+	return w.bridge.askApproval(ctx, w.request, request)
 }
 
 func (w *whatsAppApprover) Ask(string, []string) (string, error) {
@@ -146,37 +154,46 @@ func (w *whatsAppApprover) Ask(string, []string) (string, error) {
 }
 
 // askApproval posts the request in the chat and waits for the operator's
-// reply. No answer inside the window is a denial, which is the safe default.
-func (b *whatsappBridge) askApproval(request channel.Request, approval agent.ApprovalRequest) agent.Decision {
+// reply or turn cancellation. No answer inside the window is a denial.
+func (b *whatsappBridge) askApproval(ctx context.Context, request channel.Request, approval agent.ApprovalRequest) agent.Decision {
 	if b.send == nil {
 		return agent.DecisionDeny
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	lang := whatsapp.SenderLanguage(request)
-	if err := b.send(context.Background(), request.ChatID, approvalPromptText(lang, approval)); err != nil {
+	if err := b.send(ctx, request.ChatID, approvalPromptText(lang, approval)); err != nil {
 		return agent.DecisionDeny
 	}
-	answer := make(chan agent.Decision, 1)
+	key := channel.CanonicalID(request.ChatID)
+	entry := &pendingWhatsAppApproval{
+		answer: make(chan agent.Decision, 1),
+		chat:   request.ChatID,
+		sender: request.SenderID,
+	}
 	b.mu.Lock()
-	b.pendingApproval = answer
-	b.approvalChat = request.ChatID
-	b.approvalSender = request.SenderID
+	if b.pendingApprovals == nil {
+		b.pendingApprovals = make(map[string]*pendingWhatsAppApproval)
+	}
+	b.pendingApprovals[key] = entry
 	b.mu.Unlock()
 	defer func() {
 		b.mu.Lock()
-		if b.pendingApproval == answer {
-			b.pendingApproval = nil
-			b.approvalChat = ""
-			b.approvalSender = ""
+		if b.pendingApprovals[key] == entry {
+			delete(b.pendingApprovals, key)
 		}
 		b.mu.Unlock()
 	}()
 	timer := time.NewTimer(approvalTimeout)
 	defer timer.Stop()
 	select {
-	case decision := <-answer:
+	case decision := <-entry.answer:
 		return decision
 	case <-timer.C:
 		_ = b.send(context.Background(), request.ChatID, approvalTimeoutText(lang))
+		return agent.DecisionDeny
+	case <-ctx.Done():
 		return agent.DecisionDeny
 	}
 }
@@ -189,25 +206,24 @@ func (b *whatsappBridge) ResolveApproval(request channel.Request, text string) b
 	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
 		return false
 	}
+	key := channel.CanonicalID(request.ChatID)
 	b.mu.Lock()
-	if b.pendingApproval == nil || channel.CanonicalID(b.approvalChat) != channel.CanonicalID(request.ChatID) {
+	entry := b.pendingApprovals[key]
+	if entry == nil {
 		b.mu.Unlock()
 		return false
 	}
-	if !request.Admin && (b.approvalSender == "" || channel.CanonicalID(b.approvalSender) != channel.CanonicalID(request.SenderID)) {
+	if !request.Admin {
 		b.mu.Unlock()
 		return false
 	}
-	answer := b.pendingApproval
-	b.pendingApproval = nil
-	b.approvalChat = ""
-	b.approvalSender = ""
+	delete(b.pendingApprovals, key)
 	b.mu.Unlock()
 
 	decision := mapApprovalAnswer(trimmed)
 	_ = b.send(context.Background(), request.ChatID, approvalResultText(whatsapp.SenderLanguage(request), decision))
 	select {
-	case answer <- decision:
+	case entry.answer <- decision:
 	default:
 	}
 	return true
@@ -215,9 +231,10 @@ func (b *whatsappBridge) ResolveApproval(request channel.Request, text string) b
 
 // HasPendingApproval reports whether an approval is actively waiting in request's chat.
 func (b *whatsappBridge) HasPendingApproval(request channel.Request) bool {
+	key := channel.CanonicalID(request.ChatID)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.pendingApproval != nil && channel.CanonicalID(b.approvalChat) == channel.CanonicalID(request.ChatID)
+	return b.pendingApprovals[key] != nil
 }
 
 // mapApprovalAnswer turns the operator's reply into a decision. Anything
@@ -236,46 +253,27 @@ func mapApprovalAnswer(text string) agent.Decision {
 	}
 }
 
-// approvalPromptText renders the in-chat request. WhatsApp carries no inline
-// buttons in this build, so the operator answers with a key.
-func approvalPromptText(lang string, request agent.ApprovalRequest) string {
+// approvalPromptText renders the in-chat request in English, matching the
+// operator's preference for approval cards across channels.
+func approvalPromptText(_ string, request agent.ApprovalRequest) string {
 	detail := agent.Shorten(request.Detail, 160)
-	if lang == "id" {
-		return fmt.Sprintf("Perlu persetujuan: %s (%s)\n%s\nBalas y (sekali), s (sesi), a (selalu), n (tolak). %d menit.",
-			request.Tool, request.Risk, detail, int(approvalTimeout.Minutes()))
-	}
 	return fmt.Sprintf("Approval needed: %s (%s)\n%s\nReply y (once), s (session), a (always), n (deny). %d minutes.",
 		request.Tool, request.Risk, detail, int(approvalTimeout.Minutes()))
 }
 
-func approvalTimeoutText(lang string) string {
-	if lang == "id" {
-		return "Persetujuan habis waktu, ditolak."
-	}
+func approvalTimeoutText(_ string) string {
 	return "Approval timed out, denied."
 }
 
-func approvalResultText(lang string, decision agent.Decision) string {
+func approvalResultText(_ string, decision agent.Decision) string {
 	switch decision {
 	case agent.DecisionAllowOnce:
-		if lang == "id" {
-			return "Diizinkan sekali."
-		}
 		return "Allowed once."
 	case agent.DecisionAllowSession:
-		if lang == "id" {
-			return "Diizinkan untuk sesi ini."
-		}
 		return "Allowed for this session."
 	case agent.DecisionAllowAlways:
-		if lang == "id" {
-			return "Selalu diizinkan."
-		}
 		return "Always allowed."
 	default:
-		if lang == "id" {
-			return "Ditolak."
-		}
 		return "Denied."
 	}
 }

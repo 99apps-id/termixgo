@@ -81,6 +81,19 @@ the first request. The wordmark here is the same paint the README banner and
   Step Plan are selectable like any other provider, billed in credits.
 - **Trust that means something.** A fresh folder is untrusted and asks before it
   writes or runs; a trusted folder works without interrupting you.
+- **A terminal UI that stays out of the way.** Inline by default: finished
+  messages go to your terminal's own scrollback, so scrolling, selecting and
+  copying are the terminal's. Pasted images, collapsed long pastes, a composer
+  that grows with the draft, and a compact transcript that expands with Ctrl+O.
+- **Code intelligence.** Language-server tools (gopls, typescript-language-server,
+  pyright, rust-analyzer, clangd and more) for definitions, references, types,
+  diagnostics and safe renames, on top of grep, outlines and a repository map.
+- **Media and office work.** Image generation and text to speech where a provider
+  key allows it, Office and PDF conversion through LibreOffice or Microsoft
+  Office, and multi-step browser flows that can be saved and replayed.
+- **Careful with tokens.** A stable prompt-cache prefix across steps and turns,
+  the provider's own context count in the status line, search that honours
+  `.gitignore`, and a bounded learned-memory block.
 - **Composable.** `termixgo run "<prompt>"` falls back to plain streaming without
   a TTY, so it works in pipes and CI and exits non-zero when a turn failed.
 
@@ -148,10 +161,14 @@ The wizard is available any time with `/setup`. To configure from a shell:
 ```sh
 termixgo secret anthropic                 # prompts, input hidden
 termixgo model claude-sonnet-5
-termixgo endpoint openai-compatible https://my-server/v1
+termixgo endpoint add lab https://my-server/v1   # a named OpenAI-compatible server
 termixgo trust on                         # trust this folder
 termixgo doctor                           # show what is configured
 ```
+
+Every launch starts a fresh session. To continue an earlier one, use
+`termixgo resume` (the newest session), `termixgo resume <id>`, `/sessions` or
+Ctrl+P inside the UI.
 
 Then type a request and press Enter:
 
@@ -169,35 +186,81 @@ the status code and body shape. The suite passes: 41 tests, 0 failures.
 
 ## The terminal UI
 
+### Layout
+
+The UI runs **inline** by default, the way Claude Code does. It does not take
+over the screen: each message is printed once into the terminal's own
+scrollback as soon as it is final, and only what is still changing is redrawn
+below it (the turn in flight, the status line and the composer). The mouse is
+not captured, so the wheel, selection and copy are your terminal's.
+
+The previous full-screen layout, with an in-app transcript, mouse selection
+and `PgUp`/`PgDn` scrolling, is still available:
+
+```json
+{ "tuiLayout": "fullscreen" }
+```
+
+or `TERMIXGO_FULLSCREEN=1` for one run.
+
+### Reading the transcript
+
+The transcript starts compact; `Ctrl+O` expands the detail of what has not been
+printed yet (in the full-screen layout, of the whole transcript).
+
 | Line | Meaning |
 | --- | --- |
-| `Thinking...` | the model's reasoning is streaming in |
-| `Reasoned for 4s` | the reasoning block finished, with its duration |
+| `Thinking...` | the model's reasoning is streaming in; expanded, its newest lines show |
+| `Thought for 4s (ctrl+o to expand)` | the reasoning finished; expanded, all of it shows |
 | `> Reading foo.go` | a tool call is running |
 | `+ Read foo.go (12ms)` | the tool finished |
-| `x Running ...` | the tool failed, with the output in the transcript |
+| `x Running ...` | the tool failed |
+| `  ⎿  first lines of output` | a command's (or a failure's) output, 3 lines compact, 40 expanded |
+| `     … +118 lines (ctrl+o to expand)` | how much more output there is |
 | `[x] Fix the parser` | the plan, updated as work progresses |
-| `    ... [tool output clipped]` | the tool result is longer than the transcript cap |
 
-Keys:
+Assistant answers render Markdown: headings, lists (nested too), tables with
+aligned columns, quotes, rules, links shown as `label (url)`, and fenced code
+whose long lines wrap instead of being cut.
+
+The status line shows the context in use (`ctx: 45.2k/200k`, the provider's own
+count once a step has run; `ctx: ~` marks an estimate), the session's billed
+tokens, the prompt-cache hit rate (`cache 87%`) and the spend.
+
+### Keys
 
 | Key | Action |
 | --- | --- |
-| `Enter` | send |
+| `Enter` | send; while a turn runs, steer it |
 | `Ctrl+J` / `Alt+Enter` | insert a newline |
 | `Tab` | complete a slash command or an `@file` mention |
-| `Ctrl+O` | show or hide tool and reasoning details |
+| `Esc` | close a menu; else interrupt the running turn; on a draft, press twice to clear it |
+| `Ctrl+C` | copy a selection; else interrupt the turn or clear the draft; press twice on an empty composer to exit |
+| `Ctrl+X` | quit (asks for a second press when a turn runs or a draft would be lost) |
+| `Ctrl+V` / `Alt+V` | paste an image from the clipboard (Alt+V where the terminal keeps Ctrl+V for itself, as Windows Terminal does) |
+| `Ctrl+O` | expand or collapse tool output and reasoning |
+| `Ctrl+T` | show or hide reasoning |
+| `Ctrl+L` / `Ctrl+P` / `Ctrl+G` | pick a model, a session, an agent |
 | `Ctrl+Y` | copy the newest answer to the clipboard |
-| `Esc` | stop the running turn, then clear the input |
-| `PgUp` / `PgDn`, wheel | scroll the transcript |
-| Drag mouse | select text in the transcript or composer |
 | `Ctrl+A` | select all text in the composer |
-| `Ctrl+C` | copy selected text (or range) to clipboard |
-| `Ctrl+X` | quit |
+| `PgUp` / `PgDn`, drag mouse | scroll and select (full-screen layout only) |
+
+The composer starts at three rows and grows with the draft up to twelve (never
+more than a third of the window).
 
 While a turn runs, `Enter` steers it: the message is folded into the running
 turn at its next step so you can change course without stopping it. A slash
 command typed mid-turn is queued and runs when the turn ends.
+
+### Pasting
+
+- **Long text** (six lines or more, or over 1000 characters) collapses to
+  `[Pasted text #1 +42 lines]` in the composer. The turn receives the whole
+  text; the transcript keeps the placeholder.
+- **Images**: `Ctrl+V` or `Alt+V` attaches the clipboard image and inserts
+  `[Image #1]` at the cursor. Dragging an image file onto the terminal attaches
+  it the same way instead of typing its path. Delete a placeholder from the
+  draft and that image is not sent.
 
 ### Attachments from the terminal
 
@@ -250,11 +313,19 @@ window-specific capture are called out honestly where the host cannot do them
 | `/setup` | onboarding: provider key, model, skills, Telegram |
 | `/help` | every command and key binding |
 | `/copy [last\|all]` | copy the newest answer, or the whole transcript, over OSC 52 |
-| `/new` | start a new session |
+| `/new` | start a new session and clear the transcript |
+| `/clear` | clear the transcript on screen |
+| `/compact` | condense the session's context into a brief now |
+| `/export [path] [--jsonl]` | write the session to a file and the clipboard |
 | `/sessions [list\|search\|rename\|delete\|export]` | manage saved sessions |
 | `/sessions export <id> [--format markdown|jsonl]` | export a session |
 | `/stop` | stop the running turn |
 | `/status` | workspace, model, plan and token status |
+| `/quota [refresh]` | the provider's own usage figures plus the local 5-hour counts |
+| `/doctor` | diagnose configuration, keys and environment |
+| `/cd [path]` | show or change the current folder |
+| `/endpoint [list\|add\|rm\|models]` | manage OpenAI-compatible endpoints, see [Several OpenAI-compatible servers](#several-openai-compatible-servers) |
+| `/theme [dark\|light]` | switch the colour theme |
 | `/trust [on\|off]` | show or change folder trust |
 | `/approval [ask\|edits\|all\|plan]` | when a tool waits for you |
 | `/harness [id]` | how hard the agent plans and verifies, and the step budget |
@@ -270,6 +341,7 @@ window-specific capture are called out honestly where the host cannot do them
 | `/detach` | drop every pending attachment |
 | `/desktop [on\|off\|status]` | local screen, pointer, keyboard and application control |
 | `/telegram [setup\|on\|off\|status\|pair]` | manage the companion bot |
+| `/whatsapp [status\|on\|off]`, `/channels [status\|start\|stop]` | manage the messaging companions |
 | `/cron [list\|add\|remove\|on\|off\|run]` | schedule assistant jobs |
 | `/heartbeat [on\|off\|<interval>]` | periodic self-check for a 24/7 assistant |
 | `/audit [count]` | show recent audited actions |
@@ -332,7 +404,11 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
   "titleModel": "deepseek:deepseek-v4.1-flash",
   "costBudgetUsd": 2.0,
   "systemPrompt": "",
-  "baseUrls": { "openai-compatible": "https://my-server/v1" },
+  "baseUrls": { "openai-compatible/lab": "https://my-server/v1" },
+  "tuiLayout": "inline",
+  "lspServers": { ".py": ["pylsp"] },
+  "imageModel": "openai:gpt-image-1",
+  "speechModel": "openai:gpt-4o-mini-tts",
   "modelOverrides": {},
   "modelPricing": { "my-model": { "inputPerMillion": 3.0, "outputPerMillion": 9.0 } },
   "subagentModels": { "code-review": "antigravity-gemini-3.8-flash" },
@@ -360,7 +436,11 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
 | `compactionModel` | model for condensing old turns before they are trimmed, as a catalogue id, `provider:model` or `provider/model`. Empty keeps the plain trim and makes no extra call |
 | `titleModel` | model that names a session after its first turn. Empty keeps the title derived from your first line |
 | `costBudgetUsd` | stop the run once estimated session spend passes this |
-| `baseUrls` | a custom base URL per provider id |
+| `baseUrls` | a custom base URL per provider id; `openai-compatible/<name>` keys are named endpoints |
+| `tuiLayout` | `inline` (default, finished messages go to the terminal scrollback) or `fullscreen` (alternate screen, in-app transcript and mouse selection). `TERMIXGO_FULLSCREEN=1` forces full screen for one run |
+| `lspServers` | override the language server per file extension, as an argv: `{ ".py": ["pylsp"] }` |
+| `imageModel` | the `generate_image` model as `provider:model` (also names the image subagent's model; a chat or vision model there is ignored by `generate_image`) |
+| `speechModel` | the `text_to_speech` model as `provider:model`, or `system` for the operating system voice |
 | `modelOverrides` | map a stable model id to the id sent on the wire |
 | `modelPricing` | give an unpriced model a price so a budget can fire; `inputPerMillion` and `outputPerMillion` are the rates, and optional `cacheReadMultiplier` / `cacheWriteMultiplier` override the cached-token price as a fraction of input (defaults 0.10 / 1.25) |
 | `mcpServers` | MCP servers to start with a session |
@@ -476,6 +556,40 @@ termixgo models --provider qwen-token-plan   # list one provider's catalogue
 termixgo endpoint                            # show the custom endpoints
 termixgo endpoint openai-compatible https://my-server/v1
 ```
+
+### Several OpenAI-compatible servers
+
+Any number of OpenAI-compatible servers (vLLM, LM Studio, LiteLLM, a company
+gateway) can sit side by side. Each is its own provider,
+`openai-compatible/<name>`, with its own URL, key and model list, so adding one
+never replaces another.
+
+From the UI:
+
+```
+/endpoint add lab https://gpu-box:8000/v1          # no key needed
+/endpoint add gateway https://llm.corp/v1 sk-...   # key goes to the secret store
+/endpoint                                          # list URL, key state and model count
+/endpoint models gateway                           # fetch the models again
+/endpoint rm lab                                   # drop URL, models and key
+```
+
+`add` fetches the server's models from `GET /models` (the OpenAI shape and the
+Ollama shape are both read), and they appear in `/model` and `Ctrl+L`. Pick one
+with `/model openai-compatible/gateway:<model>`. A key is never echoed into the
+transcript.
+
+From a shell:
+
+```sh
+termixgo endpoint add gateway https://llm.corp/v1
+termixgo secret openai-compatible/gateway     # prompts, input hidden
+termixgo endpoint models gateway              # fetch and save the model list
+termixgo endpoint rm gateway
+```
+
+A model id that no endpoint lists resolves to the first named endpoint in
+alphabetical order, the same one every run.
 
 ### Choosing a model
 
@@ -599,8 +713,11 @@ ecosystem tools out of every request and loads them on demand through
 | `read_file`, `list_directory` | windowed text reads, one directory level |
 | `write_file`, `create_directory`, `delete_file`, `move_file` | filesystem changes |
 | `edit`, `multi_edit`, `apply_patch`, `undo_edit`, `refactor_rename` | exact-string edits, atomic symbol refactoring, and backups |
-| `grep`, `glob` | content and path search |
+| `grep`, `glob` | content and path search; honour `.gitignore`, skip lockfiles and minified bundles; grep's `output_mode` is `content` (grouped per file, optional `context` lines), `files` or `count` |
 | `search_memory` | full-text over learned memory, the journal and the workspace (SQLite FTS5) |
+| `code_outline`, `symbol_search`, `symbol_references` | structure of one file, where a symbol is defined, where it is used |
+| `lsp_definition`, `lsp_references`, `lsp_hover` | type-aware navigation through the project's language server |
+| `lsp_symbols`, `lsp_diagnostics`, `lsp_rename` | file or project symbols, compile and type errors for a file, a rename the server decides (every file backed up) |
 
 | Tool | Purpose |
 | --- | --- |
@@ -638,7 +755,11 @@ ecosystem tools out of every request and loads them on demand through
 | `lookup` | weather, exchange rate, crypto price or a Wikipedia summary from a known keyless source |
 | `read_image` | attach a local image so a vision model can see it |
 | `read_document` | text, tables and data from PDF, .docx, .xlsx, .csv, .pptx, .epub and HTML |
-| `create_office_document`, `convert_pdf_to_excel` | write an Office file or turn a PDF into a workbook |
+| `create_office_document`, `convert_pdf_to_excel` | write a Word file, a multi-sheet workbook (numbers stay numbers, bold frozen header) or CSV; turn a PDF into a workbook |
+| `convert_document` | Word, Excel, PowerPoint or OpenDocument to PDF, modern Office formats, CSV and more, through LibreOffice or Microsoft Office |
+| `generate_image` | an image from a prompt (OpenAI gpt-image-1 or DALL-E, Gemini image models, Imagen, xAI), saved in `.termixgo/media/` |
+| `text_to_speech` | spoken audio (OpenAI, Gemini TTS, or the operating system voice when no key is set), saved in `.termixgo/media/` |
+| `browser_run_steps` | a multi-step browser flow in one call; save it with `save_as`, replay it with `flow` and `{{name}}` variables |
 | `browser_navigate`, `browser_read` | open a live page and read its text, HTML, links or form controls |
 | `browser_click`, `browser_type`, `browser_press`, `browser_scroll` | drive the live page |
 | `browser_wait_for`, `browser_eval`, `browser_tabs` | wait for a state, run JavaScript, manage tabs |
@@ -687,6 +808,50 @@ Weather uses Open-Meteo, exchange rates use the European Central Bank feed via
 Frankfurter, crypto prices use CoinGecko and summaries use Wikipedia. All are
 keyless.
 
+### Mapping a repository without burning tokens
+
+The cheap order is: `repo_map` or `code_outline` for structure, `grep` with
+`output_mode=files` or `count` to find where something lives, `lsp_definition`
+and `lsp_references` for exact locations, and only then `read_file` with
+`offset`/`limit` on the lines that matter. `grep` and `glob` list files through
+`git ls-files` inside a repository, so whatever the project ignores (build
+output, generated code, logs) is never read; lockfiles, minified bundles and
+source maps are skipped unless `include_noise` is set.
+
+### Language servers
+
+The `lsp_*` tools start the project's language server on first use and keep it
+for the session; a crashed server is started again on the next call. Built in:
+
+| Files | Server (first one found on PATH) |
+| --- | --- |
+| `.go` | `gopls` |
+| `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` | `typescript-language-server --stdio` |
+| `.py` | `pyright-langserver --stdio`, `basedpyright-langserver --stdio`, `pylsp` |
+| `.rs` | `rust-analyzer` |
+| `.c`, `.h`, `.cc`, `.cpp`, `.hpp` | `clangd` |
+| `.php`, `.lua`, `.java` | `intelephense --stdio`, `lua-language-server`, `jdtls` |
+
+A missing server is reported with the install hint, and `lspServers` in the
+config replaces the command for an extension. Positions are given as a 1-based
+line plus the identifier on that line, so the model never counts UTF-16 columns.
+`lsp_rename` refuses an edit outside the workspace and backs every file up, so
+`undo_edit` reverts it.
+
+### Images, speech and office files
+
+`generate_image` and `text_to_speech` use the first provider with a key, in a
+fixed order (images: OpenAI, Google, xAI; speech: OpenAI, Google, then the
+operating system voice through SAPI, `say` or `espeak-ng`). `imageModel` and
+`speechModel` pin one. Files are written to `.termixgo/media/` (or a workspace
+path you name, never over an existing file) and can be sent on with
+`send_channel`. Both cost provider credits, so a guest chat cannot use them.
+
+`convert_document` prefers a headless LibreOffice with a private profile and
+falls back to Microsoft Word, Excel or PowerPoint over COM on Windows. The
+Office instance it starts is always closed afterwards; an Office window you have
+open is not touched.
+
 ## The live browser
 
 `web_fetch` reads a page; the live browser uses one. It starts a headless
@@ -717,6 +882,27 @@ browser_screenshot
 | `browser_cookies` | list, set or clear cookies |
 | `browser_close` | quit the browser now |
 
+A whole flow can also run in one call, which saves a model round trip per
+action, and be kept for later:
+
+```
+browser_run_steps save_as=login vars={"user": "me@example.com", "password": "..."} steps=[
+  {"action": "navigate", "url": "https://app.example.com/login"},
+  {"action": "type", "selector": "#email", "value": "{{user}}"},
+  {"action": "type", "selector": "#password", "value": "{{password}}", "submit": true},
+  {"action": "wait", "text": "Dashboard"},
+  {"action": "read", "selector": "main"}
+]
+browser_run_steps flow=login vars={"user": "...", "password": "..."}
+browser_run_steps list=true
+```
+
+Actions are `navigate`, `click`, `type`, `press`, `wait`, `scroll`, `read` and
+`screenshot`. The run stops at the first failing step and says which one. A
+saved flow keeps the `{{name}}` placeholders, never the values, and a missing
+variable fails the run before anything is typed. Flows live in
+`.termixgo/flows/`.
+
 `browser_screenshot` uses the live session when it is open, so it captures the
 page you have been clicking in with its session, not a fresh signed-out load.
 `full_page=true` captures the whole document and `selector` captures one
@@ -725,6 +911,7 @@ element.
 The browser needs Chrome, Chromium, Edge or Brave on the host; `TERMIXGO_BROWSER_BIN`
 points at a specific binary. It closes itself after five idle minutes and on a
 clean exit, because a resident Chromium is real memory on a small machine. A
+browser that crashed or whose window was closed is replaced on the next call. A
 guest chat never receives these tools, and navigation refuses link-local and
 cloud metadata addresses.
 
@@ -831,12 +1018,20 @@ Once a folder is trusted, the agent works without interrupting you.
 - `all`: nothing waits.
 - `plan`: read, search and plan, but every mutating tool is blocked.
 
+`send_channel` runs without asking when it replies to the chat a request came
+from or to the owner, but asks before it sends a file from outside the
+workspace or a message to anyone else, in every mode except `all`. A guest chat
+can never receive a file from outside the workspace.
+
 ## Memory and skills
 
 - **Project memory**: the first of `TERMIXGO.md`, `AGENTS.md` or `CLAUDE.md` at
   the workspace root enters the system prompt.
 - **Learned memory**: `.termixgo/memory.md` per project and
   `~/.termixgo/memory.md` globally. The agent appends with the `remember` tool.
+  The block that rides in every request keeps the newest facts within 6 KB
+  across the agent, project and global scopes; the approval bookkeeping lines
+  stay in the file but out of the prompt.
 - **Skills**: `.termixgo/skills/<name>/SKILL.md` in the project, or
   `~/.termixgo/skills/<name>/SKILL.md` globally. Only the short description
   enters the prompt; the body loads on demand.
@@ -903,6 +1098,11 @@ folder, asks before it runs, though a server can lower that with a `readOnlyHint
 which is treated as a claim rather than a guarantee. And a stdio server speaks
 the protocol on its stdout, so a server that prints a banner there will not work;
 its stderr is kept and shown in the failure message.
+
+A stdio server that crashes is started again on the next call to one of its
+tools. The call that was in flight when it crashed is reported as having an
+unknown outcome rather than repeated, because a tool that sends or writes must
+not run twice.
 
 Both transports implement only `initialize`, `tools/list` and `tools/call`.
 Resources, prompts and sampling are out of scope.
@@ -1124,6 +1324,15 @@ The run stops before the step that would pass the budget and says so:
 `stopped: estimated spend reached $2.1043 of the $2.00 budget`. It never stops
 silently.
 
+**Prompt caching.** Every step of a turn sends the whole history again, so the
+cache decides what a long session costs. Termixgo keeps the cached prefix
+stable: the system prompt is static (the plan travels in the turn's opening
+message and the todo tools' results), the tools that `find_tools` loaded stay
+loaded for the session and only ever extend the list at its end, Anthropic
+requests carry their moving breakpoint on the newest message, and OpenAI and
+Codex requests carry a `prompt_cache_key`. `cache N%` in the status line and the
+`Prompt cache:` line of `/cost` show the share of input served from the cache.
+
 Three honest caveats:
 
 - Prices are list values in a table in `internal/provider/pricing.go`, checked
@@ -1222,11 +1431,15 @@ issue.
 | `<workspace>/.termixgo/pipelines/` | orchestration pipelines |
 | `<workspace>/.termixgo/search.db` | the full-text index behind `search_memory` |
 | `<workspace>/.termixgo/error-journal.jsonl` | the error journal |
+| `<workspace>/.termixgo/pastes/` | clipboard images and spooled long pastes |
+| `<workspace>/.termixgo/media/` | generated images, speech and flow screenshots |
+| `<workspace>/.termixgo/flows/` | saved `browser_run_steps` flows |
 
 ## CLI reference
 
 ```sh
-termixgo                        # terminal UI (setup runs on first use)
+termixgo                        # terminal UI, a fresh session (setup runs on first use)
+termixgo resume [id]            # continue the newest (or a given) session; also -c, --continue
 termixgo setup                  # open the onboarding wizard
 termixgo run "<prompt>"         # one prompt, streamed to stdout
 termixgo run --yes "<prompt>"   # auto-approve tool prompts for this run
@@ -1238,6 +1451,9 @@ termixgo model [id]             # show or set the default model
 termixgo model voice [id|off]   # show or set the voice transcription model
 termixgo model image [id|off]   # show or set the image generation model
 termixgo endpoint [provider url]# show or set a provider custom base URL
+termixgo endpoint add <name> <url>  # a named OpenAI-compatible endpoint
+termixgo endpoint models <name>     # fetch and save that endpoint's models
+termixgo endpoint rm <name>         # remove it with its models and key
 termixgo trust [on|off]         # show or set folder trust
 termixgo approval [mode]        # ask, edits, all or plan
 termixgo harness [id]           # show or set the agent harness profile
@@ -1352,7 +1568,10 @@ internal/agent      the run loop, tools, prompt, compaction, memory
 internal/channel    channel policies, account state, and pairing
 internal/provider   BYOK clients: OpenAI-compatible, Anthropic, Google
 internal/config     ~/.termixgo config, defaults and folder trust
-internal/mcp        MCP client: stdio JSON-RPC, tool listing and dispatch
+internal/mcp        MCP client: stdio and HTTP JSON-RPC, tool listing, dispatch, crash restart
+internal/lsp        Language Server Protocol client and per-workspace server manager
+internal/media      image generation and text to speech over the providers' HTTP APIs
+internal/browser    the live headless browser over the DevTools protocol
 internal/secrets    0600 secret store for API keys and the bot token
 internal/search     SQLite full-text index over memory, journal and workspace
 internal/skill      SKILL.md discovery and parsing

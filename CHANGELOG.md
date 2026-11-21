@@ -24,7 +24,11 @@ All notable changes to Termixgo are recorded here. The format follows
 - The context gauge uses the provider's reported prompt tokens once a step has run (an estimate is marked `ctx: ~`), and no longer repeats the model name.
 - A resumed session shows each tool call's label, real outcome and output preview.
 
+- grep has `output_mode` `files` and `count`, groups content under one path line per file and takes `context` lines; grep and glob honour `.gitignore` through `git ls-files` and skip lockfiles, minified bundles and source maps unless `include_noise` is set.
+- The learned-memory block in the prompt keeps the newest facts within 6 KB across scopes and leaves out the approval bookkeeping lines.
+
 ### Fixed
+- The prompt cache prefix stays stable: the plan is no longer part of the system prompt, the tool search set persists for the session and only grows at its end, and the Anthropic moving breakpoint sits on the last message. OpenAI and Codex requests carry a `prompt_cache_key`, and the status line shows the cache hit rate.
 - A launch starts a fresh session instead of silently loading the newest saved one, so the model no longer resumes another project's pending work; switching agents only resumes a session from that agent's workspace, and `/new` clears the old transcript.
 - `send_channel` asks before sending a file from outside the workspace or a message to anyone but the caller.
 - Escape in the approval and question dialogs is held like the chat Escape, so a mouse scroll no longer denies an approval; `!cmd` no longer freezes the UI; the idle screen stops repainting ten times a second; Ctrl+T now hides the reasoning body.

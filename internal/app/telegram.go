@@ -215,7 +215,14 @@ type telegramInteractor struct {
 }
 
 func (ti *telegramInteractor) Approve(request agent.ApprovalRequest) agent.Decision {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	return ti.ApproveContext(context.Background(), request)
+}
+
+func (ti *telegramInteractor) ApproveContext(parentCtx context.Context, request agent.ApprovalRequest) agent.Decision {
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, 3*time.Minute)
 	defer cancel()
 	decision, err := ti.bot.RequestApprovalInChat(ctx, ti.chat, request.Tool, request.Detail, request.Risk)
 	if err != nil {

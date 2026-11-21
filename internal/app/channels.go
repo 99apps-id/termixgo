@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -259,16 +260,63 @@ func (a *App) RedactForChannel(text string) string {
 // this turn produced, not the session's last answer: a model that said nothing
 // must not make the bot repeat an earlier reply.
 func (a *App) runChannelTurn(ctx context.Context, agentName string, session *agent.Session, interactor Interactor, prompt string, images []provider.Image, guest bool, maxSteps int, costBudgetUSD float64, callerName, callerChannel, callerChatID, callerAccount string, progress func(string)) (string, error) {
+	return a.runChannelTurnStream(ctx, agentName, session, interactor, prompt, images, guest, maxSteps, costBudgetUSD, callerName, callerChannel, callerChatID, callerAccount, progress, nil)
+}
+
+func telegramStreamEvent(event agent.Event) (telegram.StreamEvent, bool) {
+	switch event.Kind {
+	case agent.EventTurnStart:
+		return telegram.StreamEvent{Kind: "turn-start"}, true
+	case agent.EventThinking:
+		if event.Text == "" {
+			return telegram.StreamEvent{}, false
+		}
+		return telegram.StreamEvent{Kind: "thinking", Text: event.Text}, true
+	case agent.EventText:
+		if event.Text == "" {
+			return telegram.StreamEvent{}, false
+		}
+		return telegram.StreamEvent{Kind: "text", Text: event.Text}, true
+	case agent.EventToolStart:
+		label := event.ToolLabel
+		if label == "" && event.ToolName != "" {
+			label = "Running " + event.ToolName + "..."
+		}
+		return telegram.StreamEvent{Kind: "tool-start", Text: label, ToolName: event.ToolName}, true
+	case agent.EventToolEnd:
+		label := event.ToolLabel
+		if label == "" && event.ToolName != "" {
+			label = "Ran " + event.ToolName
+		}
+		return telegram.StreamEvent{Kind: "tool-end", Text: label, ToolName: event.ToolName, ToolOK: event.ToolOK}, true
+	case agent.EventNotice:
+		if strings.TrimSpace(event.Text) == "" {
+			return telegram.StreamEvent{}, false
+		}
+		return telegram.StreamEvent{Kind: "notice", Text: event.Text}, true
+	case agent.EventError:
+		if event.Err == nil {
+			return telegram.StreamEvent{}, false
+		}
+		return telegram.StreamEvent{Kind: "error", Text: event.Err.Error()}, true
+	default:
+		return telegram.StreamEvent{}, false
+	}
+}
+
+func (a *App) runChannelTurnStream(ctx context.Context, agentName string, session *agent.Session, interactor Interactor, prompt string, images []provider.Image, guest bool, maxSteps int, costBudgetUSD float64, callerName, callerChannel, callerChatID, callerAccount string, progress func(string), onStream func(telegram.StreamEvent)) (string, error) {
 	notice := ""
 	stopReason := ""
 	// The emitter also runs on the process manager's goroutine, so the
 	// captured notice and stop reason are guarded rather than plain vars.
 	var captureMu sync.Mutex
 	var channelObserver func(agent.Event)
-	if progress != nil {
-		// The opening line is part of the contract: the caller shows it at
-		// once, before the first event arrives.
-		progress("Working...")
+	if progress != nil || onStream != nil {
+		if progress != nil {
+			// The opening line is part of the contract: the caller shows it at
+			// once, before the first event arrives.
+			progress("Working...")
+		}
 		channelObserver = func(event agent.Event) {
 			switch {
 			case event.Kind == agent.EventNotice && strings.TrimSpace(event.Text) != "":
@@ -284,12 +332,32 @@ func (a *App) runChannelTurn(ctx context.Context, agentName string, session *age
 				stopReason = event.StopReason
 				captureMu.Unlock()
 			}
-			if line := telegramProgressLine(event); line != "" {
-				progress(line)
+			if onStream != nil {
+				if ev, ok := telegramStreamEvent(event); ok {
+					onStream(ev)
+				}
+			}
+			if progress != nil {
+				if line := telegramProgressLine(event); line != "" {
+					progress(line)
+				}
 			}
 		}
-		claim := a.SetObserver(channelObserver)
-		defer a.ClearObserver(claim)
+	}
+	if len(images) > 0 {
+		shrunkImages := make([]provider.Image, len(images))
+		copy(shrunkImages, images)
+		for i := range shrunkImages {
+			if strings.HasPrefix(strings.ToLower(shrunkImages[i].MediaType), "image/") {
+				if raw, err := base64.StdEncoding.DecodeString(shrunkImages[i].Data); err == nil {
+					if shrunk, changed := agent.ShrinkImage(raw); changed {
+						shrunkImages[i].Data = base64.StdEncoding.EncodeToString(shrunk)
+						shrunkImages[i].MediaType = "image/png"
+					}
+				}
+			}
+		}
+		images = shrunkImages
 	}
 	options := runOptions{
 		images:        images,
@@ -331,7 +399,7 @@ func (a *App) runChannelTurn(ctx context.Context, agentName string, session *age
 		}
 	}
 	if answer != "" {
-		return answer, nil
+		return agent.CollapseRepeatedProse(answer), nil
 	}
 	captureMu.Lock()
 	capturedNotice := notice
@@ -605,6 +673,24 @@ func (b *telegramBridge) RunPrompt(ctx context.Context, request channel.Request,
 	return b.app.RedactForChannel(answer), nil
 }
 
+// RunPromptStream runs one turn for one chat and pushes structured stream events
+// (thinking, text deltas, tool starts/ends) for live Telegram streaming.
+func (b *telegramBridge) RunPromptStream(ctx context.Context, request channel.Request, prompt string, onEvent func(telegram.StreamEvent)) (string, error) {
+	session, err := b.session(request)
+	if err != nil {
+		return "", err
+	}
+	guest, maxSteps, budget := b.limits(request)
+	answer, err := b.app.runChannelTurnStream(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, request.SenderName, "Telegram", request.ChatID, b.name, nil, onEvent)
+	if errors.Is(err, ErrBusy) {
+		return "", channel.ErrBusy
+	}
+	if err != nil {
+		return "", err
+	}
+	return b.app.RedactForChannel(answer), nil
+}
+
 // promptFor wraps a guest's message as data. The operator's own messages are
 // instructions and stay as typed.
 func (b *telegramBridge) promptFor(request channel.Request, prompt string) string {
@@ -623,6 +709,24 @@ func (b *telegramBridge) RunPromptWithImage(ctx context.Context, request channel
 	images := []provider.Image{{MediaType: mediaType, Data: data}}
 	guest, maxSteps, budget := b.limits(request)
 	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, request.SenderName, "Telegram", request.ChatID, b.name, progress)
+	if errors.Is(err, ErrBusy) {
+		return "", channel.ErrBusy
+	}
+	if err != nil {
+		return "", err
+	}
+	return b.app.RedactForChannel(answer), nil
+}
+
+// RunPromptWithImageStream is RunPromptWithImage with live stream events.
+func (b *telegramBridge) RunPromptWithImageStream(ctx context.Context, request channel.Request, prompt, mediaType, data string, onEvent func(telegram.StreamEvent)) (string, error) {
+	session, err := b.session(request)
+	if err != nil {
+		return "", err
+	}
+	images := []provider.Image{{MediaType: mediaType, Data: data}}
+	guest, maxSteps, budget := b.limits(request)
+	answer, err := b.app.runChannelTurnStream(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, request.SenderName, "Telegram", request.ChatID, b.name, nil, onEvent)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}
@@ -665,6 +769,25 @@ func (b *telegramBridge) RunVoicePrompt(ctx context.Context, request channel.Req
 	session, sessErr := b.session(request)
 	if sessErr != nil {
 		return "", err
+	}
+	return b.app.runChannelVoiceFallback(ctx, b.account.AgentName(b.name), session, b.promptFor(request, prompt), err, progress)
+}
+
+// RunVoicePromptStream runs a voice-originated turn with live stream events.
+func (b *telegramBridge) RunVoicePromptStream(ctx context.Context, request channel.Request, prompt string, onEvent func(telegram.StreamEvent)) (string, error) {
+	answer, err := b.RunPromptStream(ctx, request, prompt, onEvent)
+	if err == nil {
+		return answer, nil
+	}
+	session, sessErr := b.session(request)
+	if sessErr != nil {
+		return "", err
+	}
+	var progress func(string)
+	if onEvent != nil {
+		progress = func(line string) {
+			onEvent(telegram.StreamEvent{Kind: "notice", Text: line})
+		}
 	}
 	return b.app.runChannelVoiceFallback(ctx, b.account.AgentName(b.name), session, b.promptFor(request, prompt), err, progress)
 }
@@ -760,7 +883,7 @@ func (b *telegramBridge) Workspace() string {
 }
 
 func (b *telegramBridge) interactorFor(request channel.Request) Interactor {
-	if b.bot == nil {
+	if b.bot == nil || !request.Admin {
 		return nil
 	}
 	var chatID int64
@@ -1068,11 +1191,11 @@ func (a *App) sendTelegramChannel(ctx context.Context, rawAccount, rawRecipient,
 	} else {
 		if ok && entry.ChatID != 0 {
 			chatID = entry.ChatID
-		} else if cfg.Telegram.ChatID != 0 {
+		} else if account == config.FinalAgentName && cfg.Telegram.ChatID != 0 {
 			chatID = cfg.Telegram.ChatID
 		} else if ok && entry.OwnerUserID != 0 {
 			chatID = entry.OwnerUserID
-		} else if cfg.Telegram.OwnerUserID != 0 {
+		} else if account == config.FinalAgentName && cfg.Telegram.OwnerUserID != 0 {
 			chatID = cfg.Telegram.OwnerUserID
 		} else if runtime != nil && runtime.bot != nil {
 			chatID, _ = runtime.bot.Pairing()

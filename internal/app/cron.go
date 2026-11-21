@@ -273,8 +273,12 @@ func (a *App) Notify(ctx context.Context, text string) error {
 		return fmt.Errorf("no bot token is stored")
 	}
 	client := telegram.NewClient(token)
-	_, err := client.SendMarkdown(ctx, chatID, trimmed, nil)
-	return err
+	for _, chunk := range channel.Chunk(trimmed, 3800) {
+		if _, err := client.SendMarkdown(ctx, chatID, chunk, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CronJobs lists the scheduled jobs.

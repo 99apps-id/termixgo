@@ -718,7 +718,13 @@ func (b *Bot) ResolveApprovalByText(chatID int64, text string) bool {
 	}
 
 	var action string
-	switch strings.ToLower(trimmed) {
+	lowered := strings.ToLower(trimmed)
+	if strings.HasPrefix(lowered, "/") {
+		if cmd, _ := splitCommand(lowered); cmd == "stop" || cmd == "cancel" {
+			lowered = "/stop"
+		}
+	}
+	switch lowered {
 	case "y", "yes", "ya", "iya", "allow", "ok", "1":
 		action = "once"
 	case "s", "session", "sesi", "2":
@@ -903,9 +909,11 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		if b.ResolveApprovalByText(chatID, text) {
 			return
 		}
-		if text == "/stop" || text == "/cancel" {
-			b.ResolveApprovalByText(chatID, "deny")
-			return
+		if isCommand {
+			if cmd, _ := splitCommand(text); cmd == "stop" || cmd == "cancel" {
+				b.ResolveApprovalByText(chatID, "deny")
+				return
+			}
 		}
 		b.reply(ctx, chatID, "Waiting for approval. Reply y (once), s (session), a (always), n (deny), or /stop to cancel.")
 		return
@@ -961,8 +969,12 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		b.agent.NewSession(request)
 		b.reply(ctx, chatID, "Started a new session.")
 	case "stop":
-		if stopper, ok := b.agent.(interface{ StopChat(channel.Request) bool }); ok && stopper.StopChat(request) {
-			b.reply(ctx, chatID, "Stopping the running turn in this chat.")
+		if stopper, ok := b.agent.(interface{ StopChat(channel.Request) bool }); ok {
+			if stopper.StopChat(request) {
+				b.reply(ctx, chatID, "Stopping the running turn in this chat.")
+			} else {
+				b.reply(ctx, chatID, "No turn is currently running in this chat.")
+			}
 		} else {
 			b.agent.Stop()
 			b.reply(ctx, chatID, "Stopping the running turn.")
@@ -1118,6 +1130,17 @@ func (b *Bot) runPrompt(ctx context.Context, chatID int64, request channel.Reque
 		}
 	}
 
+	if streamer, ok := b.agent.(StreamingAgent); ok {
+		b.runWithStream(ctx, chatID, func(runCtx context.Context, onEvent func(StreamEvent)) (string, error) {
+			answer, err := streamer.RunPromptStream(runCtx, request, prompt, onEvent)
+			if err == nil {
+				b.notifyHookTurnCompleted(runCtx, request, prompt, answer)
+			}
+			return answer, err
+		})
+		return
+	}
+
 	b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
 		answer, err := b.agent.RunPrompt(runCtx, request, prompt, progress)
 		if err == nil {
@@ -1179,6 +1202,16 @@ func (b *Bot) runPhoto(ctx context.Context, chatID int64, request channel.Reques
 
 	encoded := base64.StdEncoding.EncodeToString(data)
 	mediaType := imageMediaType(file.FilePath)
+	if streamer, ok := b.agent.(ImageStreamingAgent); ok {
+		b.runWithStream(ctx, chatID, func(runCtx context.Context, onEvent func(StreamEvent)) (string, error) {
+			answer, err := streamer.RunPromptWithImageStream(runCtx, request, prompt, mediaType, encoded, onEvent)
+			if err == nil {
+				b.notifyHookTurnCompleted(runCtx, request, prompt, answer)
+			}
+			return answer, err
+		})
+		return
+	}
 	b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
 		answer, err := b.agent.RunPromptWithImage(runCtx, request, prompt, mediaType, encoded, progress)
 		if err == nil {
@@ -1237,6 +1270,12 @@ func (b *Bot) runDocument(ctx context.Context, chatID int64, request channel.Req
 		if mediaType == "" {
 			mediaType = imageMediaType(doc.FileName)
 		}
+		if streamer, ok := b.agent.(ImageStreamingAgent); ok {
+			b.runWithStream(ctx, chatID, func(runCtx context.Context, onEvent func(StreamEvent)) (string, error) {
+				return streamer.RunPromptWithImageStream(runCtx, request, prompt, mediaType, encoded, onEvent)
+			})
+			return
+		}
 		b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
 			return b.agent.RunPromptWithImage(runCtx, request, prompt, mediaType, encoded, progress)
 		})
@@ -1273,6 +1312,12 @@ func (b *Bot) runDocument(ctx context.Context, chatID int64, request channel.Req
 			builder.WriteString(channel.FormatQuotedPrompt(quoted, "Please inspect and analyze this uploaded PDF document."))
 		}
 		encoded := base64.StdEncoding.EncodeToString(data)
+		if streamer, ok := b.agent.(ImageStreamingAgent); ok {
+			b.runWithStream(ctx, chatID, func(runCtx context.Context, onEvent func(StreamEvent)) (string, error) {
+				return streamer.RunPromptWithImageStream(runCtx, request, builder.String(), "application/pdf", encoded, onEvent)
+			})
+			return
+		}
 		b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
 			return b.agent.RunPromptWithImage(runCtx, request, builder.String(), "application/pdf", encoded, progress)
 		})
@@ -1325,7 +1370,9 @@ func (b *Bot) runVoice(ctx context.Context, chatID int64, request channel.Reques
 		return
 	}
 
-	b.reply(ctx, chatID, "Transcribed: <i>\""+escapeHTML(text)+"\"</i>")
+	if _, err := b.client.SendHTML(ctx, chatID, "Transcribed: <i>\""+escapeHTML(b.redact(text))+"\"</i>", nil); err != nil {
+		b.logf("send failed: %v", err)
+	}
 
 	prompt := text
 	if caption = strings.TrimSpace(caption); caption != "" {
@@ -1351,6 +1398,16 @@ func (b *Bot) runVoice(ctx context.Context, chatID int64, request channel.Reques
 					prompt = hookResp.Prompt
 				}
 			}
+		}
+		if streamer, ok := runner.(VoiceStreamingAgent); ok {
+			b.runWithStream(ctx, chatID, func(runCtx context.Context, onEvent func(StreamEvent)) (string, error) {
+				answer, err := streamer.RunVoicePromptStream(runCtx, request, prompt, onEvent)
+				if err == nil {
+					b.notifyHookTurnCompleted(runCtx, request, prompt, answer)
+				}
+				return answer, err
+			})
+			return
 		}
 		b.runWithCard(ctx, chatID, func(runCtx context.Context, progress func(string)) (string, error) {
 			answer, err := runner.RunVoicePrompt(runCtx, request, prompt, progress)
@@ -1572,13 +1629,13 @@ func openedFence(part string) (string, bool) {
 		if !strings.HasPrefix(trimmed, "```") {
 			continue
 		}
-		if fences == 0 {
+		fences++
+		if fences%2 == 1 {
 			lang = strings.TrimSpace(strings.TrimPrefix(trimmed, "```"))
 			if fields := strings.Fields(lang); len(fields) > 0 {
 				lang = fields[0]
 			}
 		}
-		fences++
 	}
 	return lang, fences%2 == 1
 }
@@ -1614,10 +1671,15 @@ func nextChunk(text string, limit int) (string, string) {
 			}
 			return text[:width], text[width:]
 		}
-		if limit < 64 || len(markdownToTelegramHTML(text[:cut])) <= limit || cut <= 16 {
-			part, rest := text[:cut], text[cut:]
-			if fenceLang, open := openedFence(part); open {
-				part += markdownFenceClose
+		part, rest := text[:cut], text[cut:]
+		fenceLang, open := openedFence(part)
+		candidate := part
+		if open {
+			candidate += markdownFenceClose
+		}
+		if limit < 64 || len(markdownToTelegramHTML(candidate)) <= limit || cut <= 16 {
+			if open {
+				part = candidate
 				rest = "```" + fenceLang + "\n" + rest
 			}
 			return part, rest
@@ -1739,10 +1801,11 @@ func (b *Bot) mentionsBot(message *Message) bool {
 
 func entitiesMentionBot(raw string, entities []MessageEntity, selfID int64, username string) bool {
 	lowered := strings.ToLower(raw)
+	needle := "@" + strings.ToLower(username)
 	for _, entity := range entities {
 		switch entity.Type {
-		case "mention":
-			if username != "" && strings.Contains(lowered, "@"+strings.ToLower(username)) {
+		case "mention", "bot_command":
+			if username != "" && containsExactMention(lowered, needle) {
 				return true
 			}
 		case "text_mention":
@@ -1752,6 +1815,28 @@ func entitiesMentionBot(raw string, entities []MessageEntity, selfID int64, user
 		}
 	}
 	return false
+}
+
+func containsExactMention(lowered, needle string) bool {
+	if needle == "@" {
+		return false
+	}
+	start := 0
+	for {
+		idx := strings.Index(lowered[start:], needle)
+		if idx < 0 {
+			return false
+		}
+		end := start + idx + len(needle)
+		if end == len(lowered) {
+			return true
+		}
+		next := lowered[end]
+		if !((next >= 'a' && next <= 'z') || (next >= '0' && next <= '9') || next == '_') {
+			return true
+		}
+		start += idx + len(needle)
+	}
 }
 
 // isOperator reports whether a sender is the account's paired owner, who is an
@@ -1816,9 +1901,11 @@ func (b *Bot) handleGuestMessage(ctx context.Context, request channel.Request, m
 		if b.ResolveApprovalByText(chatID, text) {
 			return
 		}
-		if text == "/stop" || text == "/cancel" {
-			b.ResolveApprovalByText(chatID, "deny")
-			return
+		if isCommand {
+			if cmd, _ := splitCommand(text); cmd == "stop" || cmd == "cancel" {
+				b.ResolveApprovalByText(chatID, "deny")
+				return
+			}
 		}
 	}
 	quoted := quotedText(message)
@@ -1836,8 +1923,12 @@ func (b *Bot) handleGuestMessage(ctx context.Context, request channel.Request, m
 		b.agent.NewSession(request)
 		b.reply(ctx, chatID, "Mulai sesi baru ya.")
 	case "stop":
-		if stopper, ok := b.agent.(interface{ StopChat(channel.Request) bool }); ok && stopper.StopChat(request) {
-			b.reply(ctx, chatID, "Menghentikan proses yang sedang berjalan di sesi ini.")
+		if stopper, ok := b.agent.(interface{ StopChat(channel.Request) bool }); ok {
+			if stopper.StopChat(request) {
+				b.reply(ctx, chatID, "Menghentikan proses yang sedang berjalan di sesi ini.")
+			} else {
+				b.reply(ctx, chatID, "Tidak ada proses yang sedang berjalan di sesi ini.")
+			}
 		} else {
 			b.agent.Stop()
 			b.reply(ctx, chatID, "Menghentikan proses.")
@@ -1901,7 +1992,7 @@ func (b *Bot) SendTo(ctx context.Context, chatID int64, text string) error {
 
 // SendFileTo uploads a document or image to one Telegram chat.
 func (b *Bot) SendFileTo(ctx context.Context, chatID int64, filename string, data []byte, caption string) error {
-	_, err := b.client.SendDocument(ctx, chatID, filename, data, caption)
+	_, err := b.client.SendDocument(ctx, chatID, filename, data, b.redact(caption))
 	return err
 }
 

@@ -7,14 +7,16 @@ import (
 )
 
 var (
-	codeSpanPattern   = regexp.MustCompile("`([^`\n]+)`")
-	boldItalicPattern = regexp.MustCompile(`\*\*\*([^*\n]+)\*\*\*`)
-	boldPattern       = regexp.MustCompile(`\*\*([^*\n]+)\*\*`)
-	italicUnderscore  = regexp.MustCompile(`\b_([^_]+)_\b`)
-	strikePattern     = regexp.MustCompile(`~~([^~\n]+)~~`)
-	linkPattern       = regexp.MustCompile(`\[([^\]\n]+)\]\(([^)\s]+)\)`)
-	tableRowPattern   = regexp.MustCompile(`^\|?[ \t]*([^|\r\n]+(?:[ \t]*\|[ \t]*[^|\r\n]+)*)\|?[ \t]*$`)
-	tableCellSplitter = regexp.MustCompile(`[ \t]*\|[ \t]*`)
+	codeSpanPattern     = regexp.MustCompile("`([^`\n]+)`")
+	boldItalicPattern   = regexp.MustCompile(`\*\*\*([^*\n]+)\*\*\*`)
+	boldPattern         = regexp.MustCompile(`\*\*([^*\n]+)\*\*`)
+	underscoreBold      = regexp.MustCompile(`__([^_\n]+)__`)
+	italicAsterisk      = regexp.MustCompile(`\*([^\s*](?:[^*\n]*?[^\s*])?)\*`)
+	italicUnderscore    = regexp.MustCompile(`\b_([^_]+)_\b`)
+	strikePattern       = regexp.MustCompile(`~~([^~\n]+)~~`)
+	linkPattern         = regexp.MustCompile(`\[([^\]\n]+)\]\(([^)\s]+)\)`)
+	tableRowPattern     = regexp.MustCompile(`^\|?[ \t]*([^|\r\n]+(?:[ \t]*\|[ \t]*[^|\r\n]+)*)\|?[ \t]*$`)
+	tableCellSplitter   = regexp.MustCompile(`[ \t]*\|[ \t]*`)
 )
 
 // markdownToTelegramHTML renders a small, deliberate subset of Markdown as the
@@ -117,9 +119,14 @@ func markdownToTelegramHTML(text string) string {
 func inlineToHTML(line string) string {
 	escaped := escapeHTML(line)
 	trimmed := strings.TrimLeft(escaped, " \t")
+	if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+		return "──────────"
+	}
 	if strings.HasPrefix(trimmed, "#") {
 		if heading := strings.TrimSpace(strings.TrimLeft(trimmed, "#")); heading != "" {
-			return "<b>" + heading + "</b>"
+			// Avoid nested <b><b>...</b></b> inside headings while still rendering inline code or links.
+			cleaned := boldPattern.ReplaceAllString(heading, "$1")
+			return "<b>" + inlineSpansToHTML(cleaned) + "</b>"
 		}
 	}
 	if strings.HasPrefix(trimmed, "&gt; ") {
@@ -159,20 +166,49 @@ func linksToHTML(text string) string {
 	last := 0
 	for _, loc := range linkPattern.FindAllStringSubmatchIndex(text, -1) {
 		out.WriteString(emphasisToHTML(text[last:loc[0]]))
-		href := strings.ReplaceAll(text[loc[4]:loc[5]], `"`, "&quot;")
-		out.WriteString(`<a href="` + href + `">` + emphasisToHTML(text[loc[2]:loc[3]]) + "</a>")
+		label := text[loc[2]:loc[3]]
+		rawHref := text[loc[4]:loc[5]]
+		href := strings.ReplaceAll(rawHref, `"`, "&quot;")
+		if isTelegramSafeURL(rawHref) {
+			out.WriteString(`<a href="` + href + `">` + emphasisToHTML(label) + "</a>")
+		} else if label == rawHref {
+			out.WriteString(emphasisToHTML(label))
+		} else {
+			out.WriteString(emphasisToHTML(label) + " (" + rawHref + ")")
+		}
 		last = loc[1]
 	}
 	out.WriteString(emphasisToHTML(text[last:]))
 	return out.String()
 }
 
+func isTelegramSafeURL(raw string) bool {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	return strings.HasPrefix(lower, "http://") ||
+		strings.HasPrefix(lower, "https://") ||
+		strings.HasPrefix(lower, "tg://") ||
+		strings.HasPrefix(lower, "mailto:")
+}
+
 func emphasisToHTML(text string) string {
-	text = boldItalicPattern.ReplaceAllString(text, "<b><i>$1</i></b>")
-	text = boldPattern.ReplaceAllString(text, "<b>$1</b>")
-	text = italicUnderscore.ReplaceAllString(text, "<i>$1</i>")
+	const (
+		bOpen  = "\x00B1\x00"
+		bClose = "\x00B2\x00"
+		iOpen  = "\x00I1\x00"
+		iClose = "\x00I2\x00"
+	)
+	text = boldItalicPattern.ReplaceAllString(text, bOpen+iOpen+"$1"+iClose+bClose)
+	text = boldPattern.ReplaceAllString(text, bOpen+"$1"+bClose)
+	text = underscoreBold.ReplaceAllString(text, bOpen+"$1"+bClose)
+	text = italicAsterisk.ReplaceAllString(text, iOpen+"$1"+iClose)
+	text = italicUnderscore.ReplaceAllString(text, iOpen+"$1"+iClose)
 	text = strikePattern.ReplaceAllString(text, "<s>$1</s>")
-	return text
+	return strings.NewReplacer(
+		bOpen, "<b>",
+		bClose, "</b>",
+		iOpen, "<i>",
+		iClose, "</i>",
+	).Replace(text)
 }
 
 // escapeHTML escapes the three characters Telegram's HTML parser treats as

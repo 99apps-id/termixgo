@@ -79,7 +79,12 @@ internal/config     ~/.termixgo config.json: agents, channel accounts, defaults,
 internal/desktop    local screen capture, pointer and keyboard input, window
                     focus and application launch, one driver per host
 internal/eval       benchmark suite runner, task evaluation and reporting
-internal/mcp        MCP client: stdio JSON-RPC, tool listing and dispatch
+internal/mcp        MCP client: stdio and HTTP JSON-RPC, tool listing, dispatch,
+                    restart of a crashed stdio server
+internal/lsp        Language Server Protocol client (Content-Length framing,
+                    UTF-16 positions) and the per-workspace server manager
+internal/media      image generation and text to speech over provider HTTP APIs,
+                    with the operating system voice as the speech fallback
 internal/secrets    0600 secret store for API keys and channel tokens
 internal/search     SQLite full-text index over memory, journal and workspace
 internal/skill      SKILL.md discovery and parsing
@@ -220,10 +225,15 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   provider with no such control is sent nothing rather than a guess: these fields
   are strict and a wrong value returns 400, which loses the turn. An empty effort
   means the vendor's own default and must stay absent from the body.
-- The Anthropic cache anchor is the first message plus a moving marker near the
-  tail (`applyPromptCacheToMessages`). Marking only the second-to-last message,
-  as this once did, moved the cached prefix on every turn and made a long
-  conversation pay full input price for its own history again.
+- The Anthropic cache anchor is the first message plus a moving marker on the
+  last message (`applyPromptCacheToMessages`). On the second-to-last message the
+  newest tool result was billed in full and then cache-written on the next step.
+- The cache prefix is tools, then system, then messages, and it must not change
+  between steps or turns. So the system prompt is static (no plan in it; the plan
+  rides in the turn's opening message and the todo tools' results), the tool
+  search set lives on the session and only grows at its end, and the learned
+  memory block leaves out the approval bookkeeping lines. Anything new that varies
+  per step belongs in the messages, never in the system prompt or the tool list.
 - A transient HTTP failure is retried only before the response body is read.
   Once a caller starts consuming streamed chunks the request has produced
   output, so a retry would double-apply it.

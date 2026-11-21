@@ -74,6 +74,12 @@ func BuildSystemParts(env *Env, model string) (staticPrompt, dynamicPlan string)
 		builder.WriteString(".\n")
 		builder.WriteString("- Unless the operator profile in USER.md or the user explicitly asks to be called by another name or title, address them politely using their profile name (" + caller + ").\n")
 	}
+	if strings.TrimSpace(env.CallerChannel) != "" {
+		builder.WriteString("\n## MESSAGING CHANNEL RULES\n")
+		builder.WriteString("- Never reply with only a promise to check later (such as \"sebentar saya cek dulu...\" or \"let me check...\") without executing a tool: run the tool first and reply with the actual result.\n")
+		builder.WriteString("- Never repeat the same sentence or acknowledgement multiple times in a reply.\n")
+		builder.WriteString("- Format replies cleanly for chat using enriched Markdown where helpful: **bold**, *italic*, bullet lists (- item), numbered lists (1. item), blockquotes (> quote), code blocks, and natural emojis/emoticons to keep the conversation clear and friendly.\n")
+	}
 	if env.Guest {
 		builder.WriteString("\n\n## GUEST SESSION\n")
 		builder.WriteString("This chat belongs to someone who is not the operator. You are talking to a guest.\n")

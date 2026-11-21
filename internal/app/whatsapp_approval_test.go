@@ -75,10 +75,7 @@ func TestWhatsAppApprovalRoundTrip(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		bridge.mu.Lock()
-		pending := bridge.pendingApproval != nil
-		bridge.mu.Unlock()
-		if pending {
+		if bridge.HasPendingApproval(request) {
 			break
 		}
 		time.Sleep(2 * time.Millisecond)
@@ -118,7 +115,7 @@ func TestWhatsAppApprovalRoundTrip(t *testing.T) {
 	if !strings.Contains(confirmations[1], "Always allowed") && !strings.Contains(confirmations[1], "Selalu diizinkan") {
 		t.Errorf("the confirmation must name the decision, got %q", confirmations[1])
 	}
-	if bridge.pendingApproval != nil {
+	if bridge.HasPendingApproval(request) {
 		t.Error("the answered approval must not linger")
 	}
 }
@@ -149,9 +146,11 @@ func TestWhatsAppApprovalRejectsAnswersThatAreNotTheOperators(t *testing.T) {
 	bridge, _ := newApprovalBridge(t)
 	request := adminRequest("628111@s.whatsapp.net")
 	answer := make(chan agent.Decision, 1)
+	key := channel.CanonicalID(request.ChatID)
 	bridge.mu.Lock()
-	bridge.pendingApproval = answer
-	bridge.approvalChat = request.ChatID
+	bridge.pendingApprovals = map[string]*pendingWhatsAppApproval{
+		key: {answer: answer, chat: request.ChatID, sender: request.SenderID},
+	}
 	bridge.mu.Unlock()
 
 	guest := request
@@ -166,13 +165,60 @@ func TestWhatsAppApprovalRejectsAnswersThatAreNotTheOperators(t *testing.T) {
 	if bridge.ResolveApproval(request, "/status") {
 		t.Error("a command must keep running instead of answering")
 	}
-	bridge.mu.Lock()
-	still := bridge.pendingApproval
-	chat := bridge.approvalChat
-	bridge.mu.Unlock()
-	if still == nil || chat != request.ChatID {
+	if !bridge.HasPendingApproval(request) {
 		t.Fatal("a refused answer must leave the approval waiting")
 	}
+}
+
+func TestWhatsAppApprovalCancelContextAndMultiChat(t *testing.T) {
+	bridge, rec := newApprovalBridge(t)
+	reqA := adminRequest("628111@s.whatsapp.net")
+	reqB := adminRequest("628222@s.whatsapp.net")
+
+	ctxA, cancelA := context.WithCancel(context.Background())
+	decidedA := make(chan agent.Decision, 1)
+	decidedB := make(chan agent.Decision, 1)
+
+	go func() {
+		decidedA <- bridge.interactorFor(reqA).(*whatsAppApprover).ApproveContext(ctxA, agent.ApprovalRequest{Tool: "run_command", Risk: "command", Detail: "ls"})
+	}()
+	go func() {
+		decidedB <- bridge.interactorFor(reqB).(*whatsAppApprover).ApproveContext(context.Background(), agent.ApprovalRequest{Tool: "write_file", Risk: "edit", Detail: "a.txt"})
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if bridge.HasPendingApproval(reqA) && bridge.HasPendingApproval(reqB) {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !bridge.HasPendingApproval(reqA) || !bridge.HasPendingApproval(reqB) {
+		t.Fatalf("both chats should hold independent pending approvals")
+	}
+
+	cancelA()
+	select {
+	case got := <-decidedA:
+		if got != agent.DecisionDeny {
+			t.Errorf("cancelled approval = %v, want deny", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled approval did not unblock immediately")
+	}
+
+	if !bridge.ResolveApproval(reqB, "y") {
+		t.Fatal("chat B approval should still be active and resolvable")
+	}
+	select {
+	case got := <-decidedB:
+		if got != agent.DecisionAllowOnce {
+			t.Errorf("chat B approval = %v, want allow once", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("chat B approval did not resolve")
+	}
+	_ = rec
 }
 
 func TestWhatsAppApprovalTimesOutClosed(t *testing.T) {

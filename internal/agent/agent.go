@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -114,6 +115,7 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	// gate can attach their recorded journal remedies to its nudge.
 	failedTools := map[string]bool{}
 	planNudges := 0
+	repetitionNudges := 0
 	// fruitlessCuts counts consecutive steps the backend cut at its output
 	// ceiling without returning any text, tool call or reasoning. Two in a row
 	// means the request itself cannot produce anything, so the run stops with a
@@ -210,6 +212,11 @@ runLoop:
 			case provider.EventTextDelta:
 				answer.WriteString(event.Text)
 				emit(Event{Kind: EventText, Text: event.Text})
+				if len(calls) == 0 && answer.Len() >= streamRepetitionMinLen && strings.ContainsAny(event.Text, ".!?\n") {
+					if streamRepetitionLoop(answer.String()) {
+						return errStreamRepetition
+					}
+				}
 			case provider.EventReasoningDelta:
 				if reasoning.Len() == 0 {
 					reasoningStart = time.Now()
@@ -257,6 +264,19 @@ runLoop:
 		}
 
 		if streamErr != nil {
+			if errors.Is(streamErr, errStreamRepetition) {
+				if repetitionNudges < maxRepetitionNudges {
+					repetitionNudges++
+					guard.noteProgress()
+					emit(Event{Kind: EventNotice, Text: "Model output began repeating itself; nudging to act or answer concisely."})
+					session.AddUser("[System: repetition-recovery] Your previous response got stuck repeating the same phrase without completing the action. Do not repeat yourself or announce that you will check. Immediately call the required tool (use find_tools if a tool is not visible) or give one concise answer.")
+					r.persist()
+					continue
+				}
+				streamErr = nil
+			}
+		}
+		if streamErr != nil {
 			if ctx.Err() != nil {
 				stopReason = "aborted"
 				break runLoop
@@ -298,8 +318,23 @@ runLoop:
 		// them encodes to no message at all for other providers, and for a
 		// stateless Codex backend they are the step's thought, which the
 		// next request must hand back or lose.
-		if strings.TrimSpace(answer.String()) != "" || len(calls) > 0 || len(reasoningItems) > 0 {
-			session.AddAssistant(answer.String(), reasoning.String(), calls, reasoningItems)
+		finalText := answer.String()
+		if len(calls) == 0 && detectDegenerativeRepetition(finalText) {
+			if repetitionNudges < maxRepetitionNudges {
+				repetitionNudges++
+				guard.noteProgress()
+				emit(Event{Kind: EventNotice, Text: "Model output repeated itself without acting; nudging to act or answer concisely."})
+				session.AddUser("[System: repetition-recovery] Your previous response repeated the same sentence multiple times without calling a tool or answering. Do not repeat yourself or announce that you will check. Immediately call the required tool (use find_tools if a tool is not visible) or give one concise answer.")
+				r.persist()
+				continue
+			}
+			finalText = CollapseRepeatedProse(finalText)
+			answer.Reset()
+			answer.WriteString(finalText)
+		}
+
+		if strings.TrimSpace(finalText) != "" || len(calls) > 0 || len(reasoningItems) > 0 {
+			session.AddAssistant(finalText, reasoning.String(), calls, reasoningItems)
 			// The model's step is durable before any tool runs. A crash from
 			// here leaves tool calls without results, and the loader closes
 			// them off with an "unknown effect" result rather than repeating

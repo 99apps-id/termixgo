@@ -2119,11 +2119,17 @@ func (a *App) runSubagentFor(ctx context.Context, parent *agent.Env, agentName s
 	cfg := a.Config()
 	children, _ := cfg.DelegationLimits(agentName)
 	if guest || !cfg.DelegationAutoApprove(agentName) {
-		decision := a.approve(agent.ApprovalRequest{
+		req := agent.ApprovalRequest{
 			Tool:   "subagent",
 			Detail: strings.TrimSpace(subType) + ": " + strings.TrimSpace(prompt),
 			Risk:   string(agent.RiskEdit),
-		})
+		}
+		decision := agent.DecisionDeny
+		if parent != nil && parent.Approve != nil {
+			decision = parent.Approve(req)
+		} else {
+			decision = a.approve(req)
+		}
 		if !decision.Allowed() {
 			return "", agent.SubagentSpend{}, errors.New("the operator did not approve the delegation")
 		}
@@ -2440,7 +2446,7 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 	a.turnDelegations = 0
 	a.mu.Unlock()
 
-	if opts.interactor != nil {
+	if opts.interactor != nil && opts.session == nil {
 		a.mu.Lock()
 		previous := a.interactor
 		a.interactor = opts.interactor
@@ -2512,13 +2518,25 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 	runEnv.CallerAccount = opts.callerAccount
 
 	if opts.interactor != nil {
-		runEnv.Approve = func(req agent.ApprovalRequest) agent.Decision {
-			return opts.interactor.Approve(req)
+		if ctxApprover, ok := opts.interactor.(interface {
+			ApproveContext(context.Context, agent.ApprovalRequest) agent.Decision
+		}); ok {
+			runEnv.Approve = func(req agent.ApprovalRequest) agent.Decision {
+				return ctxApprover.ApproveContext(runCtx, req)
+			}
+		} else {
+			runEnv.Approve = func(req agent.ApprovalRequest) agent.Decision {
+				return opts.interactor.Approve(req)
+			}
 		}
 		if ask, ok := opts.interactor.(interface {
 			Ask(string, []string) (string, error)
 		}); ok {
 			runEnv.Ask = ask.Ask
+		}
+	} else if opts.session != nil && opts.guest {
+		runEnv.Approve = func(agent.ApprovalRequest) agent.Decision {
+			return agent.DecisionDeny
 		}
 	}
 
@@ -2702,8 +2720,6 @@ func (a *App) RunPrompt(ctx context.Context, prompt string, progress func(string
 				progress(line)
 			}
 		}
-		claim := a.SetObserver(progressObserver)
-		defer a.ClearObserver(claim)
 	}
 	session := a.currentSession()
 	mark := session.MessageCount()
@@ -2754,8 +2770,6 @@ func (a *App) RunPromptWithImage(ctx context.Context, prompt, mediaType, data st
 				progress(line)
 			}
 		}
-		claim := a.SetObserver(progressObserver)
-		defer a.ClearObserver(claim)
 	}
 	// A photo can be larger than a provider accepts. Scale it down before the
 	// turn so it is not rejected, and so the oversized bytes never enter the
@@ -3051,13 +3065,17 @@ func (a *App) Status() string {
 	if err := a.ModelError(); err != nil {
 		lines = append(lines, "model problem: "+err.Error())
 	}
-	if a.botStatus != "" {
-		lines = append(lines, "telegram: "+a.botStatus)
+	a.mu.Lock()
+	botStatus := a.botStatus
+	healthStatus := a.healthStatus
+	a.mu.Unlock()
+	if botStatus != "" {
+		lines = append(lines, "telegram: "+botStatus)
 	} else {
 		lines = append(lines, "telegram: off")
 	}
-	if a.healthStatus != "" {
-		lines = append(lines, "health alerts: "+a.healthStatus)
+	if healthStatus != "" {
+		lines = append(lines, "health alerts: "+healthStatus)
 	}
 	if line := sandbox.Describe(a.Config().Sandbox); line != "" {
 		lines = append(lines, "sandbox: "+line)

@@ -86,6 +86,26 @@ type Bot struct {
 	hookURL      string
 	hookSecret   string
 	markReadHook func(ctx context.Context, chat, sender types.JID, id types.MessageID)
+	redactor     func(string) string
+	handlers     sync.WaitGroup
+}
+
+// SetRedactor installs the outbound redactor. Nil keeps the pattern-only
+// default, which strips token shapes before messages reach WhatsApp.
+func (b *Bot) SetRedactor(redactor func(string) string) {
+	b.mu.Lock()
+	b.redactor = redactor
+	b.mu.Unlock()
+}
+
+func (b *Bot) redact(text string) string {
+	b.mu.RLock()
+	redactor := b.redactor
+	b.mu.RUnlock()
+	if redactor != nil {
+		return redactor(text)
+	}
+	return channel.Redact(text, nil)
 }
 
 // New builds the bot for one client and bridge.
@@ -180,7 +200,11 @@ func (b *Bot) Run(ctx context.Context) error {
 	b.client.AddEventHandler(func(evt any) {
 		switch event := evt.(type) {
 		case *events.Message:
-			go b.handleMessage(ctx, event)
+			b.handlers.Add(1)
+			go func() {
+				defer b.handlers.Done()
+				b.handleMessage(ctx, event)
+			}()
 		case *events.Connected:
 			b.refreshSelf()
 			_ = b.client.SendPresence(ctx, types.PresenceAvailable)
@@ -193,6 +217,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	}
 	_ = b.client.SendPresence(ctx, types.PresenceAvailable)
 	<-ctx.Done()
+	b.handlers.Wait()
 	b.client.Disconnect()
 	return ctx.Err()
 }
@@ -263,7 +288,7 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 			selfUser = b.client.Store.ID.User
 			selfDevice = b.client.Store.ID.Device
 		}
-		isSelfChat := selfUser != "" && evt.Info.Chat.User == selfUser
+		isSelfChat := (selfUser != "" && evt.Info.Chat.User == selfUser) || b.isSelf(evt.Info.Chat.String())
 		isOwnDevice := selfDevice != 0 && evt.Info.Sender.Device == selfDevice
 		if !isSelfChat || isOwnDevice {
 			return
@@ -351,6 +376,14 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 
 	if cmdText, isCmd := channel.ExtractCommandText(request.Text); isCmd {
 		cmdName, _ := splitCommand(cmdText)
+		if cmdName == "stop" || cmdName == "cancel" {
+			if router, ok := b.agent.(ApprovalRouter); ok {
+				if hasPending, ok := b.agent.(interface{ HasPendingApproval(channel.Request) bool }); ok && hasPending.HasPendingApproval(request) {
+					router.ResolveApproval(request, "n")
+					return
+				}
+			}
+		}
 		isGuestAllowed := cmdName == "help" || cmdName == "start" || cmdName == "menu" ||
 			cmdName == "status" || cmdName == "new" || cmdName == "reset" || cmdName == "clear" || cmdName == "stop"
 		if !decision.Admin && !isGuestAllowed {
@@ -372,10 +405,6 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 			return
 		}
 		if hasPending, ok := b.agent.(interface{ HasPendingApproval(channel.Request) bool }); ok && hasPending.HasPendingApproval(request) {
-			if strings.EqualFold(strings.TrimSpace(request.Text), "/stop") || strings.EqualFold(strings.TrimSpace(request.Text), "/cancel") {
-				router.ResolveApproval(request, "n")
-				return
-			}
 			if lang == "id" {
 				b.reply(ctx, request.ChatID, "Sedang menunggu persetujuan. Balas y (sekali), s (sesi), a (selalu), n (tolak), atau kirim /stop untuk membatalkan.")
 			} else {
@@ -1030,7 +1059,7 @@ func (b *Bot) SendTo(ctx context.Context, chatID, text string) error {
 	b.mu.RLock()
 	hook := b.sendHook
 	b.mu.RUnlock()
-	formatted := formatWhatsApp(text)
+	formatted := formatWhatsApp(b.redact(text))
 	if hook != nil {
 		for _, chunk := range channel.Chunk(formatted, b.policySnapshot().EffectiveTextChunkLimit()) {
 			hook(chatID, chunk)
@@ -1059,7 +1088,7 @@ func (b *Bot) SendFileTo(ctx context.Context, chatID, filename string, data []by
 	if filename == "" || filename == "." || filename == "/" {
 		filename = "attachment"
 	}
-	formattedCaption := formatWhatsApp(strings.TrimSpace(caption))
+	formattedCaption := formatWhatsApp(b.redact(strings.TrimSpace(caption)))
 	b.mu.RLock()
 	hook := b.sendFileHook
 	b.mu.RUnlock()
@@ -1141,7 +1170,7 @@ func (b *Bot) reply(ctx context.Context, chatID, text string) {
 	b.mu.RLock()
 	hook := b.sendHook
 	b.mu.RUnlock()
-	formatted := formatWhatsApp(text)
+	formatted := formatWhatsApp(b.redact(text))
 	if hook != nil {
 		hook(chatID, formatted)
 		return
@@ -1342,11 +1371,19 @@ func (b *Bot) handleCommand(ctx context.Context, request channel.Request) {
 			b.sendReply(ctx, request.ChatID, "A new conversation session has been started.")
 		}
 	case "stop":
-		if stopper, ok := b.agent.(interface{ StopChat(channel.Request) bool }); ok && stopper.StopChat(request) {
-			if lang == "id" {
-				b.sendReply(ctx, request.ChatID, "Perintah berhenti dikirim ke proses sesi ini.")
+		if stopper, ok := b.agent.(interface{ StopChat(channel.Request) bool }); ok {
+			if stopper.StopChat(request) {
+				if lang == "id" {
+					b.sendReply(ctx, request.ChatID, "Perintah berhenti dikirim ke proses sesi ini.")
+				} else {
+					b.sendReply(ctx, request.ChatID, "Stop signal sent to the process in this session.")
+				}
 			} else {
-				b.sendReply(ctx, request.ChatID, "Stop signal sent to the process in this session.")
+				if lang == "id" {
+					b.sendReply(ctx, request.ChatID, "Tidak ada proses yang sedang berjalan di sesi ini.")
+				} else {
+					b.sendReply(ctx, request.ChatID, "No process is currently running in this session.")
+				}
 			}
 			return
 		}
