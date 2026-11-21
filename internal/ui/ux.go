@@ -582,26 +582,44 @@ func osToastCmd(title, message string) tea.Cmd {
 func sendOSNotification(title, message string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
+	name, args, env := toastCommand(runtime.GOOS, title, message)
+	if name == "" {
+		return
+	}
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = append(os.Environ(), env...)
+	_ = cmd.Run()
+}
 
-	switch runtime.GOOS {
-	case "windows":
-		safeTitle := strings.ReplaceAll(title, "'", "''")
-		safeMsg := strings.ReplaceAll(message, "'", "''")
-		script := fmt.Sprintf(`
-[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+// powershellAppID is the AppUserModelID Windows registers for PowerShell. A
+// toast from an unregistered id such as "Termixgo" is dropped without an
+// error, which is why the notification never appeared.
+const powershellAppID = `{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe`
+
+// windowsToastScript builds the toast XML inside PowerShell from environment
+// variables, escaped there. The text never becomes part of the script, so a
+// tool detail holding quotes, < or & can neither break the XML nor run code.
+const windowsToastScript = `[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
 [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null
+$t = [Security.SecurityElement]::Escape($env:TERMIXGO_TOAST_TITLE)
+$m = [Security.SecurityElement]::Escape($env:TERMIXGO_TOAST_MESSAGE)
 $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-$xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>%s</text><text>%s</text></binding></visual></toast>')
-$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Termixgo').Show($toast)
-`, safeTitle, safeMsg)
-		_ = exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script).Run()
+$xml.LoadXml("<toast><visual><binding template=""ToastGeneric""><text>Termixgo: $t</text><text>$m</text></binding></visual></toast>")
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:TERMIXGO_TOAST_APP).Show([Windows.UI.Notifications.ToastNotification]::new($xml))`
+
+// toastCommand returns the program, arguments and extra environment that show
+// one notification. The title and message travel only in the environment.
+func toastCommand(goos, title, message string) (string, []string, []string) {
+	env := []string{"TERMIXGO_TOAST_TITLE=" + title, "TERMIXGO_TOAST_MESSAGE=" + message}
+	switch goos {
+	case "windows":
+		env = append(env, "TERMIXGO_TOAST_APP="+powershellAppID)
+		return "powershell", []string{"-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", windowsToastScript}, env
 	case "darwin":
-		safeTitle := strings.ReplaceAll(title, `"`, `\"`)
-		safeMsg := strings.ReplaceAll(message, `"`, `\"`)
-		_ = exec.CommandContext(ctx, "osascript", "-e", fmt.Sprintf(`display notification "%s" with title "Termixgo" subtitle "%s"`, safeMsg, safeTitle)).Run()
+		return "osascript", []string{"-e", `display notification (system attribute "TERMIXGO_TOAST_MESSAGE") with title "Termixgo" subtitle (system attribute "TERMIXGO_TOAST_TITLE")`}, env
 	default:
-		_ = exec.CommandContext(ctx, "notify-send", "Termixgo: "+title, message).Run()
+		// notify-send takes plain arguments without a shell, so no quoting applies.
+		return "notify-send", []string{"Termixgo: " + title, message}, nil
 	}
 }
 

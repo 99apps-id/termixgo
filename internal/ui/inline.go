@@ -168,24 +168,30 @@ func (m *Model) reprintAll() tea.Cmd {
 	if start > 0 {
 		text = m.styles.Dim.Render(fmt.Sprintf("  ... %d earlier blocks, Ctrl+O shows the whole transcript", start)) + "\n\n" + text
 	}
-	cmds := []tea.Cmd{}
-	if m.realTerminal {
-		cmds = append(cmds, clearScrollback)
-	}
-	cmds = append(cmds, tea.ClearScreen)
-	if strings.TrimSpace(text) != "" {
-		cmds = append(cmds, tea.Println(text+"\n"))
-	}
-	return tea.Sequence(cmds...)
+	return tea.Sequence(reprintCmds(text, m.realTerminal)...)
 }
 
-// clearScrollback erases the terminal's scrollback (ED 3) and the screen.
-// Bubble Tea has no command for the scrollback, so the sequence is written to
-// the terminal directly; the ClearScreen that follows makes the renderer
-// repaint its frame.
-func clearScrollback() tea.Msg {
-	fmt.Fprint(os.Stdout, "\x1b[3J\x1b[2J\x1b[H")
-	return nil
+// eraseScrollback is ED 3, which clears the terminal's scrollback.
+const eraseScrollback = "\x1b[3J"
+
+// reprintCmds clears the screen, then prints the transcript. The scrollback
+// erase rides at the head of the printed text, so the renderer writes it under
+// its own lock, after its screen clear and before the reprinted lines. Writing
+// it straight to stdout from a command goroutine raced the renderer's frame
+// writes, and a frame flushed after the erase was left in the scrollback.
+func reprintCmds(text string, eraseHistory bool) []tea.Cmd {
+	cmds := []tea.Cmd{tea.ClearScreen}
+	printed := ""
+	if strings.TrimSpace(text) != "" {
+		printed = text + "\n"
+	}
+	if eraseHistory {
+		printed = eraseScrollback + printed
+	}
+	if printed != "" {
+		cmds = append(cmds, tea.Println(printed))
+	}
+	return cmds
 }
 
 // takePrints wraps cmd so the queued blocks are printed above the live area
