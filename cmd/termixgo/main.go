@@ -1942,6 +1942,26 @@ func serviceStatusDarwin(stdout io.Writer) error {
 
 // linux -------------------------------------------------------------
 
+// systemdUnit is the user unit for the 24/7 assistant. It restarts on any exit
+// and has no start-rate limit: with the default limit, a few quick failures
+// (a network that is not up yet at boot) left the unit stopped for good.
+func systemdUnit(binary string) string {
+	return fmt.Sprintf(`[Unit]
+Description=Termixgo Assistant
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment="PATH=%%h/.local/bin:%%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=%s serve
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`, binary)
+}
 func serviceInstallLinux(stdout io.Writer, binary string) error {
 	systemDir, err := systemdUserDir()
 	if err != nil {
@@ -1951,20 +1971,7 @@ func serviceInstallLinux(stdout io.Writer, binary string) error {
 		return fmt.Errorf("cannot create systemd user dir: %v", err)
 	}
 	servicePath := filepath.Join(systemDir, systemdService)
-	unit := fmt.Sprintf(`[Unit]
-Description=Termixgo Assistant
-After=network.target
-
-[Service]
-Type=simple
-Environment="PATH=%%h/.local/bin:%%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=%s serve
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-`, binary)
+	unit := systemdUnit(binary)
 	if err := os.WriteFile(servicePath, []byte(unit), 0o644); err != nil {
 		return fmt.Errorf("cannot write service file: %v", err)
 	}

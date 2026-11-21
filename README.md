@@ -1282,7 +1282,8 @@ termixgo service uninstall
 What `service install` creates:
 
 - Linux: a systemd user unit at `~/.config/systemd/user/termixgo.service` with
-  `Restart=on-failure` and `RestartSec=5`, enabled with
+  `Restart=always`, `RestartSec=5` and no start-rate limit, so a crash loop
+  or a clean exit is restarted rather than left down, enabled with
   `systemctl --user enable --now`, plus `loginctl enable-linger` so it keeps
   running after you close the SSH session and starts at boot without a login.
 - macOS: a launchd agent under `~/Library/LaunchAgents`.

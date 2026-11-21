@@ -6,6 +6,9 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Changed
+- `termixgo service install` on Linux writes a unit with `Restart=always` and no start-rate limit, so the assistant is restarted after a crash loop or a clean exit instead of staying down.
+
 ## 0.2.9 - 2026-11-22
 
 ### Added
