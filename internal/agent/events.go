@@ -40,6 +40,10 @@ const (
 	// EventProcessEnd reports a worker process that asked to be announced when
 	// it finishes. ToolName carries the process handle; Text is the notice.
 	EventProcessEnd EventKind = "process-end"
+	// EventContext reports one finished step's request size as the provider
+	// counted it: Usage.PromptTokens plus Usage.CompletionTokens is what the
+	// next step will send again.
+	EventContext EventKind = "context"
 	// EventRateLimit reports rate limit and quota information from the provider.
 	EventRateLimit EventKind = "rate-limit"
 )

@@ -166,6 +166,12 @@ type App struct {
 	ctxUsageAt  time.Time
 	ctxUsageVal string
 
+	// measured is the newest request size the provider reported for the
+	// live session: its prompt tokens, the session and model it belonged to,
+	// and the message count when it was sent, so the gauge can add only what
+	// came after.
+	measured measuredContext
+
 	activeRunsMu sync.Mutex
 	activeRuns   map[string]*activeRun
 
@@ -1923,6 +1929,9 @@ func (a *App) emitInto(event agent.Event, foldUsage bool) {
 	if foldUsage && event.Kind == agent.EventUsage {
 		a.recordUsageEvent(event)
 	}
+	if foldUsage && event.Kind == agent.EventContext {
+		a.recordMeasuredContext(event.Usage.PromptTokens)
+	}
 	if event.Kind == agent.EventToolEnd {
 		a.recordToolResult(event.ToolName, event.ToolOK)
 	}
@@ -3095,9 +3104,42 @@ func (a *App) ContextUsage() string {
 // unchanged, so an edited memory file or a new tool still shows up.
 const contextUsageTTL = 5 * time.Second
 
+// measuredContext is one provider-reported request size.
+type measuredContext struct {
+	tokens    int
+	sessionID string
+	modelID   string
+	mark      int
+}
+
+// recordMeasuredContext keeps the provider's count of the request a step
+// just sent. The step's own answer and tool results are appended after this
+// point, so they are added to the figure as an estimate until the next step
+// measures again.
+func (a *App) recordMeasuredContext(promptTokens int) {
+	session := a.Session()
+	if session == nil || promptTokens <= 0 {
+		return
+	}
+	a.mu.Lock()
+	a.measured = measuredContext{tokens: promptTokens, sessionID: session.ID(), modelID: a.model.ID, mark: session.MessageCount()}
+	a.mu.Unlock()
+	a.ctxUsageMu.Lock()
+	a.ctxUsageKey = ""
+	a.ctxUsageMu.Unlock()
+}
+
 func (a *App) contextUsage() string {
 	session := a.Session()
 	model := a.CurrentModel()
+	a.mu.Lock()
+	measured := a.measured
+	a.mu.Unlock()
+	if measured.tokens > 0 && measured.sessionID == session.ID() && measured.modelID == model.ID {
+		messages := session.Messages()
+		mark := min(max(measured.mark, 0), len(messages))
+		return agent.MeasuredContextHint(measured.tokens+agent.EstimateMessages(messages[mark:]), messages, model.Window())
+	}
 	// The numerator is the whole request estimate, not just the stored
 	// messages: the system prompt and the tool schemas are sent (and
 	// billed) on every step. The schema figure counts the full catalogue;
@@ -3108,11 +3150,9 @@ func (a *App) contextUsage() string {
 	if a.tools != nil {
 		overhead += agent.EstimateToolSchemas(a.tools.Definitions())
 	}
-	name := model.Label
-	if name == "" {
-		name = model.ID
-	}
-	return agent.ContextHint(session.Messages(), overhead, model.Window(), name)
+	// The model is named in the header already; repeating it here took the
+	// status line's room.
+	return agent.ContextHint(session.Messages(), overhead, model.Window(), "")
 }
 
 // NeedsSetup reports whether onboarding is required.

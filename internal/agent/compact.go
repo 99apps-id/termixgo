@@ -511,12 +511,25 @@ func ContextHint(messages []provider.Message, overheadTokens int, window int, mo
 	if compactPercent > 100 {
 		compactPercent = 100
 	}
-	hint := fmt.Sprintf("ctx: %s/%s (%d%% of window) · compact: %d%%",
+	hint := fmt.Sprintf("ctx: ~%s/%s (%d%% of window) · compact: %d%%",
 		shortNumber(history+overheadTokens), shortNumber(window), ctxPercent, compactPercent)
 	if modelName != "" {
 		hint += " · " + modelName
 	}
 	return hint
+}
+
+// MeasuredContextHint is ContextHint for a request size the provider
+// reported, which replaces the character estimate of the history and the
+// prompt overhead. The estimated form is marked "~" so the two read apart.
+func MeasuredContextHint(tokens int, messages []provider.Message, window int) string {
+	if window <= 0 {
+		window = defaultContextBudget
+	}
+	ctxPercent := min(tokens*100/window, 100)
+	compactPercent := min(EstimateMessages(messages)*100/HistoryBudget(window), 100)
+	return fmt.Sprintf("ctx: %s/%s (%d%% of window) · compact: %d%%",
+		shortNumber(tokens), shortNumber(window), ctxPercent, compactPercent)
 }
 
 func shortNumber(value int) string {

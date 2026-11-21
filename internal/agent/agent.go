@@ -247,6 +247,13 @@ runLoop:
 			}
 			emit(Event{Kind: EventReasoned, Text: reasoning.String(), ToolMillis: millis})
 		}
+		// The provider's own count of this request is the honest context
+		// figure: prompt (cache included, every provider reader normalizes
+		// that) plus what the step added. The status line shows it instead of
+		// a character estimate.
+		if stepUsage.PromptTokens > 0 {
+			emit(Event{Kind: EventContext, Usage: stepUsage})
+		}
 
 		if streamErr != nil {
 			if ctx.Err() != nil {
