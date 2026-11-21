@@ -219,6 +219,9 @@ func (m *Model) inlineView() string {
 		overlay = m.viewMentionMenu()
 	}
 	var bottom []string
+	if activity := m.activityLine(); activity != "" {
+		bottom = append(bottom, activity)
+	}
 	if m.running && m.app != nil {
 		if todos := m.app.Todos().Items(); len(todos) > 0 {
 			if planView := strings.TrimSpace(renderPlanBlock(block{kind: blockPlan, plan: todos}, m.styles, m.renderWidth())); planView != "" {
@@ -237,7 +240,7 @@ func (m *Model) inlineView() string {
 	var sections []string
 	if m.printed < len(m.blocks) {
 		hide := m.app != nil && !m.app.Config().ShowReasoning
-		liveBlocks := unprintedBlocks(m.blocks[m.printed:])
+		liveBlocks := liveWithoutRunningThinking(unprintedBlocks(m.blocks[m.printed:]), m.showDetails)
 		if m.running {
 			filtered := make([]block, 0, len(liveBlocks))
 			for _, item := range liveBlocks {

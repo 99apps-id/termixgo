@@ -479,9 +479,12 @@ func (m *Model) cycleApproval() (tea.Model, tea.Cmd) {
 
 // turnStats is what a turn summary needs, captured when the turn starts.
 type turnStats struct {
-	usage provider.Usage
-	cost  float64
-	steps int
+	// streamed counts the characters of answer and reasoning streamed so
+	// far, which the activity line turns into a live token estimate.
+	streamed int
+	usage    provider.Usage
+	cost     float64
+	steps    int
 }
 
 func (m *Model) beginTurnStats() {

@@ -2128,6 +2128,7 @@ func (m *Model) applyEvent(event agent.Event) {
 	case agent.EventTurnStart:
 		// Nothing to show yet; the first chunk creates its block.
 	case agent.EventThinking:
+		m.turnStats.streamed += len(event.Text)
 		if last := m.lastBlock(); last != nil && last.kind == blockThinking && last.running {
 			last.text += event.Text
 			last.reasoning += event.Text
@@ -2151,6 +2152,7 @@ func (m *Model) applyEvent(event agent.Event) {
 		}
 		m.blocks = append(m.blocks, block{kind: blockThinking, finalized: true, reasoning: event.Text, seconds: event.ToolMillis / 1000})
 	case agent.EventText:
+		m.turnStats.streamed += len(event.Text)
 		closeOpenThinking(m.blocks)
 		if last := m.lastBlock(); last != nil && last.kind == blockAssistant {
 			last.text += event.Text
@@ -2736,7 +2738,8 @@ func (m *Model) viewStatus() string {
 			}
 		}
 	}
-	if m.running && !m.hintsVisible() {
+	// In the inline layout the activity line carries the working indicator.
+	if m.running && !m.hintsVisible() && !m.inline {
 		// The hints row carries the live working indicator while it is on screen,
 		// so repeating it here would print the same elapsed time above and below
 		// the composer. A menu, an approval prompt or a question replaces that
@@ -2862,7 +2865,11 @@ func (m *Model) hintsVisible() bool {
 
 func (m *Model) viewHints() string {
 	text := ""
-	if m.running {
+	if m.running && m.inline {
+		// The activity line carries the spinner, the time and the stop key,
+		// so the hint row only names what else can be done meanwhile.
+		text = " Enter steers the run | Ctrl+O transcript | Shift+Tab " + string(m.appConfig().ApprovalMode) + " | Ctrl+X quit"
+	} else if m.running {
 		elapsed := time.Since(m.runStarted).Round(time.Second)
 		if count := m.queuedCount(); count > 0 {
 			text = fmt.Sprintf(" %s working (%s) | %d queued | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C copy | Ctrl+X quit", m.spin.View(), elapsed, count)
