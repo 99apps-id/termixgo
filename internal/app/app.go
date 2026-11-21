@@ -89,6 +89,8 @@ type App struct {
 	// subagents keeps subagent sessions for send_subagent and runs the
 	// background ones; like processes it outlives any one turn.
 	subagents *agent.SubagentPool
+	// schedules are the prompts the model scheduled for this process.
+	schedules *agent.SessionScheduler
 
 	client    provider.Client
 	model     provider.Model
@@ -270,6 +272,7 @@ func New(workspace string) (*App, error) {
 		runQueue:        newRunQueue(),
 		processes:       agent.NewProcessManager(),
 		subagents:       agent.NewSubagentPool(),
+		schedules:       agent.NewSessionScheduler(),
 		events:          make(chan agent.Event, eventBuffer),
 		activeAgent:     cfg.ActiveAgent,
 		agentSessions:   map[string]*agent.Session{},
@@ -290,6 +293,7 @@ func New(workspace string) (*App, error) {
 	// than being handed a per-run environment.
 	instance.processes.SetEmitter(instance.emit)
 	instance.subagents.SetEmitter(instance.emit)
+	instance.schedules.SetEmitter(instance.emit)
 	instance.policy = &agent.ApprovalPolicy{
 		Mode:           agent.ApprovalModeOrDefault(cfg),
 		AlwaysAllowed:  stringSet(cfg.AlwaysAllowedTools),
@@ -1657,17 +1661,19 @@ func (a *App) envFor(agentName string) *agent.Env {
 	ctx := a.agentContextFor(agentName)
 	cfg := a.Config()
 	return &agent.Env{
-		Workspace: ctx.workspace,
-		AgentName: ctx.name,
-		AgentHome: ctx.home,
-		Config:    cfg,
-		Secrets:   a.store,
-		Skills:    ctx.skills,
-		Memory:    ctx.memory,
-		Todos:     a.todos,
-		Trusted:   ctx.trusted,
-		Processes: a.processes,
-		Subagents: a.subagents,
+		Workspace:  ctx.workspace,
+		AgentName:  ctx.name,
+		AgentHome:  ctx.home,
+		Config:     cfg,
+		Secrets:    a.store,
+		Skills:     ctx.skills,
+		Memory:     ctx.memory,
+		Todos:      a.todos,
+		Trusted:    ctx.trusted,
+		Processes:  a.processes,
+		Subagents:  a.subagents,
+		Schedules:  a.schedules,
+		AddCronJob: a.addCronJobSummary,
 		// The journal is shared with the runner, which records into it, and read
 		// back by search_memory, which is why the same store is passed here.
 		Journal: ctx.journal,
@@ -1872,6 +1878,7 @@ func (a *App) Shutdown() {
 	if a.processes != nil {
 		a.processes.Shutdown()
 		a.subagents.StopAll()
+		a.schedules.StopAll()
 	}
 	a.mu.Lock()
 	pool := a.mcp
@@ -2631,6 +2638,10 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 	// chat must not continue a worker the terminal owns.
 	if opts.session != nil {
 		runEnv.Subagents = nil
+		runEnv.Schedules = nil
+	}
+	if opts.guest {
+		runEnv.AddCronJob = nil
 	}
 
 	// A best-effort snapshot before the turn, so a bad edit can be undone

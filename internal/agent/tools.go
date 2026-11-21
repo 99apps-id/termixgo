@@ -121,6 +121,12 @@ type Env struct {
 	// Subagents keeps subagent sessions for send_subagent and runs background
 	// ones. Nil makes every subagent a one-shot foreground run.
 	Subagents *SubagentPool
+	// Schedules holds the prompts schedule_task set for this process; they fire
+	// as wakes. Nil disables session scheduling.
+	Schedules *SessionScheduler
+	// AddCronJob stores a durable cron job and returns a one-line summary. Nil
+	// disables durable scheduling.
+	AddCronJob func(name, spec, prompt string) (string, error)
 	// Search provides full-text search over memory, journal and workspace.
 	Search *search.Store
 	// Journal records recurring tool failures for self-correction.
@@ -219,6 +225,9 @@ func DefaultRegistry() *Registry {
 		&logsTool{},
 		&waitTool{},
 		&monitorTool{},
+		&scheduleTaskTool{},
+		&notebookReadTool{},
+		&notebookEditTool{},
 		&listProcessesTool{},
 		&killTool{},
 		&envGetTool{},

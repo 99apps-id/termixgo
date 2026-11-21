@@ -743,6 +743,8 @@ ecosystem tools out of every request and loads them on demand through
 | `audit_code` | static code and security audit (vulnerabilities, secrets, concurrency) |
 | `repo_map` | token-efficient structural symbol map of codebase architecture |
 | `run_background`, `run_logs`, `run_wait`, `run_list`, `run_kill` | managed background processes |
+| `schedule_task` | schedule a prompt for later in this session (cron expression, `every 10m`, `at 15:30`), or as a durable cron job with `durable` |
+| `notebook_read`, `notebook_edit` | read a Jupyter notebook cell by cell; replace, insert or delete one cell |
 | `run_monitor` | watch a background process and get notified when an output line matches a pattern, and when it exits |
 
 | Tool | Purpose |
@@ -760,7 +762,7 @@ ecosystem tools out of every request and loads them on demand through
 | `submit_plan` | present a finished plan for approval (plan mode); the operator approves with automatic or confirmed edits, or sends it back with feedback |
 | `remember` | append a learned fact |
 | `use_skill`, `find_skill`, `install_skill`, `propose_skill` | load, install or propose skills |
-| `ask_user` | ask a question when a decision cannot be made from the code |
+| `ask_user` | ask a question when a decision cannot be made from the code; `questions` asks up to four in one call |
 | `think` | reason without acting |
 | `run_subagent` | delegate a typed, self-contained task, in the foreground or with `background` while the main turn continues |
 | `send_subagent`, `subagent_status` | continue a subagent with its full context; list, wait for, read or stop one |

@@ -367,3 +367,13 @@ func (a *App) SetHeartbeat(enabled bool, interval string) error {
 		}
 	})
 }
+
+// addCronJobSummary stores a durable job for schedule_task and describes it in
+// one line for the model.
+func (a *App) addCronJobSummary(name, spec, prompt string) (string, error) {
+	job, err := a.CronAdd(name, spec, prompt)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Stored cron job %s (%s), next run %s.", job.ID, job.Schedule.String(), job.NextRun.Format("2006-01-02 15:04")), nil
+}

@@ -595,22 +595,32 @@ func (t *askUserTool) DoneLabel(a map[string]any) string {
 	return "Asked: " + Shorten(argString(a, "question"), 50)
 }
 func (t *askUserTool) Description() string {
-	return "Ask the operator a question when a decision cannot be made from the code. Provide two to five short options when the answer is a choice."
+	return "Ask the operator a question when a decision cannot be made from the code. Provide two to five short options when the answer is a choice. To settle several independent decisions at once, pass questions (up to four) instead of question."
 }
 func (t *askUserTool) Schema() map[string]any {
 	return object(map[string]any{
 		"question": strProp("The question to ask."),
 		"options":  arrayProp("Optional short choices, two to five.", strProp("One choice.")),
-	}, "question")
+		"questions": arrayProp("Several questions asked one after another, up to four.", object(map[string]any{
+			"question": strProp("The question to ask."),
+			"options":  arrayProp("Optional short choices, two to five.", strProp("One choice.")),
+		}, "question")),
+	})
 }
 
+// maxAskQuestions bounds one multi-question ask.
+const maxAskQuestions = 4
+
 func (t *askUserTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	if env.Ask == nil {
+		return Result{Output: "The operator is not available for questions in this mode.", IsError: true}, nil
+	}
+	if many, ok := args["questions"].([]any); ok && len(many) > 0 {
+		return askMany(env, many)
+	}
 	question := argString(args, "question")
 	if question == "" {
 		return Result{Output: "question is required", IsError: true}, nil
-	}
-	if env.Ask == nil {
-		return Result{Output: "The operator is not available for questions in this mode.", IsError: true}, nil
 	}
 	options := argList(args, "options")
 	answer, err := env.Ask(question, options)
@@ -618,6 +628,42 @@ func (t *askUserTool) Run(ctx context.Context, env *Env, args map[string]any) (R
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
 	return Result{Output: fmt.Sprintf("The operator answered: %s", answer)}, nil
+}
+
+// askMany asks each question in turn through the same Ask the single form
+// uses, so every front end (terminal dialog, chat question) supports it. The
+// answers come back numbered against their questions.
+func askMany(env *Env, raw []any) (Result, error) {
+	if len(raw) > maxAskQuestions {
+		raw = raw[:maxAskQuestions]
+	}
+	var out strings.Builder
+	asked := 0
+	for _, item := range raw {
+		entry, _ := item.(map[string]any)
+		question := argString(entry, "question")
+		if question == "" {
+			continue
+		}
+		asked++
+		label := question
+		if len(raw) > 1 {
+			label = fmt.Sprintf("(%d/%d) %s", asked, len(raw), question)
+		}
+		answer, err := env.Ask(label, argList(entry, "options"))
+		if err != nil {
+			if asked == 1 {
+				return Result{Output: err.Error(), IsError: true}, nil
+			}
+			fmt.Fprintf(&out, "%d. %s\n   Not answered: %v\n", asked, question, err)
+			break
+		}
+		fmt.Fprintf(&out, "%d. %s\n   Answer: %s\n", asked, question, answer)
+	}
+	if asked == 0 {
+		return Result{Output: "each entry in questions needs a question", IsError: true}, nil
+	}
+	return Result{Output: "The operator answered:\n" + strings.TrimRight(out.String(), "\n")}, nil
 }
 
 // thinkTool records internal reasoning.

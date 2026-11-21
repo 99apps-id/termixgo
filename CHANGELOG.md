@@ -15,7 +15,12 @@ All notable changes to Termixgo are recorded here. The format follows
 - `run_monitor` watches a background process and wakes the model when an output line matches a regular expression and when the process exits; matches are batched and spaced, and capped per monitor.
 - Wakes: a finished background subagent or a monitor match starts a turn when the terminal is idle (shown as a `Background:` line) and is folded in as a steer while a turn runs. At most five turns start in a row without the operator typing.
 
+- `schedule_task`: the model schedules a prompt for later (cron expression, `every 10m`, `at 15:30`); it fires as a wake, recurring tasks expire after 7 days and repeat at most once a minute. `durable` stores a cron job run by `termixgo serve` instead.
+- `notebook_read` and `notebook_edit` for Jupyter notebooks: cells by index and id, replace, insert or delete, unknown fields kept, stale outputs cleared.
+- `ask_user` takes `questions`, up to four asked in one call, answered in order.
+
 ### Fixed
+- The guest deny-list named five tools by old names (`logs`, `wait`, `list_processes`, `kill`, `subagent`), so a chat guest could read and kill background processes and spawn subagents. It now uses the real names and also covers SSH, `dev_server`, `env_list`, `browser_run_steps`, scheduling and the new subagent tools; a test fails if a listed name stops matching a tool.
 - Guest steer messages on Telegram and WhatsApp reach the running turn wrapped as untrusted data, like the guest's prompt.
 - With tool search on, `run_subagent` was deferred because the always-on list named it `subagent`.
 - Telegram streaming: a near-limit draft could be edited over the message limit, a silent answer after overflow left the live draft in the chat, and the card's dropped-lines count reset on every update.

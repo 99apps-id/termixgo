@@ -15,9 +15,12 @@ import (
 // not only in the prompt: a tool the model cannot see is a tool it cannot ask
 // for.
 var guestDeniedTools = []string{
-	"run_command", "run_checks", "run_background", "logs", "wait",
-	"list_processes", "kill",
-	"orchestrate", "list_pipelines", "code_worker", "parallel_batch", "subagent",
+	"run_command", "run_checks", "run_background", "run_logs", "run_wait",
+	"run_list", "run_kill", "run_monitor", "dev_server",
+	"ssh_list_connections", "ssh_connect", "ssh_run_command", "ssh_active_session",
+	"orchestrate", "list_pipelines", "code_worker", "parallel_batch",
+	"run_subagent", "send_subagent", "subagent_status", "schedule_task",
+	"env_list", "browser_run_steps",
 	"git_add", "git_commit", "git_push", "git_pull", "git_branch", "git_restore",
 	"git_worktree", "git_stash", "git_stash_pop",
 	"checkpoint", "rewind",
