@@ -165,7 +165,7 @@ func renderToolGroup(items []block, styles Styles, width int) string {
 	} else {
 		summary = fmt.Sprintf("Ran %d read tools", len(items))
 	}
-	line := truncate("  + "+summary+" (ctrl+o to expand)", width)
+	line := truncate(markAgent+" "+summary+" (ctrl+o to expand)", width)
 	hintIdx := strings.LastIndex(line, " (ctrl+o to expand)")
 	if hintIdx > 0 {
 		head := line[:hintIdx]
@@ -265,23 +265,44 @@ func renderUserBlock(item block, styles Styles, width int) string {
 	return strings.Join(lines, "\n")
 }
 
+// The transcript's visual language, after Claude Code: "●" opens an answer and
+// every tool call (coloured by state), "⎿" hangs a tool's output under it, and
+// "∴" marks reasoning. Everything else is indented two columns under them.
+const (
+	markAgent     = "●"
+	markReasoning = "∴"
+)
+
 func renderAssistantBlock(item block, styles Styles, width int) string {
 	body := renderMarkdown(item.text, styles, width-2)
 	if body == "" {
 		return ""
 	}
-	return indent(body, "  ")
+	body = indent(body, "  ")
+	if item.continuation {
+		// The rest of an answer whose start was already printed.
+		return body
+	}
+	lines := strings.Split(body, "\n")
+	for index, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		lines[index] = styles.Assistant.Bold(true).Render(markAgent) + strings.TrimPrefix(line, " ")
+		break
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderThinkingBlock(item block, styles Styles, width int, showDetails bool) string {
 	header := ""
 	switch {
 	case item.running:
-		header = shimmerLine("  Thinking...", styles)
+		header = shimmerLine(markReasoning+" Thinking…", styles)
 	case item.seconds > 0:
-		header = styles.Reasoned.Render(fmt.Sprintf("  Thought for %ds", item.seconds))
+		header = styles.Reasoned.Render(fmt.Sprintf("%s Thought for %ds", markReasoning, item.seconds))
 	default:
-		header = styles.Reasoned.Render("  Thought")
+		header = styles.Reasoned.Render(markReasoning + " Thought")
 	}
 	body := strings.TrimSpace(item.reasoning)
 	if !showDetails || item.hideBody {
@@ -314,13 +335,12 @@ func renderThinkingBlock(item block, styles Styles, width int, showDetails bool)
 }
 
 func renderToolBlock(item block, styles Styles, width int, showDetails bool) string {
-	marker := "+"
+	// One marker for every state; its colour says running, done or failed.
+	marker := markAgent
 	style := styles.ToolDone
 	if item.running {
-		marker = ">"
 		style = styles.Tool
 	} else if !item.toolOK {
-		marker = "x"
 		style = styles.ToolError
 	}
 	label := item.toolLabel
@@ -337,7 +357,7 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 		// Compact: marker and label on one line - plus a few lines of the
 		// diff when this tool changed a file for real, so the operator sees
 		// what changed without opening the details view.
-		line := truncate(fmt.Sprintf("  %s %s", marker, label), width)
+		line := truncate(fmt.Sprintf("%s %s", marker, label), width)
 		if item.running {
 			return shimmerTool(line, styles)
 		}
@@ -361,7 +381,7 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 	if room < 0 {
 		room = 0
 	}
-	line := truncate(fmt.Sprintf("  %s %s", marker, label), room)
+	line := truncate(fmt.Sprintf("%s %s", marker, label), room)
 	if item.running {
 		return shimmerTool(line, styles)
 	}

@@ -68,7 +68,7 @@ func TestShimmerRespectsNoColor(t *testing.T) {
 func TestRunningThinkingBlockShimmers(t *testing.T) {
 	styles := NewStyles(DefaultPalette())
 	running := renderThinkingBlock(block{kind: blockThinking, running: true, reasoning: "x"}, styles, 80, true)
-	if !strings.Contains(stripANSI(running), "Thinking...") {
+	if !strings.Contains(stripANSI(running), "∴ Thinking…") {
 		t.Errorf("the live header should shimmer its text:\n%s", stripANSI(running))
 	}
 	done := renderThinkingBlock(block{kind: blockThinking, reasoning: "considered"}, styles, 80, true)
@@ -82,7 +82,7 @@ func TestRunningThinkingBlockShimmers(t *testing.T) {
 func TestRunningToolBlockShimmers(t *testing.T) {
 	styles := NewStyles(DefaultPalette())
 	running := stripANSI(renderToolBlock(block{kind: blockTool, running: true, toolLabel: "Reading main.go"}, styles, 80, true))
-	if !strings.Contains(running, "> Reading main.go") {
+	if !strings.Contains(running, "● Reading main.go") {
 		t.Errorf("the running line should keep its marker:\n%s", running)
 	}
 }

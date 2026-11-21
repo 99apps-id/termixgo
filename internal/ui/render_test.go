@@ -62,22 +62,30 @@ func TestTerminalDetectionDistinguishesPipesFromFiles(t *testing.T) {
 func TestRenderToolBlockMarksRunningDoneAndFailed(t *testing.T) {
 	styles := NewStyles(DefaultPalette())
 
+	// Every state carries the same marker; its colour tells them apart.
 	running := stripANSI(renderToolBlock(block{kind: blockTool, running: true, toolLabel: "Reading main.go"}, styles, 80, true))
-	if !strings.Contains(running, "> Reading main.go") {
-		t.Errorf("running = %q, want a > marker", running)
+	if !strings.HasPrefix(running, "● Reading main.go") {
+		t.Errorf("running = %q, want the agent marker", running)
 	}
 
 	done := stripANSI(renderToolBlock(block{kind: blockTool, toolOK: true, toolLabel: "Read main.go", toolMillis: 42}, styles, 80, true))
-	if !strings.Contains(done, "+ Read main.go") {
-		t.Errorf("done = %q, want a + marker", done)
+	if !strings.HasPrefix(done, "● Read main.go") {
+		t.Errorf("done = %q, want the agent marker", done)
 	}
 	if !strings.Contains(done, "(42ms)") {
 		t.Errorf("done = %q, want the elapsed time", done)
 	}
 
 	failed := stripANSI(renderToolBlock(block{kind: blockTool, toolOK: false, toolLabel: "Read main.go"}, styles, 80, true))
-	if !strings.Contains(failed, "x Read main.go") {
-		t.Errorf("failed = %q, want an x marker", failed)
+	if !strings.HasPrefix(failed, "● Read main.go") {
+		t.Errorf("failed = %q, want the agent marker", failed)
+	}
+	forceColor(t)
+	colour := NewStyles(DefaultPalette())
+	okLine := renderToolBlock(block{kind: blockTool, toolOK: true, toolLabel: "Read main.go"}, colour, 80, false)
+	badLine := renderToolBlock(block{kind: blockTool, toolOK: false, toolLabel: "Read main.go"}, colour, 80, false)
+	if okLine == badLine {
+		t.Errorf("a failed tool must be coloured apart from a finished one")
 	}
 	// A tool that finished without a recorded duration must not print (0ms).
 	if strings.Contains(failed, "ms)") {
@@ -95,7 +103,7 @@ func TestRenderThinkingBlockTrimsALongReasoning(t *testing.T) {
 	styles := NewStyles(DefaultPalette())
 
 	running := stripANSI(renderThinkingBlock(block{kind: blockThinking, running: true, reasoning: "thinking now"}, styles, 80, true))
-	if !strings.Contains(running, "Thinking...") {
+	if !strings.Contains(running, "∴ Thinking…") {
 		t.Errorf("running = %q, want the live header", running)
 	}
 	if !strings.Contains(running, "thinking now") {
@@ -115,7 +123,7 @@ func TestRenderThinkingBlockTrimsALongReasoning(t *testing.T) {
 
 	// No reasoning at all leaves the header alone rather than an empty block.
 	empty := stripANSI(renderThinkingBlock(block{kind: blockThinking}, styles, 80, true))
-	if strings.TrimSpace(empty) != "Thought" {
+	if strings.TrimSpace(empty) != "∴ Thought" {
 		t.Errorf("empty = %q", empty)
 	}
 
@@ -141,8 +149,22 @@ func TestRenderThinkingBlockTrimsALongReasoning(t *testing.T) {
 	}
 	// The compact view is the header with the way to expand.
 	compact := stripANSI(renderThinkingBlock(block{kind: blockThinking, reasoning: "considered", seconds: 2}, styles, 60, false))
-	if compact != "  Thought for 2s (ctrl+o to expand)" {
+	if compact != "∴ Thought for 2s (ctrl+o to expand)" {
 		t.Errorf("compact = %q", compact)
+	}
+}
+
+// An answer opens with the agent marker; the rest of an answer whose start
+// was already printed does not repeat it.
+func TestAssistantBlockCarriesTheAgentMarker(t *testing.T) {
+	styles := NewStyles(DefaultPalette())
+	first := stripANSI(renderAssistantBlock(block{kind: blockAssistant, text: "Hello there.\n\nSecond line."}, styles, 60))
+	if !strings.HasPrefix(first, "● Hello there.") || strings.Count(first, "●") != 1 {
+		t.Fatalf("first = %q", first)
+	}
+	rest := stripANSI(renderAssistantBlock(block{kind: blockAssistant, text: "More text.", continuation: true}, styles, 60))
+	if strings.Contains(rest, "●") || !strings.HasPrefix(rest, "  More text.") {
+		t.Fatalf("continuation = %q", rest)
 	}
 }
 

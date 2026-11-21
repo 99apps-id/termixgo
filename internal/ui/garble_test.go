@@ -49,7 +49,8 @@ func TestRenderPreservesWordOrder(t *testing.T) {
 	for _, width := range []int{40, 60, 80, 120, 200} {
 		styles := NewStyles(DefaultPalette())
 		rendered := stripANSI(transcript([]block{{kind: blockAssistant, text: garbleSentence}}, styles, width, true))
-		got := strings.Fields(rendered)
+		// The answer opens with the agent marker, which is not part of the text.
+		got := strings.Fields(strings.TrimPrefix(rendered, markAgent))
 		if len(got) != len(words) {
 			t.Errorf("width %d: %d words, want %d:\n%q", width, len(got), len(words), rendered)
 			continue

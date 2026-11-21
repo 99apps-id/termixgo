@@ -38,7 +38,7 @@ func TestStyledOutputHasOnlyWholeEscapes(t *testing.T) {
 		plain := strings.ReplaceAll(text, "`", "")
 		plain = strings.ReplaceAll(plain, "**", "")
 		want := strings.Join(strings.Fields(plain), "")
-		got := strings.Join(strings.Fields(stripped), "")
+		got := strings.TrimPrefix(strings.Join(strings.Fields(stripped), ""), markAgent)
 		if got != want {
 			t.Errorf("width %d: character stream changed:\n got %q\nwant %q", width, got, want)
 		}
