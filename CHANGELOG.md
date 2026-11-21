@@ -6,15 +6,15 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+## 0.2.9 - 2026-11-22
+
 ### Added
 - `submit_plan`, the plan-mode handshake: the agent presents its plan, the TUI shows it with a "Ready to code?" dialog (start with edits accepted automatically, start with each change confirmed, or keep planning with feedback), and an approval switches the same turn out of plan mode and is saved. Chat channels review the plan as a question in that chat, and their approval affects only that turn.
 - `web_fetch` takes a `prompt`: the page is read by the internal task model and only the answer comes back, recorded in the session ledger under that model; a failed extraction returns the page with a note.
 - Inline TUI: one activity line (`✻ Thinking… (14s · ↓ 2.1k tokens · esc to interrupt)`), a smooth theme-aware shimmer on its own animation tick, answers printed paragraph by paragraph as they stream, and one visual language (`●` answers and tools, `⎿` output, `∴` reasoning).
-
 - Background and resumable subagents: `run_subagent` takes `background`, every subagent keeps its session and id, `send_subagent` continues it with its full context, and `subagent_status` lists, waits for, reads or stops one. A background run's spend is counted in the turn that reads its report.
 - `run_monitor` watches a background process and wakes the model when an output line matches a regular expression and when the process exits; matches are batched and spaced, and capped per monitor.
 - Wakes: a finished background subagent or a monitor match starts a turn when the terminal is idle (shown as a `Background:` line) and is folded in as a steer while a turn runs. At most five turns start in a row without the operator typing.
-
 - `schedule_task`: the model schedules a prompt for later (cron expression, `every 10m`, `at 15:30`); it fires as a wake, recurring tasks expire after 7 days and repeat at most once a minute. `durable` stores a cron job run by `termixgo serve` instead.
 - `notebook_read` and `notebook_edit` for Jupyter notebooks: cells by index and id, replace, insert or delete, unknown fields kept, stale outputs cleared.
 - `ask_user` takes `questions`, up to four asked in one call, answered in order.
@@ -28,6 +28,7 @@ All notable changes to Termixgo are recorded here. The format follows
 - With tool search on, `run_subagent` was deferred because the always-on list named it `subagent`.
 - Telegram streaming: a near-limit draft could be edited over the message limit, a silent answer after overflow left the live draft in the chat, and the card's dropped-lines count reset on every update.
 - Reasoning closes with its own duration as soon as the answer or a tool starts, instead of holding the answer in the live area until the turn ends.
+- Truncated text in `read_document`, media requests and eval output is cut on a character boundary, never inside a multi-byte character.
 - The context gauge counts only the tool schemas a request carries; after any width change the inline transcript is cleared and printed again at the new width.
 
 ## 0.2.8 - 2026-11-21

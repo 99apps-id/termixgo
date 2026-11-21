@@ -546,9 +546,11 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   written like a person speaking.
 - The guest class is enforced by the registry, not the prompt. A non-operator
   run is offered the read and approval-gated write tools only: shell, process,
-  worker, subagent, git mutation, checkpoint, outbound request, browser,
-  GitHub, `env_get` and every `mcp_` tool are removed before the request is
-  built, `Secrets` is nil, the operator's "always allow" answers do not apply,
+  monitor, SSH, worker, subagent, scheduling, git mutation, checkpoint,
+  outbound request, browser, GitHub, `env_get`/`env_list` and every `mcp_`
+  tool are removed before the request is built (`guestDeniedTools` names real
+  tools only, and a test fails when a name stops matching), a guest steer is
+  wrapped as untrusted data like the guest's prompt, `Secrets` is nil, the operator's "always allow" answers do not apply,
   the approval mode is `ask`, and the rate/step/cost limits are the account's.
 - Chat answers are final text only. A WhatsApp chat sees a typing presence and
   then one answer, never a tool line, a path or a raw error; every answer is
@@ -572,6 +574,20 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   home, workspace, persona, guest state, deny-list and delegation limits; the
   per-turn fan-out cap and depth cap are enforced before the model call, and a
   guest or an `autoApprove: false` agent asks the operator first.
+- Background work wakes the model through one event. A background subagent's
+  completion, a `run_monitor` match and a `schedule_task` prompt each emit
+  `EventWake`; an idle TUI starts a turn with `agent.WakePrompt`, a running
+  turn takes it as a steer, and at most `maxAutoWakes` turns start without the
+  operator typing. The subagent pool, process manager and session scheduler
+  live on the app and outlive turns; a channel turn gets none of the pool or
+  the scheduler. A pooled subagent's session reaches `RunSubagent` through a
+  context slot that is cleared for nested runs, and a background run's spend
+  is folded into the turn that reads its report, once.
+- The plan is addressed by id. `PromptBlock` lists `[ ] t1: title`,
+  `todo_update` resolves an id, a number or a title, and `WriteNoting` settles
+  two in_progress items by completing the earlier one rather than refusing the
+  write. A channel run's throwaway store is seeded from the chat session's
+  plan and saved back to it.
 - A scheduled job names its agent and its target. `cron` jobs run in an
   isolated session of that agent's workspace and deliver to
   `channel:account:chat` or `local`; every run and delivery is recorded in

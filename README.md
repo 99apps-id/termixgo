@@ -1005,6 +1005,35 @@ others ready at the same time. `{{step.field}}` interpolates an earlier result.
 `list_pipelines` names them and `orchestrate` runs one. A step whose dependency
 failed is skipped, and the result reports what completed, failed and was skipped.
 
+### Background subagents, monitors and scheduled prompts
+
+Background work lets the model keep going while something else runs, and
+brings it back when that work needs attention.
+
+- **Subagents keep their context.** Every `run_subagent` call returns an id
+  such as `agent-1`. `send_subagent` continues that worker with a follow-up
+  and its whole earlier context, so a second question costs only the new turn.
+  With `background: true` the worker runs while the main turn moves on;
+  `subagent_status` lists the workers, waits for one, reads its report or
+  stops it. A background worker's tokens and cost are added to the turn that
+  reads its report.
+- **Monitors.** `run_monitor` watches a process started with `run_background`
+  and reports output lines that match a regular expression (for example
+  `ready|listening|FAIL|panic`) and the exit. Matches are batched and spaced,
+  and a monitor stops after `max_events` notifications (default 3).
+- **Scheduled prompts.** `schedule_task` runs a prompt later in this session:
+  a cron expression, `every 10m`, `at 15:30` or `at 2026-11-22 09:00`. A
+  recurring task repeats at most once a minute and expires after 7 days. With
+  `durable: true` it becomes a cron job instead, which survives restarts and
+  runs under `termixgo serve` (see [Scheduled jobs](#scheduled-jobs-and-heartbeat)).
+
+Each of these reaches the model as a background event. When the terminal is
+idle it starts a turn, shown as a `Background: ...` line; while a turn runs it
+is folded in like a steer. At most five turns start in a row this way; after
+that the event is shown but waits until you type. Chat channels keep one-shot
+subagents and no session schedules, so an event never lands in the wrong
+place.
+
 ### Background coding workers
 
 `code_worker` hands a self-contained coding task to a background coding agent in
@@ -1043,6 +1072,13 @@ Once a folder is trusted, the agent works without interrupting you.
   automatically, start with each change confirmed, or keep planning with your
   feedback. An approval switches the same turn out of plan mode and is saved.
   A chat channel gets the same choice as a question.
+
+The task plan is the agent's checklist for any task of three or more steps.
+It shows in the status line and in `/plan`; each item has an id (`t1`,
+`t2`) that the agent ticks off with `todo_update` as soon as the step is
+done. Starting the next item closes the current one, and a turn that tries to
+finish with open items is sent back once with their ids. Each Telegram or
+WhatsApp chat keeps its own plan across turns.
 
 `send_channel` runs without asking when it replies to the chat a request came
 from or to the owner, but asks before it sends a file from outside the
@@ -1616,8 +1652,8 @@ internal/whatsapp   native multi-device companion with whatsmeow, vision & enric
 ## Releasing
 
 ```sh
-git tag v0.2.4
-git push origin v0.2.4
+git tag v0.2.9
+git push origin v0.2.9
 ```
 
 The release workflow runs the full gate, requires the Antigravity OAuth client
