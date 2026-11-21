@@ -76,8 +76,15 @@ func Open(ctx context.Context) (*Session, error) {
 	sharedMu.Lock()
 	defer sharedMu.Unlock()
 	if shared != nil {
-		shared.touch()
-		return shared, nil
+		if !shared.dead() {
+			shared.touch()
+			return shared, nil
+		}
+		// The browser crashed or its window was closed. Handing the dead
+		// session back failed every later action, and the idle timer never
+		// reclaimed it because each attempt counted as use.
+		_ = shared.Close()
+		shared = nil
 	}
 	session, err := start(ctx)
 	if err != nil {
@@ -307,6 +314,29 @@ func (s *Session) watchIdle() {
 			return
 		}
 	}
+}
+
+// dead reports whether the session was closed or lost its protocol
+// connection. An action in flight holds actionMu and proves the connection is
+// in use, so a busy session is treated as alive rather than waited on.
+func (s *Session) dead() bool {
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return true
+	}
+	if !s.actionMu.TryLock() {
+		return false
+	}
+	conn := s.conn
+	s.actionMu.Unlock()
+	if conn == nil {
+		return false
+	}
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	return conn.closed
 }
 
 func (s *Session) touch() {

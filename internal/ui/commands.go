@@ -126,7 +126,11 @@ func (m *Model) runSlash(name, args string) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "new", "reset", "restart":
 		m.app.NewSession()
-		m.blocks = append(m.blocks, block{kind: blockNotice, text: "Started a new session."})
+		// The old transcript belongs to the old conversation. Keeping it on
+		// screen made the new session look like a continuation. Inputs queued
+		// after /new are kept: the operator typed them for the new session.
+		m.steerEcho = nil
+		m.blocks = []block{m.welcomeBlock(), {kind: blockNotice, text: "Started a new session."}}
 		m.refresh()
 		return m, nil
 	case "sessions":

@@ -222,7 +222,10 @@ func (a *App) agentSessionFor(name string) *agent.Session {
 	workspace := a.agentContextFor(name).workspace
 	dir, dirErr := agenthome.SessionsDirFor(name)
 	if dirErr == nil {
-		if summary, ok, err := agent.LatestSessionFor(name, dir); err == nil && ok {
+		// Only a conversation from this agent's own workspace is resumed.
+		// Resuming the newest one regardless carried another project's history,
+		// and its unfinished plan, into a folder that had nothing to do with it.
+		if summary, ok, err := agent.LatestSessionIn(name, dir, workspace); err == nil && ok {
 			if loaded, err := agent.LoadSessionIn(dir, summary.ID); err == nil {
 				loaded.SetAgent(name)
 				return loaded

@@ -71,19 +71,45 @@ func (t *sendChannelTool) Schema() map[string]any {
 	})
 }
 
+// channelFilePath reads the attachment path under any of its accepted names.
+func channelFilePath(args map[string]any) string {
+	for _, key := range []string{"file_path", "path", "file", "document"} {
+		if value := strings.TrimSpace(argString(args, key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// NeedsApprovalForCall gates the two sends that can leak data: a file from
+// outside the workspace, and a message to a recipient other than the chat the
+// request came from. A plain reply to the caller or the owner runs freely.
+func (t *sendChannelTool) NeedsApprovalForCall(env *Env, args map[string]any) bool {
+	if env == nil {
+		return true
+	}
+	if filePath := channelFilePath(args); filePath != "" {
+		if checkWorkspacePath(env, resolvePath(env, filePath)) != nil {
+			return true
+		}
+	}
+	if env.Guest {
+		// A guest is pinned to their own chat in Run.
+		return false
+	}
+	recipient := channel.CanonicalID(strings.TrimSpace(argString(args, "recipient")))
+	return recipient != "" && recipient != channel.CanonicalID(env.CallerChatID)
+}
+
 func (t *sendChannelTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	if env == nil {
 		return Result{Output: "no environment available", IsError: true}, nil
 	}
-	filePath := strings.TrimSpace(argString(args, "file_path"))
-	if filePath == "" {
-		filePath = strings.TrimSpace(argString(args, "path"))
-	}
-	if filePath == "" {
-		filePath = strings.TrimSpace(argString(args, "file"))
-	}
-	if filePath == "" {
-		filePath = strings.TrimSpace(argString(args, "document"))
+	filePath := channelFilePath(args)
+	if env.Guest && filePath != "" {
+		if err := checkWorkspacePath(env, resolvePath(env, filePath)); err != nil {
+			return Result{Output: "guests may only receive files from the workspace", IsError: true}, nil
+		}
 	}
 	message := strings.TrimSpace(argString(args, "message"))
 	if message == "" {

@@ -157,6 +157,14 @@ type App struct {
 	// caller instead of being dropped.
 	steer []string
 
+	// ctxUsage caches the status line's context gauge. The gauge rebuilds the
+	// system prompt (which reads the memory files from disk) and estimates the
+	// whole history, and the TUI asks for it on every frame.
+	ctxUsageMu  sync.Mutex
+	ctxUsageKey string
+	ctxUsageAt  time.Time
+	ctxUsageVal string
+
 	activeRunsMu sync.Mutex
 	activeRuns   map[string]*activeRun
 
@@ -305,7 +313,11 @@ func New(workspace string) (*App, error) {
 		skills:    instance.skills,
 		trusted:   instance.trusted,
 	}
-	instance.session = instance.agentSessionFor(cfg.ActiveAgent)
+	// A launch always starts a fresh conversation. The newest saved one used
+	// to be loaded here without a word: the screen showed a new session while
+	// the model read the old history and carried on with its pending work.
+	// Resuming is explicit (--resume, /sessions, Ctrl+P).
+	instance.session = instance.newSessionForAgent(cfg.ActiveAgent)
 
 	instance.quotaTracker = NewQuotaTracker()
 	// The rolling window survives a restart: without the state file a
@@ -1236,6 +1248,9 @@ func (a *App) NewSession() {
 	if a.agentSessions != nil {
 		a.agentSessions[name] = session
 	}
+	// A steer typed for the old conversation must not become the first
+	// message of the new one.
+	a.steer = nil
 	a.mu.Unlock()
 	a.todos.Set(nil)
 }
@@ -3050,7 +3065,26 @@ func (a *App) ModelError() error {
 
 // ContextUsage renders how much of the model's window the conversation is
 // using, which is the number that explains an unexpected trim.
-func (a *App) ContextUsage() string { return a.contextUsage() }
+func (a *App) ContextUsage() string {
+	session := a.Session()
+	key := fmt.Sprintf("%s|%s|%d", session.ID(), a.CurrentModel().ID, session.MessageCount())
+	a.ctxUsageMu.Lock()
+	if key == a.ctxUsageKey && time.Since(a.ctxUsageAt) < contextUsageTTL {
+		value := a.ctxUsageVal
+		a.ctxUsageMu.Unlock()
+		return value
+	}
+	a.ctxUsageMu.Unlock()
+	value := a.contextUsage()
+	a.ctxUsageMu.Lock()
+	a.ctxUsageKey, a.ctxUsageAt, a.ctxUsageVal = key, time.Now(), value
+	a.ctxUsageMu.Unlock()
+	return value
+}
+
+// contextUsageTTL bounds how stale a cached gauge may be while the history is
+// unchanged, so an edited memory file or a new tool still shows up.
+const contextUsageTTL = 5 * time.Second
 
 func (a *App) contextUsage() string {
 	session := a.Session()

@@ -1020,7 +1020,11 @@ func TestApprovalKeysMapToDecisions(t *testing.T) {
 		model.pendingApproval = &agent.ApprovalRequest{Tool: "run_command", Risk: "command", Detail: "Running tests"}
 		model.approvalReply = reply
 
-		press(t, model, testCase.key)
+		if testCase.key == "esc" {
+			pressEsc(t, model)
+		} else {
+			press(t, model, testCase.key)
+		}
 
 		select {
 		case got := <-reply:
@@ -1184,7 +1188,7 @@ func TestAskKeyAnswersAndEscDeclines(t *testing.T) {
 	second := chatModel(t)
 	secondReply := make(chan string, 1)
 	second.pendingAsk = &askRequestMsg{question: "again?", reply: secondReply}
-	press(t, second, "esc")
+	pressEsc(t, second)
 	if got := <-secondReply; got != "(no answer)" {
 		t.Errorf("declining should send a clear no-answer marker, got %q", got)
 	}

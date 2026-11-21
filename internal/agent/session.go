@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -913,6 +914,9 @@ type SessionSummary struct {
 	Model     string
 	UpdatedAt time.Time
 	Turns     int
+	// Workspace is the folder the conversation ran in, so a resume can refuse
+	// to carry one project's history into another.
+	Workspace string
 }
 
 // sessionsDir resolves the directory a session file lives in, creating it
@@ -965,6 +969,7 @@ func ListSessionsIn(dir string) ([]SessionSummary, error) {
 			Model:     session.Model(),
 			UpdatedAt: session.UpdatedAt(),
 			Turns:     session.Turns(),
+			Workspace: session.Workspace(),
 		})
 	}
 	sort.Slice(summaries, func(i, j int) bool { return summaries[i].UpdatedAt.After(summaries[j].UpdatedAt) })
@@ -975,6 +980,33 @@ func ListSessionsIn(dir string) ([]SessionSummary, error) {
 // directory. A session stored before the agent registry existed has no agent
 // and reads as the default agent's.
 func LatestSessionFor(agentName, dir string) (SessionSummary, bool, error) {
+	return LatestSessionIn(agentName, dir, "")
+}
+
+// LatestSessionIn is LatestSessionFor limited to one workspace. An empty
+// workspace matches any. Comparing the cleaned, case-folded path keeps a
+// Windows drive letter's case from splitting one folder into two.
+func LatestSessionIn(agentName, dir, workspace string) (SessionSummary, bool, error) {
+	want := normalizeWorkspace(workspace)
+	summary, ok, err := latestSessionMatching(agentName, dir, func(s SessionSummary) bool {
+		return want == "" || normalizeWorkspace(s.Workspace) == want
+	})
+	return summary, ok, err
+}
+
+func normalizeWorkspace(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	cleaned := filepath.Clean(trimmed)
+	if runtime.GOOS == "windows" {
+		cleaned = strings.ToLower(cleaned)
+	}
+	return cleaned
+}
+
+func latestSessionMatching(agentName, dir string, keep func(SessionSummary) bool) (SessionSummary, bool, error) {
 	summaries, err := ListSessionsIn(dir)
 	if err != nil {
 		return SessionSummary{}, false, err
@@ -988,7 +1020,7 @@ func LatestSessionFor(agentName, dir string) (SessionSummary, bool, error) {
 		if owner == "" {
 			owner = "default"
 		}
-		if owner == trimmed {
+		if owner == trimmed && keep(summary) {
 			return summary, true, nil
 		}
 	}

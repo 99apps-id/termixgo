@@ -776,6 +776,31 @@ func (r *Runner) needsApprovalFor(tool Tool) bool {
 	return false
 }
 
+// callApprover is a tool that is safe for ordinary calls but must ask the
+// operator for some argument combinations, such as a send to a stranger.
+type callApprover interface {
+	NeedsApprovalForCall(env *Env, args map[string]any) bool
+}
+
+// callNeedsApproval applies a tool's per-call gate. An allowance the operator
+// already gave for the tool, or the "all" mode, still wins.
+func (r *Runner) callNeedsApproval(tool Tool, args map[string]any) bool {
+	gate, ok := tool.(callApprover)
+	if !ok {
+		return false
+	}
+	name := tool.Name()
+	if r.Policy != nil {
+		if r.Policy.AlwaysAllowed[name] || r.Policy.SessionAllowed[name] || r.Policy.Mode == ApprovalAll {
+			return false
+		}
+	}
+	if r.Env != nil && r.Env.SessionAllowed[name] {
+		return false
+	}
+	return gate.NeedsApprovalForCall(r.Env, args)
+}
+
 // execute runs one tool call, applying the approval policy first.
 func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 	emit := r.emit
@@ -837,7 +862,7 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 		}
 	}
 
-	if r.needsApprovalFor(tool) {
+	if r.needsApprovalFor(tool) || r.callNeedsApproval(tool, args) {
 		decision := DecisionDeny
 		if r.Env.Approve != nil {
 			decision = r.Env.Approve(ApprovalRequest{

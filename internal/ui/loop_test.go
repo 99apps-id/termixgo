@@ -44,10 +44,11 @@ func TestTickKeepsTheClockOnlyWhileRunning(t *testing.T) {
 	}
 }
 
-// TestSpinnerTickIsForwarded covers the animation frames. Bubble Tea delivers
-// these whether or not anything is running, so they must not disturb the run.
+// TestSpinnerTickIsForwarded covers the animation frames while a turn runs.
+// An idle model stops the chain (TestSpinnerDoesNotTickWhileIdle).
 func TestSpinnerTickIsForwarded(t *testing.T) {
 	model := chatModel(t)
+	model.running = true
 	// spinner.Tick returns the frame message itself, so this is exactly what
 	// Bubble Tea delivers. A matching id returns the next frame command.
 	frame, cmd := send(t, model, model.spin.Tick())
@@ -137,7 +138,11 @@ func TestApprovalKeysMapToTheRightDecision(t *testing.T) {
 				request: agent.ApprovalRequest{Tool: "run_command"},
 				reply:   reply,
 			})
-			press(t, pending, testCase.key)
+			if testCase.key == "esc" {
+				pressEsc(t, pending)
+			} else {
+				press(t, pending, testCase.key)
+			}
 			select {
 			case decision := <-reply:
 				if decision != testCase.want {
@@ -252,7 +257,7 @@ func TestAskRequestCanBeDismissed(t *testing.T) {
 	reply := make(chan string, 1)
 	asking, _ := send(t, model, askRequestMsg{question: "which port?", reply: reply})
 
-	dismissed := press(t, asking, "esc")
+	dismissed := pressEsc(t, asking)
 	if dismissed.pendingAsk != nil {
 		t.Errorf("escape must clear the question")
 	}

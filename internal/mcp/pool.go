@@ -68,6 +68,11 @@ type Pool struct {
 	// rather than having it look like a typo.
 	disabled      []ServerStatus
 	disabledTools map[string][]string
+	// options keeps each server's launch settings so a crashed server can be
+	// started again without the operator running /mcp reload.
+	options map[string]Options
+	// restartMu serialises restarts so two calls do not both relaunch.
+	restartMu sync.Mutex
 }
 
 // NewPool builds an empty pool.
@@ -75,6 +80,7 @@ func NewPool() *Pool {
 	return &Pool{
 		clients:       map[string]*Client{},
 		disabledTools: map[string][]string{},
+		options:       map[string]Options{},
 	}
 }
 
@@ -126,6 +132,10 @@ func (p *Pool) Connect(ctx context.Context, disabled []Options, enabled []Option
 	defer p.mu.Unlock()
 	for _, r := range allResults {
 		p.disabledTools[r.options.Name] = r.options.DisabledTools
+		if p.options == nil {
+			p.options = map[string]Options{}
+		}
+		p.options[r.options.Name] = r.options
 		if r.failure.Err != nil {
 			p.failures = append(p.failures, r.failure)
 			p.status = append(p.status, r.status)
@@ -362,7 +372,51 @@ func (p *Pool) Call(ctx context.Context, name string, args map[string]any) (Call
 	if client == nil {
 		return CallResult{}, fmt.Errorf("the MCP server %q is not connected", bound.Server)
 	}
-	return client.Call(ctx, bound.Tool.Name, args)
+	if client.Dead() {
+		restarted, err := p.restart(ctx, bound.Server, client)
+		if err != nil {
+			return CallResult{}, err
+		}
+		client = restarted
+	}
+	result, err := client.Call(ctx, bound.Tool.Name, args)
+	if err != nil && client.Dead() && ctx.Err() == nil {
+		// The server died during the call. It is relaunched so the next call
+		// works, but this one is not repeated: whether it took effect is
+		// unknown, and a tool that sends or writes must not run twice.
+		if _, restartErr := p.restart(ctx, bound.Server, client); restartErr != nil {
+			return CallResult{}, fmt.Errorf("%w (restart failed: %v)", err, restartErr)
+		}
+		return CallResult{}, fmt.Errorf("%w; the MCP server %q crashed during the call and was restarted. Whether the call took effect is unknown: check before calling it again", err, bound.Server)
+	}
+	return result, err
+}
+
+// restart relaunches one server whose client died. A caller that finds the
+// client already replaced by another restart gets the new one.
+func (p *Pool) restart(ctx context.Context, server string, dead *Client) (*Client, error) {
+	p.restartMu.Lock()
+	defer p.restartMu.Unlock()
+	p.mu.Lock()
+	current := p.clients[server]
+	options, ok := p.options[server]
+	p.mu.Unlock()
+	if current != nil && current != dead && !current.Dead() {
+		return current, nil
+	}
+	if !ok {
+		return nil, fmt.Errorf("the MCP server %q stopped and cannot be restarted", server)
+	}
+	dead.Close()
+	client, err := Start(ctx, options)
+	if err != nil {
+		// The dead client stays in place, so the next call tries again.
+		return nil, fmt.Errorf("the MCP server %q stopped and did not restart: %w", server, err)
+	}
+	p.mu.Lock()
+	p.clients[server] = client
+	p.mu.Unlock()
+	return client, nil
 }
 
 // Failures returns the servers that could not be used.

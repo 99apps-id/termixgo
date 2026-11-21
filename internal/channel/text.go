@@ -49,7 +49,57 @@ func Chunk(text string, limit int) []string {
 	if limit <= 0 {
 		limit = config.DefaultTextChunkLimit
 	}
+	if !strings.Contains(trimmed, "```") {
+		return chunkPlain(trimmed, limit)
+	}
+	// A cut inside a fenced block is closed in its chunk and reopened in the
+	// next, so the second message does not render code as prose. The room for
+	// the added fences is reserved up front so no chunk passes the limit.
+	reserve := 0
+	if limit > 64 {
+		// "\n```" closing, plus "```" + a language of up to 32 bytes + "\n".
+		reserve = 4 + 3 + 32 + 1
+	}
+	return balanceFences(chunkPlain(trimmed, limit-reserve))
+}
 
+// balanceFences closes a code fence left open at the end of a chunk and
+// reopens it, with its language, at the start of the next.
+func balanceFences(chunks []string) []string {
+	carry := ""
+	for index, chunk := range chunks {
+		if carry != "" {
+			chunk = carry + "\n" + chunk
+			carry = ""
+		}
+		open, lang := false, ""
+		for _, line := range strings.Split(chunk, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if !strings.HasPrefix(trimmed, "```") {
+				continue
+			}
+			open = !open
+			if open {
+				lang = strings.TrimSpace(strings.TrimPrefix(trimmed, "```"))
+				if fields := strings.Fields(lang); len(fields) > 0 {
+					lang = fields[0]
+				}
+				if len(lang) > 32 {
+					lang = ""
+				}
+			}
+		}
+		if open && index < len(chunks)-1 {
+			chunk += "\n```"
+			carry = "```" + lang
+		}
+		chunks[index] = chunk
+	}
+	return chunks
+}
+
+// chunkPlain is Chunk without fence handling.
+func chunkPlain(trimmed string, limit int) []string {
 	var chunks []string
 	var current strings.Builder
 	flush := func() {

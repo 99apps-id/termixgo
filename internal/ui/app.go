@@ -538,9 +538,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.escPending = false
 			var settleCmd tea.Cmd
 			m, settleCmd = m.settleEscape()
-			if settleCmd != nil {
-				return m, settleCmd
+			updated, cmd := m.handleKey(typed)
+			if model, ok := updated.(*Model); ok {
+				model.scrubComposer()
 			}
+			return updated, tea.Batch(settleCmd, cmd)
 		}
 		updated, cmd := m.handleKey(typed)
 		if model, ok := updated.(*Model); ok {
@@ -583,6 +585,12 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case spinner.TickMsg:
+		// The spinner is only drawn while a turn runs. Letting it tick at idle
+		// repainted the whole frame ten times a second for nothing; startRun
+		// re-arms it.
+		if !m.running {
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(typed)
 		return m, cmd
@@ -669,6 +677,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.Focus()
 		m.refresh()
 		return m, textarea.Blink
+
+	case localCommandDoneMsg:
+		m.applyLocalCommand(typed)
+		return m, nil
 
 	case telegramPairedMsg:
 		if typed.paired {
@@ -911,9 +923,18 @@ func (m *Model) isTerminalNoise(key tea.KeyMsg) bool {
 }
 
 // settleEscape performs the real Escape action now that any ambiguity with a
-// split mouse report has been resolved. It replaces the old inline esc case in
-// handleKey and always returns a nil command.
+// split mouse report has been resolved. An open approval or question is
+// answered first (deny, no answer), then a running turn is stopped, then a
+// menu or the draft is cleared.
 func (m *Model) settleEscape() (*Model, tea.Cmd) {
+	if m.pendingApproval != nil {
+		_, cmd := m.answerApproval(agent.DecisionDeny)
+		return m, cmd
+	}
+	if m.pendingAsk != nil {
+		_, cmd := m.handleAskKey(tea.KeyMsg{Type: tea.KeyEscape})
+		return m, cmd
+	}
 	if m.running {
 		m.app.Stop()
 		if count := m.queuedCount(); count > 0 {
@@ -1021,6 +1042,13 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// A dialog Escape is as ambiguous as a chat one: a split mouse report
+	// starts with a lone ESC, and acting on it at once denied an approval
+	// whenever the operator scrolled. It is held and settled the same way.
+	if (m.pendingApproval != nil || m.pendingAsk != nil) && key.String() == "esc" {
+		m.escPending = true
+		return m, tea.Tick(escSettleDelay, func(time.Time) tea.Msg { return settleEscMsg{} })
+	}
 	if m.pendingApproval != nil {
 		return m.handleApprovalKey(key)
 	}
@@ -1610,11 +1638,27 @@ func (m *Model) runLocalCommand(cmdline string) (tea.Model, tea.Cmd) {
 		kind: blockUser,
 		text: "! " + cmdline,
 	})
+	m.notice = "Running !" + truncate(cmdline, 40)
+	m.refresh()
+	// The command runs off the event loop. Running it inline froze every
+	// repaint and key, Escape included, for as long as the command took.
+	workspace := m.app.Workspace()
+	return m, func() tea.Msg { return execLocalCommand(workspace, cmdline) }
+}
+
+// localCommandDoneMsg carries a finished !cmd back to the event loop.
+type localCommandDoneMsg struct {
+	output string
+	failed bool
+}
+
+// execLocalCommand runs one !cmd in the workspace with a 60 second cap.
+func execLocalCommand(workspace, cmdline string) localCommandDoneMsg {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	shell, args := localShellCommand(cmdline)
 	proc := exec.CommandContext(ctx, shell, args...)
-	proc.Dir = m.app.Workspace()
+	proc.Dir = workspace
 	out, err := proc.CombinedOutput()
 	output := strings.TrimSpace(string(out))
 	if err != nil {
@@ -1623,15 +1667,25 @@ func (m *Model) runLocalCommand(cmdline string) (tea.Model, tea.Cmd) {
 		} else {
 			output = fmt.Sprintf("command failed: %v", err)
 		}
-		m.blocks = append(m.blocks, block{kind: blockError, text: output})
-	} else {
-		if output == "" {
-			output = "(command completed with no output)"
-		}
-		m.blocks = append(m.blocks, block{kind: blockNotice, text: output})
+		return localCommandDoneMsg{output: output, failed: true}
+	}
+	if output == "" {
+		output = "(command completed with no output)"
+	}
+	return localCommandDoneMsg{output: output}
+}
+
+// applyLocalCommand shows a finished !cmd in the transcript.
+func (m *Model) applyLocalCommand(done localCommandDoneMsg) {
+	kind := blockNotice
+	if done.failed {
+		kind = blockError
+	}
+	m.blocks = append(m.blocks, block{kind: kind, text: done.output})
+	if strings.HasPrefix(m.notice, "Running !") {
+		m.notice = ""
 	}
 	m.refresh()
-	return m, nil
 }
 
 // submit dispatches either a slash command or an agent turn.
@@ -1950,6 +2004,7 @@ func (m *Model) refresh() {
 			text: fmt.Sprintf("... %d earlier transcript blocks are folded away; /export all writes the whole session", len(blocks)-transcriptWindowBlocks),
 		}}, blocks[len(blocks)-transcriptWindowBlocks:]...)
 	}
+	blocks = hideReasoning(blocks, m.app != nil && !m.app.Config().ShowReasoning)
 	content := transcript(blocks, m.styles, m.viewport.Width, m.showDetails)
 	m.contentLines = strings.Split(content, "\n")
 	if m.selecting || m.selActive {
@@ -1960,6 +2015,23 @@ func (m *Model) refresh() {
 		m.viewport.GotoBottom()
 	}
 	logFrame(content)
+}
+
+// hideReasoning returns blocks with every thinking body collapsed when hide is
+// set (Ctrl+T off). The input is copied, so the stored reasoning survives and
+// comes back when the operator turns it on again.
+func hideReasoning(blocks []block, hide bool) []block {
+	if !hide {
+		return blocks
+	}
+	out := make([]block, len(blocks))
+	copy(out, blocks)
+	for index := range out {
+		if out[index].kind == blockThinking {
+			out[index].hideBody = true
+		}
+	}
+	return out
 }
 
 // frameLogState counts the frames already written this process, so a paint

@@ -37,6 +37,9 @@ type block struct {
 	// landed. The closing event arrives after the answer text has started, so
 	// it can no longer find the block by looking at the tail of the transcript.
 	finalized bool
+	// hideBody collapses a thinking block to its header. The transcript sets
+	// it when the operator turned reasoning off with Ctrl+T.
+	hideBody bool
 
 	toolName   string
 	toolLabel  string
@@ -184,7 +187,7 @@ func renderThinkingBlock(item block, styles Styles, width int, showDetails bool)
 	default:
 		header = styles.Reasoned.Render("  Reasoned")
 	}
-	if !showDetails {
+	if !showDetails || item.hideBody {
 		return header
 	}
 	body := strings.TrimSpace(item.reasoning)

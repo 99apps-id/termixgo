@@ -91,6 +91,26 @@ type Client struct {
 	tools []Tool
 }
 
+// Dead reports whether the client can no longer answer: it was closed, or its
+// server process ended and the reader shut down.
+func (c *Client) Dead() bool {
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return true
+	}
+	if c.done == nil {
+		return false
+	}
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
+}
+
 // Start launches the server and completes the handshake. A server with a URL
 // is reached over HTTP; everything else is started as a local process.
 func Start(ctx context.Context, options Options) (*Client, error) {

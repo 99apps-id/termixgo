@@ -202,6 +202,10 @@ func writeCall(writer *bufio.Writer, id int64, mode string, params json.RawMessa
 		})
 	case "empty":
 		writeResult(writer, id, map[string]any{"content": []any{}})
+	case "die":
+		// A server that crashes in the middle of a call.
+		writer.Flush()
+		os.Exit(4)
 	default:
 		text, _ := call.Arguments["text"].(string)
 		writeResult(writer, id, map[string]any{

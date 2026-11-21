@@ -137,15 +137,42 @@ func inlineToHTML(line string) string {
 	return inlineSpansToHTML(escaped)
 }
 
+// inlineSpansToHTML styles one escaped line. Code spans are cut out first and
+// left untouched: Telegram rejects any entity nested inside <code>, and a
+// rejected message fell back to raw Markdown. Links are cut out next so a URL
+// is never rewritten by the emphasis rules; only the label is styled.
 func inlineSpansToHTML(escaped string) string {
-	// Inline code first, so markers inside it are not read as emphasis.
-	escaped = codeSpanPattern.ReplaceAllString(escaped, "<code>$1</code>")
-	escaped = boldItalicPattern.ReplaceAllString(escaped, "<b><i>$1</i></b>")
-	escaped = boldPattern.ReplaceAllString(escaped, "<b>$1</b>")
-	escaped = italicUnderscore.ReplaceAllString(escaped, "<i>$1</i>")
-	escaped = strikePattern.ReplaceAllString(escaped, "<s>$1</s>")
-	escaped = linkPattern.ReplaceAllString(escaped, `<a href="$2">$1</a>`)
-	return escaped
+	var out strings.Builder
+	last := 0
+	for _, loc := range codeSpanPattern.FindAllStringSubmatchIndex(escaped, -1) {
+		out.WriteString(linksToHTML(escaped[last:loc[0]]))
+		out.WriteString("<code>" + escaped[loc[2]:loc[3]] + "</code>")
+		last = loc[1]
+	}
+	out.WriteString(linksToHTML(escaped[last:]))
+	return out.String()
+}
+
+// linksToHTML renders [label](url) and styles the text around and inside it.
+func linksToHTML(text string) string {
+	var out strings.Builder
+	last := 0
+	for _, loc := range linkPattern.FindAllStringSubmatchIndex(text, -1) {
+		out.WriteString(emphasisToHTML(text[last:loc[0]]))
+		href := strings.ReplaceAll(text[loc[4]:loc[5]], `"`, "&quot;")
+		out.WriteString(`<a href="` + href + `">` + emphasisToHTML(text[loc[2]:loc[3]]) + "</a>")
+		last = loc[1]
+	}
+	out.WriteString(emphasisToHTML(text[last:]))
+	return out.String()
+}
+
+func emphasisToHTML(text string) string {
+	text = boldItalicPattern.ReplaceAllString(text, "<b><i>$1</i></b>")
+	text = boldPattern.ReplaceAllString(text, "<b>$1</b>")
+	text = italicUnderscore.ReplaceAllString(text, "<i>$1</i>")
+	text = strikePattern.ReplaceAllString(text, "<s>$1</s>")
+	return text
 }
 
 // escapeHTML escapes the three characters Telegram's HTML parser treats as
