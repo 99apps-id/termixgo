@@ -498,18 +498,24 @@ func TestEscStopsARunningTurn(t *testing.T) {
 	if updated.notice == "" {
 		t.Errorf("stopping should tell the operator what is happening")
 	}
-	if view := display(updated); !strings.Contains(strings.ToLower(view), "stopping") {
+	if view := display(updated); !strings.Contains(strings.ToLower(view), "interrupting") {
 		t.Errorf("the notice should be visible:\n%s", view)
 	}
 }
 
-func TestEscClearsTheComposerWhenIdle(t *testing.T) {
+// A single Escape never throws a draft away: the first one asks, a second
+// inside the window clears.
+func TestEscClearsTheComposerOnlyOnASecondPress(t *testing.T) {
 	model := chatModel(t)
 	model.composer.SetValue("half a thought")
 
-	updated := pressEsc(t, model)
-	if updated.composer.Value() != "" {
-		t.Errorf("esc should clear the composer, got %q", updated.composer.Value())
+	once := pressEsc(t, model)
+	if once.composer.Value() != "half a thought" || !strings.Contains(once.notice, "Esc again") {
+		t.Fatalf("the first Esc should keep the draft and ask, got %q / %q", once.composer.Value(), once.notice)
+	}
+	twice := pressEsc(t, once)
+	if twice.composer.Value() != "" {
+		t.Errorf("the second Esc should clear the composer, got %q", twice.composer.Value())
 	}
 }
 
@@ -833,10 +839,9 @@ func TestSlashEntryDuringARunRoutesCommandsCorrectly(t *testing.T) {
 	}
 }
 
-// TestEscDuringSlashEntryStopsTheRunningTurn proves the slash popup never
-// captures the stop shortcut. Esc still stops first; a separate Esc closes the
-// popup afterward.
-func TestEscDuringSlashEntryStopsTheRunningTurn(t *testing.T) {
+// TestEscDuringSlashEntryClosesThePopupFirst follows Claude Code: Escape out
+// of a menu opened during a run only closes the menu; the next one interrupts.
+func TestEscDuringSlashEntryClosesThePopupFirst(t *testing.T) {
 	model := chatModel(t)
 	model.running = true
 	typed := openSlashPalette(t, model)
@@ -844,18 +849,16 @@ func TestEscDuringSlashEntryStopsTheRunningTurn(t *testing.T) {
 		t.Fatalf("slash should open the popup while a turn runs")
 	}
 
-	stopped := pressEsc(t, typed)
-	if !stopped.slashOpen {
-		t.Fatalf("the first Esc during a run should stop, not close the popup")
-	}
-	if stopped.notice == "" {
-		t.Errorf("stopping should tell the operator what is happening")
-	}
-
-	stopped.running = false
-	closed := pressEsc(t, stopped)
+	closed := pressEsc(t, typed)
 	if closed.slashOpen || len(closed.slashMatches) != 0 {
-		t.Fatalf("the second Esc should close the popup")
+		t.Fatalf("the first Esc should close the popup")
+	}
+	if strings.Contains(closed.notice, "Interrupting") {
+		t.Fatalf("closing the popup must not interrupt the run")
+	}
+	stopped := pressEsc(t, closed)
+	if !strings.Contains(stopped.notice, "Interrupting") {
+		t.Fatalf("the second Esc should interrupt, notice = %q", stopped.notice)
 	}
 }
 
@@ -955,9 +958,8 @@ func TestSlashBackRowClosesWithoutRunning(t *testing.T) {
 	}
 }
 
-// TestEscClearsTypedSlashTextWithoutAMenu pins the rule that follows from the
-// new input model: with no menu open, Esc clears the composer in one press,
-// because a typed slash command is ordinary text until it is submitted.
+// TestEscClearsTypedSlashTextWithoutAMenu: with no menu open, a typed slash
+// command is ordinary text, so a double Esc clears it like any draft.
 func TestEscClearsTypedSlashTextWithoutAMenu(t *testing.T) {
 	model := chatModel(t)
 	model.composer.SetValue("/stat")
@@ -966,7 +968,7 @@ func TestEscClearsTypedSlashTextWithoutAMenu(t *testing.T) {
 		t.Fatalf("a typed command must not open a menu")
 	}
 
-	cleared := pressEsc(t, model)
+	cleared := pressEsc(t, pressEsc(t, model))
 	if got := cleared.composer.Value(); got != "" {
 		t.Errorf("Esc should clear the composer, got %q", got)
 	}
@@ -1960,16 +1962,46 @@ func TestWorktreeSlashLists(t *testing.T) {
 	}
 }
 
-// TestComposerTakesFiveRows pins the roomier input: the transcript keeps the
-// rest of the window, derived from the composer height rather than a magic
-// number.
-func TestComposerTakesFiveRows(t *testing.T) {
+// TestComposerGrowsWithTheDraft: an empty composer takes the minimum rows and
+// the transcript the rest; a multi-line draft grows it up to the cap and the
+// transcript gives the rows back; clearing the draft shrinks it again.
+func TestComposerGrowsWithTheDraft(t *testing.T) {
 	model := chatModel(t)
-	if model.viewport.Height != 40-(composerHeight+6) {
-		t.Errorf("viewport height = %d, want %d", model.viewport.Height, 40-(composerHeight+6))
+	if model.composer.Height() != composerHeight || model.viewport.Height != 40-(composerHeight+6) {
+		t.Fatalf("empty: composer %d, viewport %d", model.composer.Height(), model.viewport.Height)
 	}
-	if composerHeight != 5 {
-		t.Errorf("composer height = %d, want the roomier 5 rows", composerHeight)
+	model.composer.SetValue(strings.Repeat("line\n", 6) + "last")
+	model.refresh()
+	if model.composer.Height() != 7 || model.viewport.Height != 40-(7+6) {
+		t.Fatalf("seven lines: composer %d, viewport %d", model.composer.Height(), model.viewport.Height)
+	}
+	model.composer.SetValue(strings.Repeat("x\n", 100))
+	model.refresh()
+	if model.composer.Height() != composerMaxRows {
+		t.Fatalf("a long draft should stop at the cap, got %d", model.composer.Height())
+	}
+	resize(model, 120, 24)
+	if model.composer.Height() != 24/3 {
+		t.Fatalf("on a short window the cap is a third of it, got %d", model.composer.Height())
+	}
+	resize(model, 120, 40)
+	model.composer.SetValue("")
+	model.refresh()
+	if model.composer.Height() != composerHeight {
+		t.Fatalf("clearing should shrink the composer, got %d", model.composer.Height())
+	}
+	if lines := strings.Count(model.View(), "\n") + 1; lines > 40 {
+		t.Fatalf("the frame must fit the terminal, got %d lines", lines)
+	}
+}
+
+// A long line wraps onto several rows and is counted as such.
+func TestComposerCountsWrappedRows(t *testing.T) {
+	model := chatModel(t)
+	model.composer.SetValue(strings.Repeat("a", model.composer.Width()*4+1))
+	model.refresh()
+	if model.composer.Height() != 5 {
+		t.Fatalf("a line four widths long plus one should take 5 rows, got %d", model.composer.Height())
 	}
 }
 

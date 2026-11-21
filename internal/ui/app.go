@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"golang.org/x/term"
 
 	"github.com/99apps-id/termixgo/internal/agent"
@@ -70,6 +71,27 @@ type (
 // report fragment that still falls inside escapeNoiseActive.
 const escSettleDelay = 100 * time.Millisecond
 
+// escDoubleWindow and quitWindow are how long a first Escape or quit key
+// waits for its confirming second press.
+const (
+	escDoubleWindow = 1500 * time.Millisecond
+	quitWindow      = 2 * time.Second
+)
+
+// armQuit handles Ctrl+C or Ctrl+X when they mean quit: a second press of
+// the same key inside quitWindow quits, the first one only says so.
+func (m *Model) armQuit(name, label string) (tea.Model, tea.Cmd) {
+	if m.quitKey == name && time.Since(m.quitArmedAt) < quitWindow {
+		m.app.Stop()
+		return m, tea.Quit
+	}
+	m.quitKey = name
+	m.quitArmedAt = time.Now()
+	m.notice = "Press " + label + " again to exit"
+	m.refresh()
+	return m, nil
+}
+
 // Model is the Bubble Tea program state.
 type Model struct {
 	app    *app.App
@@ -101,6 +123,14 @@ type Model struct {
 	// body arrives (and the Escape is dropped) or the settle timer fires (and
 	// the Escape acts).
 	escPending bool
+	// escArmedAt is when an Escape on a non-empty draft asked for a second
+	// one. Only a second Escape inside escDoubleWindow clears the draft, so a
+	// stray press never throws away what the operator typed.
+	escArmedAt time.Time
+	// quitArmedAt and quitKey record a first Ctrl+C or Ctrl+X that asked for
+	// confirmation; the same key again inside quitWindow quits.
+	quitArmedAt time.Time
+	quitKey     string
 
 	slashMatches []SlashCommand
 	slashCursor  int
@@ -241,7 +271,54 @@ type Options struct {
 // composerHeight is the composer rows. Five fits a two-line prompt plus a
 // line of @file context without stealing the transcript, which owns the
 // rest of the window, and it keeps the box from jumping as the text grows.
-const composerHeight = 5
+const composerHeight = 3
+
+// composerMaxRows caps the grown composer; a longer draft scrolls inside it.
+// The cap also never takes more than a third of the window, so the
+// transcript always keeps most of the screen.
+const composerMaxRows = 12
+
+// composerRows is how many rows the draft needs: every logical line counts
+// its wrapped rows, between composerHeight and the cap.
+func (m *Model) composerRows() int {
+	limit := composerMaxRows
+	if third := m.height / 3; third < limit {
+		limit = third
+	}
+	if limit < composerHeight {
+		limit = composerHeight
+	}
+	width := m.composer.Width()
+	if width < 1 {
+		width = 1
+	}
+	rows := 0
+	for _, line := range strings.Split(m.composer.Value(), "\n") {
+		cells := ansi.StringWidth(line)
+		rows += 1 + cells/width
+		if cells > 0 && cells%width == 0 {
+			rows--
+		}
+		if rows >= limit {
+			return limit
+		}
+	}
+	if rows < composerHeight {
+		return composerHeight
+	}
+	return rows
+}
+
+// fitComposer grows or shrinks the composer to its draft and gives the rows
+// it takes or frees back to the transcript.
+func (m *Model) fitComposer() {
+	rows := m.composerRows()
+	if rows == m.composer.Height() {
+		return
+	}
+	m.composer.SetHeight(rows)
+	m.viewport.Height = max(5, m.height-(rows+6))
+}
 
 // composerPromptWidth is the columns the composer marker occupies. The
 // textarea is told this width so it reserves the room itself; adding the
@@ -943,32 +1020,51 @@ func (m *Model) settleEscape() (*Model, tea.Cmd) {
 		_, cmd := m.handleAskKey(tea.KeyMsg{Type: tea.KeyEscape})
 		return m, cmd
 	}
-	if m.running {
-		m.app.Stop()
-		if count := m.queuedCount(); count > 0 {
-			m.notice = fmt.Sprintf("Stopping... (%d queued)", count)
-		} else {
-			m.notice = "Stopping..."
-		}
+	// A menu closes before anything else, so Escape out of a slash popup
+	// opened during a run does not also stop the run.
+	if m.slashOpen || len(m.slashMatches) > 0 || len(m.mentionMatches) > 0 {
+		m.closeMenus()
 		return m, nil
 	}
+	if m.running {
+		m.stopRun()
+		return m, nil
+	}
+	if strings.TrimSpace(m.composer.Value()) == "" {
+		return m, nil
+	}
+	if time.Since(m.escArmedAt) < escDoubleWindow {
+		m.escArmedAt = time.Time{}
+		m.composer.SetValue("")
+		m.attachments = keptAttachments(m.attachments, "")
+		m.notice = ""
+	} else {
+		m.escArmedAt = time.Now()
+		m.notice = "Press Esc again to clear the input"
+	}
+	m.refresh()
+	return m, nil
+}
+
+// closeMenus closes the slash popup and the @file menu, keeping the text.
+func (m *Model) closeMenus() {
 	if m.slashOpen {
 		m.cancelSlashMenu()
-		return m, nil
 	}
-	if len(m.slashMatches) > 0 || len(m.mentionMatches) > 0 {
-		// First Esc steps back to typing and keeps the text; a second
-		// Esc clears the composer.
-		m.slashMatches = nil
-		m.mentionMatches = nil
-		m.refresh()
-		return m, nil
-	}
-	m.composer.SetValue("")
 	m.slashMatches = nil
 	m.mentionMatches = nil
 	m.refresh()
-	return m, nil
+}
+
+// stopRun interrupts the turn in flight.
+func (m *Model) stopRun() {
+	m.app.Stop()
+	if count := m.queuedCount(); count > 0 {
+		m.notice = fmt.Sprintf("Interrupting... (%d queued)", count)
+	} else {
+		m.notice = "Interrupting..."
+	}
+	m.refresh()
 }
 
 // isEscFollowOn reports whether a rune burst arriving right after a pending
@@ -1005,14 +1101,18 @@ func (m *Model) armEscapeNoise() {
 
 // handleKey routes keys by what is currently on screen.
 func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Global quit.
+	// Ctrl+X quits at once when nothing would be lost; with a turn running
+	// or a draft in the composer it asks for a second press first.
 	if key.String() == "ctrl+x" {
+		if m.running || strings.TrimSpace(m.composer.Value()) != "" {
+			return m.armQuit("ctrl+x", "Ctrl+X")
+		}
 		return m, tea.Quit
 	}
 
-	// Copy shortcuts: Ctrl+C copies what is currently selected, in the
-	// order composer range, composer select-all, then transcript selection.
-	// Outside a selection it is a no-op so the key never quits silently.
+	// Ctrl+C works the way it does in Claude Code: it copies a selection
+	// when there is one, otherwise it interrupts a running turn, otherwise it
+	// clears the draft, and on an empty idle composer a second press exits.
 	if key.String() == "ctrl+c" {
 		if m.composerSelActive {
 			return m.copyComposerRange()
@@ -1023,7 +1123,33 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selActive {
 			return m.copyTranscriptSelection()
 		}
-		return m, nil
+		if m.pendingApproval != nil {
+			_, cmd := m.answerApproval(agent.DecisionDeny)
+			return m, cmd
+		}
+		if m.pendingAsk != nil {
+			return m.handleAskKey(tea.KeyMsg{Type: tea.KeyEscape})
+		}
+		if m.current != modeChat {
+			return m.armQuit("ctrl+c", "Ctrl+C")
+		}
+		if m.slashOpen || len(m.slashMatches) > 0 || len(m.mentionMatches) > 0 {
+			m.closeMenus()
+			return m, nil
+		}
+		if m.running {
+			m.stopRun()
+			return m, nil
+		}
+		if strings.TrimSpace(m.composer.Value()) != "" {
+			m.composer.SetValue("")
+			m.attachments = keptAttachments(m.attachments, "")
+			m.notice = "Input cleared"
+			m.updateSlashMatches()
+			m.refresh()
+			return m, nil
+		}
+		return m.armQuit("ctrl+c", "Ctrl+C")
 	}
 
 	// Any typing, movement or shortcut drops an active transcript or
@@ -1325,8 +1451,9 @@ var approvalOptions = []struct {
 // ordinary submit path with the slash value staged only at the last moment.
 func (m *Model) handleSlashMenuKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
-	case "ctrl+x", "ctrl+c":
-		return m, tea.Quit
+	case "ctrl+c":
+		m.cancelSlashMenu()
+		return m, nil
 	case "ctrl+o":
 		m.showDetails = !m.showDetails
 		if m.showDetails {
@@ -1980,7 +2107,7 @@ func (m *Model) enterChat() tea.Cmd {
 // rows are the header, the status line, the hints and the composer with its
 // border; everything else belongs to the transcript.
 func (m *Model) layout() {
-	transcriptHeight := m.height - (composerHeight + 6)
+	transcriptHeight := m.height - (m.composer.Height() + 6)
 	if transcriptHeight < 5 {
 		transcriptHeight = 5
 	}
@@ -1992,6 +2119,7 @@ func (m *Model) layout() {
 	m.applyComposerStyle()
 	m.composer.SetWidth(m.width)
 	m.input.Width = max(20, m.width-8)
+	m.fitComposer()
 	m.refresh()
 }
 
@@ -2033,6 +2161,9 @@ func (m *Model) refresh() {
 	m.lastPaint = time.Now()
 	m.applyComposerStyle()
 	follow := m.viewport.AtBottom()
+	if m.current == modeChat {
+		m.fitComposer()
+	}
 	blocks := m.blocks
 	if len(blocks) > transcriptWindowBlocks {
 		blocks = append([]block{{

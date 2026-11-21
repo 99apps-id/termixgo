@@ -58,10 +58,12 @@ func TestConsoleOneRuneReportPreservesTypingAfterwards(t *testing.T) {
 // TestGenuineEscapeThenTypingStillActs pins the other half: accepting a bare
 // "[" as a report introducer must not stop a real Escape from acting. Escape
 // followed by an ordinary character still settles and clears the draft, and the
-// character is typed.
+// character is typed. A first Escape on a draft only asks for a second one, so
+// the settle shows that prompt and the typed character joins the draft.
 func TestGenuineEscapeThenTypingStillActs(t *testing.T) {
 	model := chatModel(t)
 	model.composer.SetValue("draft")
+	model.composer.CursorEnd()
 
 	model, _ = send(t, model, tea.KeyMsg{Type: tea.KeyEscape})
 	model, _ = send(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
@@ -69,7 +71,10 @@ func TestGenuineEscapeThenTypingStillActs(t *testing.T) {
 	if model.escPending {
 		t.Errorf("an ordinary key must resolve the pending Escape")
 	}
-	if got := model.composer.Value(); got != "h" {
-		t.Errorf("composer = %q, want the escaped draft replaced by the typed rune", got)
+	if model.escArmedAt.IsZero() {
+		t.Errorf("the Escape should have settled and asked for a second press")
+	}
+	if got := model.composer.Value(); got != "drafth" {
+		t.Errorf("composer = %q, want the draft plus the typed rune", got)
 	}
 }

@@ -64,7 +64,12 @@ func TestGenuineEscapeStillSettles(t *testing.T) {
 	}
 
 	settled, _ := send(t, held, settleEscMsg{})
-	if settled.composer.Value() != "" {
-		t.Errorf("a genuine Escape must clear the composer once settled, got %q", settled.composer.Value())
+	if settled.escArmedAt.IsZero() {
+		t.Fatalf("a genuine Escape must act once settled")
+	}
+	again, _ := send(t, settled, tea.KeyMsg{Type: tea.KeyEscape})
+	cleared, _ := send(t, again, settleEscMsg{})
+	if cleared.composer.Value() != "" {
+		t.Errorf("a second genuine Escape must clear the composer, got %q", cleared.composer.Value())
 	}
 }
