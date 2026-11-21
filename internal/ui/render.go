@@ -41,6 +41,11 @@ type block struct {
 	// hideBody collapses a thinking block to its header. The transcript sets
 	// it when the operator turned reasoning off with Ctrl+T.
 	hideBody bool
+	// streamed counts the bytes of a streaming answer already printed to the
+	// scrollback in the inline layout; continuation marks a block that holds
+	// the rest of an answer whose start was printed, so it carries no marker.
+	streamed     int
+	continuation bool
 
 	toolName   string
 	toolLabel  string

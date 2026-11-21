@@ -93,10 +93,12 @@ func (m *Model) flushSettled() {
 	}
 	end := m.settledCount()
 	if end <= m.printed {
+		m.flushStreamingAnswer()
 		return
 	}
+	defer m.flushStreamingAnswer()
 	hide := m.app != nil && !m.app.Config().ShowReasoning
-	slice := m.blocks[m.printed:end]
+	slice := unprintedBlocks(m.blocks[m.printed:end])
 	if m.running {
 		filtered := make([]block, 0, len(slice))
 		for _, item := range slice {
@@ -155,6 +157,11 @@ func (m *Model) reprintAll() tea.Cmd {
 	}
 	m.printed = start
 	m.pendingPrint = nil
+	// A streamed answer is printed again whole: the scrollback that held its
+	// first paragraphs is the one being cleared.
+	for index := start; index < len(m.blocks); index++ {
+		m.blocks[index].streamed = 0
+	}
 	m.flushSettled()
 	text := strings.Join(m.pendingPrint, "\n\n")
 	m.pendingPrint = nil
@@ -230,7 +237,7 @@ func (m *Model) inlineView() string {
 	var sections []string
 	if m.printed < len(m.blocks) {
 		hide := m.app != nil && !m.app.Config().ShowReasoning
-		liveBlocks := m.blocks[m.printed:]
+		liveBlocks := unprintedBlocks(m.blocks[m.printed:])
 		if m.running {
 			filtered := make([]block, 0, len(liveBlocks))
 			for _, item := range liveBlocks {

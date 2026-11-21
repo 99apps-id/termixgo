@@ -2248,6 +2248,18 @@ func (m *Model) reconcileAnswerText() {
 	}
 	for index := len(m.blocks) - 1; index > lastUser; index-- {
 		if m.blocks[index].kind == blockAssistant {
+			// Paragraphs already printed to the scrollback cannot be taken
+			// back, so the stored answer replaces the text only when it
+			// continues what was printed; otherwise the streamed text stands.
+			if printed := m.blocks[index].streamed; printed > 0 {
+				shown := strings.TrimLeft(m.blocks[index].text[:min(printed, len(m.blocks[index].text))], " \t\r\n")
+				if !strings.HasPrefix(stored, shown) {
+					return
+				}
+				// stored is trimmed, so the printed part is measured again
+				// against it.
+				m.blocks[index].streamed = len(shown)
+			}
 			m.blocks[index].text = stored
 			return
 		}
