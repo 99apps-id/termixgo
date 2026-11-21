@@ -296,6 +296,7 @@ func DefaultRegistry() *Registry {
 		&readDocumentTool{},
 		&createOfficeDocumentTool{},
 		&convertPDFToExcelTool{},
+		&convertDocumentTool{},
 		&generateImageTool{},
 		&textToSpeechTool{},
 	}

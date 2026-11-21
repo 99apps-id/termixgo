@@ -135,7 +135,51 @@ func (t *createOfficeDocumentTool) Schema() map[string]any {
 				"type": "string",
 			},
 		}),
+		"sheets": arrayProp("For .xlsx with several worksheets: [{\"name\": \"Sales\", \"rows\": [[\"Month\", \"Total\"], [\"Jan\", \"1200\"]]}]. Numbers are stored as numbers; the first row is bold and frozen.", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string"},
+				"rows": map[string]any{"type": "array", "items": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}},
+			},
+		}),
 	}, "path")
+}
+
+// parseSheetsArg reads [{"name": "...", "rows": [[...], ...]}, ...].
+func parseSheetsArg(raw any) []xlsxSheet {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	var sheets []xlsxSheet
+	for _, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		sheet := xlsxSheet{Name: fmt.Sprint(entry["name"])}
+		if entry["name"] == nil {
+			sheet.Name = ""
+		}
+		if rows, ok := entry["rows"].([]any); ok {
+			for _, row := range rows {
+				cells, ok := row.([]any)
+				if !ok {
+					continue
+				}
+				values := make([]string, len(cells))
+				for i, cell := range cells {
+					if cell == nil {
+						continue
+					}
+					values[i] = fmt.Sprint(cell)
+				}
+				sheet.Rows = append(sheet.Rows, values)
+			}
+		}
+		sheets = append(sheets, sheet)
+	}
+	return sheets
 }
 
 func (t *createOfficeDocumentTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
@@ -176,6 +220,16 @@ func (t *createOfficeDocumentTool) Run(ctx context.Context, env *Env, args map[s
 		return Result{Output: fmt.Sprintf("Successfully created Word document %s", rel)}, nil
 
 	case ".xlsx":
+		if sheets := parseSheetsArg(args["sheets"]); len(sheets) > 0 {
+			if err := writeXLSXSheets(path, sheets); err != nil {
+				return Result{Output: fmt.Sprintf("failed to create xlsx: %v", err), IsError: true}, nil
+			}
+			total := 0
+			for _, sheet := range sheets {
+				total += len(sheet.Rows)
+			}
+			return Result{Output: fmt.Sprintf("Successfully created Excel workbook %s with %d sheet(s) and %d rows", rel, len(sheets), total)}, nil
+		}
 		sheetName := title
 		if sheetName == "" {
 			sheetName = "Sheet1"
@@ -731,88 +785,181 @@ func writeDOCX(path, title, content string, tables [][]string) error {
 }
 
 func writeXLSX(path, sheetName string, rows [][]string) error {
+	return writeXLSXSheets(path, []xlsxSheet{{Name: sheetName, Rows: rows}})
+}
+
+// xlsxSheet is one worksheet of a workbook.
+type xlsxSheet struct {
+	Name string
+	Rows [][]string
+}
+
+// xlsxSheetName makes a name Excel accepts: at most 31 characters, none of
+// []:*?/\, and unique within the workbook.
+func xlsxSheetName(name string, index int, used map[string]bool) string {
+	name = strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`[]:*?/\`, r) {
+			return '-'
+		}
+		return r
+	}, strings.TrimSpace(name))
+	if name == "" {
+		name = fmt.Sprintf("Sheet%d", index+1)
+	}
+	if utf8.RuneCountInString(name) > 31 {
+		name = string([]rune(name)[:31])
+	}
+	base := name
+	for suffix := 2; used[strings.ToLower(name)]; suffix++ {
+		tail := fmt.Sprintf(" (%d)", suffix)
+		runes := []rune(base)
+		if len(runes)+len(tail) > 31 {
+			runes = runes[:31-len(tail)]
+		}
+		name = string(runes) + tail
+	}
+	used[strings.ToLower(name)] = true
+	return name
+}
+
+// xlsxNumber reports whether a cell should be stored as a number. A value
+// with a leading zero, such as a phone number or a postcode, stays text so
+// Excel does not strip the zero.
+func xlsxNumber(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || trimmed != value {
+		return false
+	}
+	digits := strings.TrimPrefix(trimmed, "-")
+	if len(digits) > 1 && digits[0] == '0' && digits[1] != '.' {
+		return false
+	}
+	if len(digits) > 15 {
+		return false
+	}
+	_, err := strconv.ParseFloat(trimmed, 64)
+	return err == nil && !strings.ContainsAny(trimmed, "eEinfINFnaNA")
+}
+
+// writeXLSXSheets writes a workbook with one worksheet per entry. The first
+// row of every sheet is bold and frozen, because it is almost always the
+// header.
+func writeXLSXSheets(path string, sheets []xlsxSheet) error {
+	if len(sheets) == 0 {
+		sheets = []xlsxSheet{{Name: "Sheet1"}}
+	}
 	buf := new(bytes.Buffer)
 	zw := zip.NewWriter(buf)
-
-	// [Content_Types].xml
-	w, err := zw.Create("[Content_Types].xml")
-	if err != nil {
-		return err
-	}
-	io.WriteString(w, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-</Types>`)
-
-	// _rels/.rels
-	w, err = zw.Create("_rels/.rels")
-	if err != nil {
-		return err
-	}
-	io.WriteString(w, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-</Relationships>`)
-
-	// xl/_rels/workbook.xml.rels
-	w, err = zw.Create("xl/_rels/workbook.xml.rels")
-	if err != nil {
-		return err
-	}
-	io.WriteString(w, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-</Relationships>`)
-
-	// xl/workbook.xml
-	w, err = zw.Create("xl/workbook.xml")
-	if err != nil {
-		return err
-	}
-	if sheetName == "" {
-		sheetName = "Sheet1"
-	}
-	fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <sheets>
-    <sheet name="%s" sheetId="1" r:id="rId1"/>
-  </sheets>
-</workbook>`, xmlEscape(sheetName))
-
-	// xl/worksheets/sheet1.xml
-	w, err = zw.Create("xl/worksheets/sheet1.xml")
-	if err != nil {
-		return err
-	}
-
-	var sheetData strings.Builder
-	sheetData.WriteString(`<sheetData>`)
-	for rIdx, row := range rows {
-		rowNum := rIdx + 1
-		sheetData.WriteString(fmt.Sprintf(`<row r="%d">`, rowNum))
-		for cIdx, val := range row {
-			colLetter := colIndexToLetters(cIdx)
-			cellRef := fmt.Sprintf("%s%d", colLetter, rowNum)
-			sheetData.WriteString(fmt.Sprintf(`<c r="%s" t="inlineStr"><is><t>%s</t></is></c>`, cellRef, xmlEscape(val)))
+	write := func(name, body string) error {
+		w, err := zw.Create(name)
+		if err != nil {
+			return err
 		}
-		sheetData.WriteString(`</row>`)
-	}
-	sheetData.WriteString(`</sheetData>`)
-
-	sheetXML := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">%s</worksheet>`, sheetData.String())
-
-	if _, err := io.WriteString(w, sheetXML); err != nil {
+		_, err = io.WriteString(w, body)
 		return err
 	}
+	const header = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + "\n"
 
+	var overrides, rels, entries strings.Builder
+	used := map[string]bool{}
+	for index, sheet := range sheets {
+		n := index + 1
+		fmt.Fprintf(&overrides, `<Override PartName="/xl/worksheets/sheet%d.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`, n)
+		fmt.Fprintf(&rels, `<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet%d.xml"/>`, n, n)
+		fmt.Fprintf(&entries, `<sheet name="%s" sheetId="%d" r:id="rId%d"/>`, xmlEscape(xlsxSheetName(sheet.Name, index, used)), n, n)
+	}
+	stylesID := len(sheets) + 1
+	fmt.Fprintf(&rels, `<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`, stylesID)
+
+	parts := []struct{ name, body string }{
+		{"[Content_Types].xml", header + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+			`<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+			`<Default Extension="xml" ContentType="application/xml"/>` +
+			`<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
+			`<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>` +
+			overrides.String() + `</Types>`},
+		{"_rels/.rels", header + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+			`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`},
+		{"xl/_rels/workbook.xml.rels", header + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` + rels.String() + `</Relationships>`},
+		{"xl/workbook.xml", header + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>` + entries.String() + `</sheets></workbook>`},
+		{"xl/styles.xml", header + `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+			`<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>` +
+			`<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>` +
+			`<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>` +
+			`<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
+			`<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>` +
+			`</styleSheet>`},
+	}
+	for _, part := range parts {
+		if err := write(part.name, part.body); err != nil {
+			return err
+		}
+	}
+	for index, sheet := range sheets {
+		if err := write(fmt.Sprintf("xl/worksheets/sheet%d.xml", index+1), xlsxSheetXML(sheet.Rows)); err != nil {
+			return err
+		}
+	}
 	if err := zw.Close(); err != nil {
 		return err
 	}
 	return os.WriteFile(path, buf.Bytes(), 0o644)
+}
+
+// xlsxSheetXML renders one worksheet: numbers as numbers, text inline, the
+// header row bold and frozen, and column widths fitted to the content.
+func xlsxSheetXML(rows [][]string) string {
+	widths := map[int]int{}
+	for _, row := range rows {
+		for c, value := range row {
+			if w := utf8.RuneCountInString(value); w > widths[c] {
+				widths[c] = w
+			}
+		}
+	}
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` + "\n")
+	b.WriteString(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`)
+	if len(rows) > 1 {
+		b.WriteString(`<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>`)
+	}
+	if len(widths) > 0 {
+		b.WriteString(`<cols>`)
+		for c := 0; c < len(widths)+1; c++ {
+			w, ok := widths[c]
+			if !ok {
+				continue
+			}
+			width := w + 2
+			if width < 8 {
+				width = 8
+			}
+			if width > 60 {
+				width = 60
+			}
+			fmt.Fprintf(&b, `<col min="%d" max="%d" width="%d" customWidth="1"/>`, c+1, c+1, width)
+		}
+		b.WriteString(`</cols>`)
+	}
+	b.WriteString(`<sheetData>`)
+	for r, row := range rows {
+		fmt.Fprintf(&b, `<row r="%d">`, r+1)
+		style := ""
+		if r == 0 && len(rows) > 1 {
+			style = ` s="1"`
+		}
+		for c, value := range row {
+			ref := fmt.Sprintf("%s%d", colIndexToLetters(c), r+1)
+			if xlsxNumber(value) {
+				fmt.Fprintf(&b, `<c r="%s"%s><v>%s</v></c>`, ref, style, value)
+				continue
+			}
+			fmt.Fprintf(&b, `<c r="%s"%s t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>`, ref, style, xmlEscape(value))
+		}
+		b.WriteString(`</row>`)
+	}
+	b.WriteString(`</sheetData></worksheet>`)
+	return b.String()
 }
 
 func colIndexToLetters(idx int) string {
