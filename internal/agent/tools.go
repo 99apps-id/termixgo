@@ -24,6 +24,9 @@ type Result struct {
 	IsError bool
 	// Plan, when set, replaces the plan and triggers a plan event.
 	Plan []Todo
+	// ApprovalMode, when set, switches the running turn's approval mode, which
+	// is how an approved plan lets the same turn go on to make its changes.
+	ApprovalMode ApprovalMode
 	// Images, when set, are attached to the conversation so a vision model can
 	// see them. read_image is the only producer.
 	Images []provider.Image
@@ -137,6 +140,11 @@ type Env struct {
 	// configured messaging channel (Telegram or WhatsApp).
 	SendChannel func(ctx context.Context, req ChannelSendRequest) (string, error)
 
+	// ReviewPlan shows a finished plan to the operator and waits for the
+	// verdict. Nil, or ErrPlanReviewUnsupported, makes submit_plan ask through
+	// Ask instead.
+	ReviewPlan func(plan string) (PlanReview, error)
+
 	// Extract answers a question about one fetched page on the internal task
 	// model, so web_fetch can return the answer instead of the whole page.
 	// Nil means web_fetch always returns the page.
@@ -212,6 +220,7 @@ func DefaultRegistry() *Registry {
 		&envGetTool{},
 		&todoWriteTool{},
 		&todoReadTool{},
+		&submitPlanTool{},
 		&artifactWriteTool{},
 		&artifactReadTool{},
 		&artifactListTool{},

@@ -211,6 +211,8 @@ func (m *Model) inlineView() string {
 		overlay = m.viewApproval()
 	case m.pendingAsk != nil:
 		overlay = m.viewAsk()
+	case m.pendingPlan != nil:
+		overlay = m.viewPlanReview()
 	case m.historySearchActive:
 		overlay = m.viewHistorySearch()
 	case m.slashMenuOpen():

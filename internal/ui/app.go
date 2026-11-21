@@ -156,6 +156,13 @@ type Model struct {
 	realTerminal bool
 	resizeSeq    int
 
+	// pendingPlan is a submitted plan waiting for the operator; planCursor is
+	// the highlighted choice and planFeedback is set while the "keep planning"
+	// feedback is being typed.
+	pendingPlan  *planReviewMsg
+	planCursor   int
+	planFeedback bool
+
 	// history is the input history Up and Down walk; turnStats measures the
 	// turn in flight for the summary shown when it ends.
 	history             *promptHistory
@@ -669,6 +676,8 @@ func (m *Model) windowTitle() string {
 	switch {
 	case m.pendingApproval != nil:
 		return base + " - approval needed"
+	case m.pendingPlan != nil:
+		return base + " - plan review"
 	case m.running:
 		elapsed := time.Since(m.runStarted).Round(time.Second)
 		return fmt.Sprintf("%s - working %s", base, elapsed)
@@ -819,6 +828,14 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingApproval = nil
 			m.approvalReply = nil
 		}
+		if m.pendingPlan != nil {
+			select {
+			case m.pendingPlan.reply <- agent.PlanReview{}:
+			default:
+			}
+			m.pendingPlan = nil
+			m.planFeedback = false
+		}
 		if m.pendingAsk != nil {
 			if m.pendingAsk.reply != nil {
 				select {
@@ -885,6 +902,9 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.refresh()
 		// A waiting approval holds the whole turn, so it rings the bell and sends a toast.
 		return m, tea.Batch(tea.SetWindowTitle(m.windowTitle()), notifyApproval(request))
+
+	case planReviewMsg:
+		return m, m.openPlanReview(typed)
 
 	case askRequestMsg:
 		m.pendingAsk = &typed
@@ -1167,6 +1187,10 @@ func (m *Model) settleEscape() (*Model, tea.Cmd) {
 		_, cmd := m.handleAskKey(tea.KeyMsg{Type: tea.KeyEscape})
 		return m, cmd
 	}
+	if m.pendingPlan != nil {
+		_, cmd := m.handlePlanKey(tea.KeyMsg{Type: tea.KeyEscape})
+		return m, cmd
+	}
 	// A menu closes before anything else, so Escape out of a slash popup
 	// opened during a run does not also stop the run.
 	if m.slashOpen || len(m.slashMatches) > 0 || len(m.mentionMatches) > 0 {
@@ -1289,6 +1313,9 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.pendingAsk != nil {
 			return m.handleAskKey(tea.KeyMsg{Type: tea.KeyEscape})
 		}
+		if m.pendingPlan != nil {
+			return m.answerPlan(agent.PlanReview{})
+		}
 		if m.current == modeTranscript {
 			return m.closeTranscript()
 		}
@@ -1341,7 +1368,7 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// A dialog Escape is as ambiguous as a chat one: a split mouse report
 	// starts with a lone ESC, and acting on it at once denied an approval
 	// whenever the operator scrolled. It is held and settled the same way.
-	if (m.pendingApproval != nil || m.pendingAsk != nil) && key.String() == "esc" {
+	if (m.pendingApproval != nil || m.pendingAsk != nil || m.pendingPlan != nil) && key.String() == "esc" {
 		m.escPending = true
 		return m, tea.Tick(escSettleDelay, func(time.Time) tea.Msg { return settleEscMsg{} })
 	}
@@ -1350,6 +1377,9 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.pendingAsk != nil {
 		return m.handleAskKey(key)
+	}
+	if m.pendingPlan != nil {
+		return m.handlePlanKey(key)
 	}
 
 	switch m.current {
@@ -2618,6 +2648,8 @@ func (m *Model) screen() string {
 		overlay = m.viewApproval()
 	case m.pendingAsk != nil:
 		overlay = m.viewAsk()
+	case m.pendingPlan != nil:
+		overlay = m.viewPlanReview()
 	case m.historySearchActive:
 		overlay = m.viewHistorySearch()
 	case m.slashMenuOpen():
@@ -2631,7 +2663,7 @@ func (m *Model) screen() string {
 	// few transcript rows visible, because the operator is still reading while
 	// typing the command.
 	minTranscript := 3
-	if m.pendingApproval != nil || m.pendingAsk != nil {
+	if m.pendingApproval != nil || m.pendingAsk != nil || m.pendingPlan != nil {
 		minTranscript = 0
 	}
 
@@ -2904,7 +2936,7 @@ func (m *Model) applyComposerStyle() {
 // hints, which is a menu, an approval prompt or a question, takes that row
 // away, so the status line has to know whether it is still there.
 func (m *Model) hintsVisible() bool {
-	return m.pendingApproval == nil && m.pendingAsk == nil &&
+	return m.pendingApproval == nil && m.pendingAsk == nil && m.pendingPlan == nil &&
 		!m.historySearchActive && !m.slashMenuOpen() && len(m.mentionMatches) == 0
 }
 
@@ -3347,7 +3379,7 @@ func (m *Model) setSlashMatches(matches []SlashCommand) {
 // the operator filters the command list. Ordinary typing never opens the
 // palette, which keeps a slash inside a path or a sentence as plain text.
 func (m *Model) openSlashMenu() {
-	if m.slashOpen || m.current != modeChat || m.pendingApproval != nil || m.pendingAsk != nil {
+	if m.slashOpen || m.current != modeChat || m.pendingApproval != nil || m.pendingAsk != nil || m.pendingPlan != nil {
 		return
 	}
 	m.slashAnchor = ""

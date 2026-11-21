@@ -1677,8 +1677,38 @@ func (a *App) envFor(agentName string) *agent.Env {
 		SendChannel: func(callCtx context.Context, req agent.ChannelSendRequest) (string, error) {
 			return a.sendChannelFrom(callCtx, ctx.workspace, req)
 		},
-		Extract: a.extractFromPage,
+		Extract:    a.extractFromPage,
+		ReviewPlan: a.reviewPlan,
 	}
+}
+
+// PlanReviewer is an Interactor that can show a plan for approval in its own
+// dialog. The terminal UI is one; a chat channel is reviewed by a question.
+type PlanReviewer interface {
+	ReviewPlan(plan string) (agent.PlanReview, error)
+}
+
+// reviewPlan shows a submitted plan to the operator, in the front end's plan
+// dialog when it has one and as a two-answer question otherwise. An approval
+// with a mode is saved, so the next turn is out of plan mode too; the running
+// turn is switched by the tool result.
+func (a *App) reviewPlan(plan string) (agent.PlanReview, error) {
+	a.mu.Lock()
+	interactor := a.interactor
+	a.mu.Unlock()
+	var review agent.PlanReview
+	var err error
+	if reviewer, ok := interactor.(PlanReviewer); ok {
+		review, err = reviewer.ReviewPlan(plan)
+	} else {
+		review, err = agent.AskPlanReview(a.ask, plan)
+	}
+	if err == nil && review.Approved && review.Mode != "" {
+		if saveErr := a.SetApprovalMode(config.ApprovalMode(review.Mode)); saveErr != nil {
+			return review, nil
+		}
+	}
+	return review, err
 }
 
 // extractFromPage answers a question about a fetched page on the internal
@@ -2562,10 +2592,25 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 		}); ok {
 			runEnv.Ask = ask.Ask
 		}
+		// A plan from a channel turn is reviewed in that chat, never in the
+		// terminal, and its approval switches only this turn: the terminal's
+		// saved approval mode is the operator's, not the chat's.
+		interactor := opts.interactor
+		ask := runEnv.Ask
+		runEnv.ReviewPlan = func(plan string) (agent.PlanReview, error) {
+			if reviewer, ok := interactor.(PlanReviewer); ok {
+				return reviewer.ReviewPlan(plan)
+			}
+			if ask == nil {
+				return agent.PlanReview{}, errors.New("this chat cannot review a plan")
+			}
+			return agent.AskPlanReview(ask, plan)
+		}
 	} else if opts.session != nil && opts.guest {
 		runEnv.Approve = func(agent.ApprovalRequest) agent.Decision {
 			return agent.DecisionDeny
 		}
+		runEnv.ReviewPlan = nil
 	}
 
 	// Delegation belongs to this run: its agent, guest state and ceilings.

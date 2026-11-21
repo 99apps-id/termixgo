@@ -756,6 +756,7 @@ ecosystem tools out of every request and loads them on demand through
 | Tool | Purpose |
 | --- | --- |
 | `todo_write`, `todo_read` | the plan |
+| `submit_plan` | present a finished plan for approval (plan mode); the operator approves with automatic or confirmed edits, or sends it back with feedback |
 | `remember` | append a learned fact |
 | `use_skill`, `find_skill`, `install_skill`, `propose_skill` | load, install or propose skills |
 | `ask_user` | ask a question when a decision cannot be made from the code |
@@ -766,7 +767,7 @@ ecosystem tools out of every request and loads them on demand through
 
 | Tool | Purpose |
 | --- | --- |
-| `web_fetch` | fetch a URL and reduce HTML to text; falls back to the r.jina.ai reader |
+| `web_fetch` | fetch a URL and reduce HTML to text; falls back to the r.jina.ai reader. With `prompt`, a small model reads the page and only its answer comes back |
 | `web_search` | search the web and return titles, URLs and snippets |
 | `lookup` | weather, exchange rate, crypto price or a Wikipedia summary from a known keyless source |
 | `read_image` | attach a local image so a vision model can see it |
@@ -1032,7 +1033,12 @@ Once a folder is trusted, the agent works without interrupting you.
 - `ask`: every write and every command waits.
 - `edits`: file edits run, commands wait.
 - `all`: nothing waits.
-- `plan`: read, search and plan, but every mutating tool is blocked.
+- `plan`: read, search and plan, but every mutating tool is blocked. When the
+  plan is ready the agent calls `submit_plan`: the plan appears in the
+  transcript and a dialog asks whether to start with edits accepted
+  automatically, start with each change confirmed, or keep planning with your
+  feedback. An approval switches the same turn out of plan mode and is saved.
+  A chat channel gets the same choice as a question.
 
 `send_channel` runs without asking when it replies to the chat a request came
 from or to the owner, but asks before it sends a file from outside the

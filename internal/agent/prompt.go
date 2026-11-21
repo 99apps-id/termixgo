@@ -33,7 +33,7 @@ func BuildSystemParts(env *Env, model string) (staticPrompt, dynamicPlan string)
 	fmt.Fprintf(&builder, "- Platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Fprintf(&builder, "- Folder trust: %s\n", trusted)
 	if config.ApprovalMode(env.Config.ApprovalMode) == config.ApprovalPlan {
-		builder.WriteString("- Plan mode is ON: investigate, read, search and record the plan with todo_write, but never call a mutating tool. Mutating calls are blocked automatically, so do not retry one that was refused.")
+		builder.WriteString("- Plan mode is ON: investigate, read, search and record the plan with todo_write, but never call a mutating tool. Mutating calls are blocked automatically, so do not retry one that was refused. When the plan is ready, call submit_plan with it; once the operator approves, carry it out in the same turn.")
 	}
 	if strings.TrimSpace(model) != "" {
 		fmt.Fprintf(&builder, "- Model: %s\n", model)

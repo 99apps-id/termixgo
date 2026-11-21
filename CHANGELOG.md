@@ -6,6 +6,15 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+- `submit_plan`, the plan-mode handshake: the agent presents its plan, the TUI shows it with a "Ready to code?" dialog (start with edits accepted automatically, start with each change confirmed, or keep planning with feedback), and an approval switches the same turn out of plan mode and is saved. Chat channels review the plan as a question in that chat, and their approval affects only that turn.
+- `web_fetch` takes a `prompt`: the page is read by the internal task model and only the answer comes back, recorded in the session ledger under that model; a failed extraction returns the page with a note.
+- Inline TUI: one activity line (`✻ Thinking… (14s · ↓ 2.1k tokens · esc to interrupt)`), a smooth theme-aware shimmer on its own animation tick, answers printed paragraph by paragraph as they stream, and one visual language (`●` answers and tools, `⎿` output, `∴` reasoning).
+
+### Fixed
+- Reasoning closes with its own duration as soon as the answer or a tool starts, instead of holding the answer in the live area until the turn ends.
+- The context gauge counts only the tool schemas a request carries; after any width change the inline transcript is cleared and printed again at the new width.
+
 ## 0.2.8 - 2026-11-21
 
 ### Added

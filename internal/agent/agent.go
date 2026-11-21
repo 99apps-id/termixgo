@@ -1034,6 +1034,17 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 		ToolOutput:      outputHead,
 		ToolOutputLines: outputLines,
 	})
+	if result.ApprovalMode != "" {
+		// An approved plan switches the running turn out of plan mode. The
+		// policy and the config this turn holds were fixed when it started,
+		// so they are updated here; the app persists the same mode.
+		if r.Policy != nil {
+			r.Policy.Mode = result.ApprovalMode
+		}
+		if r.Env != nil {
+			r.Env.Config.ApprovalMode = config.ApprovalMode(result.ApprovalMode)
+		}
+	}
 	if len(result.Plan) > 0 {
 		if err := r.Env.Todos.Write(result.Plan); err == nil {
 			emit(Event{Kind: EventPlan, Plan: r.Env.Todos.Items()})
