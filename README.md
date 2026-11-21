@@ -213,12 +213,13 @@ viewer with full reasoning, tool outputs, and `/` search; in full-screen layout,
 
 | Line | Meaning |
 | --- | --- |
-| `Thinking...` | the model's reasoning is streaming in; expanded, its newest lines show |
-| `Thought for 4s (ctrl+o to expand)` | the reasoning finished; expanded, all of it shows |
-| `> Reading foo.go` | a tool call is running |
-| `+ Read foo.go (12ms)` | the tool finished |
-| `+ Read 3 files (ctrl+o to expand)` | consecutive read/search tools collapsed |
-| `x Running ...` | the tool failed |
+| `✻ Thinking… (14s · ↓ 2.1k tokens · esc to interrupt)` | the activity line above the status bar while a turn runs (inline layout) |
+| `∴ Thought for 4s (ctrl+o to expand)` | the reasoning finished; expanded, all of it shows |
+| `● Reading foo.go` (animated) | a tool call is running |
+| `● Read foo.go` (green) | the tool finished |
+| `● Read 3 files (ctrl+o to expand)` | consecutive read/search tools collapsed |
+| `● Running ...` (red) | the tool failed |
+| `● The parser drops…` | the start of the agent's answer; a long answer prints paragraph by paragraph as it streams |
 | `  ⎿  first lines of output` | a command's (or a failure's) output, 3 lines compact, 40 expanded |
 | `     … +118 lines (ctrl+o to expand)` | how much more output there is |
 | `[x] Fix the parser` | the plan, pinned above the status line during inline runs |
