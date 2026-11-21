@@ -1004,9 +1004,9 @@ func TestSplitBulletRecognisesEveryMarker(t *testing.T) {
 		wantText  string
 		wantMatch bool
 	}{
-		{"- a dash item", "*", "a dash item", true},
-		{"* an asterisk item", "*", "an asterisk item", true},
-		{"+ a plus item", "*", "a plus item", true},
+		{"- a dash item", "•", "a dash item", true},
+		{"* an asterisk item", "•", "an asterisk item", true},
+		{"+ a plus item", "•", "a plus item", true},
 		{"1. the first", "1.", "the first", true},
 		{"99. the ninety ninth", "99.", "the ninety ninth", true},
 		{"just a sentence", "", "", false},

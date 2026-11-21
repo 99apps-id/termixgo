@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -512,12 +513,15 @@ func renderMarkdown(text string, styles Styles, width int) string {
 	}
 	var out []string
 	inCode := false
-	for _, raw := range strings.Split(text, "\n") {
-		trimmed := strings.TrimRight(raw, " \t\r")
-		if strings.HasPrefix(strings.TrimSpace(trimmed), "```") {
+	fence := ""
+	rawLines := strings.Split(text, "\n")
+	for index := 0; index < len(rawLines); index++ {
+		trimmed := strings.TrimRight(rawLines[index], " \t\r")
+		if marker := fenceMarker(trimmed); marker != "" && (!inCode || marker == fence) {
 			inCode = !inCode
 			if inCode {
-				lang := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(trimmed), "```"))
+				fence = marker
+				lang := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(trimmed), "`~"))
 				if lang != "" {
 					out = append(out, styles.Dim.Render("  ┌─ "+lang+" ─"))
 				} else {
@@ -529,19 +533,50 @@ func renderMarkdown(text string, styles Styles, width int) string {
 			continue
 		}
 		if inCode {
-			out = append(out, styles.Code.Render("  "+truncate(trimmed, max(1, width-4))))
+			// Code is wrapped, never clipped: a cut line hides the part of the
+			// command the operator most needs to copy.
+			code := strings.ReplaceAll(trimmed, "\t", "    ")
+			for _, piece := range hardSplit(code, max(1, width-4)) {
+				out = append(out, styles.Code.Render("  "+piece))
+			}
+			if code == "" {
+				out = append(out, "")
+			}
 			continue
 		}
 		if trimmed == "" {
 			out = append(out, "")
 			continue
 		}
-		if strings.HasPrefix(trimmed, "#") {
-			heading := strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
-			out = append(out, styles.Heading.Render(truncate(heading, width)))
+		if isTableRow(trimmed) {
+			end := index
+			for end < len(rawLines) && isTableRow(strings.TrimRight(rawLines[end], " \t\r")) {
+				end++
+			}
+			out = append(out, renderTable(rawLines[index:end], styles, width)...)
+			index = end - 1
 			continue
 		}
-		if bullet, rest, ok := splitBullet(trimmed); ok {
+		if isRule(trimmed) {
+			out = append(out, styles.Dim.Render(strings.Repeat("─", max(1, min(width, 60)))))
+			continue
+		}
+		if _, heading, ok := splitHeading(trimmed); ok {
+			out = append(out, styles.Heading.Render(truncate(linksToText(heading), width)))
+			continue
+		}
+		if quote, ok := strings.CutPrefix(strings.TrimLeft(trimmed, " "), ">"); ok {
+			quote = linksToText(strings.TrimPrefix(quote, " "))
+			for _, line := range strings.Split(wrapInline(quote, max(1, width-2)), "\n") {
+				out = append(out, styles.Dim.Render("│ ")+styles.Dim.Render(styleInline(line, styles)))
+			}
+			continue
+		}
+		indentation := len(trimmed) - len(strings.TrimLeft(trimmed, " \t"))
+		pad := strings.Repeat("  ", min(indentation/2, 4))
+		trimmed = linksToText(trimmed)
+		if bullet, rest, ok := splitBullet(strings.TrimLeft(trimmed, " \t")); ok {
+			width := max(8, width-len(pad))
 			if boxMark, boxRest, hasBox := splitCheckbox(rest); hasBox {
 				boxStyle := styles.Dim
 				switch boxMark {
@@ -556,25 +591,26 @@ func renderMarkdown(text string, styles Styles, width int) string {
 				lines := strings.Split(wrapped, "\n")
 				for index, line := range lines {
 					if index == 0 {
-						out = append(out, boxStyle.Render(boxMark)+" "+styleInline(line, styles))
+						out = append(out, pad+boxStyle.Render(boxMark)+" "+styleInline(line, styles))
 						continue
 					}
-					out = append(out, "    "+styleInline(line, styles))
+					out = append(out, pad+"    "+styleInline(line, styles))
 				}
 				continue
 			}
 			wrapped := wrapInline(rest, max(1, width-4))
 			lines := strings.Split(wrapped, "\n")
+			hang := strings.Repeat(" ", ansi.StringWidth(bullet)+1)
 			for index, line := range lines {
 				if index == 0 {
-					out = append(out, styles.Bullet.Render(bullet)+" "+styleInline(line, styles))
+					out = append(out, pad+styles.Bullet.Render(bullet)+" "+styleInline(line, styles))
 					continue
 				}
-				out = append(out, "  "+styleInline(line, styles))
+				out = append(out, pad+hang+styleInline(line, styles))
 			}
 			continue
 		}
-		wrapped := wrapInline(trimmed, width)
+		wrapped := wrapInline(strings.TrimLeft(trimmed, " \t"), width)
 		for _, line := range strings.Split(wrapped, "\n") {
 			out = append(out, styleInline(line, styles))
 		}
@@ -582,11 +618,173 @@ func renderMarkdown(text string, styles Styles, width int) string {
 	return strings.TrimRight(strings.Join(out, "\n"), "\n")
 }
 
+// fenceMarker returns "```" or "~~~" when a line opens or closes a fence.
+func fenceMarker(line string) string {
+	trimmed := strings.TrimSpace(line)
+	switch {
+	case strings.HasPrefix(trimmed, "```"):
+		return "```"
+	case strings.HasPrefix(trimmed, "~~~"):
+		return "~~~"
+	}
+	return ""
+}
+
+// splitHeading reads an ATX heading. The space after the hashes is required,
+// so "#hashtag" or "#123" in prose stays text.
+func splitHeading(line string) (int, string, bool) {
+	trimmed := strings.TrimLeft(line, " ")
+	level := 0
+	for level < len(trimmed) && trimmed[level] == '#' {
+		level++
+	}
+	if level == 0 || level > 6 || level >= len(trimmed) || trimmed[level] != ' ' {
+		return 0, "", false
+	}
+	heading := strings.TrimSpace(strings.TrimRight(strings.TrimSpace(trimmed[level:]), "#"))
+	return level, heading, heading != ""
+}
+
+// isRule reports a thematic break: three or more of -, * or _ alone.
+func isRule(line string) bool {
+	compact := strings.ReplaceAll(strings.TrimSpace(line), " ", "")
+	if len(compact) < 3 {
+		return false
+	}
+	for _, marker := range []string{"-", "*", "_"} {
+		if strings.Trim(compact, marker) == "" {
+			return true
+		}
+	}
+	return false
+}
+
+var markdownLinkPattern = regexp.MustCompile(`\[([^\]\n]+)\]\(([^)\s]+)\)`)
+
+// linksToText shows a link as its label followed by the URL, since a
+// terminal cannot hide the target behind the text. A bare autolinked URL
+// whose label is the URL is shown once.
+func linksToText(line string) string {
+	if !strings.Contains(line, "](") {
+		return line
+	}
+	return markdownLinkPattern.ReplaceAllStringFunc(line, func(match string) string {
+		parts := markdownLinkPattern.FindStringSubmatch(match)
+		if parts[1] == parts[2] {
+			return parts[2]
+		}
+		return parts[1] + " (" + parts[2] + ")"
+	})
+}
+
+// isTableRow reports a pipe table line.
+func isTableRow(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return len(trimmed) >= 3 && strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|")
+}
+
+// isTableSeparator reports the |---|:---:| line under a table header.
+func isTableSeparator(line string) bool {
+	inner := strings.Trim(strings.TrimSpace(line), "|")
+	if inner == "" {
+		return false
+	}
+	for _, r := range inner {
+		if !strings.ContainsRune("-:| ", r) {
+			return false
+		}
+	}
+	return strings.Contains(inner, "-")
+}
+
+// renderTable lays a pipe table out in aligned columns. When the columns do
+// not fit, the widest ones shrink first and their cells are clipped, so the
+// table never wraps and breaks its own alignment.
+func renderTable(lines []string, styles Styles, width int) []string {
+	var rows [][]string
+	header := false
+	for index, line := range lines {
+		if isTableSeparator(line) {
+			if index == 1 {
+				header = true
+			}
+			continue
+		}
+		cells := strings.Split(strings.Trim(strings.TrimSpace(line), "|"), "|")
+		for i := range cells {
+			cells[i] = linksToText(strings.TrimSpace(cells[i]))
+		}
+		rows = append(rows, cells)
+	}
+	columns := 0
+	for _, row := range rows {
+		columns = max(columns, len(row))
+	}
+	if columns == 0 {
+		return nil
+	}
+	widths := make([]int, columns)
+	for _, row := range rows {
+		for i, cell := range row {
+			widths[i] = max(widths[i], inlineWidth(strings.ReplaceAll(cell, "`", "")))
+		}
+	}
+	// Each column costs its width plus " │ " between columns.
+	budget := width - 3*(columns-1)
+	for total(widths) > budget {
+		widest := 0
+		for i := range widths {
+			if widths[i] > widths[widest] {
+				widest = i
+			}
+		}
+		if widths[widest] <= 3 {
+			break
+		}
+		widths[widest]--
+	}
+	separator := styles.Dim.Render(" │ ")
+	var out []string
+	for r, row := range rows {
+		parts := make([]string, columns)
+		for i := 0; i < columns; i++ {
+			cell := ""
+			if i < len(row) {
+				cell = strings.ReplaceAll(row[i], "`", "")
+			}
+			cell = truncate(cell, widths[i])
+			cell += strings.Repeat(" ", max(0, widths[i]-ansi.StringWidth(cell)))
+			if r == 0 && header {
+				parts[i] = styles.Heading.Render(cell)
+			} else {
+				parts[i] = cell
+			}
+		}
+		out = append(out, strings.TrimRight(strings.Join(parts, separator), " "))
+		if r == 0 && header {
+			rule := make([]string, columns)
+			for i := range rule {
+				rule[i] = strings.Repeat("─", widths[i])
+			}
+			out = append(out, styles.Dim.Render(strings.Join(rule, "─┼─")))
+		}
+	}
+	return out
+}
+
+func total(values []int) int {
+	sum := 0
+	for _, value := range values {
+		sum += value
+	}
+	return sum
+}
+
 // splitBullet recognises "- ", "* " and "1. " list markers.
 func splitBullet(line string) (string, string, bool) {
 	for _, marker := range []string{"- ", "* ", "+ "} {
 		if strings.HasPrefix(line, marker) {
-			return "*", strings.TrimSpace(line[len(marker):]), true
+			return "•", strings.TrimSpace(line[len(marker):]), true
 		}
 	}
 	digits := 0
