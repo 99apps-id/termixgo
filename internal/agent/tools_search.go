@@ -4,14 +4,11 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
-
-	"github.com/99apps-id/termixgo/internal/search"
 )
 
 // maxSearchFileBytes caps the size of a file a search will read.
@@ -31,7 +28,7 @@ func (t *grepTool) DoneLabel(a map[string]any) string {
 	return "Searched " + Shorten(argString(a, "pattern", "query", "search", "regex", "keyword", "text"), 40)
 }
 func (t *grepTool) Description() string {
-	return "Search file contents with a regular expression (RE2 syntax). Skips .git, node_modules and other generated trees. Returns path, line number and the matching line."
+	return "Search file contents with a regular expression (RE2 syntax). Honours .gitignore and skips dependency trees, lockfiles and minified bundles. output_mode=files lists only the matching files and count gives matches per file: use them first to map where something is, then content (the default, grouped by file) on the few files that matter. context adds lines around each match so a follow-up read is often unnecessary."
 }
 func (t *grepTool) Schema() map[string]any {
 	return object(map[string]any{
@@ -39,7 +36,10 @@ func (t *grepTool) Schema() map[string]any {
 		"path":             strProp("Directory or file to search. Defaults to the workspace."),
 		"glob":             strProp("Only search files matching this glob, for example **/*.go or *.ts."),
 		"case_insensitive": boolProp("Match without regard to case."),
-		"max_results":      intProp("Maximum matches to return, 1 to 500. Defaults to 30."),
+		"output_mode":      strProp("content (matching lines, default), files (matching file paths only) or count (matches per file)."),
+		"context":          intProp("Lines of context around each match in content mode, 0 to 5. Defaults to 0."),
+		"include_noise":    boolProp("Also search lockfiles, minified bundles and source maps. Defaults to false."),
+		"max_results":      intProp("Maximum matches (content) or files (files, count) to return, 1 to 500. Defaults to 30 matches or 100 files."),
 	}, "pattern")
 }
 
@@ -63,83 +63,185 @@ func (t *grepTool) Run(ctx context.Context, env *Env, args map[string]any) (Resu
 	if err := checkWorkspacePath(env, root); err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
-	glob := argString(args, "glob")
-	maxResults := argInt(args, "max_results", 30, 1, 500)
-
-	type hit struct {
-		path string
-		line int
-		text string
+	var matcher *globMatcher
+	if glob := strings.TrimSpace(argString(args, "glob")); glob != "" {
+		if matcher, err = newGlobMatcher(glob); err != nil {
+			return Result{Output: fmt.Sprintf("invalid glob: %v", err), IsError: true}, nil
+		}
 	}
-	hits := make([]hit, 0, maxResults)
-	truncated := false
+	mode := strings.ToLower(strings.TrimSpace(argString(args, "output_mode", "mode")))
+	switch mode {
+	case "", "content", "lines":
+		mode = "content"
+	case "files", "files_with_matches", "names":
+		mode = "files"
+	case "count", "counts":
+		mode = "count"
+	default:
+		return Result{Output: "output_mode must be content, files or count", IsError: true}, nil
+	}
+	defaultMax := 30
+	if mode != "content" {
+		defaultMax = 100
+	}
+	maxResults := argInt(args, "max_results", defaultMax, 1, 500)
+	contextLines := argInt(args, "context", 0, 0, 5)
+	includeNoise := argBool(args, "include_noise", false)
 
-	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil
+	var out grepOutput
+	out.mode = mode
+	out.limit = maxResults
+	skippedNoise := 0
+	for _, path := range listSearchFiles(ctx, root) {
+		if ctx.Err() != nil || out.full() {
+			break
 		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if entry.IsDir() {
-			if path != root && search.IsSkippedDir(entry.Name()) {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if glob != "" && !matchGlob(glob, relativeSlash(env, path)) {
-			return nil
+		relative := relativeSlash(env, path)
+		if matcher != nil && !matcher.match(relative) {
+			continue
 		}
 		if !isTextFile(path) {
-			return nil
+			continue
 		}
-		info, statErr := entry.Info()
-		if statErr != nil || info.Size() > maxSearchFileBytes {
-			return nil
+		if !includeNoise && isNoiseFile(path) {
+			skippedNoise++
+			continue
 		}
-		file, openErr := os.Open(path)
-		if openErr != nil {
-			return nil
+		info, statErr := os.Stat(path)
+		if statErr != nil || info.IsDir() || info.Size() > maxSearchFileBytes {
+			continue
 		}
-		defer file.Close()
-		scanner := bufio.NewScanner(file)
-		scanner.Buffer(make([]byte, 0, 64*1024), 512*1024)
-		lineNumber := 0
-		for scanner.Scan() {
-			lineNumber++
-			line := scanner.Text()
-			if !compiled.MatchString(line) {
-				continue
-			}
-			if len(hits) >= maxResults {
-				truncated = true
-				return fs.SkipAll
-			}
-			hits = append(hits, hit{path: relativeSlash(env, path), line: lineNumber, text: Shorten(line, 200)})
-		}
-		// scanner.Err() is deliberately not returned here: a single file
-		// with a line longer than 512KB (common in minified bundles)
-		// should not abort the search of every other file.
-		_ = scanner.Err()
-		return nil
-	})
-	if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
-		return Result{Output: fmt.Sprintf("search failed: %v", err), IsError: true}, nil
+		grepFile(path, relative, compiled, contextLines, &out)
 	}
 
+	if out.matches == 0 {
+		text := "No matches."
+		if skippedNoise > 0 {
+			text += fmt.Sprintf(" (%d lockfile/minified file(s) skipped; include_noise=true searches them)", skippedNoise)
+		}
+		return Result{Output: text}, nil
+	}
+	return Result{Output: out.render()}, nil
+}
+
+// grepOutput collects results per file. Content mode prints each path once
+// above its lines instead of on every line, which is a large share of a
+// result's tokens when one file has many matches.
+type grepOutput struct {
+	mode      string
+	limit     int
+	files     int
+	matches   int
+	truncated bool
+	body      strings.Builder
+}
+
+func (o *grepOutput) full() bool {
+	if o.mode == "content" {
+		return o.matches >= o.limit
+	}
+	return o.files >= o.limit
+}
+
+func (o *grepOutput) render() string {
+	var header string
+	switch o.mode {
+	case "files":
+		header = fmt.Sprintf("%d file(s) match", o.files)
+	case "count":
+		header = fmt.Sprintf("%d match(es) in %d file(s)", o.matches, o.files)
+	default:
+		header = fmt.Sprintf("%d match(es) in %d file(s)", o.matches, o.files)
+	}
+	if o.truncated || o.full() {
+		header += " (limit reached; narrow with path or glob)"
+	}
+	return header + "\n" + strings.TrimRight(o.body.String(), "\n")
+}
+
+// grepFile searches one file and appends its results.
+func grepFile(path, relative string, compiled *regexp.Regexp, contextLines int, out *grepOutput) {
+	file, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 512*1024)
+
+	// lines keeps the whole file only when context is asked for; hits are the
+	// 1-based numbers of the matching lines and texts their content.
+	var lines []string
+	var hits []int
+	var texts []string
+	number := 0
+	for scanner.Scan() {
+		number++
+		line := scanner.Text()
+		if contextLines > 0 {
+			lines = append(lines, line)
+		}
+		if compiled.MatchString(line) {
+			hits = append(hits, number)
+			if contextLines == 0 {
+				texts = append(texts, line)
+			}
+		}
+	}
+	// A line longer than the scanner buffer (a minified bundle) ends the scan
+	// of this file only; the search carries on with the next one.
 	if len(hits) == 0 {
-		return Result{Output: "No matches."}, nil
+		return
 	}
-	var builder strings.Builder
-	fmt.Fprintf(&builder, "%d match(es)", len(hits))
-	if truncated {
-		builder.WriteString(" (limit reached)")
+	out.files++
+	switch out.mode {
+	case "files":
+		out.matches += len(hits)
+		fmt.Fprintf(&out.body, "%s\n", relative)
+		return
+	case "count":
+		out.matches += len(hits)
+		fmt.Fprintf(&out.body, "%s: %d\n", relative, len(hits))
+		return
 	}
-	builder.WriteString("\n")
-	for _, item := range hits {
-		fmt.Fprintf(&builder, "%s:%d: %s\n", item.path, item.line, item.text)
+
+	fmt.Fprintf(&out.body, "%s\n", relative)
+	if contextLines == 0 {
+		for index, line := range texts {
+			if out.matches >= out.limit {
+				out.truncated = true
+				return
+			}
+			out.matches++
+			fmt.Fprintf(&out.body, "  %d: %s\n", hits[index], Shorten(line, 200))
+		}
+		return
 	}
-	return Result{Output: strings.TrimRight(builder.String(), "\n")}, nil
+	isHit := make(map[int]bool, len(hits))
+	for _, hit := range hits {
+		isHit[hit] = true
+	}
+	printed := 0
+	for _, hit := range hits {
+		if out.matches >= out.limit {
+			out.truncated = true
+			return
+		}
+		out.matches++
+		start := max(hit-contextLines, printed+1)
+		end := min(hit+contextLines, len(lines))
+		if printed > 0 && start > printed+1 {
+			out.body.WriteString("  --\n")
+		}
+		for number := start; number <= end; number++ {
+			marker := "-"
+			if isHit[number] {
+				marker = ":"
+			}
+			fmt.Fprintf(&out.body, "  %d%s %s\n", number, marker, Shorten(lines[number-1], 200))
+		}
+		printed = end
+	}
 }
 
 // globTool finds files by path pattern.
@@ -179,34 +281,24 @@ func (t *globTool) Run(ctx context.Context, env *Env, args map[string]any) (Resu
 		return Result{Output: err.Error(), IsError: true}, nil
 	}
 	maxResults := argInt(args, "max_results", 200, 1, 2000)
+	matcher, err := newGlobMatcher(pattern)
+	if err != nil {
+		return Result{Output: fmt.Sprintf("invalid glob: %v", err), IsError: true}, nil
+	}
 
+	// The same file list as grep: .gitignore is honoured inside a repository.
 	matches := make([]string, 0, maxResults)
 	truncated := false
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if entry.IsDir() {
-			if path != root && search.IsSkippedDir(entry.Name()) {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !matchGlob(pattern, relativeSlash(env, path)) {
-			return nil
+	for _, path := range listSearchFiles(ctx, root) {
+		relative := relativeSlash(env, path)
+		if !matcher.match(relative) {
+			continue
 		}
 		if len(matches) >= maxResults {
 			truncated = true
-			return fs.SkipAll
+			break
 		}
-		matches = append(matches, relativeSlash(env, path))
-		return nil
-	})
-	if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
-		return Result{Output: fmt.Sprintf("glob failed: %v", err), IsError: true}, nil
+		matches = append(matches, relative)
 	}
 	if len(matches) == 0 {
 		return Result{Output: "No files matched."}, nil

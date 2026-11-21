@@ -183,7 +183,7 @@ func TestGrepSkipsGeneratedTrees(t *testing.T) {
 	if strings.Contains(result.Output, "node_modules") {
 		t.Errorf("grep must skip node_modules, got %q", result.Output)
 	}
-	if !strings.Contains(result.Output, "app.go:1:") {
+	if !strings.Contains(result.Output, "app.go\n  1:") {
 		t.Errorf("grep should match app.go, got %q", result.Output)
 	}
 }

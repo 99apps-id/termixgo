@@ -154,9 +154,44 @@ func (m *Memory) ReadAll() (project, global, agentFacts []string) {
 	return project, global, agentFacts
 }
 
+// maxPromptMemoryBytes bounds the learned-memory block in the system prompt.
+// Each scope may hold 16 KB on disk, and three scopes at that size added about
+// 12k tokens to every request; the block keeps the newest facts that fit.
+const maxPromptMemoryBytes = 6 * 1024
+
+// promptFacts drops the bookkeeping lines the approval gate records, which
+// teach the model nothing and changed the system prompt (and so broke the
+// prompt cache) every time a new tool was approved.
+func promptFacts(facts []string) []string {
+	kept := facts[:0:0]
+	for _, fact := range facts {
+		if strings.HasPrefix(fact, "approval ") {
+			continue
+		}
+		kept = append(kept, fact)
+	}
+	return kept
+}
+
+// fitFacts keeps the newest facts of each scope within the shared budget,
+// agent scope first, then project, then global.
+func fitFacts(budget int, scopes ...*[]string) {
+	for _, scope := range scopes {
+		facts := *scope
+		start := len(facts)
+		for start > 0 && budget-(len(facts[start-1])+3) >= 0 {
+			start--
+			budget -= len(facts[start]) + 3
+		}
+		*scope = facts[start:]
+	}
+}
+
 // PromptBlock renders the learned-memory block, or "" when nothing is stored.
 func (m *Memory) PromptBlock() string {
 	project, global, agentFacts := m.ReadAll()
+	project, global, agentFacts = promptFacts(project), promptFacts(global), promptFacts(agentFacts)
+	fitFacts(maxPromptMemoryBytes, &agentFacts, &project, &global)
 	if len(project) == 0 && len(global) == 0 && len(agentFacts) == 0 {
 		return ""
 	}
