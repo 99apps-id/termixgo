@@ -296,6 +296,8 @@ func DefaultRegistry() *Registry {
 		&readDocumentTool{},
 		&createOfficeDocumentTool{},
 		&convertPDFToExcelTool{},
+		&generateImageTool{},
+		&textToSpeechTool{},
 	}
 	tools = append(tools, DesktopTools()...)
 	return NewRegistry(tools...)

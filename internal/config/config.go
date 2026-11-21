@@ -205,6 +205,12 @@ type Config struct {
 	// example {".py": ["pylsp"]}. An extension that is not listed uses the
 	// built-in choice.
 	LSPServers map[string][]string `json:"lspServers,omitempty"`
+	// SpeechModel picks the text_to_speech backend as "provider:model" (for
+	// example "openai:tts-1" or "google:gemini-2.5-flash-preview-tts"), or
+	// "system" for the operating system voice. Empty tries every configured
+	// provider in a fixed order. generate_image reads ImageModel below when it
+	// names an image generation model.
+	SpeechModel string `json:"speechModel,omitempty"`
 	// Statusline is an optional ordered list of components. Empty preserves the
 	// built-in priority and width behavior.
 	Statusline []string `json:"statusline,omitempty"`
