@@ -66,7 +66,7 @@ type browserClickTool struct{}
 
 func (t *browserClickTool) Name() string { return "browser_click" }
 func (t *browserClickTool) Aliases() []string {
-	return []string{"browser_click_element", "click_page", "browser_fill_form"}
+	return []string{"browser_click_element", "click_page"}
 }
 func (t *browserClickTool) Mutating() bool { return false }
 func (t *browserClickTool) Risk() Risk     { return RiskNetwork }

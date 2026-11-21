@@ -254,6 +254,7 @@ func DefaultRegistry() *Registry {
 		&browserTabsTool{},
 		&browserCookiesTool{},
 		&browserCloseTool{},
+		&browserRunStepsTool{},
 		&httpRequestTool{},
 		&jwtInspectTool{},
 		&secretScanTool{},

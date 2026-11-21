@@ -11,6 +11,7 @@ All notable changes to Termixgo are recorded here. The format follows
 - `generate_image` (OpenAI gpt-image-1 and DALL-E, Gemini image models, Imagen, xAI) and `text_to_speech` (OpenAI, Gemini TTS, then the operating system voice). Files land in `.termixgo/media`; guests cannot use either.
 - TUI image paste: Ctrl+V or Alt+V attaches the clipboard image as `[Image #N]` at the cursor, an image file dragged onto the terminal is attached instead of typed, and deleting a placeholder drops its image.
 - `convert_document` converts Word, Excel, PowerPoint and OpenDocument files (to PDF, modern Office formats, CSV and more) through LibreOffice, or Microsoft Office over COM on Windows; the Office instance it starts is always closed. `create_office_document` writes multi-sheet workbooks with numeric cells, a bold frozen header and fitted columns.
+- `browser_run_steps` runs a multi-step browser flow (navigate, click, type, press, wait, scroll, read, screenshot) in one call, stops at the first failing step, saves flows with `save_as` and replays them with `{{name}}` variables. Typed values are never echoed or saved. `browser_fill_form` now points here instead of at `browser_click`.
 - `/endpoint list|add|rm|models` manages several OpenAI-compatible servers from the TUI; `termixgo endpoint models <name>` fetches a server's model list from `GET /models` (OpenAI and Ollama shapes).
 
 ### Fixed
