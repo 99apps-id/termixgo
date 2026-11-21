@@ -248,19 +248,6 @@ func (p *SubagentPool) startedAt(entry *pooledSubagent) time.Time {
 	return entry.started
 }
 
-func (p *SubagentPool) state(entry *pooledSubagent) string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	switch {
-	case entry.running:
-		return "running"
-	case entry.err != nil:
-		return "failed"
-	default:
-		return "done"
-	}
-}
-
 func (e *pooledSubagent) title() string {
 	if e.description != "" {
 		return e.description

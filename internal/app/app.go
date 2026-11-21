@@ -113,6 +113,16 @@ type App struct {
 	costKnown bool
 	// quotaTracker tracks 5-hour rolling usage and vendor rate limits.
 	quotaTracker *QuotaTracker
+	// quotaUnavailable names the providers whose usage endpoint answered
+	// "none": their row in the strip reads n/a. quotaRun keeps two refreshes
+	// from overlapping, and quotaClientFor lets a test stand in for the
+	// network.
+	quotaUnavailable map[string]bool
+	quotaRowsMemo    []QuotaRow
+	quotaRowsAt      time.Time
+	quotaRowsVersion uint64
+	quotaRun         quotaRefresh
+	quotaClientFor   func(provider.Provider) (provider.Client, error)
 	// ledgerMu serialises appends to the session usage ledger: the emit path
 	// and the internal-task path can both record within one turn.
 	ledgerMu sync.Mutex

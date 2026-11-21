@@ -241,6 +241,9 @@ func (m *Model) inlineView() string {
 	if overlay != "" {
 		bottom = append(bottom, overlay)
 	} else {
+		if strip := m.viewQuota(); strip != "" {
+			bottom = append(bottom, strip)
+		}
 		bottom = append(bottom, m.viewComposer(), m.viewHints())
 	}
 	bottomText := lipgloss.JoinVertical(lipgloss.Left, bottom...)

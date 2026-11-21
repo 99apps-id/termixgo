@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/provider"
@@ -52,6 +53,17 @@ type QuotaTracker struct {
 	// a provider's 5-hour window reset the local gauge to zero and only an
 	// official snapshot, when its fetch succeeded, covered the gap.
 	statePath string
+	// snapshotVersion changes whenever a snapshot is stored or cleared, so a
+	// reader that caches what it derived from them knows when to look again.
+	snapshotVersion atomic.Uint64
+}
+
+// SnapshotVersion is a counter that changes with every stored snapshot.
+func (q *QuotaTracker) SnapshotVersion() uint64 {
+	if q == nil {
+		return 0
+	}
+	return q.snapshotVersion.Load()
 }
 
 // NewQuotaTracker builds a new quota tracker.
@@ -207,6 +219,7 @@ func (q *QuotaTracker) RecordSnapshot(providerName string, snap *provider.QuotaS
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.snapshotVersion.Add(1)
 	if snap == nil {
 		delete(q.snapshots, key)
 		return

@@ -659,6 +659,9 @@ func (m *Model) Init() tea.Cmd {
 	// which is what made the tail of an answer look scrambled.
 	m.flushSettled()
 	cmds := []tea.Cmd{m.takePrints(textarea.Blink), m.spin.Tick, tea.SetWindowTitle(m.windowTitle()), waitForEvent(m.app.Events())}
+	// Usage of every logged-in provider is fetched in the background and then
+	// kept fresh; the strip above the composer shows what is left.
+	cmds = append(cmds, m.refreshQuotaStrip(false), quotaTick())
 	if m.initialPrompt != "" {
 		prompt := m.initialPrompt
 		m.initialPrompt = ""
@@ -894,6 +897,15 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refresh()
 		return m, tea.Batch(tea.SetWindowTitle(m.windowTitle()), doneCmd)
+
+	case quotaTickMsg:
+		return m, tea.Batch(m.refreshQuotaStrip(false), quotaTick())
+
+	case quotaStripMsg:
+		// The strip may have appeared or vanished, which changes a row count the
+		// full-screen layout reserves, so the layout is recomputed.
+		m.layout()
+		return m, nil
 
 	case quotaRefreshDoneMsg:
 		if typed.snap != nil && len(typed.snap.Windows) > 0 {
@@ -2417,7 +2429,7 @@ func (m *Model) enterChat() tea.Cmd {
 // rows are the header, the status line, the hints and the composer with its
 // border; everything else belongs to the transcript.
 func (m *Model) layout() {
-	transcriptHeight := m.height - (m.composer.Height() + 6)
+	transcriptHeight := m.height - (m.composer.Height() + 6) - m.quotaRows()
 	if transcriptHeight < 5 {
 		transcriptHeight = 5
 	}
@@ -2682,6 +2694,9 @@ func (m *Model) screen() string {
 	if overlay != "" {
 		sections = append(sections, overlay)
 	} else {
+		if strip := m.viewQuota(); strip != "" {
+			sections = append(sections, strip)
+		}
 		sections = append(sections, m.viewComposer(), m.viewHints())
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
@@ -2737,11 +2752,6 @@ func (m *Model) viewHeader() string {
 	// next to every model would be noise.
 	if effort := m.app.EffortFor(m.app.CurrentModel().ID); effort != "" {
 		right += " " + effort
-	}
-	if tracker := m.app.QuotaTracker(); tracker != nil {
-		if gauge := tracker.ActiveQuotaGauge(m.app.CurrentModel().Provider, 8); gauge != "" {
-			right += " " + gauge
-		}
 	}
 
 	// The header must never be wider than the terminal: a longer line wraps in
@@ -2807,19 +2817,8 @@ func (m *Model) viewStatus() string {
 		// a zero that reads as "free".
 		vitals = append(vitals, costStyle.Render("cost n/a"))
 	}
-	if tracker := m.app.QuotaTracker(); tracker != nil {
-		provName := m.app.CurrentModel().Provider
-		p, ok := provider.ByID(provName)
-		isOAuth := (ok && p.OAuth) || strings.Contains(provName, "oauth") || provName == "codex" || provName == "antigravity" || provName == "muse" || provName == "github-copilot"
-		if isOAuth || tracker.Snapshot(provName) != nil {
-			stats := tracker.Stats(provName, app.RollingWindow)
-			if stats.Requests > 0 {
-				// These counts are the local rolling window, not the
-				// provider's own numbers, and are labelled as such.
-				vitals = append(vitals, m.styles.Dim.Render(fmt.Sprintf("5h:%dr/%dk (%s)", stats.Requests, (stats.TotalTokens+500)/1000, app.LocalEstimateLabel)))
-			}
-		}
-	}
+	// The remaining 5-hour and plan usage of every logged-in provider lives in
+	// the strip above the composer, not here.
 	// In the inline layout the activity line carries the working indicator.
 	if m.running && !m.hintsVisible() && !m.inline {
 		// The hints row carries the live working indicator while it is on screen,

@@ -263,6 +263,25 @@ While a turn runs, `Enter` steers it: the message is folded into the running
 turn at its next step so you can change course without stopping it. A slash
 command typed mid-turn is queued and runs when the turn ends.
 
+### Usage left
+
+Once you are logged in to a provider that has a usage allowance (Claude, Codex,
+Antigravity, Copilot, Muse, Grok), one line above the composer shows what is
+left of its 5-hour and weekly windows, for every such login and not only the
+active model:
+
+```
+left  Claude ████████ 72% left (2h14m) · wk 41% left  |  Codex 90% left (4h40m)
+```
+
+The figures are the provider's own, refreshed in the background (at most once
+every three minutes per provider). The bar and the percent both mean what is
+left: green above half, amber below half, red under 20%, and the time in
+brackets is when the window resets. A provider that has not answered yet reads
+`...`, and one with no usage endpoint reads `n/a`; a local count is never shown
+here. On a narrow terminal the line drops the bar, then the reset times, then
+the weekly window, instead of wrapping. `/quota` has the detailed windows.
+
 ### Pasting
 
 - **Long text** (six lines or more, or over 1000 characters) collapses to
@@ -337,7 +356,7 @@ window-specific capture are called out honestly where the host cannot do them
 | `/sessions export <id> [--format markdown|jsonl]` | export a session |
 | `/stop` | stop the running turn |
 | `/status` | workspace, model, plan and token status |
-| `/quota [refresh]` | the provider's own usage figures plus the local 5-hour counts |
+| `/quota [refresh]` | the provider's own usage figures (used) plus the local 5-hour counts |
 | `/doctor` | diagnose configuration, keys and environment |
 | `/cd [path]` | show or change the current folder |
 | `/endpoint [list\|add\|rm\|models]` | manage OpenAI-compatible endpoints, see [Several OpenAI-compatible servers](#several-openai-compatible-servers) |

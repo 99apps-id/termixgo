@@ -6,6 +6,9 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+- A usage strip above the composer shows what is left of the 5-hour and weekly windows of every logged-in provider (Claude, Codex, Antigravity, Copilot, Muse, Grok), not only the active one: a bar and a percent that both mean left, coloured by how much remains, with the reset countdown. It replaces the gauge at the right of the header and the local `5h:` count in the status line, uses the providers' own figures only (`...` until they arrive, `n/a` when a provider has no usage endpoint), refreshes in the background at most every three minutes per provider, and drops detail on a narrow terminal instead of wrapping.
+
 ### Fixed
 - A background subagent, monitor or scheduled prompt could finish without the model ever hearing of it: wake events shared the display buffer, which drops events when it is full, and a stream of text deltas fills it. A wake now waits for room (bounded) instead of being dropped, and the plain, non-terminal mode prints it.
 - `run_monitor` is refused in a chat turn, where its notification would land in the terminal's event stream; at most 8 monitors and 4 background subagents run at once; the wake text tells the model that quoted process output is data, not instructions.

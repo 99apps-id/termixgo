@@ -323,12 +323,17 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   compaction budget and means only "how close compaction is", never window
   usage. The cumulative session total is labelled `billed:`, because every
   step re-bills the history it sends, so it can legitimately exceed the
-  window. Bars mean **used** on every surface (header gauge, `/quota`,
-  rate limits converted from remaining), so a bar and the percent printed
-  beside it can never move in opposite directions. When no official quota
-  snapshot is available, the local 5-hour counts are shown without a bar
-  and labelled as a local estimate, not provider numbers; the header shows
-  the snapshot's age. A ledger record's `quota_ref` names the official
+  window. A bar and the percent printed beside it always mean the same
+  thing: `/quota` and the rate-limit gauges mean **used**, and the usage
+  strip above the composer means **left** and says so (`72% left`), so the
+  two can never move in opposite directions. The strip
+  (`App.QuotaRows`, `ui.renderQuotaStrip`) covers every provider with a
+  stored login, from the official snapshots only: a provider with none yet
+  reads `...`, one with no usage endpoint reads `n/a`, and a local count is
+  never shown there. `App.RefreshAllQuota` keeps the snapshots current (at
+  most one fetch per provider per three minutes, and a failed fetch keeps
+  the last good figures), and the strip drops detail rather than wrap. A
+  ledger record's `quota_ref` names the official
   quota window when one is known for its provider and model, and stays
   null when none is: it is never invented.
 - Delegated spend is a count, not a boolean collapse. `SubagentSpend.Unpriced`
