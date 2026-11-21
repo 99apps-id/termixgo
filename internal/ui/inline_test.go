@@ -175,3 +175,20 @@ type lockedBuffer struct {
 
 func (b *lockedBuffer) Write(p []byte) (int, error) { return b.buffer.Write(p) }
 func (b *lockedBuffer) String() string              { return b.buffer.String() }
+
+func TestInlineReservesOneColumnAndClearsOnWidthShrink(t *testing.T) {
+	model := chatModel(t)
+	model.inline = true
+	_, _ = model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if got := widestLine(model.View()); got >= 100 {
+		t.Fatalf("inline view touched column %d (widest=%d), risking ConPTY wrap", 100, got)
+	}
+
+	_, cmd := model.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	if cmd == nil {
+		t.Fatal("shrinking terminal width in inline mode must clear wrapped lines")
+	}
+	if got := widestLine(model.View()); got >= 80 {
+		t.Fatalf("after shrink to 80, inline view widest=%d, want < 80", got)
+	}
+}

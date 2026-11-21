@@ -3,8 +3,10 @@ package ui
 import (
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -77,22 +79,32 @@ func keptAttachments(items []attachment, text string) []attachment {
 	return kept
 }
 
-// clipboardPasteMsg carries a Ctrl+V clipboard read back to the event loop.
+// clipboardPasteMsg carries a Ctrl+V / Alt+V clipboard read back to the event loop.
 type clipboardPasteMsg struct {
 	image []byte
+	paths []string
 	text  string
 	err   error
 }
 
-// readClipboardForPaste reads an image first and text second. It runs as a
-// command because the Windows reader starts PowerShell, which takes a second.
+// readClipboardForPaste reads an image or copied image file first and text second.
 func readClipboardForPaste() tea.Msg {
-	if data, err := readClipboardImage(); err == nil && len(data) > 0 {
+	data, paths, imgErr := readClipboardImageOrPaths()
+	if len(paths) > 0 {
+		return clipboardPasteMsg{paths: paths}
+	}
+	if len(data) > 0 {
 		return clipboardPasteMsg{image: data}
 	}
 	text, err := readClipboardText()
 	if err != nil {
+		if imgErr != nil {
+			return clipboardPasteMsg{err: imgErr}
+		}
 		return clipboardPasteMsg{err: err}
+	}
+	if strings.TrimSpace(text) == "" && imgErr != nil {
+		return clipboardPasteMsg{err: imgErr}
 	}
 	return clipboardPasteMsg{text: text}
 }
@@ -102,6 +114,17 @@ func readClipboardForPaste() tea.Msg {
 func (m *Model) applyClipboardPaste(msg clipboardPasteMsg) {
 	m.notice = ""
 	switch {
+	case len(msg.paths) > 0:
+		attached := 0
+		for _, path := range msg.paths {
+			if len(m.attachments) >= maxAttachments || !m.attachImagePath(path) {
+				break
+			}
+			attached++
+		}
+		if attached > 0 {
+			m.notice = fmt.Sprintf("Attached %d image(s). Delete a placeholder to drop it.", attached)
+		}
 	case len(msg.image) > 0:
 		if len(m.attachments) >= maxAttachments {
 			m.notice = fmt.Sprintf("Attachment limit is %d.", maxAttachments)
@@ -112,8 +135,23 @@ func (m *Model) applyClipboardPaste(msg clipboardPasteMsg) {
 			m.notice = err.Error()
 			break
 		}
-		m.attachImagePath(path)
+		if m.attachImagePath(path) {
+			m.notice = "Attached clipboard image. Delete the placeholder to drop it."
+		}
 	case strings.TrimSpace(msg.text) != "":
+		if paths := pastedImagePaths(m.app.Workspace(), msg.text); len(paths) > 0 {
+			attached := 0
+			for _, path := range paths {
+				if len(m.attachments) >= maxAttachments || !m.attachImagePath(path) {
+					break
+				}
+				attached++
+			}
+			if attached > 0 {
+				m.notice = fmt.Sprintf("Attached %d image(s). Delete a placeholder to drop it.", attached)
+				break
+			}
+		}
 		if len(msg.text) > pasteSpoolThreshold {
 			if att, err := attachPastedText(m.app.Workspace(), msg.text); err == nil {
 				m.attachments = append(m.attachments, att)
@@ -149,6 +187,41 @@ func (m *Model) attachImagePath(path string) bool {
 	return true
 }
 
+func resolveImageFileToken(workspace, token string) (string, bool) {
+	token = strings.TrimSpace(token)
+	token = strings.Trim(token, `"'`)
+	if strings.HasPrefix(strings.ToLower(token), "file://") {
+		if parsed, err := url.Parse(token); err == nil && parsed.Scheme == "file" {
+			decoded := parsed.Path
+			if runtime.GOOS == "windows" && strings.HasPrefix(decoded, "/") && len(decoded) >= 3 && decoded[2] == ':' {
+				decoded = decoded[1:]
+			}
+			if parsed.Host != "" && parsed.Host != "localhost" {
+				decoded = `\\` + parsed.Host + decoded
+			}
+			token = filepath.FromSlash(decoded)
+		} else {
+			token = strings.TrimPrefix(token, "file:///")
+			token = strings.TrimPrefix(token, "file://")
+		}
+	}
+	if _, ok := agent.ImageMediaType(token); !ok {
+		return "", false
+	}
+	path := expandAttachmentHome(token)
+	if !filepath.IsAbs(path) {
+		if workspace == "" {
+			return "", false
+		}
+		path = filepath.Join(workspace, path)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	return path, true
+}
+
 // pastedImagePaths reports the image files a bracketed paste named, which is
 // what a terminal sends when an image is dragged onto it. Every token must be
 // an existing image, or the paste is ordinary text.
@@ -157,20 +230,18 @@ func pastedImagePaths(workspace, text string) []string {
 	if trimmed == "" || strings.Count(trimmed, "\n") > maxAttachments {
 		return nil
 	}
+	// Handle one unquoted path containing spaces (for example
+	// C:\Users\Iwan\OneDrive\Gambar\Screenshots\Screenshot 2026-11-21 212606.png)
+	// before splitting on whitespace.
+	if !strings.ContainsAny(trimmed, "\r\n") {
+		if single, ok := resolveImageFileToken(workspace, trimmed); ok {
+			return []string{single}
+		}
+	}
 	var paths []string
 	for _, token := range splitAttachmentArgs(trimmed) {
-		token = strings.TrimPrefix(token, "file://")
-		if _, ok := agent.ImageMediaType(token); !ok {
-			return nil
-		}
-		path := expandAttachmentHome(token)
-		if !filepath.IsAbs(path) {
-			if workspace == "" {
-				return nil
-			}
-			path = filepath.Join(workspace, path)
-		}
-		if info, err := os.Stat(path); err != nil || info.IsDir() {
+		path, ok := resolveImageFileToken(workspace, token)
+		if !ok {
 			return nil
 		}
 		paths = append(paths, path)

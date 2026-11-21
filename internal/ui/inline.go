@@ -109,7 +109,7 @@ func (m *Model) flushSettled() {
 	if len(slice) == 0 {
 		return
 	}
-	rendered := transcript(hideReasoning(slice, hide), m.styles, m.width, m.showDetails)
+	rendered := transcript(hideReasoning(slice, hide), m.styles, m.renderWidth(), m.showDetails)
 	if strings.TrimSpace(rendered) != "" {
 		m.pendingPrint = append(m.pendingPrint, rendered)
 	}
@@ -148,7 +148,7 @@ func (m *Model) inlineView() string {
 	var bottom []string
 	if m.running && m.app != nil {
 		if todos := m.app.Todos().Items(); len(todos) > 0 {
-			if planView := strings.TrimSpace(renderPlanBlock(block{kind: blockPlan, plan: todos}, m.styles, m.width)); planView != "" {
+			if planView := strings.TrimSpace(renderPlanBlock(block{kind: blockPlan, plan: todos}, m.styles, m.renderWidth())); planView != "" {
 				bottom = append(bottom, planView)
 			}
 		}
@@ -174,7 +174,7 @@ func (m *Model) inlineView() string {
 			}
 			liveBlocks = filtered
 		}
-		live := transcript(hideReasoning(liveBlocks, hide), m.styles, m.width, m.showDetails)
+		live := transcript(hideReasoning(liveBlocks, hide), m.styles, m.renderWidth(), m.showDetails)
 		if strings.TrimSpace(live) != "" {
 			lines := strings.Split(live, "\n")
 			budget := m.height - lipgloss.Height(bottomText) - 1

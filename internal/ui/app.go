@@ -685,12 +685,20 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch typed := message.(type) {
 	case tea.WindowSizeMsg:
+		prevWidth := m.width
 		if typed.Width > 0 && typed.Height > 0 {
 			m.width = typed.Width
 			m.height = typed.Height
 			m.layout()
 		}
 		m.ready = true
+		if m.inline && prevWidth > 0 && typed.Width > 0 && typed.Width < prevWidth {
+			// In inline mode, shrinking the terminal wraps already-drawn lines
+			// past Bubble Tea's linesRendered count, leaving duplicate frames
+			// cascading down the scrollback. Clearing the viewport lets the
+			// narrower frame repaint once cleanly.
+			return m, tea.ClearScreen
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -1341,6 +1349,13 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// path. Attaching it, rather than typing the path, is what makes drag and
 	// drop work.
 	if key.Paste {
+		if len(key.Runes) == 0 {
+			// Some terminals emit an empty bracketed paste when Ctrl+V is
+			// pressed while the clipboard holds an image rather than text.
+			m.notice = "Reading the clipboard..."
+			m.refresh()
+			return m, readClipboardForPaste
+		}
 		if paths := pastedImagePaths(m.app.Workspace(), string(key.Runes)); len(paths) > 0 {
 			attached := 0
 			for _, path := range paths {
@@ -1365,7 +1380,7 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key.String() {
-	case "ctrl+v", "alt+v":
+	case "ctrl+v", "alt+v", "ctrl+shift+v":
 		// A terminal paste carries text only, so an image has to be read from
 		// the host clipboard. Alt+V exists because Windows Terminal keeps
 		// Ctrl+V for its own text paste.
@@ -2299,10 +2314,20 @@ func (m *Model) layout() {
 	// width. SetWidth therefore takes the full terminal width and the rendered
 	// box is exactly that wide.
 	m.applyComposerStyle()
-	m.composer.SetWidth(m.width)
+	m.composer.SetWidth(m.renderWidth())
 	m.input.Width = max(20, m.width-8)
 	m.fitComposer()
 	m.refresh()
+}
+
+// renderWidth returns the column budget for inline UI chrome. In inline mode,
+// holding back one column prevents Windows ConPTY from auto-wrapping lines that
+// touch the final column and keeps Bubble Tea's cursor tracking aligned.
+func (m *Model) renderWidth() int {
+	if m.inline && m.width > 1 {
+		return m.width - 1
+	}
+	return max(1, m.width)
 }
 
 // frameLogCap bounds the frame log: enough turns to compare against a
@@ -2447,7 +2472,7 @@ func (m *Model) View() string {
 		return fitFrame(m.viewTranscript(), m.width, m.height)
 	}
 	if m.inline && m.current == modeChat {
-		return fitFrame(m.inlineView(), m.width, m.height)
+		return fitFrame(m.inlineView(), m.renderWidth(), m.height)
 	}
 	return fitFrame(m.screen(), m.width, m.height)
 }
@@ -2728,16 +2753,17 @@ func (m *Model) viewStatus() string {
 // dropped from the front too: the working indicator goes first, because the token
 // count and the spend are the two figures that appear nowhere else on screen.
 func (m *Model) composeStatus(identity, vitals []string) string {
+	width := m.renderWidth()
 	separator := m.styles.Dim.Render(" | ")
 	sepWidth := lipgloss.Width(separator)
 
-	for len(vitals) > 1 && lipgloss.Width(strings.Join(vitals, separator)) > m.width {
+	for len(vitals) > 1 && lipgloss.Width(strings.Join(vitals, separator)) > width {
 		vitals = vitals[1:]
 	}
 	vitalsText := strings.Join(vitals, separator)
 	vitalsWidth := lipgloss.Width(vitalsText)
 
-	room := m.width - vitalsWidth - sepWidth
+	room := width - vitalsWidth - sepWidth
 	var kept []string
 	for _, part := range identity {
 		trial := append(append([]string{}, kept...), part)
@@ -2747,15 +2773,15 @@ func (m *Model) composeStatus(identity, vitals []string) string {
 		kept = trial
 	}
 	if len(kept) == 0 {
-		return truncate(vitalsText, max(1, m.width))
+		return truncate(vitalsText, width)
 	}
 
 	identityText := strings.Join(kept, separator)
 	// Right-aligning the vitals keeps their position stable as the identity text
 	// grows and shrinks, so the numbers do not jump around during a run.
-	gap := m.width - lipgloss.Width(identityText) - vitalsWidth
+	gap := width - lipgloss.Width(identityText) - vitalsWidth
 	if gap < sepWidth {
-		return truncate(identityText+separator+vitalsText, max(1, m.width))
+		return truncate(identityText+separator+vitalsText, width)
 	}
 	return identityText + strings.Repeat(" ", gap) + vitalsText
 }
@@ -2823,7 +2849,7 @@ func (m *Model) viewHints() string {
 	}
 	// A hint longer than the terminal would wrap and push the frame down, so it
 	// is clipped rather than allowed to reflow the whole screen.
-	return m.styles.Hint.Render(truncate(text, max(1, m.width)))
+	return m.styles.Hint.Render(truncate(text, m.renderWidth()))
 }
 
 func (m *Model) viewSlashMenu() string {

@@ -756,7 +756,7 @@ func (m *Model) slashLayout(args string) (tea.Model, tea.Cmd) {
 		// The scrollback before the switch belongs to the terminal; the
 		// transcript is printed into it once more from the start.
 		m.printed = 0
-		m.refresh()
+		m.layout()
 		return m, tea.Batch(tea.ExitAltScreen, tea.DisableMouse)
 	}
 	m.inline = false

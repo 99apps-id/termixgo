@@ -104,3 +104,31 @@ func TestOrdinaryPasteIsNotAnAttachment(t *testing.T) {
 		t.Fatalf("a workspace-relative image should attach, got %v", got)
 	}
 }
+
+func TestUnquotedSpaceImagePathAndEmptyPaste(t *testing.T) {
+	model := chatModel(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Screenshot 2026-11-21 212606.png")
+	if err := os.WriteFile(path, pngData(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := pastedImagePaths(dir, path); len(got) != 1 || got[0] != path {
+		t.Fatalf("unquoted image path with spaces failed: got %v", got)
+	}
+
+	// Empty bracketed paste triggers clipboard fallback read.
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Paste: true})
+	if cmd == nil {
+		t.Fatal("empty bracketed paste should trigger readClipboardForPaste")
+	}
+
+	// Copied Explorer files delivered via clipboardPasteMsg.paths attach cleanly.
+	model.applyClipboardPaste(clipboardPasteMsg{paths: []string{path}})
+	if len(model.attachments) != 1 || model.attachments[0].Label != "Screenshot 2026-11-21 212606.png" {
+		t.Fatalf("attachments = %+v", model.attachments)
+	}
+	if !strings.Contains(model.composer.Value(), "[Image #1]") {
+		t.Fatalf("composer = %q, want [Image #1]", model.composer.Value())
+	}
+}

@@ -12,6 +12,8 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/99apps-id/termixgo/internal/agent"
 )
 
 // osc52MaxBytes caps the clipboard payload. Terminals limit the length of an
@@ -123,6 +125,11 @@ func clipboardReadCommands() []clipboardCommand {
 // paste is bracketed text and cannot carry pixels or a file, so this is how
 // /paste reaches the operator's real clipboard.
 func readClipboardText() (string, error) {
+	if runtime.GOOS == "windows" {
+		if text, err := readClipboardTextNative(); err == nil {
+			return text, nil
+		}
+	}
 	var lastErr error
 	for _, candidate := range clipboardReadCommands() {
 		path, err := exec.LookPath(candidate.name)
@@ -149,9 +156,40 @@ func readClipboardText() (string, error) {
 // tools each handle one shape: pngpaste on macOS, wl-paste or xclip on Linux,
 // and a PowerShell script on Windows. A machine without one is told which
 // tool to install rather than left with an empty attach.
+// readClipboardImageOrPaths returns PNG bytes or copied image file paths from
+// the host clipboard.
+func readClipboardImageOrPaths() ([]byte, []string, error) {
+	if runtime.GOOS == "windows" {
+		data, paths, err := readClipboardImageNative()
+		if err == nil && (len(data) > 0 || len(paths) > 0) {
+			return data, paths, nil
+		}
+		psData, psErr := readClipboardImageWindows()
+		if psErr == nil && len(psData) > 0 {
+			return psData, nil, nil
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		return nil, nil, psErr
+	}
+	data, err := readClipboardImage()
+	return data, nil, err
+}
+
 func readClipboardImage() ([]byte, error) {
 	switch runtime.GOOS {
 	case "windows":
+		if data, paths, err := readClipboardImageNative(); err == nil {
+			if len(data) > 0 {
+				return data, nil
+			}
+			if len(paths) > 0 {
+				if raw, readErr := os.ReadFile(paths[0]); readErr == nil && len(raw) > 0 {
+					return raw, nil
+				}
+			}
+		}
 		return readClipboardImageWindows()
 	case "darwin":
 		return runClipboardImageCommand("pngpaste", "-")
@@ -180,33 +218,56 @@ func readClipboardImage() ([]byte, error) {
 	}
 }
 
-// readClipboardImageWindows asks the .NET clipboard for a bitmap and writes it
-// to a temporary PNG, which is the only shape PowerShell can hand back
-// through a pipe reliably.
+// readClipboardImageWindows asks the .NET clipboard for a bitmap or copied
+// image file list and writes/reads a temporary PNG as a fallback when the
+// native Win32 decoder cannot handle the format.
 func readClipboardImageWindows() ([]byte, error) {
 	script := `Add-Type -AssemblyName System.Windows.Forms,System.Drawing
-if (-not [System.Windows.Forms.Clipboard]::ContainsImage()) { exit 2 }
-$image = [System.Windows.Forms.Clipboard]::GetImage()
-$path = Join-Path $env:TEMP ("termixgo-clip-" + [guid]::NewGuid().ToString("N") + ".png")
-$image.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
-Write-Output $path`
+if ([System.Windows.Forms.Clipboard]::ContainsImage()) {
+	$image = [System.Windows.Forms.Clipboard]::GetImage()
+	if ($null -ne $image) {
+		$path = Join-Path $env:TEMP ("termixgo-clip-" + [guid]::NewGuid().ToString("N") + ".png")
+		$image.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+		Write-Output ("FILE:" + $path)
+		exit 0
+	}
+}
+if ([System.Windows.Forms.Clipboard]::ContainsFileDropList()) {
+	foreach ($f in [System.Windows.Forms.Clipboard]::GetFileDropList()) {
+		if (Test-Path -LiteralPath $f -PathType Leaf) {
+			Write-Output ("PATH:" + $f)
+			exit 0
+		}
+	}
+}
+exit 2`
 	ctx, cancel := context.WithTimeout(context.Background(), clipboardReadTimeout)
 	defer cancel()
-	command := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	command := exec.CommandContext(ctx, "powershell.exe", "-STA", "-NoProfile", "-NonInteractive", "-Command", script)
 	output, err := command.Output()
 	if err != nil {
 		return nil, fmt.Errorf("the clipboard holds no image")
 	}
-	path := strings.TrimSpace(string(output))
-	if path == "" {
-		return nil, fmt.Errorf("the clipboard holds no image")
+	line := strings.TrimSpace(string(output))
+	switch {
+	case strings.HasPrefix(line, "FILE:"):
+		path := strings.TrimSpace(strings.TrimPrefix(line, "FILE:"))
+		data, readErr := os.ReadFile(path)
+		_ = os.Remove(path)
+		if readErr != nil {
+			return nil, fmt.Errorf("cannot read the clipboard image: %v", readErr)
+		}
+		return data, nil
+	case strings.HasPrefix(line, "PATH:"):
+		path := strings.TrimSpace(strings.TrimPrefix(line, "PATH:"))
+		if _, ok := agent.ImageMediaType(path); ok {
+			data, readErr := os.ReadFile(path)
+			if readErr == nil && len(data) > 0 {
+				return data, nil
+			}
+		}
 	}
-	data, readErr := os.ReadFile(path)
-	_ = os.Remove(path)
-	if readErr != nil {
-		return nil, fmt.Errorf("cannot read the clipboard image: %v", readErr)
-	}
-	return data, nil
+	return nil, fmt.Errorf("the clipboard holds no image")
 }
 
 func runClipboardImageCommand(name string, args ...string) ([]byte, error) {
