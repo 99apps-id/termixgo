@@ -20,8 +20,16 @@ Termixgo connects messaging platforms directly to autonomous agents:
 
 - **Native Protocol:** WhatsApp uses native multi-device socket encryption via pure Go
   without requiring headless browsers, Selenium, or Puppeteer.
-- **Enriched Formatting:** Messages are converted to native WhatsApp syntax with
-  clean bold (`*text*`), bold-italic (`_*text*_`), unicode bullet dots, and clear headings.
+- **Enriched Formatting:** Messages are converted to native WhatsApp and Telegram
+  syntax with bold, italic, bold-italic, strikethrough, blockquotes, horizontal
+  rules, clean bullet dots, numbered lists, aligned tables, and clear headings.
+- **OpenClaw/Hermes-Style Telegram Streaming:** Telegram replies stream live
+  drafts progressively via `sendMessageDraft` (falling back seamlessly to
+  `sendMessage`/`editMessageText`), carry live reasoning/tool indicators, flush
+  long replies across 4096-char chunks, and present English approval and model
+  picker cards.
+- **Anti-Repetition Guard:** Degenerative streaming loops are detected mid-turn
+  and stuttering prose is collapsed before channel delivery.
 - **Multimodal Vision:** Send photos, diagrams, and PDF documents directly in chat.
   Vision models inspect visual input directly, while documents on non-vision models
   are safely stored in `.termixgo/uploads/` for tool examination.

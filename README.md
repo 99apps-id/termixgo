@@ -205,8 +205,11 @@ or `TERMIXGO_FULLSCREEN=1` for one run.
 
 ### Reading the transcript
 
-The transcript starts compact; `Ctrl+O` expands the detail of what has not been
-printed yet (in the full-screen layout, of the whole transcript).
+The transcript starts compact; consecutive finished read/search tool calls are
+grouped (`Read 3 files, searched 2 patterns (ctrl+o to expand)`). In inline
+mode, `Ctrl+O` (or `/transcript`) opens a full-screen scrollable transcript
+viewer with full reasoning, tool outputs, and `/` search; in full-screen layout,
+`Ctrl+O` expands tool details inline.
 
 | Line | Meaning |
 | --- | --- |
@@ -214,14 +217,18 @@ printed yet (in the full-screen layout, of the whole transcript).
 | `Thought for 4s (ctrl+o to expand)` | the reasoning finished; expanded, all of it shows |
 | `> Reading foo.go` | a tool call is running |
 | `+ Read foo.go (12ms)` | the tool finished |
+| `+ Read 3 files (ctrl+o to expand)` | consecutive read/search tools collapsed |
 | `x Running ...` | the tool failed |
 | `  ⎿  first lines of output` | a command's (or a failure's) output, 3 lines compact, 40 expanded |
 | `     … +118 lines (ctrl+o to expand)` | how much more output there is |
-| `[x] Fix the parser` | the plan, updated as work progresses |
+| `[x] Fix the parser` | the plan, pinned above the status line during inline runs |
 
 Assistant answers render Markdown: headings, lists (nested too), tables with
 aligned columns, quotes, rules, links shown as `label (url)`, and fenced code
-whose long lines wrap instead of being cut.
+whose long lines wrap instead of being cut. When a turn ends, a summary line
+shows steps, input tokens (with cache hit rate), output tokens, estimated spend,
+and duration; long turns and waiting approvals trigger a terminal bell and OS
+desktop notification.
 
 The status line shows the context in use (`ctx: 45.2k/200k`, the provider's own
 count once a step has run; `ctx: ~` marks an estimate), the session's billed
@@ -234,11 +241,14 @@ tokens, the prompt-cache hit rate (`cache 87%`) and the spend.
 | `Enter` | send; while a turn runs, steer it |
 | `Ctrl+J` / `Alt+Enter` | insert a newline |
 | `Tab` | complete a slash command or an `@file` mention |
-| `Esc` | close a menu; else interrupt the running turn; on a draft, press twice to clear it |
+| `Up` / `Down` | walk persistent prompt history |
+| `Ctrl+R` | reverse-i-search across prompt history (`Tab` edit, `Enter` run, `Esc` cancel) |
+| `Shift+Tab` | cycle approval mode (`ask`, `edits`, `all`, `plan`) |
+| `Esc` | close a menu; else interrupt the running turn; press twice on a draft to clear it, or twice on an empty composer to edit/rewind the last message |
 | `Ctrl+C` | copy a selection; else interrupt the turn or clear the draft; press twice on an empty composer to exit |
 | `Ctrl+X` | quit (asks for a second press when a turn runs or a draft would be lost) |
 | `Ctrl+V` / `Alt+V` | paste an image from the clipboard (Alt+V where the terminal keeps Ctrl+V for itself, as Windows Terminal does) |
-| `Ctrl+O` | expand or collapse tool output and reasoning |
+| `Ctrl+O` | open the full-screen scrollable transcript viewer (inline) or toggle tool/reasoning details (full-screen) |
 | `Ctrl+T` | show or hide reasoning |
 | `Ctrl+L` / `Ctrl+P` / `Ctrl+G` | pick a model, a session, an agent |
 | `Ctrl+Y` | copy the newest answer to the clipboard |
@@ -314,8 +324,13 @@ window-specific capture are called out honestly where the host cannot do them
 | `/help` | every command and key binding |
 | `/copy [last\|all]` | copy the newest answer, or the whole transcript, over OSC 52 |
 | `/new` | start a new session and clear the transcript |
+| `/rename <title>` | rename the current session |
+| `/transcript` | open the full-screen scrollable transcript viewer (`/` to search) |
+| `/layout [inline\|fullscreen]` | switch between inline scrollback and full-screen layout |
 | `/clear` | clear the transcript on screen |
 | `/compact` | condense the session's context into a brief now |
+| `/context` | inspect what fills the context window (prompt, memory, tools, messages) |
+| `/permissions` | inspect or revoke tool allowlists |
 | `/export [path] [--jsonl]` | write the session to a file and the clipboard |
 | `/sessions [list\|search\|rename\|delete\|export]` | manage saved sessions |
 | `/sessions export <id> [--format markdown|jsonl]` | export a session |
@@ -1146,8 +1161,11 @@ termixgo serve
 WhatsApp features:
 
 - **Enriched WhatsApp Markdown:** Formats output with clean WhatsApp typography:
-  clean bold (`*text*` without raw double asterisks), bold-italic (`_*text*_`),
-  clean bullet dot lists, and clear headings.
+  bold (`*text*`), single-asterisk italic (`_text_`), bold-italic (`_*text*_`),
+  strikethrough (`~text~`), unicode bullet dots, numbered lists, quotes, horizontal
+  rules, link formatting, and clear headings.
+- **Anti-repetition guard:** Detects degenerative streaming loops mid-turn and
+  collapses stuttering prose before sending replies to WhatsApp.
 - **Multimodal vision (images & PDFs):** Send screenshots, bug photos, architectural
   diagrams, or PDF documentation with optional captions. Vision models (Gemini,
   Antigravity, Claude, OpenAI) inspect images and PDFs directly. For non-vision
@@ -1177,16 +1195,20 @@ WhatsApp features:
 
 The bot accepts `/run <prompt>`, `/stop`, `/new`, `/model`, `/status`, `/help`
 and plain text. It refuses every chat until paired, and pins the owner user id
-once paired. Progress is mirrored into one edited message instead of a flood.
+once paired. Live token streaming uses Telegram's draft stream (`sendMessageDraft`
+with automatic `sendMessage`/`editMessageText` fallback), showing live progress
+and flushing multi-chunk replies progressively across Telegram's 4096-character
+limit, with English approval and model-picker cards.
 
-Answers are rendered from Markdown: bold, inline code, fenced code blocks,
-headings and links, converted to Telegram's HTML subset, with a plain-text
-fallback if Telegram ever rejects an entity so a formatting bug cannot swallow a
-reply. Pipe tables are rendered as aligned preformatted blocks, and fenced code
-blocks whose info string ends with `linenos` are emitted with numbered lines.
-`/model` opens a provider-and-model picker. Send a photo or PDF document,
-optionally with a caption as the instruction, and the agent sees it with a
-vision model.
+Answers are rendered from Markdown: bold, italic, strikethrough, inline code,
+fenced code blocks, blockquotes, horizontal rules, bullet and numbered lists,
+headings and links, converted to Telegram's HTML subset with safe nesting and a
+plain-text fallback if Telegram ever rejects an entity so a formatting bug cannot
+swallow a reply. Pipe tables are rendered as aligned preformatted blocks, and
+fenced code blocks whose info string ends with `linenos` are emitted with
+numbered lines. `/model` opens a provider-and-model picker. Send a photo or PDF
+document, optionally with a caption as the instruction, and the agent sees it
+with a vision model.
 
 `termixgo serve` verifies that a usable model is configured before it starts and
 names the exact reason (a missing key, an unknown provider) if it is not. The CLI

@@ -6,7 +6,17 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+## 0.2.8 - 2026-11-21
+
 ### Added
+- Claude Code-grade TUI productivity and ergonomics:
+  - Persistent `Up`/`Down` prompt history plus `Ctrl+R` reverse-i-search overlay across saved prompts (`Enter` run, `Tab` edit, `Ctrl+R` next match, `Esc` restore draft).
+  - Full-screen scrollable transcript viewer via `Ctrl+O` (in inline mode) or `/transcript` (in any layout), displaying full reasoning and tool details plus `/` line filtering.
+  - `Shift+Tab` approval mode cycling (`ask`, `edits`, `all`, `plan`) directly from the composer.
+  - Double-`Esc` on an empty composer to edit and resend or rewind the last turn (`Session.PopLastTurn`, `App.RewindLastTurn`), with optional git checkpoint restore.
+  - Per-turn completion summary (`steps`, input tokens with prompt-cache hit percentage, output tokens, estimated cost, elapsed time) and non-blocking OS desktop toast notifications + terminal bell for long turns and waiting approvals.
+  - `/context` token breakdown, `/permissions` allowlist manager, `/rename` session rename, and `/layout [inline|fullscreen]` runtime layout toggle.
+- OpenClaw/Hermes-style Telegram live draft streaming (`internal/telegram/stream.go`): progressive draft delivery via `sendMessageDraft` (with automatic `sendMessage`/`editMessageText` fallback), live reasoning/tool activity indicator, multi-chunk overflow flushing across 4096-char limits, and English approval/model-picker cards.
 - Language server tools: `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_symbols`, `lsp_diagnostics` and `lsp_rename`, over gopls, typescript-language-server, pyright, rust-analyzer, clangd and others found on PATH (`lspServers` overrides per extension). A crashed server is started again on the next call.
 - `generate_image` (OpenAI gpt-image-1 and DALL-E, Gemini image models, Imagen, xAI) and `text_to_speech` (OpenAI, Gemini TTS, then the operating system voice). Files land in `.termixgo/media`; guests cannot use either.
 - TUI image paste: Ctrl+V or Alt+V attaches the clipboard image as `[Image #N]` at the cursor, an image file dragged onto the terminal is attached instead of typed, and deleting a placeholder drops its image.
@@ -15,19 +25,21 @@ All notable changes to Termixgo are recorded here. The format follows
 - `/endpoint list|add|rm|models` manages several OpenAI-compatible servers from the TUI; `termixgo endpoint models <name>` fetches a server's model list from `GET /models` (OpenAI and Ollama shapes).
 
 ### Changed
-- The TUI runs inline by default, as Claude Code does: finished messages are printed once into the terminal's own scrollback and only the turn in flight, the status line and the composer are redrawn, with no alternate screen and no mouse capture, so the terminal's scrolling, selection and copy work. `"tuiLayout": "fullscreen"` or `TERMIXGO_FULLSCREEN=1` restores the previous full-screen layout. In the inline layout Ctrl+O affects what has not been printed yet.
-- TUI keys follow Claude Code: Esc closes a menu, then interrupts a turn, and clears a draft only on a second press; Ctrl+C copies a selection, else interrupts or clears the draft, and exits on a second press; Ctrl+X asks before quitting with a run or a draft.
+- The TUI runs inline by default, as Claude Code does: finished messages are printed once into the terminal's own scrollback and only the turn in flight, the status line and the composer are redrawn, with no alternate screen and no mouse capture, so the terminal's scrolling, selection and copy work. `"tuiLayout": "fullscreen"` or `TERMIXGO_FULLSCREEN=1` restores the previous full-screen layout. Consecutive finished read/search tool calls collapse into a single summary line in compact mode, and the active plan stays pinned above the status line during inline runs.
+- TUI keys follow Claude Code: Esc closes a menu, interrupts a turn, clears a draft on a second press, or opens the rewind/edit menu on an empty composer; Ctrl+C copies a selection, else interrupts or clears the draft, and exits on a second press; Ctrl+X asks before quitting with a run or a draft.
 - The composer grows with its draft from 3 to 12 rows (at most a third of the window).
 - Long pastes collapse to `[Pasted text #N +X lines]`; the turn receives the whole text.
 - The transcript starts compact: commands and failed tools show 3 output lines under the tool line with `… +N lines (ctrl+o to expand)`, thinking collapses to `Thought for Ns`; Ctrl+O shows 40 output lines and the full reasoning instead of 8 trimmed lines.
 - Markdown in the TUI renders tables, quotes, rules, nested lists, links and `~~~` fences, and wraps long code lines instead of clipping them.
 - The context gauge uses the provider's reported prompt tokens once a step has run (an estimate is marked `ctx: ~`), and no longer repeats the model name.
 - A resumed session shows each tool call's label, real outcome and output preview.
-
+- Enriched channel markdown across Telegram and WhatsApp (bold, italic, bold-italic, strikethrough, quotes, rules, nested lists, links, tables, and safe code spans).
 - grep has `output_mode` `files` and `count`, groups content under one path line per file and takes `context` lines; grep and glob honour `.gitignore` through `git ls-files` and skip lockfiles, minified bundles and source maps unless `include_noise` is set.
 - The learned-memory block in the prompt keeps the newest facts within 6 KB across scopes and leaves out the approval bookkeeping lines.
 
 ### Fixed
+- WhatsApp and channel anti-repetition guard (`internal/agent/repetition.go`): detects and aborts degenerative streaming loops mid-turn, nudges the model to run tools instead of repeating "checking..." promises, and collapses stuttering prose on final channel delivery.
+- Telegram & WhatsApp channel audit fixes: fixed document caption truncation/overflow, HTML tag nesting in headings/links, multipart upload handling, immediate `/stop` cancellation while approvals are pending, non-admin approval rejection, and `search_memory`/`web_search`/`web_fetch`/`lookup` availability in always-on channel tools.
 - The prompt cache prefix stays stable: the plan is no longer part of the system prompt, the tool search set persists for the session and only grows at its end, and the Anthropic moving breakpoint sits on the last message. OpenAI and Codex requests carry a `prompt_cache_key`, and the status line shows the cache hit rate.
 - A launch starts a fresh session instead of silently loading the newest saved one, so the model no longer resumes another project's pending work; switching agents only resumes a session from that agent's workspace, and `/new` clears the old transcript.
 - `send_channel` asks before sending a file from outside the workspace or a message to anyone but the caller.
