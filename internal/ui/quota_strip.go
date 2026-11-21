@@ -81,9 +81,16 @@ func formatLeftIn(d time.Duration) string {
 // leftBar draws what remains, not what was used: a full bar is a full
 // allowance, and it empties as the allowance is spent.
 func leftBar(percent float64, width int) string {
-	filled := int(percent/100*float64(width) + 0.5)
-	filled = max(0, min(width, filled))
-	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+	filled, empty := leftBarParts(percent, width)
+	return filled + empty
+}
+
+// leftBarParts splits the bar so the spent part can be drawn dim: both halves
+// in the same colour made a mostly empty bar read as a full one.
+func leftBarParts(percent float64, width int) (filled, empty string) {
+	count := int(percent/100*float64(width) + 0.5)
+	count = max(0, min(width, count))
+	return strings.Repeat("█", count), strings.Repeat("░", width-count)
 }
 
 // quotaSegment renders one provider at a level of detail.
@@ -103,7 +110,8 @@ func (m *Model) quotaSegment(row app.QuotaRow, detail quotaDetail) string {
 		tone := m.leftTone(left.LeftPercent)
 		text := ""
 		if withBar {
-			text += tone.Render(leftBar(left.LeftPercent, 8)) + " "
+			filled, empty := leftBarParts(left.LeftPercent, 8)
+			text += tone.Render(filled) + m.styles.Dim.Render(empty) + " "
 		}
 		text += tone.Render(fmt.Sprintf("%.0f%%", left.LeftPercent))
 		if tag != "" {
@@ -149,13 +157,12 @@ func (m *Model) renderQuotaStrip(rows []app.QuotaRow, width int) string {
 		return ""
 	}
 	separator := m.styles.Dim.Render("  |  ")
-	lead := m.styles.Dim.Render("left ")
 	build := func(detail quotaDetail, items []app.QuotaRow) string {
 		segments := make([]string, 0, len(items))
 		for _, row := range items {
 			segments = append(segments, m.quotaSegment(row, detail))
 		}
-		return lead + strings.Join(segments, separator)
+		return strings.Join(segments, separator)
 	}
 	for detail := quotaFull; detail <= quotaTiny; detail++ {
 		if line := build(detail, rows); lipgloss.Width(line) <= width {

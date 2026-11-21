@@ -25,19 +25,80 @@ everything the agent does printed as terminal output.
 - Optional WhatsApp and Telegram companions, so you can steer tasks, inspect code,
   and send photos or PDF documents from your phone.
 
-## Screenshot
+## Screenshots
 
-[![The Termixgo welcome screen in a terminal](termigo-welcome.png)]
+These are the real terminal UI, captured in a tmux session on a small demo
+workspace. The model is a scripted stand-in so the run is repeatable, and the
+usage figures are samples; everything around the model (the layout, the tool
+steps, the approval dialogs, the diffs) is the program itself. The capture
+kit is in [`scripts/screenshots/`](scripts/screenshots/).
 
-Termixgo right after launch: the bold gradient wordmark, the welcome summary
-that names the workspace and the active model, and the composer waiting for
-the first request. The wordmark here is the same paint the README banner and
-`internal/ui/banner.go` carry.
+### First run and login
+
+<p><img src="docs/screenshots/01-setup-provider.png" width="880" alt="First run: the setup wizard asks for a provider and marks which need an API key and which use a login"></p>
+
+The setup wizard on first launch. Every provider is listed with what it needs:
+an API key, a login, or nothing for a local server.
+
+<p><img src="docs/screenshots/02-setup-oauth.png" width="880" alt="The setup wizard on the Claude OAuth step"></p>
+
+A provider that uses a login (here Claude) does not ask for a key: the wizard
+points at `termixgo login claude-oauth` and waits for you to press Enter.
+
+<p><img src="docs/screenshots/03-login-cli.png" width="880" alt="termixgo login claude-oauth prints the URL to open"></p>
+
+`termixgo login claude-oauth` prints the sign-in URL. Open it in any browser,
+approve, and the token is stored in the local secret store.
+
+<p><img src="docs/screenshots/04-welcome.png" width="880" alt="The welcome screen with the usage strip above the composer"></p>
+
+After login, the line above the composer shows what is left of each login's
+5-hour and weekly allowance (see [Usage left](#usage-left)).
+
+### Choosing a model and a command
+
+<p><img src="docs/screenshots/05-model-provider.png" width="880" alt="/model lists the providers that have a key or a login"></p>
+<p><img src="docs/screenshots/06-model-list.png" width="880" alt="The Claude models available through the OAuth login"></p>
+
+`/model` lists the providers that have a key or a login, then that provider's
+models.
+
+<p><img src="docs/screenshots/07-slash-palette.png" width="880" alt="The slash command palette"></p>
+
+A bare `/` and Enter opens the command palette; keep typing to filter it.
+
+### The agent at work
+
+<p><img src="docs/screenshots/08-approval-edit.png" width="880" alt="An edit waits for approval with its diff"></p>
+
+A file edit asks first and shows the diff: allow once, for the session,
+always, or deny.
+
+<p><img src="docs/screenshots/09-approval-command.png" width="880" alt="A shell command waits for approval"></p>
+<p><img src="docs/screenshots/10-running.png" width="880" alt="A command running, with the activity line"></p>
+
+Commands ask too. While one runs, the activity line shows what the agent is
+doing, how long it has taken and how many tokens it has produced, and Enter
+steers the run.
+
+<p><img src="docs/screenshots/11-streaming.png" width="880" alt="The answer streaming in"></p>
+<p><img src="docs/screenshots/12-done.png" width="880" alt="A finished turn with its summary line"></p>
+
+The answer streams paragraph by paragraph with Markdown. A finished turn ends
+with one line: steps, tokens in and out, cost and time.
+
+### Plan mode
+
+<p><img src="docs/screenshots/13-plan-review.png" width="880" alt="Plan mode: Ready to code? with the plan above"></p>
+
+In plan mode the agent can only read and plan. When the plan is ready it is
+shown, and you choose to start with edits accepted automatically, start with
+each change confirmed, or keep planning with feedback.
 
 ## Table of contents
 
 - [Features](#features)
-- [Screenshot](#screenshot)
+- [Screenshots](#screenshots)
 - [Install](#install)
 - [Quick start](#quick-start)
 - [The terminal UI](#the-terminal-ui)
@@ -271,7 +332,7 @@ left of its 5-hour and weekly windows, for every such login and not only the
 active model:
 
 ```
-left  Claude ████████ 72% left (2h14m) · wk 41% left  |  Codex 90% left (4h40m)
+Claude 5h 72% left (2h14m) · wk 41% left  |  Codex 5h 90% left (4h40m) · wk 66% left
 ```
 
 The figures are the provider's own, refreshed in the background (at most once

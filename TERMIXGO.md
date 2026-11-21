@@ -202,8 +202,11 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   bare, unboxed lines that ran together with the tool output.
 - The wordmark has one source of truth: the block glyphs and per-letter hues
   in `internal/ui/banner.go`. The README banner (`termixgo-banner.svg`) and the
-  welcome screenshot (`termigo-welcome.png`) mirror that paint. Change the TUI
-  banner first and re-derive the README assets from it, never the other way.
+  screenshots in `docs/screenshots/` mirror that paint. Change the TUI banner
+  first and re-derive the README assets from it, never the other way. The
+  screenshots are regenerated, not edited: `scripts/screenshots/` drives the
+  real binary in tmux against a scripted model and renders the captured ANSI.
+  Retake them when a visible part of the UI changes.
 - Tool schemas are JSON Schema objects. `edit` matches exact strings: never
   change it to line-based editing without a matching change to the prompt.
 - `read_file` returns line-count metadata, not inline line numbers, so an exact

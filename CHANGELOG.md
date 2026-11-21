@@ -15,6 +15,7 @@ All notable changes to Termixgo are recorded here. The format follows
 - `run_command` reported `Command succeeded in .`, which read as a missing duration: the text names the directory, and the workspace root is now spelled out.
 
 ### Changed
+- The README screenshot is replaced by a set of thirteen taken from the real terminal UI: first-run setup, the Claude OAuth login, choosing a model and a command, an edit and a command waiting for approval, a run in progress, a finished turn, and plan mode. `scripts/screenshots/` regenerates them (the real binary in tmux against a scripted model), and the broken image link in the README is fixed.
 - `termixgo service install` on Linux writes a unit with `Restart=always` and no start-rate limit, so the assistant is restarted after a crash loop or a clean exit instead of staying down.
 
 ## 0.2.9 - 2026-11-22
