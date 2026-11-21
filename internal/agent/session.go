@@ -44,8 +44,14 @@ type Session struct {
 
 	messages []provider.Message
 	todos    []Todo
-	usage    provider.Usage
-	costUSD  float64
+	// discovered lists the tools find_tools loaded, in discovery order. It
+	// lives with the conversation because the advertised tool list is the
+	// first part of every provider's prompt cache: resetting it each turn
+	// changed that prefix and re-billed the whole history at the start of
+	// every turn.
+	discovered []string
+	usage      provider.Usage
+	costUSD    float64
 	// segments is the same spend as usage and costUSD, split by the provider,
 	// model and billing mode that spent it. usage stays the display cache;
 	// segments are the truth it is checked against, and they are what a
@@ -78,11 +84,13 @@ type sessionJSON struct {
 	UpdatedAt time.Time          `json:"updatedAt"`
 	Messages  []provider.Message `json:"messages"`
 	Todos     []Todo             `json:"todos,omitempty"`
-	Usage     provider.Usage     `json:"usage,omitempty"`
-	CostUSD   float64            `json:"costUsd,omitempty"`
-	Segments  []UsageSegment     `json:"segments,omitempty"`
-	Condensed bool               `json:"condensed,omitempty"`
-	InFlight  bool               `json:"inFlight,omitempty"`
+	// Discovered is the tool search set; see Session.discovered.
+	Discovered []string       `json:"discoveredTools,omitempty"`
+	Usage      provider.Usage `json:"usage,omitempty"`
+	CostUSD    float64        `json:"costUsd,omitempty"`
+	Segments   []UsageSegment `json:"segments,omitempty"`
+	Condensed  bool           `json:"condensed,omitempty"`
+	InFlight   bool           `json:"inFlight,omitempty"`
 }
 
 // NewSession starts an empty conversation with a random id.
@@ -293,6 +301,33 @@ func (s *Session) SetTodos(todos []Todo) {
 	}
 	s.updatedAt = time.Now()
 	s.mu.Unlock()
+}
+
+// DiscoveredTools returns the tools find_tools loaded, in discovery order.
+func (s *Session) DiscoveredTools() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.discovered...)
+}
+
+// AddDiscoveredTools appends newly discovered tools, keeping the order and
+// skipping names already present, so the advertised list only ever grows at
+// its end.
+func (s *Session) AddDiscoveredTools(names []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seen := make(map[string]bool, len(s.discovered))
+	for _, name := range s.discovered {
+		seen[name] = true
+	}
+	for _, name := range names {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		s.discovered = append(s.discovered, name)
+	}
 }
 
 // Usage is the token accounting for the session.
@@ -724,20 +759,21 @@ func (s *Session) snapshot() sessionJSON {
 	segments := make([]UsageSegment, len(s.segments))
 	copy(segments, s.segments)
 	return sessionJSON{
-		ID:        s.id,
-		Title:     s.title,
-		Agent:     s.agent,
-		Workspace: s.workspace,
-		Model:     s.model,
-		CreatedAt: s.createdAt,
-		UpdatedAt: s.updatedAt,
-		Messages:  messages,
-		Todos:     todos,
-		Usage:     s.usage,
-		CostUSD:   s.costUSD,
-		Segments:  segments,
-		Condensed: s.condensed,
-		InFlight:  s.inFlight,
+		ID:         s.id,
+		Title:      s.title,
+		Agent:      s.agent,
+		Workspace:  s.workspace,
+		Model:      s.model,
+		CreatedAt:  s.createdAt,
+		UpdatedAt:  s.updatedAt,
+		Messages:   messages,
+		Todos:      todos,
+		Discovered: append([]string(nil), s.discovered...),
+		Usage:      s.usage,
+		CostUSD:    s.costUSD,
+		Segments:   segments,
+		Condensed:  s.condensed,
+		InFlight:   s.inFlight,
 	}
 }
 
@@ -888,20 +924,21 @@ func fromJSON(state sessionJSON) *Session {
 		updated = created
 	}
 	return &Session{
-		id:        state.ID,
-		title:     state.Title,
-		agent:     state.Agent,
-		workspace: state.Workspace,
-		model:     state.Model,
-		createdAt: created,
-		updatedAt: updated,
-		messages:  state.Messages,
-		todos:     state.Todos,
-		usage:     state.Usage,
-		costUSD:   state.CostUSD,
-		segments:  state.Segments,
-		condensed: state.Condensed,
-		inFlight:  state.InFlight,
+		id:         state.ID,
+		title:      state.Title,
+		agent:      state.Agent,
+		workspace:  state.Workspace,
+		model:      state.Model,
+		createdAt:  created,
+		updatedAt:  updated,
+		messages:   state.Messages,
+		todos:      state.Todos,
+		discovered: state.Discovered,
+		usage:      state.Usage,
+		costUSD:    state.CostUSD,
+		segments:   state.Segments,
+		condensed:  state.Condensed,
+		inFlight:   state.InFlight,
 	}
 }
 

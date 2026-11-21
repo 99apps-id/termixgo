@@ -564,16 +564,19 @@ func rawObject(arguments string) any {
 // point of the feature.
 //
 // The first message never changes once written, so an anchor there is read from
-// cache on every later turn. The marker near the tail extends the cached prefix
-// over the newest turns, which is what lets the whole prefix stay warm instead
-// of being re-billed from the top.
+// cache on every later turn. The moving marker goes on the last message, the
+// newest user turn or tool result. It used to sit on the second-to-last one,
+// which left the newest tool result outside the cache: it was billed at the
+// full input rate on this step and then written to the cache on the next, so
+// every large result was paid for twice. Marked last, it is written once
+// (at the cache-write premium) and read at the cache rate from the next step.
 func applyPromptCacheToMessages(messages []map[string]any) {
 	if len(messages) == 0 {
 		return
 	}
 	markMessageCache(messages[0])
-	if tail := len(messages) - 2; tail > 0 {
-		markMessageCache(messages[tail])
+	if last := len(messages) - 1; last > 0 {
+		markMessageCache(messages[last])
 	}
 }
 

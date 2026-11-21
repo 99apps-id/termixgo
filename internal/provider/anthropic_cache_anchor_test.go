@@ -77,13 +77,17 @@ func TestPromptCacheStaysWithinTheBreakpointLimit(t *testing.T) {
 	}
 }
 
-// TestPromptCacheMarksTheTailToo keeps the second half of the design: the tail
-// marker is what extends the cached prefix over the newest turns.
+// TestPromptCacheMarksTheTailToo keeps the second half of the design: the
+// moving marker sits on the last message, so the newest tool result is cached
+// once instead of billed in full and then cached again on the next step.
 func TestPromptCacheMarksTheTailToo(t *testing.T) {
 	messages := cacheMessages(6)
 	applyPromptCacheToMessages(messages)
-	if got := cacheBreakpoints(messages[4]); got != 1 {
-		t.Errorf("the second-to-last message should carry the moving marker, got %d", got)
+	if got := cacheBreakpoints(messages[len(messages)-1]); got != 1 {
+		t.Errorf("the last message should carry the moving marker, got %d", got)
+	}
+	if got := cacheBreakpoints(messages[len(messages)-2]); got != 0 {
+		t.Errorf("the second-to-last message should carry none, got %d", got)
 	}
 }
 

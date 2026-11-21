@@ -45,6 +45,13 @@ func (c *openAIClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 	if streamOptionsProviders[c.info.ID] {
 		payload["stream_options"] = map[string]any{"include_usage": true}
 	}
+	// OpenAI routes requests that share a prompt_cache_key to the same cache,
+	// which is what keeps a long session's prefix hitting. Only OpenAI itself
+	// is sent the field: a compatible server that rejects unknown fields
+	// would fail the request.
+	if c.info.ID == "openai" {
+		payload["prompt_cache_key"] = promptCacheKey(c.SessionID())
+	}
 
 	headers := map[string]string{}
 	key := c.currentKey()

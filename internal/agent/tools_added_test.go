@@ -303,7 +303,7 @@ func TestStepToolsLoadsOnDemand(t *testing.T) {
 	if _, ok := visible.Lookup("github_create_pr"); ok {
 		t.Errorf("an ecosystem tool must be deferred until discovered")
 	}
-	if _, ok := on.stepTools(map[string]bool{"github_create_pr": true}).Lookup("github_create_pr"); !ok {
+	if _, ok := on.stepTools([]string{"github_create_pr"}).Lookup("github_create_pr"); !ok {
 		t.Errorf("a discovered tool must become visible")
 	}
 

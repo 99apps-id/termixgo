@@ -2544,6 +2544,11 @@ func (m *Model) viewStatus() string {
 	// window and must not sit unlabelled next to the context figure, where
 	// it reads as context occupancy.
 	vitals := []string{m.styles.Dim.Render(fmt.Sprintf("billed: %d", usage.TotalTokens))}
+	// The share of input served from the prompt cache is the number that
+	// says whether a long session is cheap or re-billing its history.
+	if usage.PromptTokens > 0 && (usage.CacheReadTokens > 0 || usage.CacheWriteTokens > 0) {
+		vitals = append(vitals, m.styles.Dim.Render(fmt.Sprintf("cache %d%%", usage.CacheReadTokens*100/usage.PromptTokens)))
+	}
 	costStyle := m.styles.Dim
 	if limit := m.appConfig().CostBudgetUSD; limit > 0 && spend >= limit {
 		// Over budget is the one spend figure that should shout.

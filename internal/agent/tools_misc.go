@@ -411,8 +411,10 @@ func (t *todoWriteTool) Run(ctx context.Context, env *Env, args map[string]any) 
 		env.Emit(Event{Kind: EventPlan, Plan: plan})
 	}
 	done, total := env.Todos.Progress()
+	// The whole list is in the result: the plan is no longer repeated in the
+	// system prompt, so this is where the model reads the current state.
 	return Result{
-		Output: fmt.Sprintf("Plan updated: %d of %d complete.", done, total),
+		Output: fmt.Sprintf("Plan updated: %d of %d complete.%s", done, total, env.Todos.PromptBlock()),
 		Plan:   plan,
 	}, nil
 }

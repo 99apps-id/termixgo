@@ -102,7 +102,15 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 		headers["ChatGPT-Account-ID"] = c.accountID
 	}
 
+	// The reference client keys the backend's prompt cache on the
+	// conversation, which keeps a long session's prefix on one cache. A
+	// backend that refuses the field gets the request again without it.
+	payload["prompt_cache_key"] = promptCacheKey(c.SessionID())
 	response, err := c.post(ctx, c.baseURL+"/responses", headers, payload)
+	if err != nil && rejectsField(err, "prompt_cache_key") {
+		delete(payload, "prompt_cache_key")
+		response, err = c.post(ctx, c.baseURL+"/responses", headers, payload)
+	}
 	if err != nil {
 		return err
 	}

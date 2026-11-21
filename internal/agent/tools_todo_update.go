@@ -72,5 +72,5 @@ func (t *todoUpdateTool) Run(_ context.Context, env *Env, args map[string]any) (
 	if err := env.Todos.Write(items); err != nil {
 		return Result{Output: fmt.Sprintf("write failed: %v", err), IsError: true}, nil
 	}
-	return Result{Output: "Todo updated"}, nil
+	return Result{Output: "Todo updated." + env.Todos.PromptBlock(), Plan: env.Todos.Items()}, nil
 }

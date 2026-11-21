@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -163,6 +164,24 @@ func (c *httpClient) FetchQuota(ctx context.Context) *QuotaSnapshot {
 // can react to it: a login whose credential went stale answers 401, and Meta
 // Muse answers 404 model_not_found for the same condition. Matching on a typed
 // status beats parsing the message.
+// promptCacheKey derives the prompt_cache_key sent to OpenAI-style backends
+// from the client's session id. It is hashed so the raw id never travels in a
+// second field, and short because the key is only a routing hint.
+func promptCacheKey(session string) string {
+	sum := sha256.Sum256([]byte("termixgo-cache:" + session))
+	return "termixgo-" + hex.EncodeToString(sum[:8])
+}
+
+// rejectsField reports a 400 that names one request field, which is how a
+// backend refuses a parameter it does not know.
+func rejectsField(err error, field string) bool {
+	var statusErr *providerStatusError
+	if !errors.As(err, &statusErr) || statusErr.status != http.StatusBadRequest {
+		return false
+	}
+	return strings.Contains(statusErr.message, field) || strings.Contains(statusErr.code, field)
+}
+
 type providerStatusError struct {
 	label   string
 	status  int

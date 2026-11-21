@@ -63,15 +63,15 @@ func TestAnthropicPromptCachingPayload(t *testing.T) {
 		t.Errorf("tool1 cache_control type = %v", cacheCtrlTool["type"])
 	}
 
-	// Check message cache_control on the second-to-last turn
+	// Check message cache_control on the last turn
 	messagesRaw := array(t, body, "messages")
 	if len(messagesRaw) != 3 {
 		t.Fatalf("messages length = %d, want 3", len(messagesRaw))
 	}
-	msg1 := object(t, messagesRaw[1], "messages", "1")
-	contentRaw, ok := msg1["content"].([]any)
+	msg2 := object(t, messagesRaw[2], "messages", "2")
+	contentRaw, ok := msg2["content"].([]any)
 	if !ok || len(contentRaw) == 0 {
-		t.Fatalf("expected message content blocks in turn 1, got %#v", msg1["content"])
+		t.Fatalf("expected message content blocks in the last turn, got %#v", msg2["content"])
 	}
 	contentBlock := object(t, contentRaw[len(contentRaw)-1], "content", "last")
 	cacheCtrlMsg := object(t, contentBlock["cache_control"], "cache_control")

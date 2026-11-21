@@ -93,15 +93,13 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	// Tool search installs the discovery hooks on a per-turn copy of the
 	// environment, so the search index and the discovered set cannot leak into
 	// another turn or a subagent.
-	discovered := map[string]bool{}
+	// The discovered set belongs to the session, not the turn: the advertised
+	// tool list opens every request's cache prefix, so starting each turn
+	// from the always-on set re-billed the whole history.
 	if r.ToolSearch && r.Env != nil {
 		cloned := *r.Env
 		cloned.ToolIndex = buildToolIndex(r.Tools.Tools(), toolSearchAlwaysOn)
-		cloned.DiscoverTools = func(names []string) {
-			for _, name := range names {
-				discovered[strings.ToLower(name)] = true
-			}
-		}
+		cloned.DiscoverTools = session.AddDiscoveredTools
 		r.Env = &cloned
 	}
 
@@ -130,6 +128,9 @@ func (r *Runner) Run(ctx context.Context, session *Session, input string) error 
 	plainReasoningNext := false
 
 	turnText := input + "\n\n" + FormatEnvironmentBlock(r.Env.Workspace, TrustLabel(r.Env.Trusted))
+	if plan := r.planReminder(); plan != "" {
+		turnText += "\n\n" + plan
+	}
 	if len(r.TurnImages) > 0 {
 		session.AddUserWithImages(turnText, r.TurnImages)
 	} else {
@@ -191,7 +192,7 @@ runLoop:
 			System:         r.system(),
 			SystemParts:    r.systemParts(),
 			Messages:       compactForModel(session.Messages(), r.ContextBudget),
-			Tools:          r.stepTools(discovered).Definitions(),
+			Tools:          r.stepTools(session.DiscoveredTools()).Definitions(),
 			Effort:         r.Effort,
 			PlainReasoning: plainReasoningNext,
 		}
@@ -669,28 +670,32 @@ func (r *Runner) system() string {
 	if strings.TrimSpace(r.System) != "" {
 		return r.System
 	}
-	prompt := ApplyHarnessToSystem(BuildSystem(r.Env, r.Model), GetHarnessProfile(r.Harness))
+	staticPrompt, _ := BuildSystemParts(r.Env, r.Model)
+	prompt := ApplyHarnessToSystem(staticPrompt, GetHarnessProfile(r.Harness))
 	if r.ToolSearch {
 		prompt += "\n\n" + toolSearchHint
 	}
 	return prompt
 }
 
-// systemParts returns the static prompt and dynamic working plan separately
-// so provider implementations can mark the static prefix for prompt caching.
+// systemParts returns the system prompt for the request. It is only the
+// static prompt: the working plan used to ride here as a second part, and
+// every todo_write then changed the system block, which sits before the
+// messages in every provider's cache prefix, so the whole history was billed
+// again at full price after each plan update. The plan now reaches the model
+// in the turn's opening message and in the todo tools' results, both of which
+// stay put in the history.
 func (r *Runner) systemParts() []string {
-	if strings.TrimSpace(r.System) != "" {
-		return []string{r.System}
+	return []string{r.system()}
+}
+
+// planReminder is the plan appended to a turn's opening message, so a turn
+// that continues earlier work starts with the list in view.
+func (r *Runner) planReminder() string {
+	if r.Env == nil || r.Env.Todos == nil {
+		return ""
 	}
-	staticPrompt, dynamicPlan := BuildSystemParts(r.Env, r.Model)
-	staticWithHarness := ApplyHarnessToSystem(staticPrompt, GetHarnessProfile(r.Harness))
-	if r.ToolSearch {
-		staticWithHarness += "\n\n" + toolSearchHint
-	}
-	if strings.TrimSpace(dynamicPlan) != "" {
-		return []string{staticWithHarness, dynamicPlan}
-	}
-	return []string{staticWithHarness}
+	return strings.TrimSpace(r.Env.Todos.PromptBlock())
 }
 
 // observeToolResult folds one finished tool call into the verify ledger.
@@ -1040,15 +1045,29 @@ func (r *Runner) toolNamesList() []string {
 // full allowlist. With it, only the always-on loop and the tools the model has
 // discovered are advertised; every tool stays callable, so a discovered name
 // never fails to resolve.
-func (r *Runner) stepTools(discovered map[string]bool) *Registry {
+//
+// The order is the always-on set in registry order, then the discovered
+// tools in the order they were found. A new discovery therefore only extends
+// the list at its end instead of inserting a schema in the middle.
+func (r *Runner) stepTools(discovered []string) *Registry {
 	if !r.ToolSearch {
 		return r.Tools
 	}
 	tools := make([]Tool, 0, len(r.Tools.Tools()))
+	added := map[string]bool{}
 	for _, tool := range r.Tools.Tools() {
-		if toolSearchAlwaysOn[strings.ToLower(tool.Name())] || discovered[strings.ToLower(tool.Name())] {
+		if name := strings.ToLower(tool.Name()); toolSearchAlwaysOn[name] {
 			tools = append(tools, tool)
+			added[name] = true
 		}
+	}
+	for _, name := range discovered {
+		tool, ok := r.Tools.Lookup(name)
+		if !ok || added[strings.ToLower(tool.Name())] {
+			continue
+		}
+		added[strings.ToLower(tool.Name())] = true
+		tools = append(tools, tool)
 	}
 	return NewRegistry(tools...)
 }
