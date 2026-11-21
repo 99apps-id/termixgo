@@ -121,7 +121,11 @@ func (m *Model) applyClipboardPaste(msg clipboardPasteMsg) {
 				break
 			}
 		}
-		m.composer.InsertString(msg.text)
+		if shouldCollapsePaste(msg.text) {
+			m.collapsePaste(msg.text)
+		} else {
+			m.composer.InsertString(msg.text)
+		}
 	case msg.err != nil:
 		m.notice = "Clipboard: " + msg.err.Error()
 	default:

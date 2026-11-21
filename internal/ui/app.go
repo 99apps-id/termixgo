@@ -132,6 +132,11 @@ type Model struct {
 	quitArmedAt time.Time
 	quitKey     string
 
+	// pastes maps a "[Pasted text #N +X lines]" placeholder to the text it
+	// stands for; pasteSeq numbers them.
+	pastes   map[string]string
+	pasteSeq int
+
 	slashMatches []SlashCommand
 	slashCursor  int
 
@@ -1225,6 +1230,12 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.refresh()
 			return m, nil
 		}
+		if text := string(key.Runes); shouldCollapsePaste(text) && !isMouseNoiseText(text) {
+			m.collapsePaste(text)
+			m.updateSlashMatches()
+			m.refresh()
+			return m, nil
+		}
 	}
 
 	switch key.String() {
@@ -1295,7 +1306,9 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.composer.SetValue("")
 			m.slashMatches = nil
 			m.mentionMatches = nil
-			return m.runLocalCommand(strings.TrimSpace(strings.TrimPrefix(value, "!")))
+			command := m.expandPastes(strings.TrimSpace(strings.TrimPrefix(value, "!")))
+			m.forgetPastes(value)
+			return m.runLocalCommand(command)
 		}
 		// A bare slash committed with Enter opens the command palette. A slash
 		// anywhere else is ordinary text, so typing a path such as c:/project
@@ -1739,8 +1752,10 @@ func (m *Model) recordSteer(value string) {
 	if trimmed == "" {
 		return
 	}
-	m.app.Steer(trimmed)
-	m.steerEcho = append(m.steerEcho, trimmed)
+	full := m.expandPastes(trimmed)
+	m.forgetPastes(trimmed)
+	m.app.Steer(full)
+	m.steerEcho = append(m.steerEcho, strings.TrimSpace(full))
 	m.blocks = append(m.blocks, block{kind: blockUser, text: trimmed})
 }
 
@@ -1859,19 +1874,23 @@ func (m *Model) submit(value string) (tea.Model, tea.Cmd) {
 // submitWith runs one input. pending holds the attachments that belong to a
 // queued input; nil means the live composer attachments are the ones to take.
 func (m *Model) submitWith(value string, pending []attachment) (tea.Model, tea.Cmd) {
-	if name, args, ok := ParseSlash(value); ok {
+	// Pasted-text placeholders stay in the transcript; the turn receives the
+	// text they stand for.
+	expanded := m.expandPastes(value)
+	m.forgetPastes(value)
+	if name, args, ok := ParseSlash(expanded); ok {
 		// A slash command is a local control and takes no files. Files staged
 		// for a queued prompt stay pending for the next real prompt.
 		m.attachments = append(m.attachments, pending...)
 		return m.runSlash(name, args)
 	}
 	if pending != nil {
-		return m.startRunWith(value, value+attachmentDocumentBlock(pending), attachmentImages(pending))
+		return m.startRunWith(value, expanded+attachmentDocumentBlock(pending), attachmentImages(pending))
 	}
 	// Attachments belong to this turn only. Documents travel as prompt text
 	// and images ride on the first user message, so consume them before the
 	// turn starts and never carry them into a later one.
-	prompt, images := m.consumeAttachments(value)
+	prompt, images := m.consumeAttachments(expanded)
 	return m.startRunWith(value, prompt, images)
 }
 
