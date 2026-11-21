@@ -1777,6 +1777,7 @@ func (a *App) Shutdown() {
 	a.StopScheduler()
 	a.StopChannels()
 	a.StopTelegram()
+	defer agent.CloseLanguageServers()
 	// Cancel a turn in flight, then hold the single-run slot while the stores
 	// it writes are closed. runOn takes the same slot for the whole turn, so a
 	// turn that starts after this point is refused and one already running is

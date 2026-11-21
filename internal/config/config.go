@@ -201,6 +201,10 @@ type Config struct {
 	Language      string       `json:"language"`
 	// Theme selects the terminal palette: dark (default) or light.
 	Theme string `json:"theme,omitempty"`
+	// LSPServers overrides the language server for a file extension, for
+	// example {".py": ["pylsp"]}. An extension that is not listed uses the
+	// built-in choice.
+	LSPServers map[string][]string `json:"lspServers,omitempty"`
 	// Statusline is an optional ordered list of components. Empty preserves the
 	// built-in priority and width behavior.
 	Statusline []string `json:"statusline,omitempty"`
