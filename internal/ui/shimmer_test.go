@@ -72,7 +72,7 @@ func TestRunningThinkingBlockShimmers(t *testing.T) {
 		t.Errorf("the live header should shimmer its text:\n%s", stripANSI(running))
 	}
 	done := renderThinkingBlock(block{kind: blockThinking, reasoning: "considered"}, styles, 80, true)
-	if stripANSI(done) == "" || !strings.Contains(stripANSI(done), "Reasoned") {
+	if stripANSI(done) == "" || !strings.Contains(stripANSI(done), "Thought") {
 		t.Errorf("a finished header stays static:\n%s", stripANSI(done))
 	}
 }

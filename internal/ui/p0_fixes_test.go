@@ -87,6 +87,7 @@ func TestSpinnerDoesNotTickWhileIdle(t *testing.T) {
 // Ctrl+T off collapses every thinking block to its header; on shows the body.
 func TestShowReasoningControlsTheThinkingBody(t *testing.T) {
 	model := chatModel(t)
+	model.showDetails = true
 	model.blocks = append(model.blocks, block{kind: blockThinking, reasoning: "secret chain of thought", finalized: true})
 
 	_ = model.app.UpdateConfig(func(c *config.Config) { c.ShowReasoning = false })

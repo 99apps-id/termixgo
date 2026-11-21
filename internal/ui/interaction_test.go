@@ -1714,26 +1714,24 @@ func TestInitWithoutAModelExplainsSetup(t *testing.T) {
 // thinking/reasoning and tool blocks show their full content or a compact line.
 func TestCtrlOTogglesDetailVisibility(t *testing.T) {
 	model := chatModel(t)
-	if !model.showDetails {
-		t.Fatalf("details should be visible by default")
+	if model.showDetails {
+		t.Fatalf("the transcript should start compact")
 	}
 
-	// Press Ctrl+O to hide details.
-	hidden := press(t, model, "ctrl+o")
-	if hidden.showDetails {
-		t.Errorf("Ctrl+O should hide details")
-	}
-	if !strings.Contains(hidden.notice, "hidden") {
-		t.Errorf("the notice should say details are hidden, got %q", hidden.notice)
-	}
-
-	// Press Ctrl+O again to show details.
-	shown := press(t, hidden, "ctrl+o")
+	shown := press(t, model, "ctrl+o")
 	if !shown.showDetails {
-		t.Errorf("a second Ctrl+O should show details")
+		t.Errorf("Ctrl+O should show details")
 	}
 	if !strings.Contains(shown.notice, "visible") {
 		t.Errorf("the notice should say details are visible, got %q", shown.notice)
+	}
+
+	hidden := press(t, shown, "ctrl+o")
+	if hidden.showDetails {
+		t.Errorf("a second Ctrl+O should hide details")
+	}
+	if !strings.Contains(hidden.notice, "hidden") {
+		t.Errorf("the notice should say details are hidden, got %q", hidden.notice)
 	}
 }
 
@@ -1761,7 +1759,7 @@ func TestHiddenDetailsCollapsesThinkingAndTool(t *testing.T) {
 	// With details hidden, only the headers remain.
 	model.showDetails = false
 	collapsed := display(model)
-	if !strings.Contains(collapsed, "Reasoned") {
+	if !strings.Contains(collapsed, "Thought for 5s") {
 		t.Errorf("collapsed view should still show the header:\n%s", collapsed)
 	}
 	if strings.Contains(collapsed, "deep thought") {

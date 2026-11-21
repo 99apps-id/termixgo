@@ -63,6 +63,12 @@ type Event struct {
 	ToolResult string
 	ToolOK     bool
 	ToolMillis int64
+	// ToolOutput is the head of a command's output (or of any failure), for
+	// the transcript's preview under the tool line; ToolOutputLines is the
+	// line count of the whole output, so the preview can say how much more
+	// there is. Both are empty for tools whose output is file content.
+	ToolOutput      string
+	ToolOutputLines int
 
 	Approval  *ApprovalRequest
 	Plan      []Todo

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,30 +103,46 @@ func TestRenderThinkingBlockTrimsALongReasoning(t *testing.T) {
 	}
 
 	timed := stripANSI(renderThinkingBlock(block{kind: blockThinking, reasoning: "considered", seconds: 7}, styles, 80, true))
-	if !strings.Contains(timed, "Reasoned for 7s") {
+	if !strings.Contains(timed, "Thought for 7s") {
 		t.Errorf("timed = %q, want the duration", timed)
 	}
 
 	// No duration and not running: a bare header.
 	bare := stripANSI(renderThinkingBlock(block{kind: blockThinking, reasoning: "considered"}, styles, 80, true))
-	if !strings.Contains(bare, "Reasoned") || strings.Contains(bare, "for") {
+	if !strings.Contains(bare, "Thought") || strings.Contains(bare, "for") {
 		t.Errorf("bare = %q, want a plain header", bare)
 	}
 
 	// No reasoning at all leaves the header alone rather than an empty block.
 	empty := stripANSI(renderThinkingBlock(block{kind: blockThinking}, styles, 80, true))
-	if !strings.Contains(empty, "Reasoned") {
+	if strings.TrimSpace(empty) != "Thought" {
 		t.Errorf("empty = %q", empty)
 	}
 
-	// A wall of reasoning is capped, or one thought fills the transcript.
-	var lines []string
-	for index := 0; index < 40; index++ {
-		lines = append(lines, "reasoning line")
+	// A finished block in the details view shows every line, not 8.
+	lines := make([]string, 40)
+	for index := range lines {
+		lines[index] = fmt.Sprintf("reasoning line %d", index)
 	}
-	trimmed := stripANSI(renderThinkingBlock(block{kind: blockThinking, reasoning: strings.Join(lines, "\n")}, styles, 60, true))
-	if !strings.Contains(trimmed, "reasoning trimmed") {
-		t.Errorf("a long reasoning block should say it was trimmed:\n%s", trimmed)
+	full := stripANSI(renderThinkingBlock(block{kind: blockThinking, reasoning: strings.Join(lines, "\n")}, styles, 60, true))
+	if !strings.Contains(full, "reasoning line 39") || strings.Contains(full, "more lines") {
+		t.Errorf("a finished block should show the whole reasoning:\n%s", full)
+	}
+	// While streaming, only the newest lines show.
+	live := stripANSI(renderThinkingBlock(block{kind: blockThinking, running: true, reasoning: strings.Join(lines, "\n")}, styles, 60, true))
+	if !strings.Contains(live, "32 earlier lines") || strings.Contains(live, "reasoning line 0\n") || !strings.Contains(live, "reasoning line 39") {
+		t.Errorf("a live block should show the tail:\n%s", live)
+	}
+	// A runaway chain of thought is still capped.
+	huge := strings.Repeat("x\n", 250)
+	capped := stripANSI(renderThinkingBlock(block{kind: blockThinking, reasoning: huge}, styles, 60, true))
+	if !strings.Contains(capped, "50 more lines") {
+		t.Errorf("a huge block should be capped:\n%s", capped[len(capped)-200:])
+	}
+	// The compact view is the header with the way to expand.
+	compact := stripANSI(renderThinkingBlock(block{kind: blockThinking, reasoning: "considered", seconds: 2}, styles, 60, false))
+	if compact != "  Thought for 2s (ctrl+o to expand)" {
+		t.Errorf("compact = %q", compact)
 	}
 }
 

@@ -64,7 +64,7 @@ func TestChatViewRendersATranscript(t *testing.T) {
 	model.refresh()
 
 	view := stripANSI(model.View())
-	for _, want := range []string{"refactor the parser", "Reasoned for 3s", "Read parser.go", "Summary", "Split tokenizer"} {
+	for _, want := range []string{"refactor the parser", "Thought for 3s", "Read parser.go", "Summary", "Split tokenizer"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the chat view is missing %q:\n%s", want, view)
 		}

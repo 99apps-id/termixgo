@@ -50,6 +50,10 @@ type block struct {
 	preview    string
 	toolOK     bool
 	toolMillis int64
+	// toolOutput is the head of a command's output and toolOutputLines the
+	// line count of all of it, for the preview under the tool line.
+	toolOutput      string
+	toolOutputLines int
 
 	diffFiles  []diffFile
 	diffLayout string
@@ -74,6 +78,7 @@ func transcript(blocks []block, styles Styles, width int, showDetails bool) stri
 		item.reasoning = sanitizeText(item.reasoning)
 		item.toolLabel = sanitizeText(item.toolLabel)
 		item.toolResult = sanitizeText(item.toolResult)
+		item.toolOutput = sanitizeText(item.toolOutput)
 		for index := range item.plan {
 			item.plan[index].Title = sanitizeText(item.plan[index].Title)
 		}
@@ -183,22 +188,32 @@ func renderThinkingBlock(item block, styles Styles, width int, showDetails bool)
 	case item.running:
 		header = shimmerLine("  Thinking...", styles)
 	case item.seconds > 0:
-		header = styles.Reasoned.Render(fmt.Sprintf("  Reasoned for %ds", item.seconds))
+		header = styles.Reasoned.Render(fmt.Sprintf("  Thought for %ds", item.seconds))
 	default:
-		header = styles.Reasoned.Render("  Reasoned")
-	}
-	if !showDetails || item.hideBody {
-		return header
+		header = styles.Reasoned.Render("  Thought")
 	}
 	body := strings.TrimSpace(item.reasoning)
+	if !showDetails || item.hideBody {
+		if body != "" && !item.running && !item.hideBody {
+			header += styles.Dim.Render(" (ctrl+o to expand)")
+		}
+		return header
+	}
 	if body == "" {
 		return header
 	}
 	wrapped := wrapPlain(body, width-4)
 	lines := strings.Split(wrapped, "\n")
-	const maxLines = 8
-	if len(lines) > maxLines {
-		lines = append(lines[:maxLines], styles.Reasoned.Render("  ... (reasoning trimmed)"))
+	// While the model is still thinking only the newest lines are shown, so
+	// the stream reads as progress instead of pushing the answer off screen.
+	// A finished block shows all of it, up to a cap that keeps one runaway
+	// chain of thought from taking the whole transcript.
+	const liveLines, fullLines = 8, 200
+	switch {
+	case item.running && len(lines) > liveLines:
+		lines = append([]string{styles.Reasoned.Render(fmt.Sprintf("  ... %d earlier lines", len(lines)-liveLines))}, lines[len(lines)-liveLines:]...)
+	case len(lines) > fullLines:
+		lines = append(lines[:fullLines], styles.Reasoned.Render(fmt.Sprintf("  ... %d more lines (/export writes the whole session)", len(lines)-fullLines)))
 	}
 	rendered := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -235,10 +250,14 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 		if item.running {
 			return shimmerTool(line, styles)
 		}
+		rendered := style.Render(line)
 		if peek := previewLines(item, styles, width, previewPeekLines); peek != "" {
-			return style.Render(line) + "\n" + peek
+			rendered += "\n" + peek
 		}
-		return style.Render(line)
+		if output := renderToolOutput(item, styles, width, outputPeekLines, true); output != "" {
+			rendered += "\n" + output
+		}
+		return rendered
 	}
 	// Clip the label before styling: truncate counts runes, so slicing the
 	// styled line here used to cut the timing suffix mid-escape and print
@@ -259,6 +278,9 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 	if peek := previewLines(item, styles, width, previewFullLines); peek != "" {
 		rendered += "\n" + peek
 	}
+	if output := renderToolOutput(item, styles, width, outputFullLines, false); output != "" {
+		return rendered + "\n" + output
+	}
 	result := strings.TrimSpace(item.toolResult)
 	if result == "" {
 		return rendered
@@ -276,7 +298,49 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 const (
 	previewPeekLines = 6
 	previewFullLines = 40
+	// outputPeekLines and outputFullLines bound a command's output preview in
+	// the compact and the details view.
+	outputPeekLines = 3
+	outputFullLines = 40
 )
+
+// renderToolOutput draws the head of a command's output under its tool line,
+// the way Claude Code shows "⎿  first lines" and "… +N lines". compact adds
+// the hint that Ctrl+O shows more.
+func renderToolOutput(item block, styles Styles, width, maxLines int, compact bool) string {
+	if item.running || strings.TrimSpace(item.toolOutput) == "" {
+		return ""
+	}
+	lines := strings.Split(strings.ReplaceAll(item.toolOutput, "\t", "    "), "\n")
+	shown := lines
+	if len(shown) > maxLines {
+		shown = shown[:maxLines]
+	}
+	total := item.toolOutputLines
+	if total < len(lines) {
+		total = len(lines)
+	}
+	style := styles.Dim
+	if !item.toolOK {
+		style = styles.ToolError
+	}
+	out := make([]string, 0, len(shown)+1)
+	for index, line := range shown {
+		prefix := "     "
+		if index == 0 {
+			prefix = "  ⎿  "
+		}
+		out = append(out, style.Render(truncate(prefix+strings.TrimRight(line, " \r"), width)))
+	}
+	if hidden := total - len(shown); hidden > 0 {
+		hint := fmt.Sprintf("     … +%d lines", hidden)
+		if compact {
+			hint += " (ctrl+o to expand)"
+		}
+		out = append(out, styles.Dim.Render(truncate(hint, width)))
+	}
+	return strings.Join(out, "\n")
+}
 
 // previewLines draws a finished edit tool's diff for the transcript. A tool
 // that did not succeed changed nothing on disk, and a preview of a change

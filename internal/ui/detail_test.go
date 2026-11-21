@@ -17,36 +17,37 @@ func detailFixture(model *Model) *Model {
 	return model
 }
 
-// TestCtrlOTogglesTheWorkingNoise is the detail contract: Ctrl+O hides the
-// thinking, reasoning and tool process lines while keeping the conversation,
-// and a second press brings them back.
+// TestCtrlOTogglesTheWorkingNoise is the detail contract: the transcript starts
+// compact, as Claude Code does, Ctrl+O expands the thinking and tool detail
+// while the conversation stays, and a second press collapses it again.
 func TestCtrlOTogglesTheWorkingNoise(t *testing.T) {
 	model := detailFixture(chatModel(t))
 
-	if view := display(model); !strings.Contains(view, "secret reasoning") {
-		t.Fatalf("details should be visible at first:\n%s", view)
+	view := display(model)
+	if strings.Contains(view, "secret reasoning") {
+		t.Fatalf("the transcript should start compact:\n%s", view)
+	}
+	if !strings.Contains(view, "fix it") || !strings.Contains(view, "done") || !strings.Contains(view, "ctrl+o to expand") {
+		t.Fatalf("the compact view keeps the conversation and says how to expand:\n%s", view)
 	}
 
-	hidden := press(t, model, "ctrl+o")
-	if hidden.showDetails {
-		t.Errorf("showDetails should be false after Ctrl+O")
+	shown := press(t, model, "ctrl+o")
+	if !shown.showDetails {
+		t.Errorf("showDetails should be true after Ctrl+O")
 	}
-	if view := display(hidden); strings.Contains(view, "secret reasoning") {
-		t.Errorf("thinking and tool lines should be hidden:\n%s", view)
+	if view := display(shown); !strings.Contains(view, "secret reasoning") {
+		t.Errorf("the details should be visible:\n%s", view)
 	}
-	if view := display(hidden); !strings.Contains(view, "fix it") || !strings.Contains(view, "done") {
-		t.Errorf("the conversation must stay visible:\n%s", view)
-	}
-	if hidden.notice == "" {
+	if shown.notice == "" {
 		t.Errorf("the toggle should explain itself in the status line")
 	}
 
-	shown := press(t, hidden, "ctrl+o")
-	if !shown.showDetails {
-		t.Errorf("showDetails should be true after the second Ctrl+O")
+	hidden := press(t, shown, "ctrl+o")
+	if hidden.showDetails {
+		t.Errorf("showDetails should be false after the second Ctrl+O")
 	}
-	if view := display(shown); !strings.Contains(view, "secret reasoning") {
-		t.Errorf("the details should be back:\n%s", view)
+	if view := display(hidden); strings.Contains(view, "secret reasoning") {
+		t.Errorf("the details should be collapsed again:\n%s", view)
 	}
 }
 

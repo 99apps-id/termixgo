@@ -373,19 +373,21 @@ func NewWithOptions(application *app.App, options Options) *Model {
 	spin.Style = lipgloss.NewStyle().Foreground(styles.Palette.Accent2)
 
 	model := &Model{
-		app:         application,
-		styles:      styles,
-		limits:      DefaultLimits(),
-		width:       80,
-		height:      24,
-		ready:       true,
-		viewport:    viewport.New(80, 20),
-		composer:    composer,
-		input:       field,
-		spin:        spin,
-		picker:      pickerList,
-		current:     modeChat,
-		showDetails: true,
+		app:      application,
+		styles:   styles,
+		limits:   DefaultLimits(),
+		width:    80,
+		height:   24,
+		ready:    true,
+		viewport: viewport.New(80, 20),
+		composer: composer,
+		input:    field,
+		spin:     spin,
+		picker:   pickerList,
+		current:  modeChat,
+		// The transcript starts compact, as Claude Code does: tool lines with
+		// a short output preview and collapsed thinking. Ctrl+O expands.
+		showDetails: false,
 		turnMark:    -1,
 	}
 	// Detect initial terminal size so the first render is not stuck on
@@ -1987,15 +1989,19 @@ func (m *Model) applyEvent(event agent.Event) {
 			target.toolLabel = event.ToolLabel
 			target.toolMillis = event.ToolMillis
 			target.toolResult = event.ToolResult
+			target.toolOutput = event.ToolOutput
+			target.toolOutputLines = event.ToolOutputLines
 			return
 		}
 		m.blocks = append(m.blocks, block{
-			kind:       blockTool,
-			toolName:   event.ToolName,
-			toolLabel:  event.ToolLabel,
-			toolOK:     event.ToolOK,
-			toolMillis: event.ToolMillis,
-			toolResult: event.ToolResult,
+			kind:            blockTool,
+			toolName:        event.ToolName,
+			toolLabel:       event.ToolLabel,
+			toolOK:          event.ToolOK,
+			toolMillis:      event.ToolMillis,
+			toolResult:      event.ToolResult,
+			toolOutput:      event.ToolOutput,
+			toolOutputLines: event.ToolOutputLines,
 		})
 	case agent.EventPlan:
 		m.applyPlan(event.Plan)

@@ -776,6 +776,32 @@ func (r *Runner) needsApprovalFor(tool Tool) bool {
 	return false
 }
 
+// Preview bounds for the transcript: enough lines for the details view, and a
+// byte cap so one huge line cannot ride every event.
+const (
+	toolPreviewLines = 40
+	toolPreviewBytes = 6 * 1024
+)
+
+// toolOutputPreview returns the head of a command's output, or of any
+// failure, with the full line count. A file read or a search is left out: its
+// output is content the model reads, and a preview of it is noise.
+func toolOutputPreview(tool Tool, result Result) (string, int) {
+	if tool.Risk() != RiskCommand && !result.IsError {
+		return "", 0
+	}
+	output := strings.TrimRight(strings.ReplaceAll(result.Output, "\r\n", "\n"), "\n")
+	if strings.TrimSpace(output) == "" {
+		return "", 0
+	}
+	lines := strings.Split(output, "\n")
+	head := lines
+	if len(head) > toolPreviewLines {
+		head = head[:toolPreviewLines]
+	}
+	return clipBytes(strings.Join(head, "\n"), toolPreviewBytes), len(lines)
+}
+
 // callApprover is a tool that is safe for ordinary calls but must ask the
 // operator for some argument combinations, such as a send to a stranger.
 type callApprover interface {
@@ -928,13 +954,16 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 			endLabel = "Ran " + tool.Name()
 		}
 	}
+	outputHead, outputLines := toolOutputPreview(tool, result)
 	emit(Event{
-		Kind:       EventToolEnd,
-		ToolName:   tool.Name(),
-		ToolLabel:  endLabel,
-		ToolResult: display,
-		ToolOK:     !result.IsError,
-		ToolMillis: elapsed,
+		Kind:            EventToolEnd,
+		ToolName:        tool.Name(),
+		ToolLabel:       endLabel,
+		ToolResult:      display,
+		ToolOK:          !result.IsError,
+		ToolMillis:      elapsed,
+		ToolOutput:      outputHead,
+		ToolOutputLines: outputLines,
 	})
 	if len(result.Plan) > 0 {
 		if err := r.Env.Todos.Write(result.Plan); err == nil {
