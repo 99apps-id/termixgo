@@ -419,9 +419,9 @@ func (m *Model) handleTranscriptKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.transcriptSearchQuery = ""
 		return m, nil
 	case "up", "k":
-		m.viewport.LineUp(1)
+		m.viewport.ScrollUp(1)
 	case "down", "j":
-		m.viewport.LineDown(1)
+		m.viewport.ScrollDown(1)
 	case "pgup", "b":
 		m.viewport.HalfPageUp()
 	case "pgdown", " ", "f":

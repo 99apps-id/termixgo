@@ -33,7 +33,10 @@ func TestOpenAISendsAPromptCacheKeyOnlyToOpenAI(t *testing.T) {
 }
 
 func TestPromptCacheKeyIsStablePerSession(t *testing.T) {
-	if promptCacheKey("a") != promptCacheKey("a") || promptCacheKey("a") == promptCacheKey("b") {
+	first := promptCacheKey("a")
+	second := promptCacheKey("a")
+	other := promptCacheKey("b")
+	if first != second || first == other {
 		t.Fatalf("the key must be stable for one session and differ between sessions")
 	}
 }

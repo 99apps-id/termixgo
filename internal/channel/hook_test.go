@@ -156,6 +156,7 @@ func TestPingHTTPHook(t *testing.T) {
 		if r.Header.Get("X-Termixgo-Event") != EventPing {
 			t.Errorf("X-Termixgo-Event = %q, want %q", r.Header.Get("X-Termixgo-Event"), EventPing)
 		}
+		time.Sleep(2 * time.Millisecond)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 	}))

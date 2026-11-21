@@ -121,7 +121,7 @@ func googleInlineParts(data []byte) ([]inlinePart, string, error) {
 		return nil, "", fmt.Errorf("unreadable Gemini answer: %w", err)
 	}
 	if answer.PromptFeedback.BlockReason != "" {
-		return nil, "", fmt.Errorf("Gemini refused the prompt (%s)", answer.PromptFeedback.BlockReason)
+		return nil, "", fmt.Errorf("gemini refused the prompt (%s)", answer.PromptFeedback.BlockReason)
 	}
 	var parts []inlinePart
 	var text []string

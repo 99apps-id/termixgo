@@ -266,7 +266,7 @@ $s.Dispose()
 		}
 		cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-In", textPath, "-Out", out, "-Voice", voice)
 		if output, err := cmd.CombinedOutput(); err != nil {
-			return nil, "", "", fmt.Errorf("Windows speech: %v %s", err, strings.TrimSpace(string(output)))
+			return nil, "", "", fmt.Errorf("windows speech: %v %s", err, strings.TrimSpace(string(output)))
 		}
 		data, err := os.ReadFile(out)
 		return data, "audio/wav", ".wav", err
