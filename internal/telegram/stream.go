@@ -40,6 +40,17 @@ var streamEditInterval = 900 * time.Millisecond
 
 const streamCursor = "▍"
 
+// streamDraftReserve is the room a streamed chunk keeps for the live cursor and
+// a closing fence, in raw and in converted HTML bytes.
+const streamDraftReserve = 64
+
+// Card rows for a tool in flight and a finished one. Plain symbols, no emoji.
+const (
+	toolRunningMark = "… "
+	toolDoneMark    = "✓ "
+	toolFailedMark  = "✗ "
+)
+
 // formatStreamDraft renders partial Markdown with a trailing live cursor
 // placed outside any unclosed fenced code block so Telegram renders the code
 // block cleanly while streaming.
@@ -135,7 +146,10 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 			redactedTail := b.redact(snapRawTail)
 
 			if needsStreamSplit(redactedTail) {
-				part, rest := nextChunk(redactedTail, telegramChunkLimit)
+				// The split check measures the draft (cursor and a closing fence
+				// included), so the cut leaves room for them; cutting at the full
+				// limit could return no rest and edit an over-long draft.
+				part, rest := nextChunk(redactedTail, telegramChunkLimit-streamDraftReserve)
 				if rest != "" {
 					mu.Unlock()
 					editCtx, cancel := editCtxFor()
@@ -309,7 +323,7 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 					tailBuf.Reset()
 					resetSeq++
 				}
-				line := "⏳ " + label
+				line := toolRunningMark + label
 				if len(toolLines) == 0 || toolLines[len(toolLines)-1] != line {
 					toolLines = append(toolLines, line)
 					toolLines = capCardLines(toolLines, telegramChunkLimit)
@@ -323,14 +337,14 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 			}
 			if label != "" {
 				label = b.redact(label)
-				prefix := "✓ "
+				prefix := toolDoneMark
 				if !ev.ToolOK {
-					prefix = "✗ "
+					prefix = toolFailedMark
 					label += " (failed)"
 				}
 				line := prefix + label
 				// Replace matching in-progress line if it's the most recent entry.
-				if len(toolLines) > 0 && strings.HasPrefix(toolLines[len(toolLines)-1], "⏳ ") {
+				if len(toolLines) > 0 && strings.HasPrefix(toolLines[len(toolLines)-1], toolRunningMark) {
 					toolLines[len(toolLines)-1] = line
 				} else {
 					toolLines = append(toolLines, line)
@@ -384,7 +398,9 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 	}
 
 	if strings.TrimSpace(answer) != "" && channel.Silent(answer) {
-		if msgID != 0 && commits == 0 {
+		if msgID != 0 {
+			// Streamed chunks already in the chat stay; the live draft does not,
+			// or the chat would keep a message ending in the cursor.
 			if err := b.client.DeleteMessage(finalCtx, chatID, msgID); err != nil {
 				b.logf("could not delete the silent progress card: %v", err)
 			}

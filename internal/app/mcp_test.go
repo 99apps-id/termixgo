@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/provider"
 )
 
 const (
@@ -24,6 +25,14 @@ func TestMain(m *testing.M) {
 	if os.Getenv(appHelperEnv) != "" {
 		serveFakeMCP(os.Getenv(appModeEnv))
 		return
+	}
+	// A provider key in the developer's environment would make the app see a
+	// configured provider the tests assume is absent. Every test starts keyless;
+	// one that needs a key sets it with t.Setenv or the secret store.
+	for _, p := range provider.Providers() {
+		for _, key := range p.EnvKeys {
+			_ = os.Unsetenv(key)
+		}
 	}
 	os.Exit(m.Run())
 }

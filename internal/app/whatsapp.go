@@ -325,7 +325,8 @@ func (b *whatsappBridge) RunPromptWithImage(ctx context.Context, request channel
 // Steer forwards a steering message into an active turn in this chat.
 func (b *whatsappBridge) Steer(request channel.Request, prompt string) bool {
 	id := channelSessionID(config.ChannelWhatsApp, b.name, request.ChatID)
-	return b.app.SteerSession(id, prompt)
+	// A guest's steer is data like any guest prompt, never a raw instruction.
+	return b.app.SteerSession(id, b.promptFor(request, prompt))
 }
 
 // IsRunning reports whether a turn is active for this chat.

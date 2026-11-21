@@ -1105,7 +1105,7 @@ func (b *Bot) runPrompt(ctx context.Context, chatID int64, request channel.Reque
 		Steer(channel.Request, string) bool
 	}); ok && steerable.IsRunning(request) {
 		if steerable.Steer(request, prompt) {
-			b.reply(ctx, chatID, "Pesan arahan (steer) diterima. Agent akan menyesuaikan tindakannya.")
+			b.reply(ctx, chatID, "Steer message accepted. The agent will adjust its next steps.")
 			return
 		}
 	}
@@ -1695,6 +1695,16 @@ func nextChunk(text string, limit int) (string, string) {
 // the growing card never exceeds the Telegram message limit. A row naming how
 // many lines were dropped is kept when the card has to give up earlier steps.
 func capCardLines(lines []string, limit int) []string {
+	// The card is capped again on every update, so an earlier marker carries
+	// its count forward instead of being counted as one dropped line.
+	carried := 0
+	if len(lines) > 0 {
+		if _, err := fmt.Sscanf(lines[0], "... (%d earlier lines dropped)", &carried); err == nil {
+			lines = lines[1:]
+		} else {
+			carried = 0
+		}
+	}
 	total := 0
 	for _, line := range lines {
 		total += len(line) + 1
@@ -1709,7 +1719,7 @@ func capCardLines(lines []string, limit int) []string {
 		kept = kept[1:]
 		dropped++
 	}
-	if dropped > 0 {
+	if dropped += carried; dropped > 0 {
 		marker := fmt.Sprintf("... (%d earlier lines dropped)", dropped)
 		kept = append([]string{marker}, kept...)
 	}
