@@ -212,15 +212,7 @@ Follow these steps to activate Telegram and link it to your Termixgo agent:
    (e.g. `my_termixgo_agent_bot`).
 4. Copy the HTTP API token provided by BotFather (format: `123456789:ABCdefGHI...`).
 
-### Step 2: Store Bot Token in Termixgo Secrets Vault
-
-Store the bot token in Termixgo encrypted local secrets store:
-
-```sh
-termixgo secret telegram <YOUR_BOT_TOKEN>
-```
-
-### Step 3: Add and Login the Telegram Channel
+### Step 2: Add and Login the Telegram Channel
 
 Add the Telegram channel account:
 
@@ -236,7 +228,7 @@ termixgo channel login telegram default <YOUR_BOT_TOKEN>
 
 Termixgo validates the token with Telegram `getMe` API and links the username.
 
-### Step 4: Configure Policy and Admin
+### Step 3: Configure Policy and Admin
 
 Set the inbound DM policy:
 
@@ -251,7 +243,7 @@ termixgo channel allow add telegram default <TELEGRAM_USER_ID>
 termixgo channel admin add telegram default <TELEGRAM_USER_ID>
 ```
 
-### Step 5: Enable the Channel and Start Daemon
+### Step 4: Enable the Channel and Start Daemon
 
 Turn on the Telegram channel:
 
@@ -265,7 +257,7 @@ Launch the server daemon:
 termixgo serve
 ```
 
-### Step 6: Authorize Operator Pairing
+### Step 5: Authorize Operator Pairing
 
 1. Open your bot in Telegram and tap **Start** (or send `/start`).
 2. If pairing mode is enabled, send `/pair <PAIRING_CODE>` using the code provided in

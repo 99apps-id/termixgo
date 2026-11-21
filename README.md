@@ -1666,14 +1666,11 @@ guide, see [`CHANNELS.md`](CHANNELS.md).
 2. **Telegram Companion:**
    ```sh
    # 1. Create bot via @BotFather in Telegram and obtain bot token
-   # 2. Store the token in Termixgo vault
-   termixgo secret telegram <BOT_TOKEN>
-
-   # 3. Add and authenticate the Telegram channel
+   # 2. Add and authenticate the Telegram channel
    termixgo channel add telegram default
    termixgo channel login telegram default <BOT_TOKEN>
 
-   # 4. Enable and run
+   # 3. Enable and run
    termixgo channel on telegram default
    termixgo serve
    ```
