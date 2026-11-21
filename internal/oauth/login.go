@@ -24,6 +24,12 @@ func Login(ctx context.Context, store *Store, provider string, in io.Reader, out
 	if !ok {
 		return fmt.Errorf("%s does not use an OAuth login", provider)
 	}
+	// The token is stored under the provider's own id, not the alias typed:
+	// "login claude" saved "oauth:claude", which the claude-oauth provider never
+	// reads, so its models did not appear after a successful login.
+	if strings.TrimSpace(spec.Provider) != "" {
+		provider = spec.Provider
+	}
 	clock := Clock{}
 	var token Token
 	var err error

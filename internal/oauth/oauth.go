@@ -95,6 +95,14 @@ type Store struct {
 // NewStore wraps a secret store.
 func NewStore(store *secrets.Store) *Store { return &Store{secrets: store} }
 
+// legacyTokenNames are the aliases a token was once saved under. Login used to
+// store the token under the name typed, so an alias login was invisible to the
+// provider that reads the canonical name.
+var legacyTokenNames = map[string][]string{
+	"claude-oauth":   {"claude", "claude-code"},
+	"github-copilot": {"github"},
+}
+
 // Load returns the stored token for a provider.
 func (s *Store) Load(provider string) (Token, bool) {
 	if s == nil || s.secrets == nil {
@@ -103,6 +111,16 @@ func (s *Store) Load(provider string) (Token, bool) {
 	s.mu.Lock()
 	raw := s.secrets.Get(KeyPrefix + provider)
 	s.mu.Unlock()
+	if strings.TrimSpace(raw) == "" {
+		// A login in another terminal, or one saved under an alias by an older
+		// build (`termixgo login claude` stored "oauth:claude"), still counts.
+		for _, name := range append([]string{provider}, legacyTokenNames[provider]...) {
+			if value, ok := s.secrets.Adopt(KeyPrefix + name); ok {
+				raw = value
+				break
+			}
+		}
+	}
 	if strings.TrimSpace(raw) == "" {
 		return Token{}, false
 	}

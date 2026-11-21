@@ -20,6 +20,7 @@ All notable changes to Termixgo are recorded here. The format follows
 - `ask_user` takes `questions`, up to four asked in one call, answered in order.
 
 ### Fixed
+- Claude OAuth models did not appear after logging in: `termixgo login claude` (or `claude-code`, `github`) stored the token under the alias typed, which the provider never reads, and a terminal already running did not see a login made in another terminal until it restarted. Logins are stored under the provider's own id, a token saved under an old alias is still found, and a running terminal picks up a new login without a restart.
 - Todo items stayed unchecked: the plan the model reads showed no ids while `todo_update` matched ids only, so the model guessed and missed; `todo_update` was not offered when tool search was on; and starting the next item while one was in progress failed the whole update. The plan now shows ids, `todo_update` matches an id in any case, a number or a title and takes `ids` for several items, starting an item marks the active one completed (with a note), and the critic names the ids and the call to make.
 - A Telegram or WhatsApp turn started with an empty plan and never saved it, so a chat could not tick off an item from an earlier turn, and `/plan` in a chat fell back to the terminal's plan. Each chat now keeps its own plan.
 - Windows notifications never appeared (unregistered app id) and broke on `<` or `&`; the resize reprint's scrollback erase raced the renderer.

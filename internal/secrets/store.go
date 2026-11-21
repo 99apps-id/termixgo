@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/99apps-id/termixgo/internal/config"
 )
@@ -60,6 +61,8 @@ type Store struct {
 	// change, and locking the operator out of their own keys would be worse
 	// than telling them about it.
 	protectionErr error
+	// adopted spaces Adopt's disk reads per key.
+	adopted map[string]time.Time
 }
 
 // ProtectionError reports the last failure to restrict the secret file's
@@ -145,6 +148,45 @@ func (s *Store) Reload(key string) (string, bool) {
 	}
 	value, ok := merged[key]
 	return value, ok
+}
+
+// adoptInterval spaces disk reads for a key this process does not hold, so a
+// caller that checks often (the model picker, the status line) does not read
+// the file on every call.
+var adoptInterval = 2 * time.Second
+
+// Adopt returns a key another process stored after this one loaded, and keeps
+// it in memory. A login run in a second terminal writes the shared file; the
+// running terminal's map never learned of it, so its models stayed hidden
+// until a restart. A key already in memory is returned without a read.
+func (s *Store) Adopt(key string) (string, bool) {
+	s.mu.Lock()
+	if value, ok := s.data[key]; ok && strings.TrimSpace(value) != "" {
+		s.mu.Unlock()
+		return value, true
+	}
+	if s.adopted == nil {
+		s.adopted = map[string]time.Time{}
+	}
+	if last, ok := s.adopted[key]; ok && time.Since(last) < adoptInterval {
+		s.mu.Unlock()
+		return "", false
+	}
+	s.adopted[key] = time.Now()
+	s.mu.Unlock()
+
+	value, ok := s.Reload(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return "", false
+	}
+	s.mu.Lock()
+	s.initLocked()
+	if current, exists := s.data[key]; !exists || strings.TrimSpace(current) == "" {
+		s.data[key] = value
+	}
+	value = s.data[key]
+	s.mu.Unlock()
+	return value, true
 }
 
 // Set writes a secret and persists the file at 0600.
@@ -343,4 +385,11 @@ func appendNewline(data []byte) []byte {
 	copy(out, data)
 	out[len(data)] = '\n'
 	return out
+}
+
+// SetAdoptIntervalForTest changes Adopt's read spacing for one test.
+func SetAdoptIntervalForTest(t interface{ Cleanup(func()) }, interval time.Duration) {
+	previous := adoptInterval
+	adoptInterval = interval
+	t.Cleanup(func() { adoptInterval = previous })
 }
