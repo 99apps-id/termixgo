@@ -40,6 +40,9 @@ const (
 	modePicker
 	modeSessions
 	modeSetup
+	// modeTranscript is the full transcript pager that Ctrl+O opens in the
+	// inline layout.
+	modeTranscript
 )
 
 // msg types.
@@ -144,6 +147,11 @@ type Model struct {
 	inline       bool
 	printed      int
 	pendingPrint []string
+
+	// history is the input history Up and Down walk; turnStats measures the
+	// turn in flight for the summary shown when it ends.
+	history   *promptHistory
+	turnStats turnStats
 
 	slashMatches []SlashCommand
 	slashCursor  int
@@ -416,6 +424,7 @@ func NewWithOptions(application *app.App, options Options) *Model {
 		}
 	}
 	application.SetInteractor(model)
+	model.history = loadHistory(historyPath())
 	_ = model.reloadCustomCommands()
 	model.welcome()
 	if strings.TrimSpace(options.ResumeSessionID) != "" {
@@ -784,6 +793,17 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.err != nil {
 			m.blocks = append(m.blocks, block{kind: blockError, text: typed.err.Error()})
 		}
+		// One dim line says what the turn cost: steps, input with its cache
+		// share, output, spend and time. A long turn also rings the bell, so
+		// the operator can look away while it works.
+		elapsed := time.Since(m.runStarted)
+		if summary := m.turnSummary(elapsed); summary != "" {
+			m.blocks = append(m.blocks, block{kind: blockNotice, text: summary})
+		}
+		var doneCmd tea.Cmd
+		if elapsed >= bellAfter {
+			doneCmd = bell()
+		}
 		// Anything the finished turn never took becomes the next input, in the
 		// order it was typed, so a steer that arrived too late still runs.
 		if steered := m.app.TakeSteer(); len(steered) > 0 {
@@ -802,10 +822,11 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.notice = ""
 			m.refresh()
-			return m.submitWith(next, nextAttachments)
+			updated, cmd := m.submitWith(next, nextAttachments)
+			return updated, tea.Batch(cmd, doneCmd)
 		}
 		m.refresh()
-		return m, tea.SetWindowTitle(m.windowTitle())
+		return m, tea.Batch(tea.SetWindowTitle(m.windowTitle()), doneCmd)
 
 	case quotaRefreshDoneMsg:
 		if typed.snap != nil && len(typed.snap.Windows) > 0 {
@@ -824,7 +845,8 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.approvalReply = typed.reply
 		m.approvalCursor = 0
 		m.refresh()
-		return m, tea.SetWindowTitle(m.windowTitle())
+		// A waiting approval holds the whole turn, so it rings the bell.
+		return m, tea.Batch(tea.SetWindowTitle(m.windowTitle()), bell())
 
 	case askRequestMsg:
 		m.pendingAsk = &typed
@@ -1208,6 +1230,9 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.pendingAsk != nil {
 			return m.handleAskKey(tea.KeyMsg{Type: tea.KeyEscape})
 		}
+		if m.current == modeTranscript {
+			return m.closeTranscript()
+		}
 		if m.current != modeChat {
 			return m.armQuit("ctrl+c", "Ctrl+C")
 		}
@@ -1269,6 +1294,8 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.current {
+	case modeTranscript:
+		return m.handleTranscriptKey(key)
 	case modeHelp:
 		m.current = modeChat
 		m.refresh()
@@ -1330,7 +1357,14 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+y":
 		return m.slashCopy("")
+	case "shift+tab":
+		return m.cycleApproval()
 	case "ctrl+o":
+		// In the inline layout the printed messages are the terminal's, so
+		// Ctrl+O opens the whole transcript with every detail instead.
+		if m.inline {
+			return m.openTranscript()
+		}
 		m.showDetails = !m.showDetails
 		if m.showDetails {
 			m.notice = "Details visible (Ctrl+O to hide)"
@@ -1372,6 +1406,9 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		value := strings.TrimSpace(raw)
 		if value == "" {
 			return m, nil
+		}
+		if m.history != nil && value != "/" {
+			m.history.add(value)
 		}
 		// A leading exclamation mark runs a local workspace shell command directly,
 		// matching OpenClaw and CommandCode (!cmd). A lone "!" is treated as text.
@@ -1453,6 +1490,9 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.slashCursor = (m.slashCursor - 1 + len(m.slashMatches) + 1) % (len(m.slashMatches) + 1)
 			return m, nil
 		}
+		if m.historyKey("up") {
+			return m, nil
+		}
 	case "down":
 		if len(m.mentionMatches) > 0 {
 			m.mentionCursor = (m.mentionCursor + 1) % len(m.mentionMatches)
@@ -1460,6 +1500,9 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if len(m.slashMatches) > 0 {
 			m.slashCursor = (m.slashCursor + 1) % (len(m.slashMatches) + 1)
+			return m, nil
+		}
+		if m.historyKey("down") {
 			return m, nil
 		}
 	case "tab":
@@ -1866,6 +1909,7 @@ var liveSlashCommands = map[string]bool{
 	"tools": true, "harness": true, "trust": true, "approval": true,
 	"mcp": true, "skills": true, "memory": true, "ps": true,
 	"attach": true, "detach": true, "paste": true, "desktop": true,
+	"context": true, "permissions": true, "perms": true, "rename": true, "layout": true,
 }
 
 // liveSlashCommand reports whether a command may run during a turn.
@@ -1978,6 +2022,7 @@ func (m *Model) startRunWith(display, prompt string, images []provider.Image) (t
 	m.blocks = append(m.blocks, block{kind: blockUser, text: displayInput(display)})
 	m.running = true
 	m.runStarted = time.Now()
+	m.beginTurnStats()
 	m.turnMark = -1
 	if session := m.app.Session(); session != nil {
 		m.turnMark = session.MessageCount()
@@ -2076,6 +2121,9 @@ func (m *Model) applyEvent(event agent.Event) {
 		})
 	case agent.EventPlan:
 		m.applyPlan(event.Plan)
+	case agent.EventContext:
+		// One per finished step: the turn summary counts them.
+		m.turnStats.steps++
 	case agent.EventNotice:
 		// A steer already shown as a user block is not repeated as a notice.
 		if steer, ok := strings.CutPrefix(event.Text, "Steering: "); ok {
@@ -2263,6 +2311,16 @@ func (m *Model) refresh() {
 	if m.current == modeChat {
 		m.fitComposer()
 	}
+	if m.current == modeTranscript {
+		// The pager follows new output while it is at the bottom, and keeps
+		// its place while the operator reads further up.
+		atBottom := m.viewport.AtBottom()
+		m.viewport.SetContent(transcript(m.blocks, m.styles, m.width, true))
+		if atBottom {
+			m.viewport.GotoBottom()
+		}
+		return
+	}
 	if m.inline {
 		// The scrollback holds the finished transcript, so the in-app
 		// viewport is not rebuilt; the live area is rendered by View.
@@ -2349,6 +2407,9 @@ func (m *Model) View() string {
 	}
 	if m.width < m.limits.MinWidth || m.height < m.limits.MinHeight {
 		return fmt.Sprintf("Terminal too small. Resize to at least %dx%d.", m.limits.MinWidth, m.limits.MinHeight)
+	}
+	if m.current == modeTranscript {
+		return fitFrame(m.viewTranscript(), m.width, m.height)
 	}
 	if m.inline && m.current == modeChat {
 		return fitFrame(m.inlineView(), m.width, m.height)
@@ -2715,7 +2776,7 @@ func (m *Model) viewHints() string {
 			text = fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C copy | Ctrl+X quit", m.spin.View(), elapsed)
 		}
 	} else {
-		text = " Enter send | !cmd exec | Ctrl+V image | Ctrl+L model | Ctrl+P session | Ctrl+G agent | Ctrl+T think | Ctrl+O details | Ctrl+C copy | Ctrl+X quit"
+		text = " Enter send | Up history | Shift+Tab " + string(m.appConfig().ApprovalMode) + " | Ctrl+V image | Ctrl+O transcript | Ctrl+L model | Ctrl+P session | !cmd exec | Ctrl+X quit"
 	}
 	// Pending files own the first columns of the hint row: what will be sent
 	// matters more than the key reminder, and the row never grows, so the
@@ -3004,7 +3065,7 @@ func (m *Model) viewHelp() string {
 	header := []string{m.styles.BoxTitle.Render("Commands"), ""}
 	keys := []string{
 		"", m.styles.BoxTitle.Render("Keys"), "",
-		m.styles.MenuDesc.Render("  Enter send | !<cmd> exec | Ctrl+J newline | Ctrl+V/Alt+V paste image | Tab complete | PgUp/PgDn scroll | Drag to select"),
+		m.styles.MenuDesc.Render("  Enter send | !<cmd> exec | Ctrl+J newline | Up/Down history | Shift+Tab approval mode | Ctrl+V/Alt+V paste image | Tab complete"),
 		m.styles.MenuDesc.Render("  Ctrl+L model | Ctrl+P session | Ctrl+G agent | Ctrl+T think | Ctrl+O details | Ctrl+C copy | Ctrl+X quit"),
 	}
 	trailer := []string{m.styles.Hint.Render(fmt.Sprintf("Press any key to close. %d commands in total.", len(entries)))}

@@ -61,6 +61,16 @@ var slashCommands = []SlashCommand{
 		{Value: "delete", Detail: "remove a session", Complete: true},
 		{Value: "export", Detail: "print one session as Markdown", Complete: true},
 	}},
+	{Trigger: "/rename", Args: "<title>", Summary: "Rename the current session"},
+	{Trigger: "/context", Args: "", Summary: "Show what fills the context window, part by part"},
+	{Trigger: "/layout", Args: "[inline|fullscreen]", Summary: "Switch between the inline and the full-screen layout", Options: []SlashOption{
+		{Value: "inline", Detail: "finished messages go to the terminal scrollback"},
+		{Value: "fullscreen", Detail: "alternate screen, in-app transcript and mouse selection"},
+	}},
+	{Trigger: "/permissions", Args: "[revoke|clear]", Summary: "Show or revoke tool allowances", Options: []SlashOption{
+		{Value: "revoke", Detail: "ask again before a tool's next call", Complete: true},
+		{Value: "clear", Detail: "drop every allowance"},
+	}},
 	{Trigger: "/stop", Args: "", Summary: "Stop the running turn"},
 	{Trigger: "/status", Args: "", Summary: "Show workspace, model and token status"},
 	{Trigger: "/quota", Args: "[refresh]", Summary: "Show official provider usage plus 5-hour rolling counts", Options: []SlashOption{

@@ -49,7 +49,9 @@ func (m *Model) settledCount() int {
 // flushSettled queues every newly final block for printing into the
 // scrollback. A transcript that was reset (/new, /clear) starts over.
 func (m *Model) flushSettled() {
-	if !m.inline {
+	// Nothing is printed while the transcript pager holds the alternate
+	// screen: a print there is dropped, so it waits until the pager closes.
+	if !m.inline || m.current == modeTranscript {
 		return
 	}
 	if m.printed > len(m.blocks) {
