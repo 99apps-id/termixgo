@@ -738,6 +738,7 @@ func (t *webFetchTool) Description() string {
 func (t *webFetchTool) Schema() map[string]any {
 	return object(map[string]any{
 		"url":    strProp("Absolute http or https URL."),
+		"prompt": strProp("Optional: what to get from the page, for example 'the install steps for Windows' or 'the rate limits table'. A small model reads the page and only its answer comes back, which keeps a long page out of the context. Leave it empty to receive the page text itself."),
 		"reader": boolProp("Force the r.jina.ai reader instead of a direct fetch. The tool already falls back to the reader automatically when a direct fetch is blocked or bot-blocked; set this for a JavaScript page."),
 	}, "url")
 }
@@ -849,7 +850,35 @@ var fetchClient = &http.Client{
 	Timeout: 60 * time.Second,
 }
 
+// Run fetches the page and, when a prompt is given and the app offers an
+// extractor, hands the page to a small model and returns only its answer. A
+// long page then costs the conversation a paragraph instead of 20k tokens,
+// and stays out of every later step's history.
 func (t *webFetchTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
+	result, err := t.fetch(ctx, env, args)
+	prompt := strings.TrimSpace(argString(args, "prompt", "question"))
+	if err != nil || result.IsError || prompt == "" || env == nil || env.Extract == nil {
+		return result, err
+	}
+	source := strings.TrimSpace(argString(args, "url"))
+	answer, extractErr := env.Extract(ctx, source, prompt, result.Output)
+	if extractErr != nil || strings.TrimSpace(answer) == "" {
+		// The page itself is still the right answer to the call; the model
+		// reads it in full rather than getting nothing.
+		note := "extraction returned nothing"
+		if extractErr != nil {
+			note = "extraction failed: " + extractErr.Error()
+		}
+		result.Output = "[" + note + "; the full page follows]\n\n" + result.Output
+		return result, nil
+	}
+	return Result{
+		Output:  fmt.Sprintf("Source: %s\nQuestion: %s\n\n%s", source, prompt, strings.TrimSpace(answer)),
+		Display: "Extracted from " + Shorten(source, 60),
+	}, nil
+}
+
+func (t *webFetchTool) fetch(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	raw := strings.TrimSpace(argString(args, "url"))
 	parsed, err := url.Parse(raw)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {

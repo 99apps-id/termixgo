@@ -357,6 +357,9 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		Ask:       parent.Ask,
 		Journal:   parent.Journal,
 		Search:    parent.Search,
+		// An explorer subagent reads the web the most, so it keeps the
+		// parent's page extractor.
+		Extract: parent.Extract,
 	}
 	children := 0
 	child.RunSubagent = func(childCtx context.Context, childType, childPrompt string) (string, SubagentSpend, error) {

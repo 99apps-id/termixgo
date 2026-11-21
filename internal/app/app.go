@@ -1677,7 +1677,21 @@ func (a *App) envFor(agentName string) *agent.Env {
 		SendChannel: func(callCtx context.Context, req agent.ChannelSendRequest) (string, error) {
 			return a.sendChannelFrom(callCtx, ctx.workspace, req)
 		},
+		Extract: a.extractFromPage,
 	}
+}
+
+// extractFromPage answers a question about a fetched page on the internal
+// task model (the compaction model when one is set, else the active one) and
+// records the call in the session ledger under that model.
+func (a *App) extractFromPage(ctx context.Context, url, prompt, content string) (string, error) {
+	client, model, effort, err := a.taskClient(agent.TaskCompaction)
+	if err != nil {
+		return "", err
+	}
+	answer, usage, err := agent.ExtractFromPage(ctx, client, model, effort, url, prompt, content)
+	a.recordTaskUsage(a.Session(), agent.TaskExtract, model, usage)
+	return answer, err
 }
 
 // mcpEnvPrefix namespaces a server's environment inside the secret store, and

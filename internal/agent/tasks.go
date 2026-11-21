@@ -122,6 +122,27 @@ func SummarizeHistory(ctx context.Context, client provider.Client, model, effort
 	return taskCall(ctx, client, model, effort, SummarySystemPrompt, prompt)
 }
 
+// TaskExtract answers a question about one fetched web page.
+const TaskExtract = "extract"
+
+// extractPageLimit bounds how much of a page the extraction model reads.
+const extractPageLimit = 120000
+
+// ExtractSystemPrompt keeps a page extraction faithful: the answer is all the
+// conversation will see of the page, so it must not invent and must say what
+// it could not find.
+const ExtractSystemPrompt = "You answer one question about one web page, using only the page content you are given. Quote exact values, code, commands, versions and names as they appear. Keep links that matter as URLs. If the page does not contain the answer, say so plainly and name what it does cover. Answer directly, without a preamble, in at most a few short paragraphs or a list."
+
+// ExtractFromPage answers prompt from a page on the internal task model and
+// returns the call's usage for the caller to record.
+func ExtractFromPage(ctx context.Context, client provider.Client, model, effort, url, prompt, page string) (string, provider.Usage, error) {
+	if len(page) > extractPageLimit {
+		page = clipBytes(page, extractPageLimit) + "\n[page clipped]"
+	}
+	input := fmt.Sprintf("URL: %s\nQuestion: %s\n\n--- page ---\n%s", url, prompt, page)
+	return taskCall(ctx, client, model, effort, ExtractSystemPrompt, input)
+}
+
 // TitleSystemPrompt keeps a session name short and literal. The name is read in
 // a list of sessions, so a sentence is less useful than a phrase.
 const TitleSystemPrompt = "You name coding sessions. Answer with a title of at most six words that says what the session is about. Use the words the user used. No quotes, no trailing punctuation, no preamble."

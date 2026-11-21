@@ -137,6 +137,11 @@ type Env struct {
 	// configured messaging channel (Telegram or WhatsApp).
 	SendChannel func(ctx context.Context, req ChannelSendRequest) (string, error)
 
+	// Extract answers a question about one fetched page on the internal task
+	// model, so web_fetch can return the answer instead of the whole page.
+	// Nil means web_fetch always returns the page.
+	Extract func(ctx context.Context, url, prompt, content string) (string, error)
+
 	// ToolIndex lists every tool a run may load, so find_tools can search them
 	// by keyword. It is set by the runner for the duration of one turn.
 	ToolIndex []ToolIndexEntry
