@@ -1733,8 +1733,8 @@ internal/whatsapp   native multi-device companion with whatsmeow, vision & enric
 ## Releasing
 
 ```sh
-git tag v0.2.9
-git push origin v0.2.9
+git tag v0.2.10
+git push origin v0.2.10
 ```
 
 The release workflow runs the full gate, requires the Antigravity OAuth client

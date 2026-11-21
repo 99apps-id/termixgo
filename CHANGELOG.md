@@ -6,6 +6,8 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+## 0.2.10 - 2026-11-22
+
 ### Added
 - A usage strip above the composer shows what is left of the 5-hour and weekly windows of every logged-in provider (Claude, Codex, Antigravity, Copilot, Muse, Grok), not only the active one: a bar and a percent that both mean left, coloured by how much remains, with the reset countdown. It replaces the gauge at the right of the header and the local `5h:` count in the status line, uses the providers' own figures only (`...` until they arrive, `n/a` when a provider has no usage endpoint), refreshes in the background at most every three minutes per provider, and drops detail on a narrow terminal instead of wrapping.
 
