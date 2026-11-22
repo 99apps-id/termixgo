@@ -97,3 +97,19 @@ func TestTodoUpdateIsAlwaysOffered(t *testing.T) {
 		t.Fatalf("with tool search on the model could not tick items off")
 	}
 }
+
+// A plan with every item done is dropped between tasks, so it does not follow
+// the operator into an unrelated request; an unfinished one is kept.
+func TestPruneFinishedDropsOnlyACompletePlan(t *testing.T) {
+	done := []Todo{{Title: "a", Status: "completed"}, {Title: "b", Status: "completed"}}
+	if got := PruneFinished(done); got != nil {
+		t.Fatalf("a finished plan should go, got %+v", got)
+	}
+	open := []Todo{{Title: "a", Status: "completed"}, {Title: "b", Status: "pending"}}
+	if got := PruneFinished(open); len(got) != 2 {
+		t.Fatalf("an unfinished plan stays, got %+v", got)
+	}
+	if PruneFinished(nil) != nil {
+		t.Fatal("nothing stays nothing")
+	}
+}

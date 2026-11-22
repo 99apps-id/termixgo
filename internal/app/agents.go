@@ -128,7 +128,7 @@ func (a *App) SetActiveAgent(name string) error {
 	a.activeAgent = trimmed
 	a.session = next
 	a.mu.Unlock()
-	a.todos.Set(next.Todos())
+	a.todos.Set(agent.PruneFinished(next.Todos()))
 
 	// The active agent is configuration so a restart resumes the same persona;
 	// a failed write costs the preference, not the switch.

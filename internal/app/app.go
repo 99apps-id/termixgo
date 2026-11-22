@@ -1317,7 +1317,7 @@ func (a *App) LoadSession(session *agent.Session) {
 	a.mu.Lock()
 	a.session = session
 	a.mu.Unlock()
-	a.todos.Set(session.Todos())
+	a.todos.Set(agent.PruneFinished(session.Todos()))
 }
 
 // Running reports whether a turn is in flight.
@@ -2601,7 +2601,7 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 		// The store is the run's own, but the plan is the chat's: it starts
 		// from what the session saved, so an item from the last turn can
 		// still be checked off, and it is saved back when the turn ends.
-		runEnv.Todos.Set(opts.session.Todos())
+		runEnv.Todos.Set(agent.PruneFinished(opts.session.Todos()))
 	}
 	if opts.observer != nil {
 		origEmit := runEnv.Emit
@@ -2742,9 +2742,13 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 		return err
 	}
 	if opts.session == nil {
-		session.SetTodos(a.todos.Items())
+		// The finished plan stays in the transcript; the store starts the next
+		// task empty.
+		remaining := agent.PruneFinished(a.todos.Items())
+		a.todos.Set(remaining)
+		session.SetTodos(remaining)
 	} else {
-		session.SetTodos(runEnv.Todos.Items())
+		session.SetTodos(agent.PruneFinished(runEnv.Todos.Items()))
 	}
 	if opts.isolated || a.Ephemeral() {
 		return nil

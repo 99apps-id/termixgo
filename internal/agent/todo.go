@@ -168,6 +168,21 @@ func findTodo(items []Todo, ref string) int {
 	return match
 }
 
+// PruneFinished returns nil when every item is completed. A finished plan has
+// done its job; keeping it makes the next, unrelated task start under a stale
+// "plan 4/4" header and shows the old list in the live view.
+func PruneFinished(items []Todo) []Todo {
+	if len(items) == 0 {
+		return nil
+	}
+	for _, item := range items {
+		if item.Status != "completed" {
+			return items
+		}
+	}
+	return nil
+}
+
 // Progress counts completed and total items.
 func (s *TodoStore) Progress() (done, total int) {
 	items := s.Items()

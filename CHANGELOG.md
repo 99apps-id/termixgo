@@ -6,6 +6,13 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Fixed
+
+- A finished plan no longer follows you into the next task. Once every item is
+  completed the plan is cleared from the live store and the saved session (the
+  transcript keeps the final list), so the status line stops saying `plan 4/4`
+  and the live view stops showing the old list. An unfinished plan is kept.
+
 ## 0.2.10 - 2026-11-22
 
 ### Added
