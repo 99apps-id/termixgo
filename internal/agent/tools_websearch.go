@@ -43,16 +43,8 @@ var webSearchGitHubEndpoint = "https://api.github.com/search/repositories"
 // DNS resolver on Windows, so the agent's web tools are not derailed by a
 // misbehaving system resolver or a VPN tunnel that breaks the CGO lookup path.
 var webSearchClient = &http.Client{
-	Transport: &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           dialWithDoHFallback,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          16,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   15 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-	},
-	Timeout: 60 * time.Second,
+	Transport: newDoHRetryTransport(),
+	Timeout:   60 * time.Second,
 }
 
 // webSearchSource names where results came from, so the model knows how much
@@ -773,44 +765,6 @@ func dialWithDoHFallback(ctx context.Context, network, addr string) (net.Conn, e
 		lastErr = err
 	}
 	return nil, lastErr
-}
-
-// dohResolve resolves a host over the DNS-over-HTTPS JSON API.
-func dohResolve(ctx context.Context, host string) ([]string, error) {
-	link := dohEndpoint + "?name=" + url.QueryEscape(host) + "&type=A"
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
-	if err != nil {
-		return nil, err
-	}
-	request.Header.Set("accept", "application/dns-json")
-	response, err := dohClient.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("doh returned %s", response.Status)
-	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if err != nil {
-		return nil, err
-	}
-	var parsed struct {
-		Answer []struct {
-			Type int    `json:"type"`
-			Data string `json:"data"`
-		} `json:"Answer"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, err
-	}
-	var ips []string
-	for _, answer := range parsed.Answer {
-		if answer.Type == 1 && net.ParseIP(answer.Data) != nil {
-			ips = append(ips, answer.Data)
-		}
-	}
-	return ips, nil
 }
 
 // isDNSFailure reports a name-resolution failure. It is a subset of

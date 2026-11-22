@@ -6,6 +6,18 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Fixed
+
+- **Web tools no longer fail on a bad DNS answer.** A name the system resolver
+  hands back with a wrong address (an ISP block page or a poisoned cache) used to
+  end in a certificate error or a reset, because only a failed lookup fell back
+  to DNS-over-HTTPS. A GET that fails that way is now retried once with the
+  address taken from DoH. DoH itself asks four resolvers in turn, two addressed
+  by IP so a blocked resolver name cannot stop it, reads IPv6 when a host has no
+  IPv4, stops at a name that does not exist, and remembers an answer for its TTL
+  (30 seconds to 10 minutes). All web tools share this: search, fetch, extract,
+  wayback and the browser snapshot.
+
 ### Added
 
 - **Audit and tax tools.** `calc` does exact decimal arithmetic (expressions, or a
