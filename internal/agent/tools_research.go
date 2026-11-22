@@ -457,7 +457,7 @@ func citeAction(a map[string]any) string {
 	return "list"
 }
 func (t *citeTool) Description() string {
-	return "Keep the sources of a piece of research and turn them into a reference list. add stores a source with its URL, title, author, publication date, the date it was accessed, an exact quote and an archive link; given only a URL it reads the title, author and date from the page. list shows the sources with their numbers, export writes the list as apa, bibtex or markdown, remove drops one. Cite as [n] in the text. Never invent an author, a date or a quote: leave a field empty when the page does not say."
+	return "Keep the sources and citations of a piece of research and export them as a reference list, bibliography, APA or BibTeX. add stores a source with its URL, title, author, publication date, the date it was accessed, an exact quote and an archive link; given only a URL it reads the title, author and date from the page. list shows the sources with their numbers, export writes the list as apa, bibtex or markdown, remove drops one. Cite as [n] in the text. Never invent an author, a date or a quote: leave a field empty when the page does not say."
 }
 func (t *citeTool) Schema() map[string]any {
 	return object(map[string]any{
