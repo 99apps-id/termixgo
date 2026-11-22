@@ -800,7 +800,7 @@ supported; a failure names the model id and the endpoint.
 
 ## Tools
 
-The agent can call more than fifty tools. `toolSearchEnabled` keeps the
+The agent can call more than sixty tools. `toolSearchEnabled` keeps the
 ecosystem tools out of every request and loads them on demand through
 `find_tools`, which trims the schema a large toolset otherwise sends each step.
 
@@ -858,6 +858,16 @@ ecosystem tools out of every request and loads them on demand through
 | `read_document` | text, tables and data from PDF, .docx, .xlsx, .csv, .pptx, .epub and HTML |
 | `create_office_document`, `convert_pdf_to_excel` | write a Word file, a multi-sheet workbook (numbers stay numbers, bold frozen header) or CSV; turn a PDF into a workbook |
 | `convert_document` | Word, Excel, PowerPoint or OpenDocument to PDF, modern Office formats, CSV and more, through LibreOffice or Microsoft Office |
+
+| Tool | Purpose |
+| --- | --- |
+| `calc` | exact decimal arithmetic for an expression or a file column (sum, count, average, min, max); the rounding rule is named and a total row counted twice is flagged. It holds no tax rates: the agent is told to look up the current regulation and cite it |
+| `reconcile` | match two tables by key or by amount with a tolerance (invoices against the ledger, bank against cash book); reports matched, one-sided and differing items with their sheet rows |
+| `benford_test` | first-digit screening of a column (chi-square, Nigrini's bands) with round, repeated and just-under-threshold amounts; a lead, not proof |
+| `evidence_log` | the audit working paper: append-only, hash-chained findings with source file hash, location and legal basis; `verify` detects an edited entry or a changed source file; `export` writes markdown |
+| `web_extract` | an article's title, author, dates, canonical URL and main text without menus and footers |
+| `cite` | keep sources with accessed date, quote and archive link; export as APA, BibTeX or markdown |
+| `wayback` | find, list or save Internet Archive snapshots of a public page |
 | `generate_image` | an image from a prompt (OpenAI gpt-image-1 or DALL-E, Gemini image models, Imagen, xAI), saved in `.termixgo/media/` |
 | `text_to_speech` | spoken audio (OpenAI, Gemini TTS, or the operating system voice when no key is set), saved in `.termixgo/media/` |
 | `browser_run_steps` | a multi-step browser flow in one call; save it with `save_as`, replay it with `flow` and `{{name}}` variables |

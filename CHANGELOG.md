@@ -6,6 +6,20 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- **Audit and tax tools.** `calc` does exact decimal arithmetic (expressions, or a
+  file column), `reconcile` matches two tables by key or amount, `benford_test`
+  screens a column of amounts, and `evidence_log` keeps a hash-chained working
+  paper whose `verify` catches an edited entry or a source file that changed. The
+  tools carry no tax rates: the prompt now tells the agent to take every rate,
+  threshold, deadline and standard from the current official regulation, check
+  its effective date and cite it, and to say so when it cannot confirm the rule.
+- **Research tools.** `web_extract` returns an article's metadata and main text,
+  `cite` keeps sources and exports APA, BibTeX or markdown without inventing a
+  missing author or date, and `wayback` finds, lists or saves Internet Archive
+  snapshots (never of a private address).
+
 ### Fixed
 
 - A finished plan no longer follows you into the next task. Once every item is
