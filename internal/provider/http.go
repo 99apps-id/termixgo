@@ -10,8 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/99apps-id/termixgo/internal/dohnet"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -112,16 +112,11 @@ func newHTTPClient(info Provider, baseURL, apiKey string) (Client, error) {
 		// No overall timeout: a stream legitimately runs for minutes. A
 		// stalled connection still fails fast because the header timeout
 		// below only guards the start of the response.
-		Transport: &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			DialContext:           (&net.Dialer{Timeout: 20 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          16,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   20 * time.Second,
-			ResponseHeaderTimeout: 120 * time.Second,
-			ExpectContinueTimeout: time.Second,
-		},
+		Transport: dohnet.NewTransport(func(t *http.Transport) {
+			t.TLSHandshakeTimeout = 20 * time.Second
+			t.ResponseHeaderTimeout = 120 * time.Second
+			t.ExpectContinueTimeout = time.Second
+		}),
 	}
 	base := &httpClient{info: info, baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, http: shared}
 	// A Codex login targets the ChatGPT Responses backend, not chat-completions.

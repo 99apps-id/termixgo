@@ -1,9 +1,10 @@
-package agent
+package dohnet
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -31,12 +32,12 @@ func dohServer(t *testing.T, hits *atomic.Int32, answers map[string]string) *htt
 
 func useDoHEndpoints(t *testing.T, endpoints ...string) {
 	t.Helper()
-	old := dohEndpointList
-	dohEndpointList = func() []string { return endpoints }
+	old := EndpointList
+	EndpointList = func() []string { return endpoints }
 	dohCacheMu.Lock()
 	dohCache = map[string]dohCacheEntry{}
 	dohCacheMu.Unlock()
-	t.Cleanup(func() { dohEndpointList = old })
+	t.Cleanup(func() { EndpointList = old })
 }
 
 func TestDoHFailsOverToTheNextResolver(t *testing.T) {
@@ -44,7 +45,7 @@ func TestDoHFailsOverToTheNextResolver(t *testing.T) {
 	bad := dohServer(t, &badHits, map[string]string{})
 	good := dohServer(t, &goodHits, map[string]string{"A": `{"Status":0,"Answer":[{"type":1,"TTL":300,"data":"203.0.113.7"}]}`})
 	useDoHEndpoints(t, bad.URL, good.URL)
-	ips, err := dohResolve(context.Background(), "example.test")
+	ips, err := Resolve(context.Background(), "example.test")
 	if err != nil || len(ips) != 1 || ips[0] != "203.0.113.7" {
 		t.Fatalf("ips=%v err=%v", ips, err)
 	}
@@ -60,12 +61,12 @@ func TestDoHAnswersIPv6OnlyHostsAndIsCached(t *testing.T) {
 		"AAAA": `{"Status":0,"Answer":[{"type":28,"TTL":120,"data":"2001:db8::1"}]}`,
 	})
 	useDoHEndpoints(t, server.URL)
-	ips, err := dohResolve(context.Background(), "v6only.test")
+	ips, err := Resolve(context.Background(), "v6only.test")
 	if err != nil || len(ips) != 1 || ips[0] != "2001:db8::1" {
 		t.Fatalf("an IPv6-only name should resolve: ips=%v err=%v", ips, err)
 	}
 	after := hits.Load()
-	if _, err := dohResolve(context.Background(), "V6ONLY.test"); err != nil {
+	if _, err := Resolve(context.Background(), "V6ONLY.test"); err != nil {
 		t.Fatal(err)
 	}
 	if hits.Load() != after {
@@ -78,7 +79,7 @@ func TestDoHStopsAtANameThatDoesNotExist(t *testing.T) {
 	first := dohServer(t, &firstHits, map[string]string{"A": `{"Status":3}`})
 	second := dohServer(t, &secondHits, map[string]string{"A": `{"Status":0,"Answer":[{"type":1,"data":"203.0.113.9"}]}`})
 	useDoHEndpoints(t, first.URL, second.URL)
-	if _, err := dohResolve(context.Background(), "nope.test"); !errors.Is(err, errDoHNoName) {
+	if _, err := Resolve(context.Background(), "nope.test"); !errors.Is(err, ErrNoName) {
 		t.Fatalf("err = %v", err)
 	}
 	if secondHits.Load() != 0 {
@@ -95,7 +96,7 @@ func TestDialDoHOnlyIgnoresTheSystemResolver(t *testing.T) {
 	var hits atomic.Int32
 	server := dohServer(t, &hits, map[string]string{"A": `{"Status":0,"Answer":[{"type":1,"TTL":60,"data":"127.0.0.1"}]}`})
 	useDoHEndpoints(t, server.URL)
-	conn, err := dialDoHOnly(context.Background(), "tcp", fmt.Sprintf("poisoned.invalid:%d", listener.Addr().(*net.TCPAddr).Port))
+	conn, err := DialDoHOnly(context.Background(), "tcp", fmt.Sprintf("poisoned.invalid:%d", listener.Addr().(*net.TCPAddr).Port))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -117,7 +118,7 @@ func okResponse(r *http.Request) *http.Response {
 // a reset; the same GET is then tried with the address from DoH.
 func TestRetryTransportRetriesAWrongAddressOnce(t *testing.T) {
 	var baseCalls, pinnedCalls atomic.Int32
-	transport := &dohRetryTransport{
+	transport := &retryTransport{
 		base: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			baseCalls.Add(1)
 			return nil, errors.New("Get: tls: failed to verify certificate: x509: certificate is valid for block.example, not site.example")
@@ -136,7 +137,7 @@ func TestRetryTransportRetriesAWrongAddressOnce(t *testing.T) {
 
 func TestRetryTransportKeepsTheFirstErrorWhenTheRetryFails(t *testing.T) {
 	first := errors.New("x509: certificate signed by unknown authority")
-	transport := &dohRetryTransport{
+	transport := &retryTransport{
 		base: roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, first }),
 		pinned: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return nil, errors.New("doh: no resolver returned an address")
@@ -168,7 +169,7 @@ func TestRetryViaDoHDecision(t *testing.T) {
 		{"empty reply", get("https://site.example/"), "EOF", true},
 		{"blackhole", get("https://site.example/"), "dial tcp 10.0.0.1:443: i/o timeout", true},
 		{"dns failure is the dialer's job", get("https://site.example/"), "dial tcp: lookup site.example: no such host", false},
-		{"a POST is not repeated", post, "x509: certificate", false},
+		{"a POST is not repeated", post, "EOF", false},
 		{"an IP literal has no name to resolve", get("https://203.0.113.5/"), "x509: certificate", false},
 		{"a cancelled request", gone, "x509: certificate", false},
 		{"an HTTP status is not a transport error", get("https://site.example/"), "server returned 500", false},
@@ -177,5 +178,61 @@ func TestRetryViaDoHDecision(t *testing.T) {
 		if got := retryViaDoH(c.request, errors.New(c.err)); got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestRetryViaDoHPostOnlyWhenItNeverReachedAServer(t *testing.T) {
+	post := func(rewindable bool) *http.Request {
+		r, _ := http.NewRequest(http.MethodPost, "https://api.example.com/send", strings.NewReader("{}"))
+		if !rewindable {
+			r.GetBody = nil
+		}
+		return r
+	}
+	cases := []struct {
+		name    string
+		request *http.Request
+		err     string
+		want    bool
+	}{
+		{"handshake failure", post(true), "x509: certificate is valid for a, not b", true},
+		{"dial failure", post(true), "dial tcp 1.2.3.4:443: i/o timeout", true},
+		{"reset after send could duplicate", post(true), "read: connection reset by peer", false},
+		{"eof after send could duplicate", post(true), "EOF", false},
+		{"body that cannot be rewound", post(false), "x509: certificate", false},
+	}
+	for _, c := range cases {
+		if got := retryViaDoH(c.request, errors.New(c.err)); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestRetryTransportResendsThePostBody(t *testing.T) {
+	var received atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		received.Store(string(b))
+	}))
+	defer server.Close()
+	transport := &retryTransport{
+		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("x509: certificate signed by unknown authority")
+		}),
+		pinned: http.DefaultTransport,
+	}
+	request, _ := http.NewRequest(http.MethodPost, "http://api.example.com/send", strings.NewReader("hello"))
+	request.URL.Host = "api.example.com"
+	// Point the pinned leg at the test server through a dialer, as DoH would.
+	transport.pinned = &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+	}}
+	response, err := transport.RoundTrip(request)
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	response.Body.Close()
+	if got, _ := received.Load().(string); got != "hello" {
+		t.Fatalf("server received %q", got)
 	}
 }

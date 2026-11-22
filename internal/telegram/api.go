@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/99apps-id/termixgo/internal/dohnet"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -47,11 +48,13 @@ func newClientAt(token, baseURL string) *Client {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http: &http.Client{
 			Timeout: 0,
-			Transport: &http.Transport{
-				MaxIdleConns:        4,
-				IdleConnTimeout:     90 * time.Second,
-				TLSHandshakeTimeout: 15 * time.Second,
-			},
+			// Long polling holds a request open, so no header timeout, and
+			// the bridge has always dialled direct, so no environment proxy.
+			Transport: dohnet.NewTransport(func(t *http.Transport) {
+				t.Proxy = nil
+				t.MaxIdleConns = 4
+				t.ResponseHeaderTimeout = 0
+			}),
 		},
 	}
 }

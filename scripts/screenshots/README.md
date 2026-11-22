@@ -23,7 +23,7 @@ and, for the last step, `node` and any Chromium-based browser.
 
 ```sh
 # 1. Build the binary to photograph, stamped with the version for the title bar.
-go build -ldflags "-X github.com/99apps-id/termixgo/internal/version.Version=0.2.10" \
+go build -ldflags "-X github.com/99apps-id/termixgo/internal/version.Version=0.2.11" \
   -o /tmp/tgx-shots/termixgo-demo ./cmd/termixgo
 
 # 2. Create the demo workspace, state and the throwaway certificates.

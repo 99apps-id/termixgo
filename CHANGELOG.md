@@ -6,6 +6,8 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+## 0.2.11 - 2026-11-23
+
 ### Added
 
 - **Audit and tax tools.** `calc` does exact decimal arithmetic (expressions, or a
@@ -30,8 +32,10 @@ All notable changes to Termixgo are recorded here. The format follows
   by IP so a blocked resolver name cannot stop it, reads IPv6 when a host has no
   IPv4, stops at a name that does not exist, and remembers an answer for its TTL
   (30 seconds to 10 minutes). All web tools share this: search, fetch, extract,
-  wayback and the browser snapshot.
-
+  wayback and the browser snapshot. The model providers and the Telegram bridge
+  use the same fallback (shared in `internal/dohnet`); a request with a body is
+  repeated only after a handshake or connect failure, so a message is never sent
+  twice.
 - A finished plan no longer follows you into the next task. Once every item is
   completed the plan is cleared from the live store and the saved session (the
   transcript keeps the final list), so the status line stops saying `plan 4/4`

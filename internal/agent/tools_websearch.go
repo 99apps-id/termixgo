@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/99apps-id/termixgo/internal/dohnet"
 	"html"
 	"io"
 	"net"
@@ -43,7 +44,7 @@ var webSearchGitHubEndpoint = "https://api.github.com/search/repositories"
 // DNS resolver on Windows, so the agent's web tools are not derailed by a
 // misbehaving system resolver or a VPN tunnel that breaks the CGO lookup path.
 var webSearchClient = &http.Client{
-	Transport: newDoHRetryTransport(),
+	Transport: dohnet.NewTransport(nil),
 	Timeout:   60 * time.Second,
 }
 
@@ -702,14 +703,6 @@ func appendQuery(endpoint, key, value string) string {
 	return trimmed + separator + key + "=" + url.QueryEscape(value)
 }
 
-// dohEndpoint is the DNS-over-HTTPS resolver used only when the system
-// resolver fails. A browser often reaches a site the OS resolver is blocked on
-// because the browser resolves over HTTPS; this gives the web tools the same
-// path instead of failing on a blocked or poisoned ISP DNS.
-var dohEndpoint = "https://cloudflare-dns.com/dns-query"
-
-var dohClient = &http.Client{Timeout: 10 * time.Second}
-
 // errBlockedAddress reports a dial the guard refused.
 var errBlockedAddress = errors.New("refusing a link-local or cloud metadata address")
 
@@ -727,68 +720,7 @@ func blockMetadataAddress(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
-// dialWithDoHFallback dials an address, and when the host name cannot be
-// resolved by the system resolver it resolves over HTTPS and dials the pinned
-// IP. A literal address and a successful system lookup use the plain dialer,
-// so the fallback only runs where DNS is actually broken.
-func dialWithDoHFallback(ctx context.Context, network, addr string) (net.Conn, error) {
-	dialer := &net.Dialer{
-		Timeout:   15 * time.Second,
-		KeepAlive: 30 * time.Second,
-		Control:   blockMetadataAddress,
-	}
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil || net.ParseIP(host) != nil {
-		return dialer.DialContext(ctx, network, addr)
-	}
-	conn, dialErr := dialer.DialContext(ctx, network, addr)
-	if dialErr == nil {
-		return conn, nil
-	}
-	// The fallback runs on a resolution failure only. A connect failure with
-	// a resolved route (split-horizon DNS, a dead internal host) is the
-	// answer: going to DoH there would dial the public view of a name the
-	// system resolution deliberately pointed elsewhere.
-	if !isDNSFailure(dialErr) {
-		return nil, dialErr
-	}
-	ips, resolveErr := dohResolve(ctx, host)
-	if resolveErr != nil || len(ips) == 0 {
-		return nil, dialErr
-	}
-	lastErr := dialErr
-	for _, ip := range ips {
-		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip, port))
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
-	}
-	return nil, lastErr
-}
-
-// isDNSFailure reports a name-resolution failure. It is a subset of
-// isNetworkUnreachable that must not be retried: a blocked or nonexistent
-// name does not resolve on a second attempt, so retrying only delays the
-// fallback to the next search source.
-func isDNSFailure(err error) bool {
-	if err == nil {
-		return false
-	}
-	lowered := strings.ToLower(err.Error())
-	for _, needle := range []string{
-		"no such host",
-		"getaddrinfo",
-		"temporary failure in name resolution",
-		"server misbehaving",
-		"no addresses",
-	} {
-		if strings.Contains(lowered, needle) {
-			return true
-		}
-	}
-	return false
-}
+func isDNSFailure(err error) bool { return dohnet.IsDNSFailure(err) }
 
 // isNetworkUnreachable reports whether an error is a DNS or connectivity
 // failure, the case where retrying another URL fails the same way.
@@ -818,3 +750,5 @@ func isNetworkUnreachable(err error) bool {
 	}
 	return false
 }
+
+func init() { dohnet.Control = blockMetadataAddress }

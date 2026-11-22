@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/99apps-id/termixgo/internal/dohnet"
 	"io"
 	"net"
 	"net/http"
@@ -39,11 +40,11 @@ func TestDialFallsBackToDoH(t *testing.T) {
 	}))
 	t.Cleanup(func() {
 		doh.Close()
-		dohEndpoint = "https://cloudflare-dns.com/dns-query"
+		dohnet.Endpoint = dohnet.DefaultEndpoint
 	})
-	dohEndpoint = doh.URL
+	dohnet.Endpoint = doh.URL
 
-	conn, err := dialWithDoHFallback(context.Background(), "tcp", fmt.Sprintf("blocked.invalid:%d", port))
+	conn, err := dohnet.DialWithFallback(context.Background(), "tcp", fmt.Sprintf("blocked.invalid:%d", port))
 	if err != nil {
 		t.Fatalf("dial through DoH: %v", err)
 	}
@@ -271,9 +272,9 @@ func TestWebSearchDoesNotClaimOfflineWhenASourceWasReachable(t *testing.T) {
 	}))
 	t.Cleanup(func() {
 		doh.Close()
-		dohEndpoint = "https://cloudflare-dns.com/dns-query"
+		dohnet.Endpoint = dohnet.DefaultEndpoint
 	})
-	dohEndpoint = doh.URL
+	dohnet.Endpoint = doh.URL
 
 	emptySources(t)
 	// A host that never resolves: the DNS failure the operator hits when an
