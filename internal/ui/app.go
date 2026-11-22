@@ -2833,7 +2833,7 @@ func (m *Model) viewStatus() string {
 	// Everything else, most useful first: the drop loop below removes from the
 	// end, so the context usage survives longer than the session id.
 	identity := []string{m.styles.Dim.Render(m.app.ContextUsage())}
-	if total > 0 {
+	if total > 0 && done < total {
 		identity = append(identity, m.styles.Plan.Render(fmt.Sprintf("plan %d/%d", done, total)))
 	}
 	// The task in flight is named rather than only counted, so a glance at the

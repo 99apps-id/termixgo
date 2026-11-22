@@ -150,3 +150,16 @@ func TestNoActiveTaskLeavesTheStatusLineClean(t *testing.T) {
 		t.Errorf("a finished plan should not name a task:\n%s", view)
 	}
 }
+
+// A plan whose items are all done is history: it leaves the status line, while
+// an unfinished one keeps its counter.
+func TestFinishedPlanLeavesTheStatusLine(t *testing.T) {
+	model := chatModel(t)
+	model.app.Todos().Set([]agent.Todo{
+		{ID: "t1", Title: "One", Status: "completed"},
+		{ID: "t2", Title: "Two", Status: "completed"},
+	})
+	if view := display(model); strings.Contains(view, "plan 2/2") {
+		t.Errorf("a finished plan should not stay in the status line:\n%s", view)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/config"
 )
 
@@ -231,7 +232,9 @@ func (m *Model) inlineView() string {
 		bottom = append(bottom, activity)
 	}
 	if m.running && m.app != nil {
-		if todos := m.app.Todos().Items(); len(todos) > 0 {
+		// A plan with every item done is history, not status: the final list is
+		// already in the transcript.
+		if todos := m.app.Todos().Items(); len(todos) > 0 && agent.PruneFinished(todos) != nil {
 			if planView := strings.TrimSpace(renderPlanBlock(block{kind: blockPlan, plan: todos}, m.styles, m.renderWidth())); planView != "" {
 				bottom = append(bottom, planView)
 			}
