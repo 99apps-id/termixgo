@@ -30,6 +30,11 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Fixed
 
+- **Antigravity signs in with the IDE's OAuth client.** A token issued to the agy CLI's
+  client is read by Google as an account with no tier (`standard-tier`, no project),
+  and every chat call answers 403, even for an account the CLI itself uses. The IDE's
+  client is what 0.2.11 used and it works, so it stays the stamped default; the pair
+  can still be set with `TERMIXGO_ANTIGRAVITY_CLIENT_ID` and `..._SECRET`.
 - **A new Antigravity login replaces the stored client pair, and a refresh uses the
   pair that issued the token.** The old code kept the first pair stored forever, so a
   login made with another client could not be refreshed from an unstamped build. The
@@ -60,9 +65,6 @@ All notable changes to Termixgo are recorded here. The format follows
   line, and the context windows the ChatGPT catalogue lists.
 - **Claude Code identity moved to 2.1.325**: the current beta list, the billing
   header with its fingerprint, and the interactive `(external, cli)` User-Agent.
-- **Antigravity signs in with the agy CLI's own OAuth client** instead of the IDE's.
-  The pair is read from the installed binary into the git-ignored `.env.local`; log
-  in again to get a token issued to it.
 - **Copilot** reports the installed VS Code 1.147.0 and Copilot Chat 0.75.0, and Muse
   reports CLI 1.4.24.
 

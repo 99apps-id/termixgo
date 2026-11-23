@@ -501,6 +501,9 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   and the version), checked against the client's own value. Copilot reports the
   installed VS Code and Copilot Chat versions. When a vendor ships a new CLI, update
   the version constants and capture again before trusting the old shapes.
+  The OAuth client is the exception to "match the CLI": Antigravity signs in with the
+  IDE's client, because a token from the CLI's client reads as an account with no tier
+  (verified: the same account answers 403 with it and works with the IDE's).
 - Meta Muse reports subscription usage inside the stream: the last event of every
   response is `response.subscription_usage` with the 5-hour window and the weekly
   one (`used_percent`, `resets_at`). `decodeResponsesStream` records it

@@ -787,7 +787,8 @@ own machine, approve, then paste the failed `127.0.0.1` callback URL from the
 address bar back into the server terminal to finish the login.
 
 Antigravity signs in with Google's public installed-app client, the same pair
-the agy CLI ships. A release build stamps that pair into the binary at
+the Antigravity IDE ships. (The agy CLI's own client is not used: a token issued to it is
+read by Google as an account with no tier, and every chat call answers 403.) A release build stamps that pair into the binary at
 build time, from a git-ignored `.env.local` or from
 `TERMIXGO_ANTIGRAVITY_CLIENT_ID` and `TERMIXGO_ANTIGRAVITY_CLIENT_SECRET`, so a
 shipped build opens the browser with no prompt. The pair is never committed,
