@@ -501,13 +501,6 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   and the version), checked against the client's own value. Copilot reports the
   installed VS Code and Copilot Chat versions. When a vendor ships a new CLI, update
   the version constants and capture again before trusting the old shapes.
-- `agy-cli-*` is a delegation, not a transport. `agy -p` is a whole agent with its own
-  tools and no text-only mode, so the turn is run by agy and Termixgo only shows its
-  answer, its tool lines (as reasoning) and its usage. Termixgo's tools, approval
-  gates and trust rules do not apply inside that turn; `TERMIXGO_AGY_MODE` defaults to
-  `plan` for that reason. The CLI keeps the conversation (`--conversation`), so a
-  resumed run sends only the newest message. The provider is ready only when the CLI
-  is found, and the `antigravity-*` route never needs it.
 - Meta Muse reports subscription usage inside the stream: the last event of every
   response is `response.subscription_usage` with the 5-hour window and the weekly
   one (`used_percent`, `resets_at`). `decodeResponsesStream` records it

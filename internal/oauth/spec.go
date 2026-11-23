@@ -135,7 +135,7 @@ var specs = map[string]Spec{
 		RedirectHost: "localhost",
 		RedirectPath: "/auth/callback",
 		UserAgent:    defaultAntigravityUserAgent(),
-		ExtraAuth:    map[string]string{"access_type": "offline", "prompt": "consent"},
+		ExtraAuth:    map[string]string{"access_type": "offline", "prompt": "consent select_account"},
 	},
 	"github-copilot": {
 		Provider:        "github-copilot",

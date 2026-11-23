@@ -2,9 +2,11 @@ package oauth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -66,7 +68,9 @@ func Login(ctx context.Context, store *Store, provider string, in io.Reader, out
 		// Persist the pair a release build stamped in, so a later refresh works
 		// from a build that carries no stamp (a plain go build or an older
 		// binary) without asking the operator to log in again.
-		persistClientCredentials(store, provider, flow)
+		// A login issues its token to the pair used for it, so that pair replaces
+		// any stored one: a refresh must use the client that issued the token.
+		saveLoginClient(store, provider, flow)
 		var session pkceWaiter
 		var authURL string
 		session, authURL, err = StartPKCE(flow)
@@ -148,7 +152,44 @@ func Login(ctx context.Context, store *Store, provider string, in io.Reader, out
 		return err
 	}
 	fmt.Fprintf(out, "Logged in to %s.\n", provider)
+	if spec.Kind == "pkce" && provider == "antigravity" {
+		// Say which Google account that was: the browser offers the signed-in one
+		// first, and what the account is entitled to depends on it.
+		if email := googleAccountEmail(ctx, token.Access); email != "" {
+			fmt.Fprintf(out, "Signed in as %s.\n", email)
+		}
+	}
 	return nil
+}
+
+// saveLoginClient stores the client pair a login was made with, replacing the
+// pair of an earlier login.
+func saveLoginClient(store *Store, provider string, flow PKCEFlow) {
+	if store == nil || strings.TrimSpace(flow.ClientID) == "" {
+		return
+	}
+	_ = store.SaveClient(provider, flow.ClientID, flow.ClientSecret)
+}
+
+// googleUserinfoURL is a variable so a test can point it at a server.
+var googleUserinfoURL = "https://www.googleapis.com/oauth2/v2/userinfo"
+
+// googleAccountEmail asks Google who an access token belongs to. It returns an
+// empty string on any failure: the login itself already succeeded.
+func googleAccountEmail(ctx context.Context, accessToken string) string {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	body, status, err := requestJSON(ctx, http.MethodGet, googleUserinfoURL, map[string]string{"Authorization": "Bearer " + accessToken}, nil)
+	if err != nil || status != http.StatusOK {
+		return ""
+	}
+	var info struct {
+		Email string `json:"email"`
+	}
+	if json.Unmarshal(body, &info) != nil {
+		return ""
+	}
+	return strings.TrimSpace(info.Email)
 }
 
 // persistClientCredentials saves the resolved client pair to the secret store
@@ -166,6 +207,21 @@ func persistClientCredentials(store *Store, provider string, flow PKCEFlow) {
 	if strings.TrimSpace(secret) == "" && strings.TrimSpace(flow.ClientSecret) != "" {
 		_ = store.SaveClient(provider, id, flow.ClientSecret)
 	}
+}
+
+// pkceFlowForRefresh is the flow a refresh uses: the pair stored at login when
+// there is one, because a refresh token only works with the client that issued
+// it. A build whose stamp changed (the agy client replacing the IDE one) must
+// not break a login made with the older pair.
+func pkceFlowForRefresh(spec Spec, store *Store) PKCEFlow {
+	flow := pkceFlowFromSpec(spec, store)
+	if store != nil {
+		if id, secret := store.LoadClient(spec.Provider); strings.TrimSpace(id) != "" {
+			flow.ClientID = id
+			flow.ClientSecret = secret
+		}
+	}
+	return flow
 }
 
 // pkceFlowFromSpec maps a spec to the PKCE flow, resolving a client credential
@@ -345,7 +401,7 @@ func refreshTokenOnce(ctx context.Context, store *Store, spec Spec, token Token)
 	case "codex":
 		refreshed, err = RefreshCodex(ctx, CodexFlow{ClientID: spec.ClientID, Issuer: spec.Issuer}, token.Refresh, clock)
 	case "pkce":
-		flow := pkceFlowFromSpec(spec, store)
+		flow := pkceFlowForRefresh(spec, store)
 		if strings.TrimSpace(flow.ClientID) == "" {
 			// No client credentials to refresh with; keep the current access
 			// token until the operator logs in again.
@@ -353,6 +409,18 @@ func refreshTokenOnce(ctx context.Context, store *Store, spec Spec, token Token)
 		}
 		persistClientCredentials(store, spec.Provider, flow)
 		refreshed, err = RefreshPKCE(ctx, flow, token.Refresh, clock)
+		if err != nil {
+			// The pair stored at login can be the wrong one: an older build kept the
+			// first pair it ever stored, so a login made with another client sat
+			// beside a pair that did not issue it. Try the pair this build carries,
+			// and remember it when it is the one the token answers to.
+			if built := pkceFlowFromSpec(spec, store); strings.TrimSpace(built.ClientID) != "" && built.ClientID != flow.ClientID {
+				if retried, retryErr := RefreshPKCE(ctx, built, token.Refresh, clock); retryErr == nil && strings.TrimSpace(retried.Access) != "" {
+					refreshed, err = retried, nil
+					saveLoginClient(store, spec.Provider, built)
+				}
+			}
+		}
 	default:
 		refreshed, err = RefreshDevice(ctx, DeviceFlow{ClientID: spec.ClientID, DeviceURL: spec.DeviceURL, TokenURL: spec.TokenURL}, token.Refresh, clock)
 	}

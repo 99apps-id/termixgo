@@ -55,7 +55,6 @@ var quotaLabels = map[string]string{
 	"claude-oauth":   "Claude",
 	"openai-codex":   "Codex",
 	"antigravity":    "Antigravity",
-	"agy-cli":        "agy CLI",
 	"github-copilot": "Copilot",
 	"muse":           "Muse",
 	"xai-oauth":      "Grok",

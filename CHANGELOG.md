@@ -8,13 +8,6 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Added
 
-- **Antigravity through the agy CLI (experimental, on `feat/agy-backend`).** The
-  `agy-cli-*` models run a turn through the installed Antigravity CLI, so the
-  request to Google is the CLI's own. They appear usable only when agy is found
-  (PATH, the standalone or IDE install directory, or `TERMIXGO_AGY_PATH`). It is a
-  delegation: agy runs its own tools, and Termixgo's tools, approvals and trust
-  rules do not apply to that turn. `TERMIXGO_AGY_MODE` picks `plan` (default),
-  `accept-edits` or `auto`. The `antigravity-*` models keep working without the CLI.
 - **Gemini 4 Neon on Antigravity**, with low, medium, high and xhigh thinking. Also
   GPT-6.2 Sol, GPT-6.2 Astra and GPT-6.1 Terra on Codex (GPT-5.6 and its siblings
   stay), Claude Haiku 5.5 on the Claude login, the Copilot models GitHub now lists
@@ -37,6 +30,11 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Fixed
 
+- **A new Antigravity login replaces the stored client pair, and a refresh uses the
+  pair that issued the token.** The old code kept the first pair stored forever, so a
+  login made with another client could not be refreshed from an unstamped build. The
+  login also asks Google to show its account chooser and prints the account it
+  signed in as.
 - **Antigravity no longer invents a project id.** A consumer account that Cloud Code
   enrols but assigns no project used to fail onboarding and fall back to a random
   `termixgo-...` id, which no real client sends and which also left the usage strip
@@ -45,10 +43,6 @@ All notable changes to Termixgo are recorded here. The format follows
 - **Antigravity usage shows for accounts with per-model quota.** Some accounts get a
   remaining fraction per model and no 5-hour or weekly window; the strip now reads
   the tightest model of each family instead of showing nothing.
-- **The agy CLI route no longer waits for the process to exit.** The CLI can stay
-  alive minutes after its result; the turn now ends when the result arrives. Its
-  usage row reuses the Antigravity login, and an authentication failure says that
-  agy keeps its own sign-in.
 - **The Antigravity identity follows the installed agy.** The User-Agent version and
   changelist are read from the agy on the machine (now 1.5.15), cached until the
   binary changes, so an agy that updated itself no longer leaves Termixgo

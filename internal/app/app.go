@@ -597,11 +597,6 @@ func (a *App) guessProvider(modelID string) string {
 		}
 	}
 	for _, candidate := range provider.Providers() {
-		// The agy CLI route is a delegation that bypasses Termixgo's tools and
-		// approvals, so it is only ever chosen by name, never guessed.
-		if candidate.Kind == provider.KindAgyCLI {
-			continue
-		}
 		if candidate.NeedsKey && provider.HasKey(a.store, candidate.ID) {
 			return candidate.ID
 		}

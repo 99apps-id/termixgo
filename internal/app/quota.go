@@ -496,7 +496,7 @@ func (q *QuotaTracker) ActiveQuotaGauge(providerName string, width int) string {
 func isOAuthOrPlanProvider(providerName string) bool {
 	norm := strings.ToLower(strings.TrimSpace(providerName))
 	if norm == "codex" || norm == "openai-codex" || norm == "antigravity" || norm == "muse" || norm == "github-copilot" ||
-		norm == "claude-oauth" || norm == "qwen-token-plan" || norm == "stepfun-plan" || norm == "agy-cli" {
+		norm == "claude-oauth" || norm == "qwen-token-plan" || norm == "stepfun-plan" {
 		return true
 	}
 	if strings.Contains(norm, "oauth") || strings.Contains(norm, "plan") {

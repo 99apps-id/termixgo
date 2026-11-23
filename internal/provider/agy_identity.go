@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -193,3 +197,45 @@ func scanChangelist(path string) (string, bool) {
 		}
 	}
 }
+
+// agyBinaryName is the CLI's file name on this platform.
+func agyBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "agy.exe"
+	}
+	return "agy"
+}
+
+// findAgy locates an installed Antigravity CLI: an explicit TERMIXGO_AGY_PATH,
+// then PATH, then the places its installers put it (the standalone installer
+// and the IDE's managed copy). The CLI is optional: it only supplies the
+// release identity, and its absence leaves the built-in one.
+func findAgy() (string, error) {
+	if explicit := strings.TrimSpace(os.Getenv("TERMIXGO_AGY_PATH")); explicit != "" {
+		if info, err := os.Stat(explicit); err == nil && !info.IsDir() {
+			return explicit, nil
+		}
+		return "", fmt.Errorf("TERMIXGO_AGY_PATH points at %q, which is not a file", explicit)
+	}
+	if found, err := exec.LookPath("agy"); err == nil {
+		return found, nil
+	}
+	var candidates []string
+	if local := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); local != "" {
+		candidates = append(candidates, filepath.Join(local, "agy", "bin", agyBinaryName()))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(home, ".gemini", "bin", agyBinaryName()),
+			filepath.Join(home, ".local", "bin", agyBinaryName()),
+			filepath.Join(home, ".agy", "bin", agyBinaryName()))
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", errAgyMissing
+}
+
+var errAgyMissing = errors.New("no Antigravity CLI (agy) was found")

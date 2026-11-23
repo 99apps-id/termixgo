@@ -487,7 +487,7 @@ func (c *antigravityClient) ensureProject(ctx context.Context) (string, error) {
 		// refused for it, and every chat call would answer 403. Say so now.
 		for _, candidate := range loaded.Tiers {
 			if candidate.UserDefinedProject {
-				return "", fmt.Errorf("this Google account is on the %s tier, which needs its own Cloud project; the Antigravity route here supports the personal account agy signs in with. Run 'termixgo login antigravity' with that account, or use the agy-cli-* models", candidate.ID)
+				return "", fmt.Errorf("this Google account is on the %s tier, which needs its own Cloud project; accounts of that kind are not supported here. Sign in with a personal Google account: 'termixgo login antigravity'", candidate.ID)
 			}
 		}
 	}

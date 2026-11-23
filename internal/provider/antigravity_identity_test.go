@@ -222,7 +222,7 @@ func TestAntigravityProjectTierGivesAClearError(t *testing.T) {
 		t.Fatalf("newHTTPClient: %v", err)
 	}
 	_, err = client.(*antigravityClient).ensureProject(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "standard-tier") || !strings.Contains(err.Error(), "agy-cli-*") {
-		t.Fatalf("err = %v, want the tier named and the alternative offered", err)
+	if err == nil || !strings.Contains(err.Error(), "standard-tier") || !strings.Contains(err.Error(), "personal Google account") {
+		t.Fatalf("err = %v, want the tier named and the way forward offered", err)
 	}
 }
