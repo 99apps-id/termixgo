@@ -461,8 +461,9 @@ func (c *antigravityClient) ensureProject(ctx context.Context) (string, error) {
 			ID string `json:"id"`
 		} `json:"currentTier"`
 		Tiers []struct {
-			ID        string `json:"id"`
-			IsDefault bool   `json:"isDefault"`
+			ID                 string `json:"id"`
+			IsDefault          bool   `json:"isDefault"`
+			UserDefinedProject bool   `json:"userDefinedCloudaicompanionProject"`
 		} `json:"allowedTiers"`
 	}
 	_ = json.Unmarshal(raw, &loaded)
@@ -478,6 +479,16 @@ func (c *antigravityClient) ensureProject(ctx context.Context) (string, error) {
 		if candidate.IsDefault {
 			tier = candidate.ID
 			break
+		}
+	}
+	if project == "" && loaded.CurrentTier == nil {
+		// A tier that wants the operator's own Cloud project (a workspace or
+		// paid account) cannot be onboarded here: the shared consumer project is
+		// refused for it, and every chat call would answer 403. Say so now.
+		for _, candidate := range loaded.Tiers {
+			if candidate.UserDefinedProject {
+				return "", fmt.Errorf("this Google account is on the %s tier, which needs its own Cloud project; the Antigravity route here supports the personal account agy signs in with. Run 'termixgo login antigravity' with that account, or use the agy-cli-* models", candidate.ID)
+			}
 		}
 	}
 	if project == "" {

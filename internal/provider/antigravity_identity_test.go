@@ -206,3 +206,23 @@ func TestAntigravityQuotaWithPerModelBuckets(t *testing.T) {
 		t.Errorf("claude window = %+v, want the tightest of Claude and GPT (30%% used)", claude)
 	}
 }
+
+// TestAntigravityProjectTierGivesAClearError covers the account whose tier wants
+// its own Cloud project: it is told so, instead of being sent on to a 403.
+func TestAntigravityProjectTierGivesAClearError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		fmt.Fprint(writer, `{"allowedTiers":[{"id":"standard-tier","isDefault":true,"userDefinedCloudaicompanionProject":true}],"ineligibleTiers":[{"reasonCode":"GOOGLE_TOS_NOT_SUPPORTED_BY_CLIENT","tierId":"free-tier"}]}`)
+	}))
+	defer server.Close()
+	original := agLoadAssistURL
+	agLoadAssistURL = server.URL + "/v1internal:loadCodeAssist"
+	t.Cleanup(func() { agLoadAssistURL = original })
+	client, err := newHTTPClient(Provider{ID: "antigravity", Label: "Antigravity", Kind: KindAntigravity}, server.URL, "tok")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	_, err = client.(*antigravityClient).ensureProject(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "standard-tier") || !strings.Contains(err.Error(), "agy-cli-*") {
+		t.Fatalf("err = %v, want the tier named and the alternative offered", err)
+	}
+}
