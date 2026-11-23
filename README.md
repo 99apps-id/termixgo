@@ -425,7 +425,7 @@ window-specific capture are called out honestly where the host cannot do them
 | `/trust [on\|off]` | show or change folder trust |
 | `/approval [ask\|edits\|all\|plan]` | when a tool waits for you |
 | `/harness [id]` | how hard the agent plans and verifies, and the step budget |
-| `/effort [low\|medium\|high\|max\|default]` | reasoning effort for the active model |
+| `/effort [low\|medium\|high\|xhigh\|max\|ultra\|default]` | reasoning effort for the active model; a level the model lacks is lowered to its highest |
 | `/taskmodel [title\|compaction\|default\|<id>]` | model for the internal jobs: naming and condensing |
 | `/plan` | show the current task plan |
 | `/tools` | list the tools the agent can call |
@@ -527,7 +527,7 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
 | `api` | `{ "enabled": true, "listen": "127.0.0.1:8787" }` for the local HTTP endpoint |
 | `healthAlerts` | `{ "enabled": true, "interval": "5m", "diskPercent": 90, "notify": [...] }` machine pressure alerts |
 | `sandbox` | `{ "enabled": true, "image": "golang:1.26", "network": "none" }` run shell commands in a container |
-| `effort` | reasoning effort asked of models that accept one: `low`, `medium`, `high`, `max`. Empty leaves the vendor's own default |
+| `effort` | reasoning effort asked of models that accept one: `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. Empty leaves the vendor's own default |
 | `modelEfforts` | override `effort` per model id, so a fast model can run at `low` while a planner runs at `high` |
 | `compactionModel` | model for condensing old turns before they are trimmed, as a catalogue id, `provider:model` or `provider/model`. Empty keeps the plain trim and makes no extra call |
 | `titleModel` | model that names a session after its first turn. Empty keeps the title derived from your first line |
@@ -772,6 +772,7 @@ A full login on a machine with a browser, then pick a model and start:
 
 ```sh
 termixgo login antigravity                    # opens the Google consent page
+termixgo model antigravity/antigravity-gemini-4-neon
 termixgo model antigravity/antigravity-gemini-4-hydrogen
 termixgo model antigravity/antigravity-gemini-3.8-flash
 termixgo
@@ -782,7 +783,7 @@ own machine, approve, then paste the failed `127.0.0.1` callback URL from the
 address bar back into the server terminal to finish the login.
 
 Antigravity signs in with Google's public installed-app client, the same pair
-the Antigravity IDE ships. A release build stamps that pair into the binary at
+the agy CLI ships. A release build stamps that pair into the binary at
 build time, from a git-ignored `.env.local` or from
 `TERMIXGO_ANTIGRAVITY_CLIENT_ID` and `TERMIXGO_ANTIGRAVITY_CLIENT_SECRET`, so a
 shipped build opens the browser with no prompt. The pair is never committed,

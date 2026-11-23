@@ -36,45 +36,71 @@ type antigravityClient struct {
 	// replayed on the next request, which Gemini 3 requires for a tool loop.
 	signatures map[string]string
 	sessionID  string
+	// cascade and trajectory are the conversation and execution ids the CLI
+	// puts in requestId and in its labels, one pair per client.
+	cascade    string
+	trajectory string
 }
 
 const (
-	defaultAGCLIVersion = "1.5.9"
-	agMaxOutputToken    = 64000
+	// defaultAGCLIVersion and defaultAGChangelist are the pair the installed
+	// Antigravity CLI reports (agy 1.5.14, read from its own request to a
+	// local endpoint). The changelist is part of the identity: a version with
+	// the wrong changelist is a client no release ever was.
+	defaultAGCLIVersion = "1.5.14"
+	defaultAGChangelist = "1026970498"
+	agMaxOutputToken    = 65536
 )
 
-func agCLIVersion() string {
-	for _, key := range []string{"TERMIXGO_ANTIGRAVITY_CLI_VERSION", "ANTIGRAVITY_CLI_VERSION", "ODON_ANTIGRAVITY_CLI_VERSION"} {
+func firstEnv(keys ...string) string {
+	for _, key := range keys {
 		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 			return v
 		}
 	}
+	return ""
+}
+
+func agCLIVersion() string {
+	if v := firstEnv("TERMIXGO_ANTIGRAVITY_CLI_VERSION", "ANTIGRAVITY_CLI_VERSION", "ODON_ANTIGRAVITY_CLI_VERSION"); v != "" {
+		return v
+	}
 	return defaultAGCLIVersion
 }
 
-// agUserAgent returns the Antigravity CLI identity. Cloud Code lists Gemini 4
-// (Hydrogen, Argon, Carbon) only for the CLI identity; the IDE identity gets
-// 404 for those models.
+// agChangelist is the build changelist the CLI puts in its User-Agent. An
+// overridden version drops the bundled changelist unless one is given too,
+// because the pair is only valid together.
+func agChangelist() string {
+	if v := firstEnv("TERMIXGO_ANTIGRAVITY_CLI_CL"); v != "" {
+		return v
+	}
+	if agCLIVersion() != defaultAGCLIVersion {
+		return ""
+	}
+	return defaultAGChangelist
+}
+
+// agUserAgent returns the Antigravity CLI identity, in the exact shape agy
+// sends on every Cloud Code call:
+//
+//	antigravity/cli/<version> (aidev_client; os_type=<os>; arch=<arch>; cl=<changelist>; auth_method=consumer)
+//
+// Cloud Code lists Gemini 4 only for the CLI identity, and an account whose
+// traffic does not look like agy's is the one that gets limited, so nothing
+// here is invented: the OS and architecture are Go's own spelling, which is
+// what the CLI reports, and every other field is the CLI's.
 func agUserAgent() string {
-	platform := "linux"
-	switch runtime.GOOS {
-	case "darwin":
-		platform = "darwin"
-	case "windows":
-		platform = "windows"
+	fields := []string{"aidev_client", "os_type=" + runtime.GOOS, "arch=" + runtime.GOARCH}
+	if cl := agChangelist(); cl != "" {
+		fields = append(fields, "cl="+cl)
 	}
-	arch := runtime.GOARCH
-	switch arch {
-	case "amd64":
-		arch = "x64"
-	case "386":
-		arch = "x86"
-	case "arm64":
-		arch = "arm64"
-	case "arm":
-		arch = "arm"
+	method := firstEnv("TERMIXGO_ANTIGRAVITY_AUTH_METHOD")
+	if method == "" {
+		method = "consumer"
 	}
-	return fmt.Sprintf("antigravity/cli/%s %s/%s", agCLIVersion(), platform, arch)
+	fields = append(fields, "auth_method="+method)
+	return fmt.Sprintf("antigravity/cli/%s (%s)", agCLIVersion(), strings.Join(fields, "; "))
 }
 
 func gemini4Family(model string) string {
@@ -85,7 +111,7 @@ func gemini4Family(model string) string {
 	}
 	family := strings.SplitN(rest, "-", 2)[0]
 	switch family {
-	case "hydrogen", "argon", "carbon":
+	case "neon", "hydrogen", "argon", "carbon":
 		return family
 	default:
 		return ""
@@ -93,10 +119,42 @@ func gemini4Family(model string) string {
 }
 
 func gemini4Levels(family string) []string {
-	if family == "hydrogen" {
+	if family == "hydrogen" || family == "neon" {
 		return []string{"low", "medium", "high", "xhigh"}
 	}
 	return []string{"low", "medium", "high"}
+}
+
+// agSuffixLevels are the thinking levels the Antigravity backend offers as a
+// model-name suffix for the non-Gemini-4 models the CLI lists: Gemini 3.x
+// Flash and the Claude 5.5 pair take low, medium and high.
+var agSuffixLevels = []string{"low", "medium", "high"}
+
+// agSuffixedModel splits a wire model id into its base and the thinking
+// level named by its suffix, for the families whose effort rides in the name.
+// ok is false for any other id.
+func agSuffixedModel(model string) (base, level string, ok bool) {
+	id := strings.TrimPrefix(model, "antigravity-")
+	for _, candidate := range agSuffixLevels {
+		if base, found := strings.CutSuffix(id, "-"+candidate); found && base != "" {
+			if strings.HasPrefix(base, "gemini-3") || strings.HasPrefix(base, "claude-") {
+				return base, candidate, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+// agModelEnums are the model_enum labels the CLI attaches per wire model,
+// captured from its own requests. A model with no captured label is sent
+// without one rather than with a guess.
+var agModelEnums = map[string]string{
+	"gemini-4-argon-low":      "MODEL_PLACEHOLDER_M419",
+	"gemini-4-argon-medium":   "MODEL_PLACEHOLDER_M418",
+	"gemini-4-argon-high":     "MODEL_PLACEHOLDER_M417",
+	"gemini-3.8-flash-low":    "MODEL_PLACEHOLDER_M320",
+	"gemini-3.8-flash-medium": "MODEL_PLACEHOLDER_M319",
+	"gemini-3.8-flash-high":   "MODEL_PLACEHOLDER_M318",
 }
 
 func containsString(items []string, target string) bool {
@@ -108,13 +166,15 @@ func containsString(items []string, target string) bool {
 	return false
 }
 
-// gemini4WireModel maps a Gemini 4 model id and optional effort level to the
-// wire id expected by the Antigravity CLI 1.5.9 backend.
+// gemini4WireModel maps a model id and optional effort level to the wire id
+// the Antigravity CLI backend expects: the thinking level is part of the model
+// name, so the effort picks the suffix. A level the family lacks is lowered to
+// its highest.
 func gemini4WireModel(model, effort string) string {
 	id := strings.TrimPrefix(model, "antigravity-")
 	family := gemini4Family(id)
 	if family == "" {
-		return model
+		return agSuffixedWireModel(model, effort)
 	}
 	levels := gemini4Levels(family)
 	base := "gemini-4-" + family
@@ -135,13 +195,24 @@ func gemini4WireModel(model, effort string) string {
 		wanted = "medium"
 	case EffortHigh:
 		wanted = "high"
-	case EffortMax, "xhigh":
+	case EffortXHigh, EffortMax, EffortUltra:
 		wanted = "xhigh"
 	}
 	if !containsString(levels, wanted) {
 		wanted = levels[len(levels)-1]
 	}
 	return base + "-" + wanted
+}
+
+// agSuffixedWireModel applies an effort to a Gemini 3.x Flash or Claude wire id
+// whose level is a name suffix. Any other id is returned unchanged, and so is
+// one with no effort set, which keeps the level the catalogue entry names.
+func agSuffixedWireModel(model, effort string) string {
+	base, _, ok := agSuffixedModel(model)
+	if !ok || effort == "" {
+		return strings.TrimPrefix(model, "antigravity-")
+	}
+	return base + "-" + clampEffort(effort, agSuffixLevels)
 }
 
 func gemini4BareModel(wireModel string) string {
@@ -184,15 +255,18 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 	}
 	session := c.session()
 	wireModel := gemini4WireModel(req.Model, req.Effort)
+	steps := agModelSteps(req.Messages)
 	body := map[string]any{
-		"project":   project,
-		"model":     wireModel,
-		"userAgent": "antigravity",
-		"requestId": agRequestID(len(req.Messages)),
+		"project":     project,
+		"model":       wireModel,
+		"userAgent":   "antigravity",
+		"requestType": "agent",
+		"requestId":   c.requestID(steps),
 		"request": map[string]any{
 			"contents":         c.encodeContents(req),
 			"sessionId":        session,
-			"generationConfig": agGenerationConfig(req),
+			"generationConfig": agGenerationConfig(req, wireModel),
+			"labels":           c.labels(wireModel, steps),
 		},
 	}
 	request := body["request"].(map[string]any)
@@ -203,15 +277,19 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 		}
 	}
 	if len(req.Tools) > 0 {
+		// The CLI sends no toolConfig, so neither does this client.
 		request["tools"] = []map[string]any{{"functionDeclarations": agTools(req.Tools)}}
-		request["toolConfig"] = map[string]any{"functionCallingConfig": map[string]any{"mode": "VALIDATED"}}
 	}
 
 	key := c.currentKey()
+	// The CLI sends exactly four headers on a chat call: the token, the JSON
+	// content type, its User-Agent and Go's gzip negotiation. Accept is
+	// emptied because the shared poster would add an event-stream one, and no
+	// session header is sent because the CLI has none.
 	headers := map[string]string{
-		"Authorization":        "Bearer " + key,
-		"User-Agent":           agUserAgent(),
-		"X-Machine-Session-Id": session,
+		"Authorization": "Bearer " + key,
+		"User-Agent":    agUserAgent(),
+		"Accept":        "",
 	}
 	endpoint := c.baseURL + "/v1internal:streamGenerateContent?alt=sse"
 	response, err := c.post(ctx, endpoint, headers, body)
@@ -221,16 +299,15 @@ func (c *antigravityClient) Stream(ctx context.Context, req ChatRequest, emit fu
 			newKey := c.refreshKey()
 			newSession := c.resetSession()
 			headers["Authorization"] = "Bearer " + newKey
-			headers["X-Machine-Session-Id"] = newSession
 			reqMap := body["request"].(map[string]any)
 			reqMap["sessionId"] = newSession
-			body["requestId"] = agRequestID(len(req.Messages))
+			body["requestId"] = c.requestID(steps)
 			response, err = c.post(ctx, endpoint, headers, body)
 		}
 		if err != nil {
 			if bareModel := gemini4BareModel(wireModel); bareModel != "" && isGemini4ModelNotFound(err) {
 				body["model"] = bareModel
-				body["requestId"] = agRequestID(len(req.Messages))
+				body["requestId"] = c.requestID(steps)
 				response, err = c.post(ctx, endpoint, headers, body)
 			}
 		}
@@ -352,7 +429,9 @@ func (c *antigravityClient) ensureProject(ctx context.Context) (string, error) {
 		c.project = c.accountID
 		return c.project, nil
 	}
-	metadata := map[string]any{"ideType": 9, "platform": agPlatform(), "pluginType": 2}
+	// The CLI names only its IDE type here; the numeric platform and plugin
+	// fields belong to the IDE client and are not part of its request.
+	metadata := map[string]any{"ideType": "ANTIGRAVITY"}
 	raw, err := c.doJSON(ctx, agLoadAssistURL, map[string]any{"metadata": metadata})
 	if err != nil {
 		return "", err
@@ -753,7 +832,7 @@ func antigravityFunctionResponse(message Message) map[string]any {
 	}}
 }
 
-func agGenerationConfig(req ChatRequest) map[string]any {
+func agGenerationConfig(req ChatRequest, wireModel string) map[string]any {
 	config := map[string]any{}
 	if req.Temperature != nil {
 		config["temperature"] = *req.Temperature
@@ -765,13 +844,31 @@ func agGenerationConfig(req ChatRequest) map[string]any {
 	config["maxOutputTokens"] = maxTokens
 	// Gemini 3 models cannot disable thinking; ask for a thought summary so the
 	// transcript shows the reasoning rather than dropping it.
-	level := googleEffort(req.Effort)
+	// The level follows the wire model's own suffix, which is what the CLI
+	// does: the model name and the level it sends always agree. A model with
+	// no suffix falls back to the requested effort, then to the balanced one.
+	level := ""
+	if _, suffix, ok := agSuffixedModel(wireModel); ok {
+		level = suffix
+	} else if family := gemini4Family(wireModel); family != "" {
+		for _, candidate := range gemini4Levels(family) {
+			if strings.HasSuffix(wireModel, "-"+candidate) {
+				level = candidate
+			}
+		}
+	}
 	if level == "" {
-		// The Cloud Code backend expects a level, so an unset effort keeps the
-		// balanced default rather than omitting the field.
+		level = googleEffort(req.Effort)
+	}
+	if level == "" {
 		level = "medium"
 	}
-	config["thinkingConfig"] = map[string]any{"thinkingLevel": level, "includeThoughts": true}
+	if level == "xhigh" {
+		// The public thinking enum stops at HIGH; the xhigh tier is selected
+		// by the model name.
+		level = "high"
+	}
+	config["thinkingConfig"] = map[string]any{"thinkingLevel": strings.ToUpper(level), "includeThoughts": true}
 	return config
 }
 
@@ -782,10 +879,52 @@ func agTools(tools []ToolDef) []map[string]any {
 		out = append(out, map[string]any{
 			"name":        sanitizeFunctionName(tool.Name),
 			"description": tool.Description,
-			"parameters":  schema,
+			"parameters":  upperSchemaTypes(schema),
 		})
 	}
 	return out
+}
+
+// upperSchemaTypes writes every "type" in a function schema in the upper-case
+// spelling the CLI sends (OBJECT, STRING, INTEGER). The backend reads both, so
+// this is about sending what the CLI sends, not about accepting more. Inside
+// "properties" the keys are property names, so only their values are walked.
+func upperSchemaTypes(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, entry := range typed {
+			switch {
+			case key == "type":
+				if name, ok := entry.(string); ok {
+					out[key] = strings.ToUpper(name)
+					continue
+				}
+				out[key] = entry
+			case key == "properties":
+				if properties, ok := entry.(map[string]any); ok {
+					walked := make(map[string]any, len(properties))
+					for name, property := range properties {
+						walked[name] = upperSchemaTypes(property)
+					}
+					out[key] = walked
+					continue
+				}
+				out[key] = upperSchemaTypes(entry)
+			default:
+				out[key] = upperSchemaTypes(entry)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for index, entry := range typed {
+			out[index] = upperSchemaTypes(entry)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 // cleanAntigravitySchema strips JSON Schema keywords Gemini rejects and makes
@@ -1089,17 +1228,6 @@ func sanitizeFunctionName(name string) string {
 	return clean
 }
 
-func agPlatform() int {
-	switch runtime.GOOS {
-	case "windows":
-		return 5
-	case "darwin":
-		return 2
-	default:
-		return 1
-	}
-}
-
 func agProjectID(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -1164,15 +1292,68 @@ func isEndpointError(err error) bool {
 		strings.Contains(msg, "no such host")
 }
 
-func agRequestID(messageCount int) string {
-	if messageCount < 1 {
-		messageCount = 1
+// agModelSteps counts the model turns already in the history, which is the
+// step the CLI reports as last_step_index.
+func agModelSteps(messages []Message) int {
+	steps := 0
+	for _, message := range messages {
+		if message.Role == RoleAssistant {
+			steps++
+		}
 	}
-	step := messageCount*2 - 1
-	if step < 1 {
-		step = 1
+	return steps
+}
+
+// ids returns the conversation and execution UUIDs, created on first use and
+// kept for the life of the client so one conversation reads as one.
+func (c *antigravityClient) ids() (cascade, trajectory string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cascade == "" {
+		c.cascade = randomUUID()
 	}
-	return fmt.Sprintf("agent/%s/%d/%s/%d", randomHex(16), time.Now().UnixMilli(), randomHex(16), step)
+	if c.trajectory == "" {
+		c.trajectory = randomUUID()
+	}
+	return c.cascade, c.trajectory
+}
+
+// requestID is the CLI's request id: agent/<conversation>/<unix ms>/<execution>/<step>.
+func (c *antigravityClient) requestID(steps int) string {
+	cascade, trajectory := c.ids()
+	return fmt.Sprintf("agent/%s/%d/%s/%d", cascade, time.Now().UnixMilli(), trajectory, steps+1)
+}
+
+// labels are the request labels the CLI attaches, with the same keys and the
+// same string values.
+func (c *antigravityClient) labels(wireModel string, steps int) map[string]string {
+	cascade, trajectory := c.ids()
+	claude := strings.HasPrefix(wireModel, "claude-")
+	labels := map[string]string{
+		"cascade_id":               cascade,
+		"last_step_index":          strconv.Itoa(steps),
+		"request_id":               fmt.Sprintf("%s-%d", trajectory, steps),
+		"root_cascade_id":          cascade,
+		"trajectory_id":            trajectory,
+		"used_claude":              strconv.FormatBool(claude),
+		"used_claude_conservative": "false",
+		"used_non_gemini_model":    strconv.FormatBool(!strings.HasPrefix(wireModel, "gemini-")),
+	}
+	if enum, ok := agModelEnums[wireModel]; ok {
+		labels["model_enum"] = enum
+	}
+	return labels
+}
+
+// randomUUID is a random version 4 UUID.
+func randomUUID() string {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "00000000-0000-4000-8000-000000000000"
+	}
+	raw[6] = (raw[6] & 0x0f) | 0x40
+	raw[8] = (raw[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
 }
 
 func randomHex(bytes int) string {

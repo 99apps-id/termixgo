@@ -28,7 +28,7 @@ func TestEffortReachesTheWirePayload(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newHTTPClient: %v", err)
 		}
-		collect(t, client, ChatRequest{Model: "claude-sonnet-4-5", Messages: messages, Effort: EffortMax})
+		collect(t, client, ChatRequest{Model: "claude-opus-5-5", Messages: messages, Effort: EffortMax})
 		output := object(t, recorder.payload(t)["output_config"], "output_config")
 		if output["effort"] != "max" {
 			t.Errorf("output_config.effort = %v, want max", output["effort"])

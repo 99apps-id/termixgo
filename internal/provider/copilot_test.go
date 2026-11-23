@@ -55,10 +55,10 @@ func TestCopilotStreamChatCompletionsAndMessages(t *testing.T) {
 	if gotAuth != "Bearer copilot-test-token" {
 		t.Errorf("Authorization = %q", gotAuth)
 	}
-	if gotIntegration != "vscode-chat" || gotEditor != "vscode/1.110.0" || gotPlugin != "copilot-chat/0.38.0" {
+	if gotIntegration != "vscode-chat" || gotEditor != "vscode/1.147.0" || gotPlugin != "copilot-chat/0.75.0" {
 		t.Errorf("vscode headers mismatch: integration=%q editor=%q plugin=%q", gotIntegration, gotEditor, gotPlugin)
 	}
-	if gotAgent != "GitHubCopilotChat/0.38.0" {
+	if gotAgent != "GitHubCopilotChat/0.75.0" {
 		t.Errorf("user-agent = %q", gotAgent)
 	}
 	if gotSessionID == "" {

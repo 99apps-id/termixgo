@@ -37,6 +37,9 @@ type ToolCall struct {
 // on the next step: the id and the encrypted content are what the backend
 // needs to pick the thought up again, the summary is what it carried.
 type ReasoningItem struct {
+	// Kind is empty for a Responses reasoning item. The Anthropic reader sets
+	// it on the thinking blocks it keeps, so each encoder takes back only its own.
+	Kind             string
 	ID               string
 	EncryptedContent string
 	Summary          []string
@@ -99,7 +102,8 @@ type ChatRequest struct {
 	Temperature *float64
 	MaxTokens   int
 	// Effort is the reasoning effort the operator asked for: one of
-	// EffortLow, EffortMedium, EffortHigh or EffortMax, or empty for the
+	// EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax or
+	// EffortUltra, or empty for the
 	// provider default. Each client maps it onto its own wire field, and a
 	// provider that accepts no such control sends nothing rather than a
 	// guess, because these fields are strict and a 400 costs the whole turn.
@@ -133,7 +137,9 @@ const (
 	EffortLow    = "low"
 	EffortMedium = "medium"
 	EffortHigh   = "high"
+	EffortXHigh  = "xhigh"
 	EffortMax    = "max"
+	EffortUltra  = "ultra"
 )
 
 // StreamEventType discriminates the chunks a client emits.

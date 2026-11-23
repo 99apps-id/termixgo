@@ -53,8 +53,8 @@ func (f *codexQuotaFetcher) fetch(ctx context.Context) *QuotaSnapshot {
 	headers := map[string]string{
 		"Authorization": "Bearer " + key,
 		"Accept":        "application/json",
-		"originator":    "codex_cli_rs",
-		"User-Agent":    "codex_cli_rs/" + codexCLIVersion,
+		"Originator":    codexOriginator,
+		"User-Agent":    codexQuotaUserAgent(),
 	}
 	if strings.TrimSpace(f.account) != "" {
 		headers["ChatGPT-Account-ID"] = strings.TrimSpace(f.account)

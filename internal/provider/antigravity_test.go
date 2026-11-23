@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -642,9 +643,22 @@ func TestAntigravityLeavesAWellFormedHistoryUntouched(t *testing.T) {
 }
 
 func TestAntigravityUserAgentUsesCLIVersion(t *testing.T) {
-	ua := agUserAgent()
-	if !strings.HasPrefix(ua, "antigravity/cli/1.5.9 ") {
-		t.Errorf("agUserAgent() = %q, want prefix antigravity/cli/1.5.9 ", ua)
+	t.Setenv("TERMIXGO_ANTIGRAVITY_CLI_VERSION", "")
+	t.Setenv("ANTIGRAVITY_CLI_VERSION", "")
+	t.Setenv("ODON_ANTIGRAVITY_CLI_VERSION", "")
+	t.Setenv("TERMIXGO_ANTIGRAVITY_CLI_CL", "")
+	t.Setenv("TERMIXGO_ANTIGRAVITY_AUTH_METHOD", "")
+	// The shape is the one agy 1.5.14 sent when its request was captured on a
+	// local endpoint; only the OS and architecture vary with the host.
+	want := "antigravity/cli/1.5.14 (aidev_client; os_type=" + runtime.GOOS + "; arch=" + runtime.GOARCH + "; cl=1026970498; auth_method=consumer)"
+	if ua := agUserAgent(); ua != want {
+		t.Errorf("agUserAgent() = %q, want %q", ua, want)
+	}
+	// A version override drops the bundled changelist, which only belongs to
+	// the release it was read from.
+	t.Setenv("TERMIXGO_ANTIGRAVITY_CLI_VERSION", "1.6.0")
+	if ua := agUserAgent(); strings.Contains(ua, "cl=") {
+		t.Errorf("agUserAgent() with a version override = %q, want no changelist", ua)
 	}
 }
 
@@ -662,7 +676,22 @@ func TestAntigravityGemini4WireModels(t *testing.T) {
 		{"antigravity-gemini-4-argon", EffortMax, "gemini-4-argon-high"},
 		{"gemini-4-carbon-medium", "", "gemini-4-carbon-medium"},
 		{"antigravity-gemini-4-carbon", EffortMax, "gemini-4-carbon-high"},
-		{"gemini-3.8-flash-medium", EffortHigh, "gemini-3.8-flash-medium"},
+		{"antigravity-gemini-4-neon", EffortLow, "gemini-4-neon-low"},
+		{"antigravity-gemini-4-neon", EffortHigh, "gemini-4-neon-high"},
+		{"antigravity-gemini-4-neon", EffortXHigh, "gemini-4-neon-xhigh"},
+		{"antigravity-gemini-4-neon", EffortMax, "gemini-4-neon-xhigh"},
+		{"antigravity-gemini-4-neon", EffortUltra, "gemini-4-neon-xhigh"},
+		{"gemini-4-neon-high", "", "gemini-4-neon-high"},
+		{"antigravity-gemini-4-hydrogen", EffortUltra, "gemini-4-hydrogen-xhigh"},
+		{"antigravity-gemini-4-argon", EffortXHigh, "gemini-4-argon-high"},
+		// Flash and Claude carry the level in the name too: the effort picks
+		// the suffix and a level above high lands on high.
+		{"gemini-3.8-flash-medium", "", "gemini-3.8-flash-medium"},
+		{"gemini-3.8-flash-medium", EffortHigh, "gemini-3.8-flash-high"},
+		{"gemini-3.8-flash-high", EffortLow, "gemini-3.8-flash-low"},
+		{"gemini-3.8-flash-medium", EffortUltra, "gemini-3.8-flash-high"},
+		{"claude-opus-5-5-medium", EffortHigh, "claude-opus-5-5-high"},
+		{"claude-sonnet-5-5-medium", EffortXHigh, "claude-sonnet-5-5-high"},
 	}
 	for _, tc := range cases {
 		if got := gemini4WireModel(tc.model, tc.effort); got != tc.want {

@@ -326,8 +326,8 @@ func TestFable52Support(t *testing.T) {
 	}
 
 	// Test default version and environment override
-	if v := resolveClaudeCLIVersion(); v != "2.1.290" {
-		t.Errorf("resolveClaudeCLIVersion() = %q, want '2.1.290'", v)
+	if v := resolveClaudeCLIVersion(); v != "2.1.325" {
+		t.Errorf("resolveClaudeCLIVersion() = %q, want '2.1.325'", v)
 	}
 	t.Setenv("ODON_CLAUDE_CLI_VERSION", "2.1.300")
 	if v := resolveClaudeCLIVersion(); v != "2.1.300" {

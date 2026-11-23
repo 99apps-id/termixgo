@@ -3,16 +3,13 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 )
 
-// museQuotaFetcher reports the Muse-side allowance for one login. Meta
-// exposes no documented usage endpoint on the Muse surface: the fetcher
-// probes the small set of usage-shaped paths the backend has answered, and
-// when none answers it says so instead of inventing a number. The gauge then
-// falls back to the response rate-limit headers, which are Meta's own
-// per-minute signal on every turn.
+// museQuotaFetcher reports the Muse-side allowance for one login, read from
+// the subscription usage event Meta ends every response with.
 type museQuotaFetcher struct {
 	http *httpClient
 }
@@ -40,45 +37,32 @@ func (f *museQuotaFetcher) FetchQuotaForced(ctx context.Context) *QuotaSnapshot 
 	})
 }
 
-// museQuotaPaths are the usage-shaped paths probed in order. None is
-// documented for Muse; the first path that answers a windowed document wins,
-// and a clean miss on all of them is reported as unavailable rather than
-// silent, so the operator knows the gauge is on headers.
-var museQuotaPaths = []string{"/usage", "/quota", "/v1/usage"}
-
+// fetch reports the usage Meta last sent. The reading rides the end of every
+// response stream, so a session that has spoken to Meta already has one; only
+// an idle or fresh session probes, with a request of a few dozen tokens.
 func (f *museQuotaFetcher) fetch(ctx context.Context) *QuotaSnapshot {
 	snap := &QuotaSnapshot{Provider: "muse", FetchedAt: time.Now()}
-	key := strings.TrimSpace(f.http.currentKey())
-	if key == "" {
+	if strings.TrimSpace(f.http.currentKey()) == "" {
 		snap.Unavailable = "no Muse login; run 'termixgo login muse'"
 		return snap
 	}
-	headers := map[string]string{
-		"Authorization": "Bearer " + key,
-		"User-Agent":    museUserAgent,
-		"X-Client-Id":   "tbh:tui",
-		"x-api-version": "1.0.0",
-		"Accept":        "application/json",
+	if fresh := museUsageFresh(time.Now()); fresh != nil {
+		return fresh
 	}
-	for _, path := range museQuotaPaths {
-		endpoint := strings.TrimRight(f.http.baseURL, "/") + path
-		body, status, err := quotaGET(ctx, f.http.http, endpoint, headers)
-		if err != nil {
-			continue
-		}
-		if status == 401 || status == 403 {
+	probed, err := (&museClient{httpClient: f.http}).probeUsage(ctx)
+	if probed != nil {
+		return probed
+	}
+	if err != nil {
+		var status *providerStatusError
+		if errors.As(err, &status) && (status.status == 401 || status.status == 403) {
 			snap.Unavailable = "login expired; run 'termixgo login muse'"
 			return snap
 		}
-		if status < 200 || status >= 300 {
-			continue
-		}
-		if parsed := parseMuseQuota(snap, body); parsed != nil {
-			return parsed
-		}
+		snap.Unavailable = "Muse usage unavailable: " + err.Error()
+		return snap
 	}
-	snap.Unavailable = "Meta exposes no usage endpoint on the Muse surface; gauge uses response headers"
-	snap.Windows = nil
+	snap.Unavailable = "Meta sent no subscription usage with the last response"
 	return snap
 }
 

@@ -6,17 +6,35 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 )
 
 // codexCLIVersion is the Codex CLI release whose identity the ChatGPT backend
 // expects. It gates access to the newer models, so it is sent in both the
 // User-Agent and the version header.
-const codexCLIVersion = "0.159.0"
+const codexCLIVersion = "0.171.0"
 
 // codexClient speaks the Responses API served by the ChatGPT backend for a
 // Codex login. It is not chat-completions: the request carries input items and
 // the stream is a typed event feed, so it needs its own encoder and decoder.
-type codexClient struct{ *httpClient }
+type codexClient struct {
+	*httpClient
+
+	threadMu sync.Mutex
+	thread   string
+}
+
+// threadID is the conversation id the Codex client puts on its session and
+// thread headers, one UUID for the life of the client so the backend sees one
+// conversation instead of a new one per step.
+func (c *codexClient) threadID() string {
+	c.threadMu.Lock()
+	defer c.threadMu.Unlock()
+	if c.thread == "" {
+		c.thread = uuidV7()
+	}
+	return c.thread
+}
 
 func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(StreamEvent) error) error {
 	input := encodeResponsesInput(req)
@@ -65,7 +83,7 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 	if !isCodexResponsesLiteModel(req.Model) {
 		if req.PlainReasoning {
 			reasoning := map[string]any{}
-			if effort := compatibleEffort(c.info.ID, req.Effort); effort != "" {
+			if effort := compatibleEffortFor(c.info.ID, req.Model, req.Effort); effort != "" {
 				reasoning["effort"] = effort
 			}
 			if len(reasoning) > 0 {
@@ -73,7 +91,7 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 			}
 		} else {
 			reasoning := map[string]any{"summary": "auto"}
-			if effort := compatibleEffort(c.info.ID, req.Effort); effort != "" {
+			if effort := compatibleEffortFor(c.info.ID, req.Model, req.Effort); effort != "" {
 				reasoning["effort"] = effort
 			}
 			payload["reasoning"] = reasoning
@@ -81,22 +99,33 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 		}
 	}
 	if isCodexResponsesLiteModel(req.Model) {
-		applyResponsesLite(payload, input, tools, instructions, req.Effort)
+		applyResponsesLite(payload, input, tools, instructions, codexEffort(req.Model, req.Effort))
 	}
 
 	key := c.currentKey()
+	thread := c.threadID()
 	headers := map[string]string{
 		"Authorization": "Bearer " + key,
-		"originator":    "codex_cli_rs",
-		"User-Agent":    "codex_cli_rs/" + codexCLIVersion,
-		"version":       codexCLIVersion,
-		"session_id":    c.SessionID(),
+		"Accept":        "text/event-stream",
+		"Originator":    codexOriginator,
+		"User-Agent":    codexUserAgent(),
+		"Version":       codexCLIVersion,
+		"Session-Id":    thread,
+		"Thread-Id":     thread,
+		// The client names each request, which the backend logs beside the
+		// turn metadata below.
+		"X-Client-Request-Id":   thread,
+		"X-Codex-Window-Id":     thread + ":0",
+		"X-Codex-Turn-Metadata": codexTurnMetadata(thread, uuidV7()),
 		// The working Termigo desktop client sends this on every ChatGPT
 		// request. Without it the backend answers some of the catalogue's
 		// models (a reserve id, a virtual review id) with an incomplete
 		// response carrying zero output tokens, while the same request with
 		// the header answers normally.
 		"OpenAI-Beta": "responses=experimental",
+	}
+	if isCodexResponsesLiteModel(req.Model) {
+		headers["X-Openai-Internal-Codex-Responses-Lite"] = "true"
 	}
 	if strings.TrimSpace(c.accountID) != "" {
 		headers["ChatGPT-Account-ID"] = c.accountID
@@ -105,7 +134,7 @@ func (c *codexClient) Stream(ctx context.Context, req ChatRequest, emit func(Str
 	// The reference client keys the backend's prompt cache on the
 	// conversation, which keeps a long session's prefix on one cache. A
 	// backend that refuses the field gets the request again without it.
-	payload["prompt_cache_key"] = promptCacheKey(c.SessionID())
+	payload["prompt_cache_key"] = thread
 	response, err := c.post(ctx, c.baseURL+"/responses", headers, payload)
 	if err != nil && rejectsField(err, "prompt_cache_key") {
 		delete(payload, "prompt_cache_key")
@@ -259,6 +288,12 @@ func decodeResponsesStream(label string, body io.Reader, emit func(StreamEvent) 
 					return wrapStreamError(label, fmt.Errorf("the Responses backend ended the response incomplete (%s) before the step finished", reason))
 				}
 			}
+		case "response.subscription_usage":
+			// Only Meta sends this event. It is the gauge's source, so it is
+			// recorded here and never reaches the agent loop.
+			if event.Subscription != nil {
+				recordMuseSubscription(*event.Subscription)
+			}
 		case "response.failed", "error":
 			return wrapStreamError(label, fmt.Errorf("the Responses backend reported a failure: %s", event.message()))
 		}
@@ -282,6 +317,10 @@ func encodeResponsesInput(req ChatRequest) []map[string]any {
 			// calls: they are the thought that produced them, and a
 			// stateless backend has no other way to recover it.
 			for _, item := range message.ReasoningItems {
+				// A thinking block another vendor wrote is not a Responses item.
+				if item.Kind != "" {
+					continue
+				}
 				// An item another backend issued with no encrypted
 				// content and an id this API cannot carry (Meta joins
 				// two ids with a colon) cannot be resumed here: the
@@ -465,7 +504,7 @@ func applyResponsesLite(payload map[string]any, input []map[string]any, tools []
 	// a shadowing variable declared in the if header assigned to a copy that
 	// died at the end of the block, and the raw operator level (including an
 	// empty one) went on the wire untouched.
-	mapped := openAIEffortValues(effort)
+	mapped := effort
 	if mapped == "" {
 		mapped = "medium"
 	}
@@ -482,7 +521,9 @@ type responsesEvent struct {
 	// output item.
 	ItemID    string `json:"item_id"`
 	Arguments string `json:"arguments"`
-	Error     *struct {
+	// Subscription is Meta Muse's usage reading, which closes every stream.
+	Subscription *museSubscription `json:"subscription"`
+	Error        *struct {
 		Message string `json:"message"`
 	} `json:"error"`
 	Item *struct {
@@ -525,11 +566,7 @@ func (e responsesEvent) message() string {
 
 func isCodexResponsesLiteModel(model string) bool {
 	m := strings.ToLower(model)
-	return strings.Contains(m, "gpt-6.1-sol") ||
-		strings.Contains(m, "gpt-6-sol") ||
-		strings.Contains(m, "gpt-6-luna") ||
-		strings.Contains(m, "gpt-6-astra") ||
-		strings.Contains(m, "gpt-5.6-sol") ||
-		strings.Contains(m, "gpt-5.6-luna") ||
-		strings.Contains(m, "gpt-5.6-terra")
+	// The GPT-6 line (6, 6.1, 6.2) and the GPT-5.6 line all take the
+	// responses-lite shape; older Codex models keep the plain one.
+	return strings.Contains(m, "gpt-6") || strings.Contains(m, "gpt-5.6")
 }

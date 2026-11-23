@@ -129,6 +129,17 @@ func (q *quotaCache) fetch(providerID string, force bool, fetch func() *QuotaSna
 	return snap
 }
 
+// store replaces the cached snapshot for a provider with a reading taken from
+// somewhere other than a fetch, such as a response stream.
+func (q *quotaCache) store(providerID string, snap *QuotaSnapshot) {
+	if snap == nil {
+		return
+	}
+	q.mu.Lock()
+	q.snapshots[providerID] = snap
+	q.mu.Unlock()
+}
+
 // ClearQuotaCache drops the cached snapshot for a provider, so the next read
 // hits the endpoint again.
 func ClearQuotaCache(providerID string) {

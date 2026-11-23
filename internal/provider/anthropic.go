@@ -19,13 +19,13 @@ import (
 // matches what the current CLI sends; the first entry is what unlocks an
 // OAuth bearer at all.
 const (
-	defaultClaudeCLIVersion = "2.1.290"
+	defaultClaudeCLIVersion = "2.1.325"
 	claudeCodeIdentity      = "You are Claude Code, Anthropic's official CLI for Claude."
 )
 
 var (
 	claudeCLIVersion   = defaultClaudeCLIVersion
-	claudeCLIUserAgent = "claude-cli/" + claudeCLIVersion + " (external, sdk-cli)"
+	claudeCLIUserAgent = claudeUserAgentFor(claudeCLIVersion)
 
 	learnedClaudeCLIVersionMu sync.Mutex
 	learnedClaudeCLIVersion   string
@@ -77,7 +77,12 @@ func currentClaudeCLIUserAgent() string {
 	if ver == defaultClaudeCLIVersion {
 		return claudeCLIUserAgent
 	}
-	return "claude-cli/" + ver + " (external, sdk-cli)"
+	return claudeUserAgentFor(ver)
+}
+
+// claudeUserAgentFor is the interactive Claude Code identity for a version.
+func claudeUserAgentFor(version string) string {
+	return "claude-cli/" + version + " (external, cli)"
 }
 
 func claudeCLIVersionFromError(body string) string {
@@ -123,24 +128,36 @@ func stainlessArch() string {
 }
 
 const (
-	claudeOAuthBeta = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24,structured-outputs-2025-12-15,fast-mode-2026-02-01,redact-thinking-2026-02-12,token-efficient-tools-2026-03-28"
+	claudeOAuthBeta = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11"
 )
 
 // anthropicClient speaks the Messages streaming protocol.
 type anthropicClient struct{ *httpClient }
 
 func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func(StreamEvent) error) error {
-	maxTokens := req.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 8192
-	}
-	messages := encodeAnthropicMessages(req.Messages)
 	model := req.Model
 	if c.info.OAuth && strings.HasPrefix(model, "claude-oauth-") {
 		model = strings.TrimPrefix(model, "claude-oauth-")
 	}
 	if model == "claude-fable-5.2" {
 		model = "claude-fable-5-2"
+	}
+	// Adaptive thinking lets the model decide when and how much to think. The
+	// thinking tokens come out of max_tokens, so the default ceiling is raised
+	// with it: 8192 would cut a reasoning step off before it answered.
+	thinking := anthropicAdaptiveThinking(model) && claudeThinkingEnabled()
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 8192
+		if thinking {
+			maxTokens = 64000
+		}
+	}
+	var messages []map[string]any
+	if thinking {
+		messages = encodeAnthropicMessagesWith(req.Messages, model)
+	} else {
+		messages = encodeAnthropicMessages(req.Messages)
 	}
 	payload := map[string]any{
 		"model":      model,
@@ -174,8 +191,20 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 	// header. It is separate from extended thinking: it shapes how much work
 	// the whole response gets, and it is left out entirely when the operator
 	// set no effort, so the model keeps its own default.
-	if effort := anthropicEffortValues(req.Effort); effort != "" {
+	if effort := anthropicEffort(model, req.Effort); effort != "" {
 		payload["output_config"] = map[string]any{"effort": effort}
+	}
+
+	if thinking {
+		// display summarized keeps the model's reasoning visible in the
+		// transcript; the Claude Code client itself asks for it omitted.
+		payload["thinking"] = map[string]any{"type": "adaptive", "display": "summarized"}
+		// clear_thinking keep all is the client's own context edit: earlier
+		// thinking blocks stay in the context instead of being dropped, which
+		// keeps the cached prefix stable across a tool loop.
+		payload["context_management"] = map[string]any{"edits": []map[string]any{{"type": "clear_thinking_20251015", "keep": "all"}}}
+		// A thinking request takes the default temperature only.
+		delete(payload, "temperature")
 	}
 
 	applyPromptCacheToMessages(messages)
@@ -208,15 +237,17 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 		}
 		headers["anthropic-beta"] = beta
 		headers["anthropic-dangerous-direct-browser-access"] = "true"
+		// The SDK asks for JSON even on a stream, so the shared poster's
+		// event-stream Accept is replaced.
+		headers["Accept"] = "application/json"
 		headers["x-app"] = "cli"
 		headers["User-Agent"] = currentClaudeCLIUserAgent()
 		if sid := strings.TrimSpace(c.SessionID()); sid != "" {
 			headers["X-Claude-Code-Session-Id"] = deriveUUIDFromSeed("session:" + sid)
 		}
-		headers["X-Stainless-Helper-Method"] = "stream"
 		headers["X-Stainless-Retry-Count"] = "0"
-		headers["X-Stainless-Runtime-Version"] = "v24.14.0"
-		headers["X-Stainless-Package-Version"] = "0.80.0"
+		headers["X-Stainless-Runtime-Version"] = "v26.12.1"
+		headers["X-Stainless-Package-Version"] = "0.128.0"
 		headers["X-Stainless-Runtime"] = "node"
 		headers["X-Stainless-Lang"] = "js"
 		headers["X-Stainless-Arch"] = stainlessArch()
@@ -234,7 +265,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 			aliases = names
 			cloakClaudeMessages(messages)
 		}
-		payload["system"] = withClaudeCodeIdentity(payload["system"])
+		payload["system"] = withClaudeCodeIdentity(payload["system"], claudeFingerprintText(req.Messages))
 		payload["metadata"] = map[string]any{
 			"user_id": claudeUserID(key, c.SessionID()),
 		}
@@ -242,6 +273,9 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 	} else {
 		headers["x-api-key"] = key
 		beta := "prompt-caching-2024-07-31"
+		if thinking {
+			beta += ",context-management-2025-06-27"
+		}
 		if hasPDF {
 			beta += ",pdfs-2024-09-25"
 		}
@@ -254,7 +288,50 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 			payload["tools"] = tools
 		}
 	}
-	return c.streamWithURL(ctx, url, headers, payload, emit, aliases)
+	err := c.streamWithURL(ctx, url, headers, payload, emit, aliases)
+	if err != nil && thinking && isThinkingRejection(err) {
+		// A history the thinking rules refuse (a block signed by another model,
+		// a turn that lost its block) costs the whole turn, so the request is
+		// repeated once as a plain one: no thinking, no thinking blocks.
+		delete(payload, "thinking")
+		delete(payload, "context_management")
+		stripThinkingBlocks(messages)
+		return c.streamWithURL(ctx, url, headers, payload, emit, aliases)
+	}
+	return err
+}
+
+// isThinkingRejection reports a 400 that is about the thinking parameter or a
+// thinking block.
+func isThinkingRejection(err error) bool {
+	var statusErr *providerStatusError
+	if !errors.As(err, &statusErr) || statusErr.status != http.StatusBadRequest {
+		return false
+	}
+	return strings.Contains(strings.ToLower(statusErr.message), "thinking")
+}
+
+// stripThinkingBlocks removes every thinking and redacted_thinking block from
+// an encoded history, leaving an empty text block where a turn would
+// otherwise be empty.
+func stripThinkingBlocks(messages []map[string]any) {
+	for _, message := range messages {
+		blocks, ok := message["content"].([]map[string]any)
+		if !ok {
+			continue
+		}
+		kept := blocks[:0]
+		for _, block := range blocks {
+			if kind, _ := block["type"].(string); kind == "thinking" || kind == "redacted_thinking" {
+				continue
+			}
+			kept = append(kept, block)
+		}
+		if len(kept) == 0 {
+			kept = append(kept, map[string]any{"type": "text", "text": ""})
+		}
+		message["content"] = kept
+	}
 }
 
 func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers map[string]string, payload map[string]any, emit func(StreamEvent) error, aliases map[string]string) error {
@@ -273,7 +350,7 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 		if errors.As(err, &statusErr) && statusErr.status == http.StatusBadRequest && strings.Contains(statusErr.message, "claude_code_version_too_old") {
 			if required := claudeCLIVersionFromError(statusErr.message); required != "" && required != resolveClaudeCLIVersion() {
 				rememberClaudeCLIVersion(required)
-				headers["User-Agent"] = "claude-cli/" + required + " (external, sdk-cli)"
+				headers["User-Agent"] = claudeUserAgentFor(required)
 				response, err = c.post(ctx, url, headers, payload)
 			}
 		}
@@ -289,6 +366,7 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 
 	reader := newSSEReader(response.Body)
 	blocks := map[int]*anthropicBlock{}
+	streamModel, _ := payload["model"].(string)
 	// The counters Anthropic streams are cumulative for the request, and one
 	// response can carry more than one message: interleaved thinking is in the
 	// OAuth beta list, and each thinking round reports the running total again.
@@ -349,6 +427,14 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 				}
 			}
 		case "content_block_start":
+			if event.ContentBlock != nil && (event.ContentBlock.Type == "thinking" || event.ContentBlock.Type == "redacted_thinking") {
+				blocks[event.Index] = &anthropicBlock{
+					kind:      event.ContentBlock.Type,
+					thinking:  event.ContentBlock.Thinking,
+					signature: event.ContentBlock.Signature,
+					data:      event.ContentBlock.Data,
+				}
+			}
 			if event.ContentBlock != nil && event.ContentBlock.Type == "tool_use" {
 				name := event.ContentBlock.Name
 				if aliases != nil {
@@ -367,7 +453,14 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 						return err
 					}
 				}
+			case "signature_delta":
+				if block := blocks[event.Index]; block != nil {
+					block.signature += delta.Signature
+				}
 			case "thinking_delta":
+				if block := blocks[event.Index]; block != nil && block.kind == "thinking" {
+					block.thinking += delta.Thinking
+				}
 				if delta.Thinking != "" {
 					if err := emit(StreamEvent{Type: EventReasoningDelta, Text: delta.Thinking}); err != nil {
 						return err
@@ -379,7 +472,14 @@ func (c *anthropicClient) streamWithURL(ctx context.Context, url string, headers
 				}
 			}
 		case "content_block_stop":
-			if block := blocks[event.Index]; block != nil {
+			if block := blocks[event.Index]; block != nil && block.kind != "" {
+				delete(blocks, event.Index)
+				if item, ok := block.reasoningItem(streamModel); ok {
+					if err := emit(StreamEvent{Type: EventReasoningItem, ReasoningItem: &item}); err != nil {
+						return err
+					}
+				}
+			} else if block != nil {
 				delete(blocks, event.Index)
 				call := ToolCall{ID: block.id, Name: block.name, Arguments: block.arguments}
 				if call.Arguments == "" {
@@ -421,6 +521,38 @@ type anthropicBlock struct {
 	id        string
 	name      string
 	arguments string
+	// kind is set for a thinking or redacted_thinking block, which is kept
+	// whole (text plus signature, or the opaque data) so the next request can
+	// hand it back.
+	kind      string
+	thinking  string
+	signature string
+	data      string
+}
+
+// Reasoning item kinds written by the Anthropic reader. They mark an item as
+// one only Anthropic can take back, so the Responses encoder skips it.
+const (
+	reasoningKindThinking = "anthropic-thinking"
+	reasoningKindRedacted = "anthropic-redacted-thinking"
+)
+
+// reasoningItem renders a finished thinking block as a stored item. The model
+// id rides in ID because a signature is only valid for the model that wrote it.
+func (b *anthropicBlock) reasoningItem(model string) (ReasoningItem, bool) {
+	switch b.kind {
+	case "thinking":
+		if strings.TrimSpace(b.signature) == "" {
+			return ReasoningItem{}, false
+		}
+		return ReasoningItem{Kind: reasoningKindThinking, ID: model, EncryptedContent: b.signature, Summary: []string{b.thinking}}, true
+	case "redacted_thinking":
+		if strings.TrimSpace(b.data) == "" {
+			return ReasoningItem{}, false
+		}
+		return ReasoningItem{Kind: reasoningKindRedacted, ID: model, EncryptedContent: b.data}, true
+	}
+	return ReasoningItem{}, false
 }
 
 func encodeAnthropicTools(tools []ToolDef) []map[string]any {
@@ -443,6 +575,13 @@ func encodeAnthropicTools(tools []ToolDef) []map[string]any {
 // tool results must be user-role blocks, and consecutive results and user turns
 // must be merged into one user message or the API rejects the sequence.
 func encodeAnthropicMessages(messages []Message) []map[string]any {
+	return encodeAnthropicMessagesWith(messages, "")
+}
+
+// encodeAnthropicMessagesWith is encodeAnthropicMessages that also hands back
+// the thinking blocks the named model wrote. With no model the blocks are left
+// out, which is what a request without thinking wants.
+func encodeAnthropicMessagesWith(messages []Message, thinkingModel string) []map[string]any {
 	out := make([]map[string]any, 0, len(messages))
 	for index := 0; index < len(messages); index++ {
 		message := messages[index]
@@ -450,7 +589,25 @@ func encodeAnthropicMessages(messages []Message) []map[string]any {
 		case RoleUser:
 			out = appendAnthropicUserTurn(out, anthropicUserContent(message))
 		case RoleAssistant:
-			blocks := make([]map[string]any, 0, len(message.ToolCalls)+1)
+			blocks := make([]map[string]any, 0, len(message.ToolCalls)+2)
+			if thinkingModel != "" {
+				// Thinking blocks lead the turn, in the order they were written.
+				for _, item := range message.ReasoningItems {
+					if item.ID != thinkingModel {
+						continue
+					}
+					switch item.Kind {
+					case reasoningKindThinking:
+						text := ""
+						if len(item.Summary) > 0 {
+							text = item.Summary[0]
+						}
+						blocks = append(blocks, map[string]any{"type": "thinking", "thinking": text, "signature": item.EncryptedContent})
+					case reasoningKindRedacted:
+						blocks = append(blocks, map[string]any{"type": "redacted_thinking", "data": item.EncryptedContent})
+					}
+				}
+			}
 			if strings.TrimSpace(message.Content) != "" {
 				blocks = append(blocks, map[string]any{"type": "text", "text": message.Content})
 			}
@@ -602,7 +759,15 @@ func markMessageCache(target map[string]any) {
 		if len(content) == 0 {
 			return
 		}
-		content[len(content)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
+		// A thinking block cannot carry a cache breakpoint, so the marker goes
+		// on the last block that can.
+		for index := len(content) - 1; index >= 0; index-- {
+			if kind, _ := content[index]["type"].(string); kind == "thinking" || kind == "redacted_thinking" {
+				continue
+			}
+			content[index]["cache_control"] = map[string]any{"type": "ephemeral"}
+			return
+		}
 	}
 }
 
@@ -613,14 +778,18 @@ type anthropicEvent struct {
 		Type        string `json:"type"`
 		Text        string `json:"text"`
 		Thinking    string `json:"thinking"`
+		Signature   string `json:"signature"`
 		PartialJSON string `json:"partial_json"`
 		StopReason  string `json:"stop_reason"`
 	} `json:"delta"`
 	ContentBlock *struct {
-		Type  string `json:"type"`
-		ID    string `json:"id"`
-		Name  string `json:"name"`
-		Input any    `json:"input"`
+		Type      string `json:"type"`
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		Input     any    `json:"input"`
+		Thinking  string `json:"thinking"`
+		Signature string `json:"signature"`
+		Data      string `json:"data"`
 	} `json:"content_block"`
 	Message *struct {
 		Usage *struct {
@@ -709,7 +878,13 @@ func cloakClaudeMessages(messages []map[string]any) {
 // Code identity on its own (without cache_control), and removes duplicate
 // copies of it from subsequent blocks. Anthropic rejects OAuth subscription
 // requests with 429 rate_limit_error when another block precedes it.
-func withClaudeCodeIdentity(system any) []map[string]any {
+func withClaudeCodeIdentity(system any, fingerprintText string) []map[string]any {
+	blocks := withClaudeCodeIdentityBlocks(system)
+	billing := map[string]any{"type": "text", "text": claudeBillingHeader(fingerprintText)}
+	return append([]map[string]any{billing}, blocks...)
+}
+
+func withClaudeCodeIdentityBlocks(system any) []map[string]any {
 	identity := map[string]any{"type": "text", "text": claudeCodeIdentity}
 	switch value := system.(type) {
 	case []map[string]any:
@@ -763,4 +938,47 @@ var claudeDecoyTools = []map[string]any{
 	{"name": "Skill", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
 	{"name": "EnterPlanMode", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
 	{"name": "ExitPlanMode", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
+}
+
+// claudeFingerprintSalt and claudeFingerprintIndexes are the constants the
+// Claude Code client mixes into the build fingerprint it advertises in the
+// billing header. They were recovered by matching the client's own header for
+// a known prompt: version 2.1.325 and the text "say hi" produce 382.
+const claudeFingerprintSalt = "59cf53e54c78"
+
+var claudeFingerprintIndexes = [...]int{4, 7, 20}
+
+// claudeFingerprint is the three-hex build fingerprint: a SHA-256 over the
+// salt, the characters of the first user message at three fixed positions and
+// the client version.
+func claudeFingerprint(text, version string) string {
+	runes := []rune(text)
+	picked := make([]rune, 0, len(claudeFingerprintIndexes))
+	for _, index := range claudeFingerprintIndexes {
+		if index < len(runes) {
+			picked = append(picked, runes[index])
+		} else {
+			picked = append(picked, '0')
+		}
+	}
+	sum := sha256.Sum256([]byte(claudeFingerprintSalt + string(picked) + version))
+	return hex.EncodeToString(sum[:])[:3]
+}
+
+// claudeBillingHeader is the first system block of every Claude Code request:
+// the client version with its fingerprint, and the entrypoint it runs as.
+func claudeBillingHeader(fingerprintText string) string {
+	version := resolveClaudeCLIVersion()
+	return fmt.Sprintf("x-anthropic-billing-header: cc_version=%s.%s; cc_entrypoint=cli;", version, claudeFingerprint(fingerprintText, version))
+}
+
+// claudeFingerprintText is the text the fingerprint is taken from: the first
+// user message of the conversation, as the client does.
+func claudeFingerprintText(messages []Message) string {
+	for _, message := range messages {
+		if message.Role == RoleUser && strings.TrimSpace(message.Content) != "" {
+			return message.Content
+		}
+	}
+	return ""
 }

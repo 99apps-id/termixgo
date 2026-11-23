@@ -23,7 +23,7 @@ func TestCodexStreamUsesTheResponsesAPI(t *testing.T) {
 		gotOriginator = request.Header.Get("originator")
 		gotVersion = request.Header.Get("version")
 		gotAgent = request.Header.Get("User-Agent")
-		gotSessionID = request.Header.Get("session_id")
+		gotSessionID = request.Header.Get("Session-Id")
 		gotBeta = request.Header.Get("OpenAI-Beta")
 		raw, _ := io.ReadAll(request.Body)
 		_ = json.Unmarshal(raw, &gotBody)
@@ -82,14 +82,14 @@ func TestCodexStreamUsesTheResponsesAPI(t *testing.T) {
 	}
 	// The backend gates newer models on the Codex CLI identity, so the version
 	// header and User-Agent must carry a real release, not a placeholder.
-	if gotVersion != codexCLIVersion || gotAgent != "codex_cli_rs/"+codexCLIVersion {
+	if gotVersion != codexCLIVersion || !strings.HasPrefix(gotAgent, "codex_cli_rs/"+codexCLIVersion+" (") || !strings.HasSuffix(gotAgent, "(codex-tui; "+codexCLIVersion+")") {
 		t.Errorf("identity headers: version=%q user-agent=%q", gotVersion, gotAgent)
 	}
 	if gotBeta != "responses=experimental" {
 		t.Errorf("OpenAI-Beta = %q, want responses=experimental", gotBeta)
 	}
 	if gotSessionID == "" {
-		t.Errorf("session_id header missing")
+		t.Errorf("Session-Id header missing")
 	}
 	if gotBody["instructions"] != "be brief" || gotBody["store"] != false {
 		t.Errorf("body = %v", gotBody)

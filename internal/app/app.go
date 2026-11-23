@@ -1986,6 +1986,11 @@ func (a *App) emitInto(event agent.Event, foldUsage bool) {
 		pending := a.turnPending
 		a.turnPending = nil
 		a.mu.Unlock()
+		if tracker != nil && prov == "muse" {
+			if snap := provider.MuseUsageSnapshot(); snap != nil {
+				tracker.RecordSnapshot(prov, snap)
+			}
+		}
 		if tracker != nil {
 			// The turn total folds delegated spend in, but the quota window
 			// belongs to the model that spent it: each delegated run is

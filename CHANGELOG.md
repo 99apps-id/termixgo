@@ -6,6 +6,45 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- **Gemini 4 Neon on Antigravity**, with low, medium, high and xhigh thinking. Also
+  GPT-6.2 Sol, GPT-6.2 Astra and GPT-6.1 Terra on Codex (GPT-5.6 and its siblings
+  stay), Claude Haiku 5.5 on the Claude login, the Copilot models GitHub now lists
+  (Claude Fable 5.2, Opus 5.5 and Haiku 5.5, GPT-6.1, GPT-6, Gemini 4, Grok 4.6,
+  MAI Code 2) and Muse Ember 1.0.
+- **Effort levels `xhigh` and `ultra`** beside low, medium, high and max. Each model
+  gets the highest level it offers at or below the one chosen, taken from the
+  vendors' own tables, so `ultra` reaches only the Codex models that list it.
+- **Adaptive thinking and context management for Claude.** Models that take them
+  (Fable, Opus 5, Sonnet 5, Haiku 5.5, Opus 4.7 and 4.8) now get
+  `thinking: {type: adaptive}` with the reasoning summarized into the transcript, and
+  `context_management` with Claude Code's own `clear_thinking` edit that keeps earlier
+  thinking in context. The signed thinking blocks of a step are stored and handed
+  back in front of its tool call, as the API requires. A 400 about thinking repeats
+  the request once as a plain one, and `TERMIXGO_CLAUDE_THINKING=off` turns the
+  parameter off.
+- **Muse usage meter.** Meta ends every response with a subscription usage event
+  (5-hour and weekly windows). Termixgo reads it, so the Muse row above the composer
+  moves with each turn, and an idle session probes once with a tiny request.
+
+### Changed
+
+- **Antigravity requests match agy 1.5.14.** The User-Agent carries the CLI's
+  `aidev_client` fields and changelist, account calls send only the IDE type, the
+  chat call adds `requestType`, `labels` and upper-case thinking levels, and the
+  session, client-name and `toolConfig` fields the CLI never sends are gone.
+- **Codex requests match the Codex CLI**: hyphenated `Session-Id` and `Thread-Id`,
+  turn metadata, a CLI-shaped User-Agent, the responses-lite header for the GPT-6
+  line, and the context windows the ChatGPT catalogue lists.
+- **Claude Code identity moved to 2.1.325**: the current beta list, the billing
+  header with its fingerprint, and the interactive `(external, cli)` User-Agent.
+- **Antigravity signs in with the agy CLI's own OAuth client** instead of the IDE's.
+  The pair is read from the installed binary into the git-ignored `.env.local`; log
+  in again to get a token issued to it.
+- **Copilot** reports the installed VS Code 1.147.0 and Copilot Chat 0.75.0, and Muse
+  reports CLI 1.4.24.
+
 ## 0.2.11 - 2026-11-23
 
 ### Added

@@ -82,6 +82,12 @@ func (c *httpClient) postWithStall(ctx context.Context, url string, headers map[
 		request.Header.Set("Accept", "text/event-stream")
 		request.Header.Set("User-Agent", version.UserAgent)
 		for key, value := range headers {
+			// An empty value removes a default header: a client that must match
+			// another tool byte for byte cannot send the Accept it never sets.
+			if value == "" {
+				request.Header.Del(key)
+				continue
+			}
 			request.Header.Set(key, value)
 		}
 

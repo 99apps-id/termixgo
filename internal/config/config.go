@@ -601,7 +601,7 @@ func normaliseHooks(hooks []Hook) []Hook {
 // EffortLevels is the accepted reasoning effort levels, in escalation order.
 // The vocabulary is duplicated here by value rather than imported from
 // provider, which already imports this package.
-var EffortLevels = []string{"low", "medium", "high", "max"}
+var EffortLevels = []string{"low", "medium", "high", "xhigh", "max", "ultra"}
 
 // ValidEffort reports whether a level is one this build accepts.
 func ValidEffort(effort string) bool {

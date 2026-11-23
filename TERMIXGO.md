@@ -222,8 +222,13 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   turns, in the 60 to 85 percent band, and that call is what rewrites stored
   history (`Session.InsertSummary`); with no such model the plain local trim is
   the whole story. Naming a session is opt-in the same way, on `titleModel`.
-- Reasoning effort is one shared vocabulary (`low`, `medium`, `high`, `max`) in
-  `provider.ChatRequest.Effort`, mapped per vendor in `internal/provider/effort.go`.
+- Reasoning effort is one shared vocabulary (`low`, `medium`, `high`, `xhigh`, `max`,
+  `ultra`) in `provider.ChatRequest.Effort`, mapped per vendor in
+  `internal/provider/effort.go` and per model in `effort_model.go`. A level a model
+  does not offer is lowered to the highest one it does (`clampEffort`), never sent.
+  The tables are what the vendors list themselves (the ChatGPT model catalogue, the
+  Claude Code model table, Copilot's `/models`, the Antigravity model suffixes), and
+  `ultra` is only sent where the ChatGPT catalogue lists it.
   The wire field differs by vendor and each vendor's value set is its own, so a
   provider with no such control is sent nothing rather than a guess: these fields
   are strict and a wrong value returns 400, which loses the turn. An empty effort
@@ -459,8 +464,8 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   carrying the old `muse-code/1.0.2` identity answers plain chat but returns
   403 `client_attestation_denied` (or silence on tools) for a native tools
   field. The Muse client therefore sends the installed CLI's identity
-  (verified against CLI 1.4.20 by capturing its request to a local endpoint):
-  the `muse-build/1.4.20 (non-interactive; <os>-<arch>)` user agent, the
+  (verified against CLI 1.4.24 by capturing its request to a local endpoint):
+  the `muse-build/1.4.24 (non-interactive; <os>-<arch>)` user agent, the
   `x-client-id: tbh:exec` and `x-tbh-*` session headers, and its tools as one
   `muse` namespace tool with no `tool_choice`. With that identity a
   subscription login executes native tool calls. If a refusal still arrives,
@@ -476,6 +481,29 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   can name the pay-as-you-go key as the next step instead of telling the
   operator to re-check a key that is valid, and the generic 403 hint is
   suppressed for that code for the same reason.
+- A vendor client presents the vendor's own CLI, field for field, and the source of
+  truth is a capture of the installed CLI's request to a local endpoint, not memory.
+  Antigravity sends what agy 1.5.14 sends: the
+  `antigravity/cli/<v> (aidev_client; os_type=; arch=; cl=; auth_method=consumer)`
+  User-Agent, an account call of only `{"metadata":{"ideType":"ANTIGRAVITY"}}`,
+  `requestType: agent`, the `labels` block, upper-case function schema types and
+  thinking levels, and no session header, no `toolConfig` and no client-name pair.
+  The version and its changelist are one pair: overriding the version drops the
+  bundled changelist. Codex sends `Session-Id`, `Thread-Id`, `Version`,
+  `X-Client-Request-Id`, `X-Codex-Window-Id` and `X-Codex-Turn-Metadata` under a
+  `codex_cli_rs/<v> (<os> <ver>; <arch>) <terminal> (codex-tui; <v>)` User-Agent;
+  the body is not zstd-compressed, which the backend accepts. Claude Code sends the
+  `x-anthropic-billing-header` system block, whose `cc_version` carries a three-hex
+  fingerprint (SHA-256 of a fixed salt, three characters of the first user message
+  and the version), checked against the client's own value. Copilot reports the
+  installed VS Code and Copilot Chat versions. When a vendor ships a new CLI, update
+  the version constants and capture again before trusting the old shapes.
+- Meta Muse reports subscription usage inside the stream: the last event of every
+  response is `response.subscription_usage` with the 5-hour window and the weekly
+  one (`used_percent`, `resets_at`). `decodeResponsesStream` records it
+  (`recordMuseSubscription`) and the gauge reads it, so a turn moves the meter with
+  no request of its own. There is no usage endpoint: a session with no reading newer
+  than fifteen minutes probes once with a sixteen-token request.
 - The agent-event observer is one slot with one owner. `App.SetObserver` returns a
   claim and refuses to install over a live one, so a second surface cannot detach
   the sink of the turn that is streaming; the holder releases it with

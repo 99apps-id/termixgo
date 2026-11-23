@@ -40,7 +40,7 @@ func openAIEffortValues(effort string) string {
 		return "low"
 	case EffortMedium:
 		return "medium"
-	case EffortHigh, EffortMax:
+	case EffortHigh, EffortXHigh, EffortMax, EffortUltra:
 		return "high"
 	}
 	return ""
@@ -50,8 +50,11 @@ func openAIEffortValues(effort string) string {
 // All four map straight across, so max is passed on rather than folded.
 func anthropicEffortValues(effort string) string {
 	switch effort {
-	case EffortLow, EffortMedium, EffortHigh, EffortMax:
+	case EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax:
 		return effort
+	case EffortUltra:
+		// Anthropic has no level above max.
+		return EffortMax
 	}
 	return ""
 }
@@ -63,7 +66,7 @@ func googleEffort(effort string) string {
 	switch effort {
 	case EffortLow, EffortMedium, EffortHigh:
 		return effort
-	case EffortMax:
+	case EffortXHigh, EffortMax, EffortUltra:
 		// Gemini 3 has no level above high, so its deepest thinking is high.
 		return "high"
 	}
@@ -81,7 +84,7 @@ func googleThinkingBudget(effort string) int {
 		return 8192
 	case EffortHigh:
 		return 24576
-	case EffortMax:
+	case EffortXHigh, EffortMax, EffortUltra:
 		return 32768
 	}
 	return 0
@@ -94,9 +97,9 @@ func moonshotEffortValues(effort string) string {
 	switch effort {
 	case EffortLow:
 		return "low"
-	case EffortMedium, EffortHigh:
+	case EffortMedium, EffortHigh, EffortXHigh:
 		return "high"
-	case EffortMax:
+	case EffortMax, EffortUltra:
 		return "max"
 	}
 	return ""
@@ -108,9 +111,9 @@ func zhipuEffortValues(effort string) string {
 	switch effort {
 	case EffortLow:
 		return "low"
-	case EffortMedium, EffortHigh:
+	case EffortMedium, EffortHigh, EffortXHigh:
 		return "high"
-	case EffortMax:
+	case EffortMax, EffortUltra:
 		return "max"
 	}
 	return ""

@@ -35,10 +35,10 @@ func TestFetchCopilotToken(t *testing.T) {
 	if gotVersion != "2025-04-01" {
 		t.Errorf("x-github-api-version = %q, want 2025-04-01", gotVersion)
 	}
-	if gotEditor != "vscode/1.110.0" || gotPlugin != "copilot-chat/0.38.0" {
+	if gotEditor != "vscode/1.147.0" || gotPlugin != "copilot-chat/0.75.0" {
 		t.Errorf("editor headers: editor=%q plugin=%q", gotEditor, gotPlugin)
 	}
-	if gotAgent != "GitHubCopilotChat/0.38.0" {
+	if gotAgent != "GitHubCopilotChat/0.75.0" {
 		t.Errorf("User-Agent = %q", gotAgent)
 	}
 

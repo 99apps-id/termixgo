@@ -435,8 +435,8 @@ func TestClaudeOAuthSpec(t *testing.T) {
 		if spec.RedirectHost != "localhost" {
 			t.Errorf("spec.RedirectHost = %q, want 'localhost'", spec.RedirectHost)
 		}
-		if !strings.Contains(spec.UserAgent, "claude-cli/2.1.290") {
-			t.Errorf("spec.UserAgent = %q, want to contain claude-cli/2.1.290", spec.UserAgent)
+		if !strings.Contains(spec.UserAgent, "claude-cli/2.1.325") {
+			t.Errorf("spec.UserAgent = %q, want to contain claude-cli/2.1.325", spec.UserAgent)
 		}
 		if !spec.ExchangeJSON || !spec.RefreshJSON {
 			t.Errorf("spec JSON flags: exchange=%v refresh=%v, want true", spec.ExchangeJSON, spec.RefreshJSON)
@@ -545,13 +545,13 @@ func TestSpecForAliasesAndUserAgents(t *testing.T) {
 	if !ok {
 		t.Fatal("SpecFor(antigravity) not found")
 	}
-	if !strings.HasPrefix(ag.UserAgent, "antigravity/cli/1.5.9 ") {
-		t.Errorf("SpecFor(antigravity).UserAgent = %q, want antigravity/cli/1.5.9 prefix", ag.UserAgent)
+	if !strings.HasPrefix(ag.UserAgent, "antigravity/cli/1.5.14 ") {
+		t.Errorf("SpecFor(antigravity).UserAgent = %q, want antigravity/cli/1.5.14 prefix", ag.UserAgent)
 	}
 
 	t.Setenv("TERMIXGO_CLAUDE_CLI_VERSION", "invalid..ver")
-	if got := defaultClaudeUserAgent(); !strings.HasPrefix(got, "claude-cli/2.1.290 ") {
-		t.Errorf("defaultClaudeUserAgent() with invalid env = %q, want fallback 2.1.290", got)
+	if got := defaultClaudeUserAgent(); !strings.HasPrefix(got, "claude-cli/2.1.325 ") {
+		t.Errorf("defaultClaudeUserAgent() with invalid env = %q, want fallback 2.1.325", got)
 	}
 	t.Setenv("TERMIXGO_CLAUDE_CLI_VERSION", "2.1.300")
 	if got := defaultClaudeUserAgent(); !strings.HasPrefix(got, "claude-cli/2.1.300 ") {

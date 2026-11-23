@@ -21,9 +21,9 @@ func (c *copilotClient) Stream(ctx context.Context, req ChatRequest, emit func(S
 		"Authorization":                       "Bearer " + key,
 		"Content-Type":                        "application/json",
 		"copilot-integration-id":              "vscode-chat",
-		"editor-version":                      "vscode/1.110.0",
-		"editor-plugin-version":               "copilot-chat/0.38.0",
-		"user-agent":                          "GitHubCopilotChat/0.38.0",
+		"editor-version":                      "vscode/1.147.0",
+		"editor-plugin-version":               "copilot-chat/0.75.0",
+		"user-agent":                          "GitHubCopilotChat/0.75.0",
 		"openai-intent":                       "conversation-panel",
 		"x-github-api-version":                "2025-04-01",
 		"x-request-id":                        reqID,
@@ -59,7 +59,7 @@ func (c *copilotClient) Stream(ctx context.Context, req ChatRequest, emit func(S
 		if len(req.Tools) > 0 {
 			payload["tools"] = encodeAnthropicTools(req.Tools)
 		}
-		if effort := anthropicEffortValues(req.Effort); effort != "" {
+		if effort := anthropicEffort(req.Model, req.Effort); effort != "" {
 			payload["output_config"] = map[string]any{"effort": effort}
 		}
 		return anthropicCli.streamWithURL(ctx, url, headers, payload, emit, nil)
@@ -87,7 +87,7 @@ func (c *copilotClient) Stream(ctx context.Context, req ChatRequest, emit func(S
 		payload["tools"] = encodeOpenAITools(req.Tools)
 		payload["tool_choice"] = "auto"
 	}
-	if effort := compatibleEffort(c.info.ID, req.Effort); effort != "" {
+	if effort := compatibleEffortFor(c.info.ID, req.Model, req.Effort); effort != "" {
 		payload["reasoning_effort"] = effort
 	}
 	err := openAICli.streamWithURL(ctx, c.baseURL+"/chat/completions", headers, payload, emit)
@@ -116,7 +116,7 @@ func (c *copilotClient) streamResponses(ctx context.Context, headers map[string]
 		payload["tools"] = tools
 		payload["tool_choice"] = "auto"
 	}
-	if effort := compatibleEffort(c.info.ID, req.Effort); effort != "" {
+	if effort := compatibleEffortFor(c.info.ID, req.Model, req.Effort); effort != "" {
 		payload["reasoning_effort"] = effort
 	}
 	response, err := c.post(ctx, c.baseURL+"/responses", headers, payload)

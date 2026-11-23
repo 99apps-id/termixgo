@@ -20,7 +20,7 @@ func TestEffortForPrefersTheModelOverride(t *testing.T) {
 		t.Errorf("EffortFor(other) = %q, want the session-wide low", got)
 	}
 
-	cfg.ModelEfforts["planner"] = "ultra"
+	cfg.ModelEfforts["planner"] = "extreme"
 	if got := cfg.EffortFor("planner"); got != "low" {
 		t.Errorf("an unknown model level should fall back to the session setting, got %q", got)
 	}

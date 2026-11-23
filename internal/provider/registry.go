@@ -74,6 +74,7 @@ var contextWindows = map[string]int{
 	"claude-sonnet-5":                   1000000,
 	"claude-sonnet-4-6":                 1000000,
 	"claude-haiku-4-5":                  200000,
+	"claude-oauth-haiku-5-5":            200000,
 	"claude-oauth-opus-5-5":             1000000,
 	"claude-oauth-opus-5":               1000000,
 	"claude-oauth-fable-5-2":            1000000,
@@ -86,6 +87,7 @@ var contextWindows = map[string]int{
 	"antigravity-gemini-4-hydrogen":     1048576,
 	"antigravity-gemini-4-argon":        1048576,
 	"antigravity-gemini-4-carbon":       1048576,
+	"antigravity-gemini-4-neon":         1048576,
 	"antigravity-gemini-3.8-flash":      1048576,
 	"antigravity-gemini-3.8-flash-high": 1048576,
 	"antigravity-gemini-3.5-flash":      1048576,
@@ -102,17 +104,22 @@ var contextWindows = map[string]int{
 
 	// OAuth catalogue entries keep a distinct local id; their window follows
 	// the model they map to.
-	"codex-gpt-6.1-sol":              1050000,
-	"codex-gpt-6-astra":              1050000,
-	"codex-gpt-6-sol":                1050000,
-	"codex-gpt-6-luna":               1050000,
-	"codex-gpt-5.6-terra":            1050000,
-	"codex-gpt-5.6-sol":              1050000,
-	"codex-gpt-5.6-luna":             1050000,
+	// The ChatGPT backend serves these at the window its own model catalogue
+	// lists (context_window on /codex/models), not the 1.05M of the API route.
+	"codex-gpt-6.2-sol":              500000,
+	"codex-gpt-6.2-astra":            272000,
+	"codex-gpt-6.1-terra":            500000,
+	"codex-gpt-6.1-sol":              500000,
+	"codex-gpt-6-astra":              272000,
+	"codex-gpt-6-sol":                272000,
+	"codex-gpt-6-luna":               272000,
+	"codex-gpt-5.6-terra":            272000,
+	"codex-gpt-5.6-sol":              272000,
+	"codex-gpt-5.6-luna":             272000,
 	"codex-gpt-5.5":                  1050000,
 	"codex-gpt-daybreak-blue-latest": 1050000,
-	"codex-gpt-reserve":              1050000,
-	"codex-auto-review":              1050000,
+	"codex-gpt-reserve":              272000,
+	"codex-auto-review":              272000,
 	"codex-gpt-5.4":                  1050000,
 	"codex-gpt-5.4-codex":            400000,
 	"codex-gpt-5.3-codex":            400000,
@@ -129,6 +136,19 @@ var contextWindows = map[string]int{
 	"copilot-claude-sonnet-5-5": 1000000,
 	"copilot-claude-sonnet-5":   1000000,
 	"copilot-claude-haiku-4-5":  200000,
+	"copilot-claude-haiku-5-5":  200000,
+	"copilot-claude-opus-5-5":   328000,
+	"copilot-claude-fable-5-2":  1000000,
+	"copilot-gpt-6.1-sol":       400000,
+	"copilot-gpt-6.1-terra":     400000,
+	"copilot-gpt-6-astra":       400000,
+	"copilot-gpt-6-sol":         400000,
+	"copilot-gpt-5.6-sol":       400000,
+	"copilot-gemini-4-argon":    265536,
+	"copilot-gemini-4-hydrogen": 1048576,
+	"copilot-grok-4.6":          328000,
+	"copilot-mai-code-2":        1050000,
+	"copilot-mai-code-2-flash":  1050000,
 	"copilot-gemini-3.8-flash":  1048576,
 	"copilot-gemini-3.6-flash":  1048576,
 	"copilot-gemini-3.5-flash":  1048576,
@@ -148,6 +168,9 @@ var contextWindows = map[string]int{
 	"muse-wonder-1.0":             1048576,
 	"muse-wonder-1.0-contributor": 1048576,
 	"muse-spark-1.2":              1048576,
+	// Ember is on the live catalogue but its window is not published, so it
+	// keeps the conservative default.
+	"muse-ember-1.0": DefaultContextWindow,
 	// The published window for the two ids below is not known to this build, so
 	// they are pinned to the conservative default rather than inheriting the
 	// family's 1M. An over-large budget makes the provider reject the request;
@@ -433,7 +456,10 @@ func Models() []Model {
 		// The models served through a ChatGPT login (Codex OAuth). The local id
 		// is distinct because the catalogue keys by id alone; APIID is what goes
 		// on the wire. The newest Codex generation first.
-		{ID: "codex-gpt-6.1-sol", Provider: "openai-codex", Label: "GPT-6.1 Sol (ChatGPT)", APIID: "gpt-6.1-sol", Description: "Newest Sol tier through a ChatGPT login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "codex-gpt-6.2-sol", Provider: "openai-codex", Label: "GPT-6.2 Sol (ChatGPT)", APIID: "gpt-6.2-sol", Description: "Newest fast, go-to model for coding and everyday work through a ChatGPT login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "codex-gpt-6.2-astra", Provider: "openai-codex", Label: "GPT-6.2 Astra (ChatGPT)", APIID: "gpt-6.2-astra", Description: "Newest flagship through a ChatGPT login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "codex-gpt-6.1-terra", Provider: "openai-codex", Label: "GPT-6.1 Terra (ChatGPT)", APIID: "gpt-6.1-terra", Description: "Balanced GPT-6.1 through a ChatGPT login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "codex-gpt-6.1-sol", Provider: "openai-codex", Label: "GPT-6.1 Sol (ChatGPT)", APIID: "gpt-6.1-sol", Description: "Previous Sol tier through a ChatGPT login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "codex-gpt-6-astra", Provider: "openai-codex", Label: "GPT-6 Astra (ChatGPT)", APIID: "gpt-6-astra", Description: "Flagship through a ChatGPT login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "codex-gpt-6-sol", Provider: "openai-codex", Label: "GPT-6 Sol (ChatGPT)", APIID: "gpt-6-sol", Description: "Balanced through a ChatGPT login.", Tags: []string{"reasoning", "tools"}},
 		{ID: "codex-gpt-6-luna", Provider: "openai-codex", Label: "GPT-6 Luna (ChatGPT)", APIID: "gpt-6-luna", Description: "Efficient through a ChatGPT login.", Tags: []string{"fast", "tools"}},
@@ -457,6 +483,7 @@ func Models() []Model {
 		{ID: "claude-fable-5-2", Provider: "anthropic", Label: "Claude Fable 5.2", Description: "Flagship deep reasoning and long-horizon agentic work.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-fable-5-1", Provider: "anthropic", Label: "Claude Fable 5.1", Description: "Deepest reasoning and long-horizon agentic work.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-opus-5-5", Provider: "anthropic", Label: "Claude Opus 5.5", Description: "Long-running agentic coding and knowledge work.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "claude-sonnet-5-5", Provider: "anthropic", Label: "Claude Sonnet 5.5", Description: "Frontier speed and intelligence.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-sonnet-5", Provider: "anthropic", Label: "Claude Sonnet 5", Description: "Best combination of speed and intelligence.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-haiku-4-5", Provider: "anthropic", Label: "Claude Haiku 4.5", Description: "Fastest Claude, near-frontier.", Tags: []string{"fast", "tools"}},
 		// The Claude models served through a Claude login (OAuth).
@@ -467,6 +494,7 @@ func Models() []Model {
 		{ID: "claude-oauth-fable-5", Provider: "claude-oauth", Label: "Claude Fable 5 (OAuth)", APIID: "claude-fable-5", Description: "Mythos tier reasoning through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-oauth-sonnet-5-5", Provider: "claude-oauth", Label: "Claude Sonnet 5.5 (OAuth)", APIID: "claude-sonnet-5-5", Description: "Frontier speed and intelligence through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "claude-oauth-sonnet-5", Provider: "claude-oauth", Label: "Claude Sonnet 5 (OAuth)", APIID: "claude-sonnet-5", Description: "Balanced Claude through a Claude login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "claude-oauth-haiku-5-5", Provider: "claude-oauth", Label: "Claude Haiku 5.5 (OAuth)", APIID: "claude-haiku-5-5", Description: "Fastest Claude of the 5.5 generation through a Claude login.", Tags: []string{"fast", "tools", "coding"}},
 		{ID: "claude-oauth-haiku-4-5", Provider: "claude-oauth", Label: "Claude 4.5 Haiku (OAuth)", APIID: "claude-haiku-4-5-20251001", Description: "Fast Claude through a Claude login.", Tags: []string{"fast", "tools"}},
 
 		// GitHub Copilot models served through a GitHub login (OAuth).
@@ -488,6 +516,19 @@ func Models() []Model {
 		{ID: "copilot-gemini-3.5-flash", Provider: "github-copilot", Label: "Gemini 3.5 Flash (Copilot)", APIID: "gemini-3.5-flash", Description: "Efficient Gemini through GitHub Copilot.", Tags: []string{"fast", "tools"}},
 		{ID: "copilot-grok-4.7", Provider: "github-copilot", Label: "Grok 4.7 (Copilot)", APIID: "grok-4.7", Description: "xAI Grok through GitHub Copilot.", Tags: []string{"reasoning", "tools"}},
 		{ID: "copilot-kimi-k3", Provider: "github-copilot", Label: "Kimi K3 (Copilot)", APIID: "kimi-k3", Description: "Moonshot Kimi through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-claude-fable-5-2", Provider: "github-copilot", Label: "Claude Fable 5.2 (Copilot)", APIID: "claude-fable-5.2", Description: "Flagship deep reasoning through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-claude-opus-5-5", Provider: "github-copilot", Label: "Claude Opus 5.5 (Copilot)", APIID: "claude-opus-5.5", Description: "Flagship Claude through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-claude-haiku-5-5", Provider: "github-copilot", Label: "Claude Haiku 5.5 (Copilot)", APIID: "claude-haiku-5.5", Description: "Fast Claude through GitHub Copilot.", Tags: []string{"fast", "tools", "coding"}},
+		{ID: "copilot-gpt-6.1-sol", Provider: "github-copilot", Label: "GPT-6.1 Sol (Copilot)", APIID: "gpt-6.1-sol", Description: "Newest Sol tier through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-gpt-6.1-terra", Provider: "github-copilot", Label: "GPT-6.1 Terra (Copilot)", APIID: "gpt-6.1-terra", Description: "Balanced GPT-6.1 through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-gpt-6-astra", Provider: "github-copilot", Label: "GPT-6 Astra (Copilot)", APIID: "gpt-6-astra", Description: "Flagship GPT-6 through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-gpt-6-sol", Provider: "github-copilot", Label: "GPT-6 Sol (Copilot)", APIID: "gpt-6-sol", Description: "Balanced GPT-6 through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-gpt-5.6-sol", Provider: "github-copilot", Label: "GPT-5.6 Sol (Copilot)", APIID: "gpt-5.6-sol", Description: "Balanced GPT-5.6 through GitHub Copilot.", Tags: []string{"reasoning", "tools"}},
+		{ID: "copilot-gemini-4-argon", Provider: "github-copilot", Label: "Gemini 4 Argon (Copilot)", APIID: "gemini-4-argon", Description: "Gemini 4 flagship through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-gemini-4-hydrogen", Provider: "github-copilot", Label: "Gemini 4 Hydrogen (Copilot)", APIID: "gemini-4-hydrogen", Description: "Fast agentic Gemini 4 through GitHub Copilot.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "copilot-grok-4.6", Provider: "github-copilot", Label: "Grok 4.6 (Copilot)", APIID: "grok-4.6", Description: "xAI Grok through GitHub Copilot.", Tags: []string{"reasoning", "tools"}},
+		{ID: "copilot-mai-code-2", Provider: "github-copilot", Label: "MAI Code 2 (Copilot)", APIID: "mai-code-2", Description: "Microsoft coding model through GitHub Copilot.", Tags: []string{"coding", "tools"}},
+		{ID: "copilot-mai-code-2-flash", Provider: "github-copilot", Label: "MAI Code 2 Flash (Copilot)", APIID: "mai-code-2-flash", Description: "Fast Microsoft coding model through GitHub Copilot.", Tags: []string{"coding", "fast"}},
 		{ID: "copilot-mai-code-1-flash", Provider: "github-copilot", Label: "MAI-Code-1.1-Flash (Copilot)", APIID: "mai-code-1.1-flash", Description: "Fast coding model through GitHub Copilot.", Tags: []string{"coding", "fast"}},
 		// Meta Muse Code models served through a Meta login (OAuth). The wire
 		// ids are the ones api.meta.ai serves; a Muse login only reaches the
@@ -497,6 +538,7 @@ func Models() []Model {
 		// GET /v1/models also answers with sam-3.1 and muse-voice-transcribe-1.0,
 		// which are not chat models and are deliberately not offered here.
 		{ID: "muse-spark-1.3", Provider: "muse", Label: "Muse Spark 1.3", Description: "Meta's flagship reasoning and agentic coding model through a Muse login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "muse-ember-1.0", Provider: "muse", Label: "Muse Ember 1.0", Description: "Muse Ember, listed by the live api.meta.ai catalogue for Muse Code logins.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "muse-wonder-1.0", Provider: "muse", Label: "Muse Wonder 1.0", Description: "Muse creative reasoning model through a Meta login.", Tags: []string{"reasoning", "coding"}},
 		{ID: "muse-wonder-1.0-contributor", Provider: "muse", Label: "Muse Wonder 1.0 Contributor", Description: "Muse Wonder contributor model through a Meta login.", Tags: []string{"coding"}},
 		{ID: "muse-spark-1.3-contributor", Provider: "muse", Label: "Muse Spark 1.3 Contributor", Description: "Muse contributor model through a Meta login.", Tags: []string{"coding", "tools"}},
@@ -511,6 +553,7 @@ func Models() []Model {
 		// (gemini-3.8-flash-medium); 9router's "(medium)" preset is stripped
 		// before the request and sent as thinkingConfig, so it must not be part
 		// of the id. A wrong id returns 404 "check the model id and base URL".
+		{ID: "antigravity-gemini-4-neon", Provider: "antigravity", Label: "Gemini 4 Neon (Antigravity)", APIID: "gemini-4-neon-high", Description: "Newest Gemini 4 tier: low, medium, high and xhigh thinking.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "antigravity-gemini-4-hydrogen", Provider: "antigravity", Label: "Gemini 4 Hydrogen (Antigravity)", APIID: "gemini-4-hydrogen-high", Description: "Fast agentic Gemini 4 on every Antigravity plan.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "antigravity-gemini-4-argon", Provider: "antigravity", Label: "Gemini 4 Argon (Antigravity)", APIID: "gemini-4-argon-medium", Description: "Gemini 4 flagship for Pro, Ultra and Enterprise plans.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "antigravity-gemini-4-carbon", Provider: "antigravity", Label: "Gemini 4 Carbon (Antigravity)", APIID: "gemini-4-carbon-medium", Description: "Top Gemini 4 tier; Google AI Ultra and Enterprise only.", Tags: []string{"reasoning", "tools", "coding"}},

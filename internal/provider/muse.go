@@ -17,7 +17,7 @@ import (
 )
 
 // museCLIVersion is the Muse Code CLI release whose identity Meta's backend
-// gates on, verified against the installed CLI (1.4.20). Native tool calls
+// gates on, verified against the installed CLI (1.4.24). Native tool calls
 // are only served to a client carrying this build identity, so it travels
 // in the User-Agent on every Muse request.
 // museUserAgent is the build identity the official CLI sends: muse-build,
@@ -388,10 +388,12 @@ func (c *museClient) payload(req ChatRequest) map[string]any {
 // The official CLI defaults to high, so an unset level lands there too.
 func museEffort(effort string) string {
 	switch effort {
-	case EffortLow, EffortMedium, EffortHigh:
+	case EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax:
 		return effort
-	case EffortMax:
-		return "max"
+	case EffortUltra:
+		// Muse Code's ultra tier is a client-side mode on top of max; the
+		// endpoint's own ceiling is max.
+		return EffortMax
 	}
 	return "high"
 }

@@ -185,8 +185,8 @@ func TestAnthropicOAuthUsesTheClaudeCodeIdentity(t *testing.T) {
 	if recorder.headers.Get("anthropic-dangerous-direct-browser-access") != "true" {
 		t.Errorf("anthropic-dangerous-direct-browser-access header missing")
 	}
-	if recorder.headers.Get("X-Stainless-Helper-Method") != "stream" {
-		t.Errorf("X-Stainless-Helper-Method = %q, want stream", recorder.headers.Get("X-Stainless-Helper-Method"))
+	if got := recorder.headers.Get("Accept"); got != "application/json" {
+		t.Errorf("Accept = %q, want application/json as the Claude Code SDK sends", got)
 	}
 	if meta, ok := recorder.body["metadata"].(map[string]any); !ok || !strings.Contains(fmt.Sprint(meta["user_id"]), "device_id") {
 		t.Errorf("expected metadata.user_id in payload, got %v", recorder.body["metadata"])
@@ -195,7 +195,19 @@ func TestAnthropicOAuthUsesTheClaudeCodeIdentity(t *testing.T) {
 	if !ok || len(sysBlocks) == 0 {
 		t.Fatalf("system = %#v, want array with Claude Code identity", recorder.body["system"])
 	}
-	firstBlock, _ := sysBlocks[0].(map[string]any)
+	// The billing header leads, as it does in the real client, and carries the
+	// version with its three-hex build fingerprint.
+	billing, _ := sysBlocks[0].(map[string]any)
+	if text, _ := billing["text"].(string); !strings.HasPrefix(text, "x-anthropic-billing-header: cc_version="+resolveClaudeCLIVersion()+".") || !strings.HasSuffix(text, "; cc_entrypoint=cli;") {
+		t.Errorf("first system block = %#v, want the billing header", billing)
+	}
+	if _, hasCache := billing["cache_control"]; hasCache {
+		t.Errorf("the billing header block must not carry cache_control")
+	}
+	if len(sysBlocks) < 2 {
+		t.Fatalf("system = %#v, want the identity after the billing header", sysBlocks)
+	}
+	firstBlock, _ := sysBlocks[1].(map[string]any)
 	if firstBlock["text"] != claudeCodeIdentity {
 		t.Errorf("first system block = %#v, want %q", firstBlock, claudeCodeIdentity)
 	}
@@ -758,7 +770,7 @@ func TestAnthropicOAuthRetriesOnClaudeCodeVersionTooOld(t *testing.T) {
 	if out.String() != "ok" {
 		t.Errorf("text = %q, want ok", out.String())
 	}
-	if len(userAgents) != 2 || userAgents[1] != "claude-cli/2.1.320 (external, sdk-cli)" {
+	if len(userAgents) != 2 || userAgents[1] != "claude-cli/2.1.320 (external, cli)" {
 		t.Errorf("userAgents = %v", userAgents)
 	}
 }

@@ -182,8 +182,8 @@ var (
 )
 
 const (
-	defaultClaudeCLIVersion      = "2.1.290"
-	defaultAntigravityCLIVersion = "1.5.9"
+	defaultClaudeCLIVersion      = "2.1.325"
+	defaultAntigravityCLIVersion = "1.5.14"
 )
 
 func isDottedVersion(value string) bool {
@@ -210,7 +210,7 @@ func defaultClaudeUserAgent() string {
 			break
 		}
 	}
-	return "claude-cli/" + ver + " (external, sdk-cli)"
+	return "claude-cli/" + ver + " (external, cli)"
 }
 
 func defaultAntigravityUserAgent() string {

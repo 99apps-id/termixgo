@@ -16,9 +16,9 @@ func FetchCopilotToken(ctx context.Context, endpoint, githubAccessToken string, 
 	headers := map[string]string{
 		"Authorization":         "token " + githubAccessToken,
 		"Accept":                "application/json",
-		"User-Agent":            "GitHubCopilotChat/0.38.0",
-		"Editor-Version":        "vscode/1.110.0",
-		"Editor-Plugin-Version": "copilot-chat/0.38.0",
+		"User-Agent":            "GitHubCopilotChat/0.75.0",
+		"Editor-Version":        "vscode/1.147.0",
+		"Editor-Plugin-Version": "copilot-chat/0.75.0",
 		"x-github-api-version":  "2025-04-01",
 	}
 	body, status, err := requestJSON(ctx, http.MethodGet, endpoint, headers, nil)

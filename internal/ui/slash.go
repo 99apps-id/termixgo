@@ -96,11 +96,13 @@ var slashCommands = []SlashCommand{
 	}},
 	{Trigger: "/harness", Args: "[id]", Summary: "Show or change the agent harness"},
 	{Trigger: "/agent", Args: "[<name>]", Summary: "Show or switch the active agent (persona, workspace, session)"},
-	{Trigger: "/effort", Args: "[low|medium|high|max|default]", Summary: "Show or change the reasoning effort", Options: []SlashOption{
+	{Trigger: "/effort", Args: "[low|medium|high|xhigh|max|ultra|default]", Summary: "Show or change the reasoning effort", Options: []SlashOption{
 		{Value: "low", Detail: "least thinking, fastest and cheapest"},
 		{Value: "medium", Detail: "balanced"},
 		{Value: "high", Detail: "more thinking for hard work"},
-		{Value: "max", Detail: "deepest thinking the model allows"},
+		{Value: "xhigh", Detail: "extra deep thinking, where the model has it"},
+		{Value: "max", Detail: "maximum thinking the model allows"},
+		{Value: "ultra", Detail: "max, plus task delegation on models that offer it"},
 		{Value: "default", Detail: "leave the provider's own default"},
 	}},
 	{Trigger: "/taskmodel", Args: "[title|compaction|default|<id>]", Summary: "Model for internal jobs: naming and condensing", Options: []SlashOption{
