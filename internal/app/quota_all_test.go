@@ -170,3 +170,33 @@ func TestOldSnapshotsAreMarkedStale(t *testing.T) {
 		t.Fatalf("rows = %+v", rows)
 	}
 }
+
+// TestQuotaRowCoversTheAgyCLIRouteWhileItIsTheCurrentProvider covers a model
+// served through the agy CLI: the provider has no login of its own, so its row
+// exists only while it is the current one.
+func TestQuotaRowCoversTheAgyCLIRouteWhileItIsTheCurrentProvider(t *testing.T) {
+	application := newTestApp(t)
+	if rows := application.QuotaRows(); len(rows) != 0 {
+		t.Fatalf("not current, no row: %+v", rows)
+	}
+	application.mu.Lock()
+	application.model = provider.Model{ID: "agy-cli-gemini-4-neon", Provider: "agy-cli"}
+	application.mu.Unlock()
+	application.forgetQuotaRows()
+
+	var calls int32
+	snap := &provider.QuotaSnapshot{Provider: "agy-cli", FetchedAt: time.Now(), Windows: []provider.QuotaWindow{
+		{Key: "gemini_models", DisplayName: "Gemini models", UsedPercent: 35},
+	}}
+	application.quotaClientFor = func(provider.Provider) (provider.Client, error) {
+		return quotaStub{snap: snap, calls: &calls}, nil
+	}
+	application.RefreshAllQuota(context.Background(), true)
+	rows := application.QuotaRows()
+	if len(rows) != 1 || rows[0].Provider != "agy-cli" || rows[0].Label != "agy CLI" || rows[0].State != QuotaKnown || !rows[0].Active {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if rows[0].Other == nil || rows[0].Other.LeftPercent != 65 {
+		t.Fatalf("other = %+v, want the tightest model family at 65%% left", rows[0].Other)
+	}
+}
