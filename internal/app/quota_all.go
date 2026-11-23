@@ -209,22 +209,34 @@ const quotaMinInterval = 3 * time.Minute
 type quotaRefresh struct {
 	mu      sync.Mutex
 	running bool
+	// again records a request that arrived while a run was in flight, so the
+	// run goes round once more instead of dropping it: a provider switched to
+	// mid-refresh must not wait for the next tick to get its figures.
+	again bool
 }
 
 func (q *quotaRefresh) begin() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.running {
+		q.again = true
 		return false
 	}
 	q.running = true
 	return true
 }
 
-func (q *quotaRefresh) end() {
+// next reports whether another run was requested during this one, and ends the
+// run when none was.
+func (q *quotaRefresh) next() bool {
 	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.again {
+		q.again = false
+		return true
+	}
 	q.running = false
-	q.mu.Unlock()
+	return false
 }
 
 // quotaClient builds a client for one login provider, with the same OAuth
@@ -266,7 +278,15 @@ func (a *App) RefreshAllQuota(ctx context.Context, force bool) {
 	if tracker == nil || !a.quotaRun.begin() {
 		return
 	}
-	defer a.quotaRun.end()
+	for {
+		a.refreshAllQuotaOnce(ctx, force, tracker)
+		if !a.quotaRun.next() {
+			return
+		}
+	}
+}
+
+func (a *App) refreshAllQuotaOnce(ctx context.Context, force bool, tracker *QuotaTracker) {
 
 	var wg sync.WaitGroup
 	for _, info := range a.quotaProviders() {

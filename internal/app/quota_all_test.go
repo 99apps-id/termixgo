@@ -200,3 +200,25 @@ func TestQuotaRowCoversTheAgyCLIRouteWhileItIsTheCurrentProvider(t *testing.T) {
 		t.Fatalf("other = %+v, want the tightest model family at 65%% left", rows[0].Other)
 	}
 }
+
+// A refresh requested while another is running is not dropped: the running one
+// goes round again, so a provider switched to mid-refresh gets its figures
+// without waiting for the next tick.
+func TestQuotaRefreshRunsAgainWhenRequestedMidRun(t *testing.T) {
+	var guard quotaRefresh
+	if !guard.begin() {
+		t.Fatal("the first run must start")
+	}
+	if guard.begin() {
+		t.Fatal("a second run must not start beside the first")
+	}
+	if !guard.next() {
+		t.Fatal("the request that arrived mid-run must trigger another pass")
+	}
+	if guard.next() {
+		t.Fatal("with nothing else requested the run must end")
+	}
+	if !guard.begin() {
+		t.Fatal("after the run ended a new one must be able to start")
+	}
+}

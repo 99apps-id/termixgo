@@ -98,9 +98,13 @@ func (m *Model) armQuit(name, label string) (tea.Model, tea.Cmd) {
 
 // Model is the Bubble Tea program state.
 type Model struct {
-	app    *app.App
-	styles Styles
-	limits Limits
+	// quotaProvider is the provider the usage strip was last refreshed for. A
+	// change of provider adds a row (or makes one active) that has no figures
+	// yet, so it triggers a refresh instead of waiting for the next tick.
+	quotaProvider string
+	app           *app.App
+	styles        Styles
+	limits        Limits
 
 	program *tea.Program
 
@@ -695,6 +699,21 @@ func (m *Model) windowTitle() string {
 // Update implements tea.Model. In the inline layout every update also prints
 // the blocks that became final into the scrollback.
 func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.updateInline(message)
+	if m.app != nil {
+		if current := m.app.CurrentModel().Provider; current != m.quotaProvider {
+			first := m.quotaProvider == ""
+			m.quotaProvider = current
+			if !first {
+				cmd = tea.Batch(cmd, m.refreshQuotaStrip(false))
+			}
+		}
+	}
+	return next, cmd
+}
+
+// updateInline runs one update and, in the inline layout, prints what settled.
+func (m *Model) updateInline(message tea.Msg) (tea.Model, tea.Cmd) {
 	updated, cmd := m.update(message)
 	if model, ok := updated.(*Model); ok && model.inline {
 		model.flushSettled()
