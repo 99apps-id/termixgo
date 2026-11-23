@@ -202,6 +202,9 @@ func parseAntigravityQuota(snap *QuotaSnapshot, body []byte) *QuotaSnapshot {
 		}
 	}
 	if len(windows) == 0 {
+		windows = antigravityModelBucketWindows(groups)
+	}
+	if len(windows) == 0 {
 		snap.Unavailable = "no quota buckets in quota response"
 		snap.Windows = nil
 		return snap
@@ -250,4 +253,66 @@ func hasQuotaKey(windows []QuotaWindow, key string) bool {
 		}
 	}
 	return false
+}
+
+// antigravityModelBucketWindows reads the other shape of quota summary: a
+// per-model list with a remaining fraction on each model and no 5-hour or
+// weekly window, which is what some accounts (paid and enterprise tiers) get.
+// The figure that matters for the gauge is the tightest model of each family,
+// so each family reports the smallest remaining fraction among its models.
+func antigravityModelBucketWindows(groups []struct {
+	DisplayName string `json:"displayName"`
+	Buckets     []struct {
+		BucketID          string   `json:"bucketId"`
+		DisplayName       string   `json:"displayName"`
+		Window            string   `json:"window"`
+		RemainingFraction *float64 `json:"remainingFraction"`
+		ResetTime         any      `json:"resetTime"`
+		Disabled          bool     `json:"disabled"`
+	} `json:"buckets"`
+}) []QuotaWindow {
+	type tightest struct {
+		left  float64
+		reset any
+		seen  bool
+	}
+	families := map[string]*tightest{}
+	for _, group := range groups {
+		for _, bucket := range group.Buckets {
+			if bucket.RemainingFraction == nil {
+				continue
+			}
+			family := antigravityFamily(bucket.DisplayName + " " + bucket.BucketID)
+			if family == "" {
+				continue
+			}
+			left := *bucket.RemainingFraction
+			if bucket.Disabled {
+				left = 0
+			}
+			entry := families[family]
+			if entry == nil {
+				entry = &tightest{}
+				families[family] = entry
+			}
+			if !entry.seen || left < entry.left {
+				entry.left, entry.reset, entry.seen = left, bucket.ResetTime, true
+			}
+		}
+	}
+	var windows []QuotaWindow
+	for _, family := range []string{"gemini", "claude_gpt"} {
+		entry := families[family]
+		if entry == nil {
+			continue
+		}
+		display := map[string]string{"gemini": "Gemini models", "claude_gpt": "Claude & GPT models"}[family]
+		windows = append(windows, QuotaWindow{
+			Key:         family + "_models",
+			DisplayName: display,
+			UsedPercent: clampPercent(100 - entry.left*100),
+			ResetsAt:    quotaTime(entry.reset),
+		})
+	}
+	return windows
 }

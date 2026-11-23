@@ -35,9 +35,25 @@ All notable changes to Termixgo are recorded here. The format follows
   (5-hour and weekly windows). Termixgo reads it, so the Muse row above the composer
   moves with each turn, and an idle session probes once with a tiny request.
 
+### Fixed
+
+- **Antigravity no longer invents a project id.** A consumer account that Cloud Code
+  enrols but assigns no project used to fail onboarding and fall back to a random
+  `termixgo-...` id, which no real client sends and which also left the usage strip
+  empty. It now uses `aicode-consumers`, as agy does, and skips onboarding for an
+  account that already has a tier.
+- **Antigravity usage shows for accounts with per-model quota.** Some accounts get a
+  remaining fraction per model and no 5-hour or weekly window; the strip now reads
+  the tightest model of each family instead of showing nothing.
+- **The agy CLI route no longer waits for the process to exit.** The CLI can stay
+  alive minutes after its result; the turn now ends when the result arrives. Its
+  usage row reuses the Antigravity login, and an authentication failure says that
+  agy keeps its own sign-in.
+- The Antigravity identity follows the installed agy, now 1.5.15.
+
 ### Changed
 
-- **Antigravity requests match agy 1.5.14.** The User-Agent carries the CLI's
+- **Antigravity requests match agy 1.5.15.** The User-Agent carries the CLI's
   `aidev_client` fields and changelist, account calls send only the IDE type, the
   chat call adds `requestType`, `labels` and upper-case thinking levels, and the
   session, client-name and `toolConfig` fields the CLI never sends are gone.

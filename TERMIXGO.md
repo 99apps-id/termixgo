@@ -483,7 +483,7 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   suppressed for that code for the same reason.
 - A vendor client presents the vendor's own CLI, field for field, and the source of
   truth is a capture of the installed CLI's request to a local endpoint, not memory.
-  Antigravity sends what agy 1.5.14 sends: the
+  Antigravity sends what agy 1.5.15 sends: the
   `antigravity/cli/<v> (aidev_client; os_type=; arch=; cl=; auth_method=consumer)`
   User-Agent, an account call of only `{"metadata":{"ideType":"ANTIGRAVITY"}}`,
   `requestType: agent`, the `labels` block, upper-case function schema types and

@@ -95,6 +95,9 @@ func agyMode() string {
 	return "plan"
 }
 
+// agyExitGrace is how long the CLI gets to exit after it reports its result.
+var agyExitGrace = 3 * time.Second
+
 const (
 	// agyPromptBudget keeps the whole command line under the 32,767-character
 	// limit Windows puts on a process, with room for the other arguments.
@@ -281,7 +284,12 @@ func (c *agyCLIClient) run(ctx context.Context, binary string, req ChatRequest, 
 					streamErr = emitErr
 					break
 				}
-				_ = done
+				if done {
+					// The result event closes the run. The CLI can stay alive well after
+					// it (a Neon run was seen holding the process for minutes), so the
+					// turn does not wait for it to exit.
+					break
+				}
 			}
 		}
 		if readErr != nil {
@@ -296,7 +304,15 @@ func (c *agyCLIClient) run(ctx context.Context, binary string, req ChatRequest, 
 		// does not run on unattended.
 		_ = cmd.Process.Kill()
 	}
-	waitErr := cmd.Wait()
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	var waitErr error
+	select {
+	case waitErr = <-exited:
+	case <-time.After(agyExitGrace):
+		_ = cmd.Process.Kill()
+		waitErr = <-exited
+	}
 	if streamErr != nil {
 		return emitted, streamErr
 	}
@@ -318,7 +334,12 @@ func (c *agyCLIClient) run(ctx context.Context, binary string, req ChatRequest, 
 		if message == "" {
 			message = "status " + strings.ToLower(finalStatus)
 		}
-		return emitted, fmt.Errorf("the Antigravity CLI ended the run unsuccessfully: %s", clipRunes(message, 400))
+		hint := ""
+		if lower := strings.ToLower(message); strings.Contains(lower, "authentic") || strings.Contains(lower, "sign in") || strings.Contains(lower, "login") {
+			// The CLI keeps its own sign-in, apart from 'termixgo login antigravity'.
+			hint = ". The agy CLI has its own sign-in: run agy once and sign in there (with the Google account that has the model), or use the antigravity-* models, which use the Termixgo login"
+		}
+		return emitted, fmt.Errorf("the Antigravity CLI ended the run unsuccessfully: %s%s", clipRunes(message, 400), hint)
 	}
 	if finalStatus == "" {
 		detail := strings.TrimSpace(stderr.String())
@@ -353,6 +374,7 @@ func (c *agyCLIClient) handle(event agyEvent, announced map[int]bool, total *agy
 			*emitted = true
 			return true, emit(StreamEvent{Type: EventTextDelta, Text: event.Result.Response})
 		}
+		return true, nil
 	case "step_update":
 		step := event.StepUpdate
 		if step == nil {
@@ -426,4 +448,31 @@ func (b *limitedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// FetchQuota reports the Antigravity allowance of the Termixgo login. The CLI
+// exposes no usage of its own on a headless run, so the figure comes from the
+// same quota call the antigravity-* route makes, and it is the allowance of the
+// account signed in to Termixgo, which is the CLI's account only when the same
+// Google account is used for both.
+func (c *agyCLIClient) FetchQuota(ctx context.Context) *QuotaSnapshot {
+	unavailable := func(reason string) *QuotaSnapshot {
+		return &QuotaSnapshot{Provider: c.info.ID, FetchedAt: time.Now(), Unavailable: reason}
+	}
+	if c.resolveKey == nil {
+		return unavailable("the agy CLI keeps its own login and reports no usage; run 'termixgo login antigravity' to see the Antigravity allowance")
+	}
+	key := strings.TrimSpace(c.resolveKey("antigravity"))
+	if key == "" {
+		return unavailable("the agy CLI keeps its own login and reports no usage; run 'termixgo login antigravity' to see the Antigravity allowance")
+	}
+	info, _ := ByID("antigravity")
+	base := &httpClient{info: info, baseURL: strings.TrimRight(DefaultBaseURL("antigravity"), "/"), apiKey: key, http: c.http, resolveKey: c.resolveKey, forceResolveKey: c.forceResolveKey}
+	snap := (&antigravityClient{httpClient: base}).FetchQuota(ctx)
+	if snap == nil {
+		return unavailable("no usage answer from Antigravity")
+	}
+	copied := *snap
+	copied.Provider = c.info.ID
+	return &copied
 }

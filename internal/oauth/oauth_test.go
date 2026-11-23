@@ -545,8 +545,8 @@ func TestSpecForAliasesAndUserAgents(t *testing.T) {
 	if !ok {
 		t.Fatal("SpecFor(antigravity) not found")
 	}
-	if !strings.HasPrefix(ag.UserAgent, "antigravity/cli/1.5.14 ") {
-		t.Errorf("SpecFor(antigravity).UserAgent = %q, want antigravity/cli/1.5.14 prefix", ag.UserAgent)
+	if !strings.HasPrefix(ag.UserAgent, "antigravity/cli/1.5.15 ") {
+		t.Errorf("SpecFor(antigravity).UserAgent = %q, want antigravity/cli/1.5.15 prefix", ag.UserAgent)
 	}
 
 	t.Setenv("TERMIXGO_CLAUDE_CLI_VERSION", "invalid..ver")

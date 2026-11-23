@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestMain lets this test binary stand in for the agy CLI: when the helper
@@ -16,6 +17,10 @@ func TestMain(m *testing.M) {
 		fmt.Print(script)
 		if args := os.Getenv("TERMIXGO_TEST_AGY_ARGS_FILE"); args != "" {
 			_ = os.WriteFile(args, []byte(strings.Join(os.Args[1:], "\x00")), 0o600)
+		}
+		if os.Getenv("TERMIXGO_TEST_AGY_HANG") != "" {
+			// A CLI that reports its result and then keeps running.
+			time.Sleep(time.Minute)
 		}
 		os.Exit(0)
 	}
@@ -171,5 +176,44 @@ func TestAgyModeDefaultsToPlan(t *testing.T) {
 	t.Setenv("TERMIXGO_AGY_MODE", "yolo")
 	if agyMode() != "plan" {
 		t.Errorf("an unknown mode must fall back to plan, got %q", agyMode())
+	}
+}
+
+// TestAgyCLIDoesNotWaitForAProcessThatStaysAlive covers the CLI holding on
+// after its result: the turn ends when the result arrives.
+func TestAgyCLIDoesNotWaitForAProcessThatStaysAlive(t *testing.T) {
+	useFakeAgy(t, agySuccessRun)
+	t.Setenv("TERMIXGO_TEST_AGY_HANG", "1")
+	previous := agyExitGrace
+	agyExitGrace = 300 * time.Millisecond
+	t.Cleanup(func() { agyExitGrace = previous })
+	started := time.Now()
+	var text strings.Builder
+	err := agyClient(t).Stream(context.Background(), ChatRequest{Model: "gemini-3.8-flash-low", Messages: []Message{{Role: RoleUser, Content: "hi"}}}, func(event StreamEvent) error {
+		if event.Type == EventTextDelta {
+			text.WriteString(event.Text)
+		}
+		return nil
+	})
+	if err != nil || text.String() != "it says hello" {
+		t.Fatalf("err=%v text=%q", err, text.String())
+	}
+	if elapsed := time.Since(started); elapsed > 20*time.Second {
+		t.Errorf("the turn took %v: it waited for the process", elapsed)
+	}
+}
+
+func TestAgyCLIAuthFailureNamesItsOwnSignIn(t *testing.T) {
+	useFakeAgy(t, `{"event":"result","result":{"status":"ERROR","response":"authentication failed or timed out"}}`+"\n")
+	err := agyClient(t).Stream(context.Background(), ChatRequest{Model: "gemini-4-neon-high", Messages: []Message{{Role: RoleUser, Content: "hi"}}}, func(StreamEvent) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "own sign-in") || !strings.Contains(err.Error(), "antigravity-*") {
+		t.Fatalf("err = %v, want the hint that agy has its own sign-in", err)
+	}
+}
+
+func TestAgyCLIQuotaNeedsTheTermixgoLogin(t *testing.T) {
+	snap := agyClient(t).FetchQuota(context.Background())
+	if snap == nil || snap.Unavailable == "" || len(snap.Windows) != 0 || snap.Provider != "agy-cli" {
+		t.Fatalf("snapshot = %+v, want unavailable with a reason", snap)
 	}
 }

@@ -183,7 +183,7 @@ var (
 
 const (
 	defaultClaudeCLIVersion      = "2.1.325"
-	defaultAntigravityCLIVersion = "1.5.14"
+	defaultAntigravityCLIVersion = "1.5.15"
 )
 
 func isDottedVersion(value string) bool {

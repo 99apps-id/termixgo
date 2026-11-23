@@ -42,13 +42,17 @@ type antigravityClient struct {
 	trajectory string
 }
 
+// agConsumerProject is the project the CLI puts on every call of a consumer
+// account that Cloud Code assigns none.
+const agConsumerProject = "aicode-consumers"
+
 const (
 	// defaultAGCLIVersion and defaultAGChangelist are the pair the installed
-	// Antigravity CLI reports (agy 1.5.14, read from its own request to a
+	// Antigravity CLI reports (agy 1.5.15, read from its own request to a
 	// local endpoint). The changelist is part of the identity: a version with
 	// the wrong changelist is a client no release ever was.
-	defaultAGCLIVersion = "1.5.14"
-	defaultAGChangelist = "1026970498"
+	defaultAGCLIVersion = "1.5.15"
+	defaultAGChangelist = "1027820220"
 	agMaxOutputToken    = 65536
 )
 
@@ -437,14 +441,23 @@ func (c *antigravityClient) ensureProject(ctx context.Context) (string, error) {
 		return "", err
 	}
 	var loaded struct {
-		Project json.RawMessage `json:"cloudaicompanionProject"`
-		Tiers   []struct {
+		Project     json.RawMessage `json:"cloudaicompanionProject"`
+		CurrentTier *struct {
+			ID string `json:"id"`
+		} `json:"currentTier"`
+		Tiers []struct {
 			ID        string `json:"id"`
 			IsDefault bool   `json:"isDefault"`
 		} `json:"allowedTiers"`
 	}
 	_ = json.Unmarshal(raw, &loaded)
 	project := agProjectID(loaded.Project)
+	// A consumer account that is already enrolled answers with a tier and no
+	// project. The CLI then names the shared consumer project, so there is
+	// nothing to onboard and nothing to invent.
+	if project == "" && loaded.CurrentTier != nil && strings.TrimSpace(loaded.CurrentTier.ID) != "" {
+		project = agConsumerProject
+	}
 	tier := "legacy-tier"
 	for _, candidate := range loaded.Tiers {
 		if candidate.IsDefault {
@@ -477,7 +490,9 @@ func (c *antigravityClient) ensureProject(ctx context.Context) (string, error) {
 		}
 	}
 	if project == "" {
-		project = "termixgo-" + randomHex(8)
+		// The CLI sends the consumer project when the account names none; an
+		// invented id is a project no real client ever used.
+		project = agConsumerProject
 	}
 	c.project = project
 	return project, nil

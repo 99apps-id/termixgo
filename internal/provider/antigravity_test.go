@@ -648,9 +648,9 @@ func TestAntigravityUserAgentUsesCLIVersion(t *testing.T) {
 	t.Setenv("ODON_ANTIGRAVITY_CLI_VERSION", "")
 	t.Setenv("TERMIXGO_ANTIGRAVITY_CLI_CL", "")
 	t.Setenv("TERMIXGO_ANTIGRAVITY_AUTH_METHOD", "")
-	// The shape is the one agy 1.5.14 sent when its request was captured on a
+	// The shape is the one agy 1.5.15 sent when its request was captured on a
 	// local endpoint; only the OS and architecture vary with the host.
-	want := "antigravity/cli/1.5.14 (aidev_client; os_type=" + runtime.GOOS + "; arch=" + runtime.GOARCH + "; cl=1026970498; auth_method=consumer)"
+	want := "antigravity/cli/1.5.15 (aidev_client; os_type=" + runtime.GOOS + "; arch=" + runtime.GOARCH + "; cl=1027820220; auth_method=consumer)"
 	if ua := agUserAgent(); ua != want {
 		t.Errorf("agUserAgent() = %q, want %q", ua, want)
 	}

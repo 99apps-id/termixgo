@@ -13,7 +13,7 @@ import (
 )
 
 // TestAntigravityRequestMatchesTheCLI pins what the client sends to Google
-// against the request the installed agy 1.5.14 was captured sending: the same
+// against the request the installed agy 1.5.15 was captured sending: the same
 // header set, the same envelope fields and the same thinking spelling. A
 // header or field the CLI does not send is the kind of difference that gets an
 // account limited, so the absences are asserted as firmly as the presences.
@@ -149,4 +149,60 @@ func TestAntigravityNeonIsInTheCatalogue(t *testing.T) {
 		}
 	}
 	t.Fatal("antigravity-gemini-4-neon is missing from the catalogue")
+}
+
+// TestAntigravityConsumerAccountUsesTheSharedProject covers the account that
+// Cloud Code enrols but assigns no project: the CLI names the shared consumer
+// project, so the client must neither onboard nor invent an id.
+func TestAntigravityConsumerAccountUsesTheSharedProject(t *testing.T) {
+	var onboarded int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case strings.Contains(request.URL.Path, "loadCodeAssist"):
+			fmt.Fprint(writer, `{"currentTier":{"id":"free-tier","name":"Antigravity"},"allowedTiers":[{"id":"free-tier","isDefault":true}]}`)
+		case strings.Contains(request.URL.Path, "onboardUser"):
+			onboarded++
+			http.Error(writer, "no", http.StatusInternalServerError)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	originalLoad, originalOnboard := agLoadAssistURL, agOnboardURL
+	agLoadAssistURL = server.URL + "/v1internal:loadCodeAssist"
+	agOnboardURL = server.URL + "/v1internal:onboardUser"
+	t.Cleanup(func() { agLoadAssistURL, agOnboardURL = originalLoad, originalOnboard })
+
+	client, err := newHTTPClient(Provider{ID: "antigravity", Label: "Antigravity", Kind: KindAntigravity}, server.URL, "tok")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	project, err := client.(*antigravityClient).ensureProject(context.Background())
+	if err != nil || project != "aicode-consumers" {
+		t.Fatalf("project = %q, err = %v, want aicode-consumers", project, err)
+	}
+	if onboarded != 0 {
+		t.Errorf("an enrolled account was onboarded %d times", onboarded)
+	}
+}
+
+// TestAntigravityQuotaWithPerModelBuckets covers the summary some accounts get:
+// a remaining fraction per model and no 5-hour or weekly window.
+func TestAntigravityQuotaWithPerModelBuckets(t *testing.T) {
+	body := []byte(`{"groups":[{"buckets":[
+		{"bucketId":"gemini-4-neon-high","displayName":"Gemini 4 Neon (High)","remainingFraction":1},
+		{"bucketId":"gemini-4-argon-high","displayName":"Gemini 4 Argon (High)","remainingFraction":0.4},
+		{"bucketId":"claude-opus-5-5-high","displayName":"Claude Opus 5.5 (High)","remainingFraction":0.9},
+		{"bucketId":"gpt-oss-120b-medium","displayName":"GPT-OSS 120B (Medium)","remainingFraction":0.7}]}]}`)
+	snap := parseAntigravityQuota(&QuotaSnapshot{Provider: "antigravity"}, body)
+	if snap.Unavailable != "" || len(snap.Windows) != 2 {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+	gemini, claude := snap.Windows[0], snap.Windows[1]
+	if gemini.Key != "gemini_models" || gemini.UsedPercent != 60 {
+		t.Errorf("gemini window = %+v, want the tightest model (60%% used)", gemini)
+	}
+	if claude.Key != "claude_gpt_models" || claude.UsedPercent < 29.9 || claude.UsedPercent > 30.1 {
+		t.Errorf("claude window = %+v, want the tightest of Claude and GPT (30%% used)", claude)
+	}
 }
