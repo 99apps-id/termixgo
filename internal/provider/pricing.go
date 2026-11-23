@@ -206,6 +206,7 @@ var planProviders = map[string]PlanInfo{
 	"xai-oauth":      {Name: "SuperGrok", CreditUnit: "subscription"},
 	"claude-oauth":   {Name: "Claude", CreditUnit: "subscription"},
 	"antigravity":    {Name: "Google Antigravity", CreditUnit: "subscription"},
+	"agy-cli":        {Name: "Google Antigravity (CLI)", CreditUnit: "subscription"},
 	"github-copilot": {Name: "GitHub Copilot", CreditUnit: "subscription"},
 	"muse":           {Name: "Meta Muse Code", CreditUnit: "subscription"},
 }

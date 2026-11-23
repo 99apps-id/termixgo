@@ -199,7 +199,8 @@ func TestProvidersRequiringKeySortedAndConsistent(t *testing.T) {
 		}
 		// An OAuth provider has no environment variable: its credential comes
 		// from a stored login, not an API key.
-		if info.OAuth {
+		// The agy CLI route has no key either: the installed CLI is its credential.
+		if info.OAuth || info.Kind == KindAgyCLI {
 			continue
 		}
 		if len(info.EnvKeys) == 0 {

@@ -213,6 +213,9 @@ func NewClient(id, baseURL string, resolveKey KeyResolver) (Client, error) {
 		key = strings.TrimSpace(resolveKey(id))
 	}
 	if info.NeedsKey && key == "" {
+		if info.Kind == KindAgyCLI {
+			return nil, errAgyMissing
+		}
 		if info.OAuth {
 			return nil, fmt.Errorf("%s needs a login; run 'termixgo login %s'", info.Label, id)
 		}

@@ -13,6 +13,7 @@ const (
 	KindAnthropic   Kind = "anthropic"
 	KindGoogle      Kind = "google"
 	KindAntigravity Kind = "antigravity"
+	KindAgyCLI      Kind = "agy-cli"
 	KindCopilot     Kind = "copilot"
 	KindMuse        Kind = "muse"
 )
@@ -88,6 +89,12 @@ var contextWindows = map[string]int{
 	"antigravity-gemini-4-argon":        1048576,
 	"antigravity-gemini-4-carbon":       1048576,
 	"antigravity-gemini-4-neon":         1048576,
+	"agy-cli-gemini-4-neon":             1048576,
+	"agy-cli-gemini-4-hydrogen":         1048576,
+	"agy-cli-gemini-4-argon":            1048576,
+	"agy-cli-gemini-3.8-flash":          1048576,
+	"agy-cli-claude-opus-5-5":           1000000,
+	"agy-cli-claude-sonnet-5-5":         1000000,
 	"antigravity-gemini-3.8-flash":      1048576,
 	"antigravity-gemini-3.8-flash-high": 1048576,
 	"antigravity-gemini-3.5-flash":      1048576,
@@ -325,6 +332,9 @@ func Providers() []Provider {
 		{ID: "openai", Label: "OpenAI", Kind: KindOpenAI, DefaultBaseURL: "https://api.openai.com/v1", ConsoleURL: "https://platform.openai.com/api-keys", NeedsKey: true, KeyPrefix: "sk-", EnvKeys: []string{"OPENAI_API_KEY"}},
 		{ID: "anthropic", Label: "Anthropic", Kind: KindAnthropic, DefaultBaseURL: "https://api.anthropic.com", ConsoleURL: "https://console.anthropic.com/settings/keys", NeedsKey: true, KeyPrefix: "sk-ant-", EnvKeys: []string{"ANTHROPIC_API_KEY"}},
 		{ID: "claude-oauth", Label: "Claude (OAuth)", Kind: KindAnthropic, DefaultBaseURL: "https://api.anthropic.com", ConsoleURL: "https://claude.ai/", NeedsKey: true, OAuth: true},
+		// agy-cli runs a turn through the installed Antigravity CLI. It has no key
+		// of its own: it is usable exactly when the CLI is installed.
+		{ID: "agy-cli", Label: "Antigravity CLI (agy)", Kind: KindAgyCLI, DefaultBaseURL: "agy://local", ConsoleURL: "https://antigravity.google", NeedsKey: true},
 		{ID: "antigravity", Label: "Google Antigravity", Kind: KindAntigravity, DefaultBaseURL: "https://daily-cloudcode-pa.googleapis.com", ConsoleURL: "https://antigravity.google", NeedsKey: true, OAuth: true},
 		{ID: "google", Label: "Google Gemini", Kind: KindGoogle, DefaultBaseURL: "https://generativelanguage.googleapis.com", ConsoleURL: "https://aistudio.google.com/apikey", NeedsKey: true, EnvKeys: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 		{ID: "xai", Label: "xAI Grok", Kind: KindOpenAI, DefaultBaseURL: "https://api.x.ai/v1", ConsoleURL: "https://console.x.ai/", NeedsKey: true, KeyPrefix: "xai-", EnvKeys: []string{"XAI_API_KEY"}},
@@ -553,6 +563,14 @@ func Models() []Model {
 		// (gemini-3.8-flash-medium); 9router's "(medium)" preset is stripped
 		// before the request and sent as thinkingConfig, so it must not be part
 		// of the id. A wrong id returns 404 "check the model id and base URL".
+		// The same models through the CLI itself. These are delegations: agy runs
+		// its own tools and Termixgo's tools and approvals do not apply.
+		{ID: "agy-cli-gemini-4-neon", Provider: "agy-cli", Label: "Gemini 4 Neon (agy CLI)", APIID: "gemini-4-neon-high", Description: "Gemini 4 Neon. Runs through the installed agy CLI with its own tools.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "agy-cli-gemini-4-hydrogen", Provider: "agy-cli", Label: "Gemini 4 Hydrogen (agy CLI)", APIID: "gemini-4-hydrogen-high", Description: "Gemini 4 Hydrogen. Runs through the installed agy CLI with its own tools.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "agy-cli-gemini-4-argon", Provider: "agy-cli", Label: "Gemini 4 Argon (agy CLI)", APIID: "gemini-4-argon-medium", Description: "Gemini 4 Argon. Runs through the installed agy CLI with its own tools.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "agy-cli-gemini-3.8-flash", Provider: "agy-cli", Label: "Gemini 3.8 Flash (agy CLI)", APIID: "gemini-3.8-flash-medium", Description: "Gemini 3.8 Flash. Runs through the installed agy CLI with its own tools.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "agy-cli-claude-opus-5-5", Provider: "agy-cli", Label: "Claude Opus 5.5 (agy CLI)", APIID: "claude-opus-5-5-medium", Description: "Claude Opus 5.5. Runs through the installed agy CLI with its own tools.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "agy-cli-claude-sonnet-5-5", Provider: "agy-cli", Label: "Claude Sonnet 5.5 (agy CLI)", APIID: "claude-sonnet-5-5-medium", Description: "Claude Sonnet 5.5. Runs through the installed agy CLI with its own tools.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "antigravity-gemini-4-neon", Provider: "antigravity", Label: "Gemini 4 Neon (Antigravity)", APIID: "gemini-4-neon-high", Description: "Newest Gemini 4 tier: low, medium, high and xhigh thinking.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "antigravity-gemini-4-hydrogen", Provider: "antigravity", Label: "Gemini 4 Hydrogen (Antigravity)", APIID: "gemini-4-hydrogen-high", Description: "Fast agentic Gemini 4 on every Antigravity plan.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "antigravity-gemini-4-argon", Provider: "antigravity", Label: "Gemini 4 Argon (Antigravity)", APIID: "gemini-4-argon-medium", Description: "Gemini 4 flagship for Pro, Ultra and Enterprise plans.", Tags: []string{"reasoning", "tools", "coding"}},

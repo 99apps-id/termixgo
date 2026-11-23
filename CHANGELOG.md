@@ -8,6 +8,13 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Added
 
+- **Antigravity through the agy CLI (experimental, on `feat/agy-backend`).** The
+  `agy-cli-*` models run a turn through the installed Antigravity CLI, so the
+  request to Google is the CLI's own. They appear usable only when agy is found
+  (PATH, the standalone or IDE install directory, or `TERMIXGO_AGY_PATH`). It is a
+  delegation: agy runs its own tools, and Termixgo's tools, approvals and trust
+  rules do not apply to that turn. `TERMIXGO_AGY_MODE` picks `plan` (default),
+  `accept-edits` or `auto`. The `antigravity-*` models keep working without the CLI.
 - **Gemini 4 Neon on Antigravity**, with low, medium, high and xhigh thinking. Also
   GPT-6.2 Sol, GPT-6.2 Astra and GPT-6.1 Terra on Codex (GPT-5.6 and its siblings
   stay), Claude Haiku 5.5 on the Claude login, the Copilot models GitHub now lists

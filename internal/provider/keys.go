@@ -53,6 +53,13 @@ func museModelAPIKey(store *secrets.Store, id string) string {
 // token, because that key keeps native tool calls instead of the text
 // tool protocol a subscription login falls back to.
 func ResolveKey(store *secrets.Store, id string) string {
+	if id == "agy-cli" {
+		// The CLI holds its own login, so the only credential is the CLI.
+		if agyCLIInstalled() {
+			return "agy-cli"
+		}
+		return ""
+	}
 	if info, ok := ByID(id); ok && info.OAuth {
 		if id == "muse" {
 			if key := museModelAPIKey(store, id); key != "" {
@@ -98,6 +105,12 @@ func UsesOAuth(id string) bool {
 // KeySource names where a key came from, for the status view. A login
 // provider answers with the stored OAuth token, not an API key.
 func KeySource(store *secrets.Store, id string) string {
+	if id == "agy-cli" {
+		if agyCLIInstalled() {
+			return "installed agy CLI"
+		}
+		return ""
+	}
 	if UsesOAuth(id) {
 		if id == "muse" && museModelAPIKey(store, id) != "" {
 			return "model API key"

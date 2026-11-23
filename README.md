@@ -768,6 +768,12 @@ termixgo model muse/muse-spark-1.3
 
 ### Antigravity
 
+Two routes reach the same models. `antigravity-*` calls Cloud Code directly and
+needs only the login below. `agy-cli-*` runs the turn through the installed `agy`
+CLI (experimental): the request to Google is then the CLI's own, but agy uses its
+own tools and permission handling, so Termixgo's tools and approvals do not apply
+to that turn. Set `TERMIXGO_AGY_MODE` to `plan` (default), `accept-edits` or `auto`.
+
 A full login on a machine with a browser, then pick a model and start:
 
 ```sh
