@@ -997,7 +997,10 @@ func (r *Runner) execute(ctx context.Context, call provider.ToolCall) Result {
 				r.Env.SessionAllowed[tool.Name()] = true
 			}
 		}
-		if r.Policy != nil && r.Policy.Memory != nil {
+		// Only a permanent allowance is durable by definition. A one-time or
+		// session answer dies with its turn or session, so recording it would
+		// plant a stale fact that later sessions inherit as if it still held.
+		if decision == DecisionAllowAlways && r.Policy != nil && r.Policy.Memory != nil {
 			r.Policy.Memory.RecordApprovalDecision(tool.Name(), decision)
 		}
 	}

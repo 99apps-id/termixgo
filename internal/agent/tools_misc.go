@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/99apps-id/termixgo/internal/channel"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/skill"
 )
@@ -469,7 +470,7 @@ func (t *rememberTool) DoneLabel(a map[string]any) string {
 	return "Remembered: " + Shorten(argString(a, "fact"), 50)
 }
 func (t *rememberTool) Description() string {
-	return "Store a durable fact or convention so later sessions know it. Use project scope for this codebase, agent for agent-specific memory, or global for cross-project preferences."
+	return "Store a durable convention or standing preference so later sessions know it, for example a coding style or a permanent operator decision. Use project scope for this codebase, agent for agent-specific memory, or global for cross-project preferences. Never store task status, session progress, credentials, or any secret material: progress belongs in the todo list and dies with the session, and secrets are refused outright."
 }
 func (t *rememberTool) Schema() map[string]any {
 	return object(map[string]any{
@@ -492,6 +493,22 @@ func (t *rememberTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	scope := strings.ToLower(strings.TrimSpace(argString(args, "scope")))
 	if scope != "global" && scope != "agent" {
 		scope = "project"
+	}
+	// Memory rides into every future session prompt, so a stored key would
+	// leak to the provider on every later turn. Scrub token shapes and any
+	// live secret values, and refuse outright when anything was scrubbed:
+	// storing the placeholder would leave junk that reads like a fact but
+	// helps nothing, and the refusal must not echo the secret back.
+	var known []string
+	if env.Secrets != nil {
+		for _, key := range env.Secrets.Keys() {
+			if value := env.Secrets.Get(key); value != "" {
+				known = append(known, value)
+			}
+		}
+	}
+	if channel.Redact(fact, known) != fact {
+		return Result{Output: "that looks like it contains secret material, so it was not remembered; rephrase it without the secret", IsError: true}, nil
 	}
 	if err := env.Memory.Remember(fact, scope); err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
