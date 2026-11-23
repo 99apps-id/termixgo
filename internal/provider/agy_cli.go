@@ -187,17 +187,14 @@ type agyUsage struct {
 	CacheReadTokens int `json:"cache_read_tokens"`
 }
 
-func (u agyUsage) add(other agyUsage) agyUsage {
-	return agyUsage{
-		InputTokens:     u.InputTokens + other.InputTokens,
-		OutputTokens:    u.OutputTokens + other.OutputTokens,
-		ThinkingTokens:  u.ThinkingTokens + other.ThinkingTokens,
-		CacheReadTokens: u.CacheReadTokens + other.CacheReadTokens,
-	}
-}
-
 // toUsage reports the CLI's counters in the shared shape. Its input count
 // leaves out what the cache served, so the prompt is the two together.
+//
+// The counters are those of the run's last model call, not a sum. A CLI turn is
+// an agent loop, and every call in it re-sends the CLI's own prompt (about 24k
+// tokens before any task), so adding the calls up reported the same prompt
+// several times over and read as a context four times its real size. The last
+// call's prompt is the context the model actually held.
 func (u agyUsage) toUsage() Usage {
 	prompt := u.InputTokens + u.CacheReadTokens
 	return Usage{
@@ -356,7 +353,7 @@ func (c *agyCLIClient) run(ctx context.Context, binary string, req ChatRequest, 
 
 // handle applies one CLI event. Text becomes answer text, tool activity
 // becomes a reasoning line so the operator can see what the agent is doing,
-// and usage is summed across the run's model calls.
+// and usage is the last model call of the run (see agyUsage.toUsage).
 func (c *agyCLIClient) handle(event agyEvent, announced map[int]bool, total *agyUsage, sawUsage *bool, status, response, failure *string, emitted *bool, emit func(StreamEvent) error) (bool, error) {
 	switch event.Event {
 	case "init":
@@ -390,7 +387,7 @@ func (c *agyCLIClient) handle(event agyEvent, announced map[int]bool, total *agy
 				}
 			}
 			if step.State == "DONE" && step.Usage != nil {
-				*total = total.add(*step.Usage)
+				*total = *step.Usage
 				*sawUsage = true
 			}
 		case step.StepType == "tool" && step.State == "ACTIVE" && !announced[step.StepIndex]:

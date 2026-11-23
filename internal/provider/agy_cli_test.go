@@ -220,3 +220,28 @@ func TestAgyCLIQuotaNeedsTheTermixgoLogin(t *testing.T) {
 		t.Fatalf("snapshot = %+v, want unavailable with a reason", snap)
 	}
 }
+
+// TestAgyCLIUsageIsTheLastCallNotASum covers a run of several model calls: the
+// CLI re-sends its own prompt on each, so the figure that matters is the last
+// call's, which is the context the model held.
+func TestAgyCLIUsageIsTheLastCallNotASum(t *testing.T) {
+	useFakeAgy(t, `{"event":"init","conversation_id":"c-9"}
+{"event":"step_update","step_update":{"conversation_id":"c-9","step_index":1,"state":"DONE","step_type":"agent_response","usage":{"input_tokens":24000,"output_tokens":100,"thinking_tokens":10,"cache_read_tokens":0}}}
+{"event":"step_update","step_update":{"conversation_id":"c-9","step_index":3,"state":"DONE","step_type":"agent_response","usage":{"input_tokens":13000,"output_tokens":50,"thinking_tokens":5,"cache_read_tokens":24000}}}
+{"event":"step_update","step_update":{"conversation_id":"c-9","step_index":5,"state":"DONE","step_type":"agent_response","text_delta":"done","usage":{"input_tokens":2000,"output_tokens":30,"thinking_tokens":0,"cache_read_tokens":37000}}}
+{"event":"result","result":{"conversation_id":"c-9","status":"SUCCESS","response":"done"}}
+`)
+	var usage Usage
+	err := agyClient(t).Stream(context.Background(), ChatRequest{Model: "gemini-4-neon-high", Messages: []Message{{Role: RoleUser, Content: "hi"}}}, func(event StreamEvent) error {
+		if event.Type == EventUsage {
+			usage = *event.Usage
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if usage.PromptTokens != 39000 || usage.CompletionTokens != 30 || usage.CacheReadTokens != 37000 {
+		t.Errorf("usage = %+v, want the last call's (39000 prompt), not the sum (about 100k)", usage)
+	}
+}
