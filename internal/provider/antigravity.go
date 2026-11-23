@@ -65,9 +65,21 @@ func firstEnv(keys ...string) string {
 	return ""
 }
 
+// agVersionOverride is a version the operator pinned by hand.
+func agVersionOverride() string {
+	return firstEnv("TERMIXGO_ANTIGRAVITY_CLI_VERSION", "ANTIGRAVITY_CLI_VERSION", "ODON_ANTIGRAVITY_CLI_VERSION")
+}
+
+// agCLIVersion is the version the requests present. Precedence: a pin from the
+// environment, then the version of the CLI installed on this machine (so the
+// identity follows the CLI when it updates itself), then the release this
+// build was written against.
 func agCLIVersion() string {
-	if v := firstEnv("TERMIXGO_ANTIGRAVITY_CLI_VERSION", "ANTIGRAVITY_CLI_VERSION", "ODON_ANTIGRAVITY_CLI_VERSION"); v != "" {
+	if v := agVersionOverride(); v != "" {
 		return v
+	}
+	if identity, ok := agyIdentityLookup(); ok {
+		return identity.Version
 	}
 	return defaultAGCLIVersion
 }
@@ -79,8 +91,11 @@ func agChangelist() string {
 	if v := firstEnv("TERMIXGO_ANTIGRAVITY_CLI_CL"); v != "" {
 		return v
 	}
-	if agCLIVersion() != defaultAGCLIVersion {
+	if agVersionOverride() != "" {
 		return ""
+	}
+	if identity, ok := agyIdentityLookup(); ok {
+		return identity.Changelist
 	}
 	return defaultAGChangelist
 }

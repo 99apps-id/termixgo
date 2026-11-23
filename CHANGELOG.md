@@ -49,7 +49,11 @@ All notable changes to Termixgo are recorded here. The format follows
   alive minutes after its result; the turn now ends when the result arrives. Its
   usage row reuses the Antigravity login, and an authentication failure says that
   agy keeps its own sign-in.
-- The Antigravity identity follows the installed agy, now 1.5.15.
+- **The Antigravity identity follows the installed agy.** The User-Agent version and
+  changelist are read from the agy on the machine (now 1.5.15), cached until the
+  binary changes, so an agy that updated itself no longer leaves Termixgo
+  presenting an older release. Without an agy the built-in pair is used, and
+  `TERMIXGO_ANTIGRAVITY_CLI_VERSION` and `TERMIXGO_ANTIGRAVITY_CLI_CL` still pin it.
 
 ### Changed
 

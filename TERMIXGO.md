@@ -489,7 +489,10 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   `requestType: agent`, the `labels` block, upper-case function schema types and
   thinking levels, and no session header, no `toolConfig` and no client-name pair.
   The version and its changelist are one pair: overriding the version drops the
-  bundled changelist. Codex sends `Session-Id`, `Thread-Id`, `Version`,
+  changelist. Both are read from the installed agy (`agy --version`, and the build
+  path `google_src/files/<changelist>/depot` inside the binary, cached by the
+  binary's size and mtime), so the identity follows the CLI when it updates itself;
+  the pair built into the code is only the fallback when no agy is installed. Codex sends `Session-Id`, `Thread-Id`, `Version`,
   `X-Client-Request-Id`, `X-Codex-Window-Id` and `X-Codex-Turn-Metadata` under a
   `codex_cli_rs/<v> (<os> <ver>; <arch>) <terminal> (codex-tui; <v>)` User-Agent;
   the body is not zstd-compressed, which the backend accepts. Claude Code sends the

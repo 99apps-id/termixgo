@@ -13,6 +13,9 @@ import (
 // variable is set it prints a canned stream-json run and exits before the
 // test framework parses the CLI's flags.
 func TestMain(m *testing.M) {
+	// The identity lookup reads the agy installed on the machine, which a test
+	// must not depend on.
+	agyIdentityLookup = func() (agyIdentity, bool) { return agyIdentity{}, false }
 	if script := os.Getenv("TERMIXGO_TEST_AGY_SCRIPT"); script != "" {
 		fmt.Print(script)
 		if args := os.Getenv("TERMIXGO_TEST_AGY_ARGS_FILE"); args != "" {
