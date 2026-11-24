@@ -89,3 +89,28 @@ func TestGuestCannotSendAWorkspaceSecret(t *testing.T) {
 		t.Fatalf("a guest was sent the workspace .env: %+v", result)
 	}
 }
+
+// The prompt answers questions about itself, so a guest prompt must not hold
+// what belongs to the operator.
+func TestGuestPromptHoldsNothingOfTheOperators(t *testing.T) {
+	workspace := t.TempDir()
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "AGENTS.md"), []byte("PROJECT-NOTE-7731"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "USER.md"), []byte("- Name: Operator-Private-Name\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	guest, _ := BuildSystemParts(&Env{Workspace: workspace, AgentHome: home, Guest: true}, "m")
+	for _, leaked := range []string{"PROJECT-NOTE-7731", "Operator-Private-Name"} {
+		if strings.Contains(guest, leaked) {
+			t.Errorf("the guest prompt carries %q", leaked)
+		}
+	}
+	operator, _ := BuildSystemParts(&Env{Workspace: workspace, AgentHome: home}, "m")
+	for _, kept := range []string{"PROJECT-NOTE-7731", "Operator-Private-Name"} {
+		if !strings.Contains(operator, kept) {
+			t.Errorf("the operator prompt lost %q", kept)
+		}
+	}
+}

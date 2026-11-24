@@ -85,6 +85,28 @@ func (s *Store) load() error {
 	return nil
 }
 
+// refreshLocked re-reads the file before a change is applied. Another process
+// (the CLI while serve runs, or serve while the CLI edits) may have added,
+// removed or disabled a job since this copy was loaded, and writing the stale
+// list back would silently undo that change. A failed read keeps what is in
+// memory: the write that follows will report the real problem.
+func (s *Store) refreshLocked() {
+	if strings.TrimSpace(s.path) == "" {
+		return
+	}
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			s.jobs = nil
+		}
+		return
+	}
+	var jobs []Job
+	if json.Unmarshal(data, &jobs) == nil {
+		s.jobs = jobs
+	}
+}
+
 func (s *Store) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("create cron directory: %w", err)
@@ -143,6 +165,7 @@ func (s *Store) Add(name, prompt string, schedule Schedule, now time.Time) (Job,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshLocked()
 	s.jobs = append(s.jobs, job)
 	if err := s.saveLocked(); err != nil {
 		s.jobs = s.jobs[:len(s.jobs)-1]
@@ -155,6 +178,7 @@ func (s *Store) Add(name, prompt string, schedule Schedule, now time.Time) (Job,
 func (s *Store) Update(id string, change func(*Job)) (Job, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshLocked()
 	for index := range s.jobs {
 		if s.jobs[index].ID != id {
 			continue
@@ -192,6 +216,7 @@ func (s *Store) Reload() error {
 func (s *Store) Remove(id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshLocked()
 	for index, job := range s.jobs {
 		if job.ID != id {
 			continue
@@ -210,6 +235,7 @@ func (s *Store) Remove(id string) (bool, error) {
 func (s *Store) SetEnabled(id string, enabled bool, now time.Time) (Job, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshLocked()
 	for index := range s.jobs {
 		if s.jobs[index].ID != id {
 			continue
@@ -235,6 +261,7 @@ func (s *Store) SetEnabled(id string, enabled bool, now time.Time) (Job, bool, e
 func (s *Store) Due(now time.Time) []Job {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshLocked()
 	var due []Job
 	changed := false
 	for index := range s.jobs {
@@ -266,6 +293,7 @@ func (s *Store) Due(now time.Time) []Job {
 func (s *Store) MarkStarted(id string, now time.Time) (Job, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshLocked()
 	for index := range s.jobs {
 		if s.jobs[index].ID != id {
 			continue
@@ -295,6 +323,7 @@ func (s *Store) MarkStarted(id string, now time.Time) (Job, bool, error) {
 func (s *Store) Requeue(id string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshLocked()
 	for index := range s.jobs {
 		if s.jobs[index].ID != id {
 			continue
@@ -312,6 +341,7 @@ func (s *Store) Requeue(id string, now time.Time) error {
 func (s *Store) MarkError(id string, failure error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshLocked()
 	for index := range s.jobs {
 		if s.jobs[index].ID != id {
 			continue

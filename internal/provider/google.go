@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"strings"
 )
 
@@ -72,9 +71,12 @@ func (c *googleClient) Stream(ctx context.Context, req ChatRequest, emit func(St
 		payload["generationConfig"] = generation
 	}
 
-	endpoint := fmt.Sprintf("%s/v1beta/%s:streamGenerateContent?alt=sse&key=%s",
-		c.baseURL, googleModelPath(req.Model), url.QueryEscape(c.apiKey))
-	response, err := c.post(ctx, endpoint, nil, payload)
+	// The key travels in a header, not the query string. net/http quotes the
+	// full URL in a transport error, so a key in the query ended up in the
+	// error text shown in the terminal, logged and saved with the session.
+	endpoint := fmt.Sprintf("%s/v1beta/%s:streamGenerateContent?alt=sse",
+		c.baseURL, googleModelPath(req.Model))
+	response, err := c.post(ctx, endpoint, map[string]string{"x-goog-api-key": c.apiKey}, payload)
 	if err != nil {
 		return err
 	}

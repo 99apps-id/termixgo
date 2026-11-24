@@ -161,6 +161,10 @@ func (a *App) RunScheduled(ctx context.Context, job cron.Job) (string, error) {
 			// requeued rather than marked failed.
 			return "", cron.ErrBusy
 		}
+		// The failure text lands in the history file and in the job's LastError,
+		// both plain files, so a provider error that echoes a credential is
+		// scrubbed first.
+		err = errors.New(a.RedactForChannel(err.Error()))
 		entry.Error = err.Error()
 		cron.RecordHistory(entry)
 		return "", err

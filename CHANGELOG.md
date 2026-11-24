@@ -49,6 +49,45 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Fixed
 
+Security audit of the channels, cron, browser, sandbox, workspace and approval paths:
+
+- **A group member could approve a tool call on Telegram.** The approval card is visible
+  to everyone in a group, and any member pressing Allow was accepted. Only the operator,
+  an admin or the person in a private chat may answer now.
+- **`/pair` could be brute forced.** The six digit code never expired and wrong guesses
+  were free. Five wrong codes in ten minutes now lock pairing for fifteen, the compare is
+  constant time, and a locked bot stays silent.
+- **The Telegram bot token reached error text.** net/http quotes the request URL, and the
+  token is in the path, so a transport error carried a working credential into logs and
+  the status line. Errors are scrubbed. The Gemini API key moved from the query string to
+  the `x-goog-api-key` header for the same reason.
+- **A guest and the operator shared one chat session.** In a group, what the operator's
+  turns read stayed in the history the next guest turn was given. Guests now have their
+  own session beside the operator's.
+- **A guest prompt carried the operator's private context.** The operator profile, the
+  learned memory and the project notes are no longer in a guest prompt, and
+  `search_memory` and the policy tools are not offered to a guest.
+- **A guest could read credential files in the workspace.** `.env*`, `.git`, `.ssh`, key
+  files, `secrets.json` and Termixgo's own state (except the uploads folder) are refused
+  to read, search, list or send in a guest turn.
+- **A live browser could open any file.** `browser_navigate`, new tabs, screenshots and
+  flows accepted `file:///` for any path, so navigating and reading the page was a file
+  read with no workspace check. They share the workspace rule of the file tools now.
+- **`http_request` could upload or write without asking.** A POST, PUT, PATCH or DELETE,
+  or any request with a body, now asks first; a plain GET stays free.
+- **OAuth tokens were not redacted from chat answers.** A login is stored as one JSON
+  object, so the whole blob never matched while its access and refresh tokens did. Each
+  field is redacted, and Google tokens, client secrets and bearer values have patterns.
+- **The sandbox on Windows ran in an empty folder.** The mount used the container path
+  on both sides; the source is now the host workspace.
+- **Cron lost jobs across processes.** `serve` wrote its stale in-memory list back after
+  a long run and undid a job added, removed or disabled from the CLI meanwhile. Every
+  change now re-reads the file first. A panicking job no longer takes the scheduler down,
+  and failure text is redacted before it is stored.
+- **Per-sender state grew without bound.** The rate limiter never forgot a quiet sender,
+  and pairing requests never expired. Entries now expire (24 hours, at most 50 open),
+  and uploads are written with owner-only permissions.
+
 - **The terminal no longer minimizes when a turn ends.** The end-of-turn notification
   ran `powershell -WindowStyle Hidden` on the same console as the terminal, so PowerShell
   hid "its" window and Windows Terminal minimized. The helper now gets its own hidden

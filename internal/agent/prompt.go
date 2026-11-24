@@ -39,7 +39,11 @@ func BuildSystemParts(env *Env, model string) (staticPrompt, dynamicPlan string)
 		fmt.Fprintf(&builder, "- Model: %s\n", model)
 	}
 
-	if memory := readProjectMemory(env.Workspace); memory != "" {
+	// A guest chat is open to people the operator never vetted, and the model
+	// answers questions about whatever is in its prompt. The project notes, the
+	// operator's profile and the learned memory are the operator's, so a guest
+	// prompt carries none of them.
+	if memory := readProjectMemory(env.Workspace); memory != "" && !env.Guest {
 		builder.WriteString("\n\n## PROJECT MEMORY - ")
 		builder.WriteString(memoryName(env.Workspace))
 		builder.WriteByte('\n')
@@ -58,7 +62,10 @@ func BuildSystemParts(env *Env, model string) (staticPrompt, dynamicPlan string)
 		builder.WriteString("- You already have your complete SOUL.md loaded in this block. Never search the workspace for SOUL.md or read legacy configuration files from other software.\n\n")
 		builder.WriteString(soul)
 	}
-	profile := readUserProfile(env.AgentHome)
+	profile := ""
+	if !env.Guest {
+		profile = readUserProfile(env.AgentHome)
+	}
 	if profile != "" {
 		builder.WriteString("\n\n## USER\n")
 		fmt.Fprintf(&builder, "- The operator profile is defined below (source: %s).\n", filepath.Join(env.AgentHome, "USER.md"))
@@ -102,7 +109,7 @@ func BuildSystemParts(env *Env, model string) (staticPrompt, dynamicPlan string)
 	if env.Grounding == "strict" {
 		builder.WriteString("- Strict grounding is on: an answer with no tool evidence is challenged once, and an answer that still has no evidence is marked as unverified.\n")
 	}
-	if env.Memory != nil {
+	if env.Memory != nil && !env.Guest {
 		if strings.TrimSpace(env.AgentHome) != "" {
 			env.Memory.SetAgentHome(env.AgentHome)
 		}

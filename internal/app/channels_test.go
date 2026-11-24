@@ -192,3 +192,18 @@ func TestRunChannelTurnStreamDoesNotDuplicateEvents(t *testing.T) {
 		t.Errorf("expected 1 text stream event (no duplicate observer emission), got %d (%+v)", textEvents, events)
 	}
 }
+
+// An operator and a guest in one chat must never read each other's history.
+func TestChannelSessionsAreSeparatedByRole(t *testing.T) {
+	admin := channelSessionIDFor(config.ChannelTelegram, "sales", channel.Request{ChatID: "-100", Admin: true})
+	guest := channelSessionIDFor(config.ChannelTelegram, "sales", channel.Request{ChatID: "-100"})
+	if admin == guest {
+		t.Fatalf("operator and guest share the session %q", admin)
+	}
+	if admin != channelSessionID(config.ChannelTelegram, "sales", "-100") {
+		t.Errorf("the operator's session id must stay what it was, so saved history is kept: %q", admin)
+	}
+	if !strings.HasSuffix(guest, "-guest") {
+		t.Errorf("guest session = %q", guest)
+	}
+}

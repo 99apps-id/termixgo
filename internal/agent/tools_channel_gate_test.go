@@ -78,3 +78,29 @@ func TestSendChannelRefusesGuestFilesOutsideTheWorkspace(t *testing.T) {
 		t.Fatalf("a guest must not receive a file from outside the workspace: %+v", result)
 	}
 }
+
+// A read stays free; a request that writes or carries a body asks first.
+func TestHTTPRequestAsksBeforeAWriteOrAnUpload(t *testing.T) {
+	tool := &httpRequestTool{}
+	cases := []struct {
+		args map[string]any
+		want bool
+	}{
+		{map[string]any{"url": "https://example.com"}, false},
+		{map[string]any{"url": "https://example.com", "method": "get"}, false},
+		{map[string]any{"url": "https://example.com", "method": "HEAD"}, false},
+		{map[string]any{"url": "https://example.com", "method": "POST"}, true},
+		{map[string]any{"url": "https://example.com", "method": "delete"}, true},
+		{map[string]any{"url": "https://example.com", "method": "PUT", "body": "x"}, true},
+		{map[string]any{"url": "https://example.com", "body": "leaked file content"}, true},
+	}
+	for _, tc := range cases {
+		if got := tool.NeedsApprovalForCall(&Env{}, tc.args); got != tc.want {
+			t.Errorf("%v: needs approval = %v, want %v", tc.args, got, tc.want)
+		}
+	}
+	asking := &Runner{Policy: &ApprovalPolicy{Mode: ApprovalAsk}, Env: &Env{}}
+	if !asking.callNeedsApproval(tool, map[string]any{"url": "https://example.com", "method": "POST"}) {
+		t.Errorf("a POST must ask in ask mode")
+	}
+}

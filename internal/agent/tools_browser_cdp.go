@@ -419,6 +419,13 @@ func (t *browserTabsTool) Run(ctx context.Context, env *Env, args map[string]any
 	default:
 		return Result{Output: fmt.Sprintf("unknown action %q: use list, new, select or close", action), IsError: true}, nil
 	}
+	// Refuse a file target before a browser is started for it.
+	tabURL := firstNonEmpty(strings.TrimSpace(argString(args, "url")), "about:blank")
+	if action == "new" {
+		if err := checkBrowserTarget(env, tabURL); err != nil {
+			return Result{Output: err.Error(), IsError: true}, nil
+		}
+	}
 	session, err := browserSession(ctx)
 	if err != nil {
 		return Result{Output: err.Error(), IsError: true}, nil
@@ -444,10 +451,6 @@ func (t *browserTabsTool) Run(ctx context.Context, env *Env, args map[string]any
 		}
 		return Result{Output: out.String()}, nil
 	case "new":
-		tabURL := firstNonEmpty(strings.TrimSpace(argString(args, "url")), "about:blank")
-		if err := checkBrowserTarget(env, tabURL); err != nil {
-			return Result{Output: err.Error(), IsError: true}, nil
-		}
 		target, err := session.NewTab(runCtx, tabURL)
 		if err != nil {
 			return Result{Output: err.Error(), IsError: true}, nil

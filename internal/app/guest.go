@@ -33,7 +33,8 @@ var guestDeniedTools = []string{
 	"browser_tabs", "browser_cookies", "browser_close",
 	"github_create_pr", "github_get_pr", "github_list_prs", "github_review_pr",
 	"github_comment_pr", "github_merge_pr",
-	"ask_user", "remember", "install_skill", "propose_skill",
+	"ask_user", "remember", "search_memory", "install_skill", "propose_skill",
+	"list_policies", "list_invariants", "pin_invariant",
 	"desktop_screenshot", "desktop_input", "desktop_windows",
 }
 

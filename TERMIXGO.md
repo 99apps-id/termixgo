@@ -611,6 +611,18 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   tools only, and a test fails when a name stops matching), a guest steer is
   wrapped as untrusted data like the guest's prompt, `Secrets` is nil, the operator's "always allow" answers do not apply,
   the approval mode is `ask`, and the rate/step/cost limits are the account's.
+- A guest also never sees what is the operator's. Its session id carries a
+  `-guest` suffix (`channelSessionIDFor`), so the operator's turns and a
+  guest's never share a history in one chat; its prompt omits the operator
+  profile, the learned memory and the project notes; and `checkWorkspacePath`
+  refuses credential files and runtime state (`guestSensitive`) for a guest.
+  Every file tool goes through that one function, so a new tool inherits the
+  rule by using it. A live browser target is checked by `checkBrowserTarget`
+  before a session is started.
+- A tool approval card in a group is answerable only by the operator, an admin
+  or the owner; a private chat may answer its own card. `/pair` locks after
+  five wrong codes (`pairFailLimit`). A secret never goes in a URL: the bot
+  token is scrubbed from transport errors and the Gemini key is a header.
 - Chat answers are final text only. A WhatsApp chat sees a typing presence and
   then one answer, never a tool line, a path or a raw error; every answer is
   redacted for token shapes and stored secret values before it is sent.

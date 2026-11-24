@@ -736,20 +736,20 @@ func (b *telegramBridge) RunPromptWithImageStream(ctx context.Context, request c
 
 // Steer forwards a steering message into an active turn in this chat.
 func (b *telegramBridge) Steer(request channel.Request, prompt string) bool {
-	id := channelSessionID(config.ChannelTelegram, b.name, request.ChatID)
+	id := channelSessionIDFor(config.ChannelTelegram, b.name, request)
 	// A guest's steer is data like any guest prompt, never a raw instruction.
 	return b.app.SteerSession(id, b.promptFor(request, prompt))
 }
 
 // IsRunning reports whether a turn is active for this chat.
 func (b *telegramBridge) IsRunning(request channel.Request) bool {
-	id := channelSessionID(config.ChannelTelegram, b.name, request.ChatID)
+	id := channelSessionIDFor(config.ChannelTelegram, b.name, request)
 	return b.app.IsSessionRunning(id)
 }
 
 // StopChat cancels the turn in flight for this chat.
 func (b *telegramBridge) StopChat(request channel.Request) bool {
-	id := channelSessionID(config.ChannelTelegram, b.name, request.ChatID)
+	id := channelSessionIDFor(config.ChannelTelegram, b.name, request)
 	return b.app.StopSession(id)
 }
 
@@ -899,7 +899,7 @@ func (b *telegramBridge) session(request channel.Request) (*agent.Session, error
 	if err != nil {
 		return nil, err
 	}
-	id := channelSessionID(config.ChannelTelegram, b.name, request.ChatID)
+	id := channelSessionIDFor(config.ChannelTelegram, b.name, request)
 	if loaded, err := agent.LoadSessionIn(dir, id); err == nil {
 		loaded.SetAgent(agentName)
 		return loaded, nil
@@ -918,7 +918,7 @@ func (b *telegramBridge) freshSession(request channel.Request) (*agent.Session, 
 	if err != nil {
 		return nil, err
 	}
-	id := channelSessionID(config.ChannelTelegram, b.name, request.ChatID)
+	id := channelSessionIDFor(config.ChannelTelegram, b.name, request)
 	session, err := agent.NewSessionWithID(agentName, id, b.app.AgentWorkspace(agentName), b.app.CurrentModel().ID)
 	if err != nil {
 		return nil, err
@@ -1534,4 +1534,17 @@ func (a *App) deliverViaOutbox(ctx context.Context, ch, account, recipient, file
 		}
 	}
 	return false, nil
+}
+
+// channelSessionIDFor is the session of one sender class in one chat. A group
+// holds the operator and strangers at once; with one shared session, what the
+// operator's turns read (a file, a command's output) stayed in the history a
+// guest's next turn was given, and the guest could simply ask for it. Guests
+// get their own session beside the operator's, so the two histories never meet.
+func channelSessionIDFor(kind, account string, request channel.Request) string {
+	id := channelSessionID(kind, account, request.ChatID)
+	if !request.Admin {
+		return id + "-guest"
+	}
+	return id
 }

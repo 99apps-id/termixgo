@@ -43,6 +43,21 @@ func (t *httpRequestTool) DoneLabel(a map[string]any) string {
 	}
 	return fmt.Sprintf("HTTP %s %s completed", method, Shorten(argString(a, "url"), 35))
 }
+
+// NeedsApprovalForCall asks before a request that can change or send data. A
+// plain read stays free, but a POST, PUT, PATCH or DELETE, or any request that
+// carries a body, is how a prompt-injected page turns a file the agent read
+// into an upload, so the operator sees the method and the target first.
+func (t *httpRequestTool) NeedsApprovalForCall(_ *Env, args map[string]any) bool {
+	method := strings.ToUpper(strings.TrimSpace(argString(args, "method")))
+	switch method {
+	case "", "GET", "HEAD", "OPTIONS":
+		return strings.TrimSpace(argString(args, "body")) != ""
+	default:
+		return true
+	}
+}
+
 func (t *httpRequestTool) Description() string {
 	return "Send an HTTP request with customizable method (GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD), headers, and body for API testing and security audits."
 }
