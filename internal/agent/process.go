@@ -645,6 +645,16 @@ func (r *ringBuffer) ReadSince(offset int64) (string, int64, bool) {
 	return text, r.written, dropped
 }
 
+// All returns everything the ring still holds and how many bytes were evicted
+// before it. Unlike ReadSince it does not cut to the log-chunk size: a foreground
+// command wants head and tail of the whole retained output, and the saved copy
+// wants all of it.
+func (r *ringBuffer) All() (string, int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.TrimRight(string(r.data), "\n"), r.written - int64(len(r.data))
+}
+
 // lastLines returns the final n lines of text.
 func lastLines(text string, n int) string {
 	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")

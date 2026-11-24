@@ -144,6 +144,12 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   character, and the terminal then paints a replacement glyph. The same rule
   holds for a Telegram body, where the consequence is worse: the Bot API rejects
   a body that is not valid UTF-8, so the message is never delivered.
+- A clipped tool result is not a lost one. When `run_command` cuts a long output to its
+  head and tail, the whole retained output (the ring buffer keeps the last 256 KB) is
+  written to `.termixgo/tool-output/` (0700/0600, newest 60 files, seven days) and the
+  result ends with a pointer, so the model reads the omitted part with `read_file`
+  instead of rerunning the command. A workspace that cannot be written to keeps the
+  plain clipped result.
 - Nothing the operator must read to decide is cut to one line. The question dialog, the
   approval dialog (the command or path being approved), table cells, headings, plan items,
   tool labels and command output wrap inside the width; a text is clipped only when the

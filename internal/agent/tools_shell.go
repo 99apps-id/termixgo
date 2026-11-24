@@ -234,8 +234,17 @@ func execute(ctx context.Context, env *Env, command, dir string, timeout time.Du
 	}
 
 	runErr := process.Wait()
-	text, _, _ := buffer.ReadSince(0)
+	text, evicted := buffer.All()
 	output := truncateOutput(text, maxOutputChars)
+	if len(text) > maxOutputChars {
+		// The middle of a long output is omitted above. Keep the whole of it on disk
+		// and say where, so the model reads the part it needs instead of rerunning.
+		saved := text
+		if evicted > 0 {
+			saved = fmt.Sprintf("[%d earlier bytes were dropped: only the last %d bytes of output are kept]\n", evicted, len(text)) + text
+		}
+		output = appendSpill(env, "run_command", saved, output)
+	}
 	label := dirLabel(displayPath(env, dir))
 
 	if errors.Is(runErr, exec.ErrWaitDelay) {

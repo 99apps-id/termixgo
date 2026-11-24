@@ -8,6 +8,12 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Added
 
+- **A long command output is kept whole on disk.** `run_command` cut a long output to
+  its head and tail and the middle was gone. The full output (up to the last 256 KB the
+  command printed) is now saved under `.termixgo/tool-output/` and the result names the
+  file, so the agent reads the part it needs with `read_file` (offset, limit) or `grep`
+  instead of running the command again. The folder keeps the newest 60 files for seven
+  days.
 - **Gemini 4 Neon on Antigravity**, with low, medium, high and xhigh thinking. Also
   GPT-6.2 Sol, GPT-6.2 Astra and GPT-6.1 Terra on Codex (GPT-5.6 and its siblings
   stay), Claude Haiku 5.5 on the Claude login, the Copilot models GitHub now lists
