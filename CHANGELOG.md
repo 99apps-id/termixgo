@@ -6,8 +6,19 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- **Cost, tokens and file changes in `termixgo sessions list`.** Each row now shows what the
+  session spent (a dollar figure, or "unpriced" for a plan model), its tokens, and the
+  files it changed with added and removed lines, read from its successful edit tool calls.
+  `--limit N` shortens the list and `--json` prints the same numbers. The line counts are an
+  estimate of what the model asked to change, not a git diff.
+
 ### Fixed
 
+- **Session titles no longer start with the environment block.** A title made from a turn
+  carried "<env> workspace_root: ..." after the operator's first words, in every listing
+  and in the picker. New titles leave the block out, and saved ones are cleaned when read.
 - **A message sent while a Telegram turn runs is a steer again.** The durable inbox held
   every message of a chat until the running turn ended, so a correction typed mid-turn
   became a second turn instead of reaching the live run. A message from a sender whose

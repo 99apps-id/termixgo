@@ -226,6 +226,7 @@ termixgo endpoint add lab https://my-server/v1   # a named OpenAI-compatible ser
 termixgo trust on                         # trust this folder
 termixgo doctor                           # show what is configured
 termixgo stats --models 5 --days 30       # cost, tokens, tools and models across your sessions
+termixgo sessions list --limit 10         # recent sessions with cost, tokens and file changes
 ```
 
 Every launch starts a fresh session. To continue an earlier one, use

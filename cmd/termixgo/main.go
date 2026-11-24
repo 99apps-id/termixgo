@@ -1721,23 +1721,7 @@ func runSessions(args []string, stdout io.Writer) error {
 	}
 	switch action {
 	case "list":
-		sessions, err := agent.ListSessions()
-		if err != nil {
-			return err
-		}
-		if len(sessions) == 0 {
-			fmt.Fprintln(stdout, "No saved sessions yet.")
-			return nil
-		}
-		fmt.Fprintf(stdout, "Saved sessions (%d):\n", len(sessions))
-		for _, s := range sessions {
-			title := s.Title
-			if title == "" {
-				title = "(untitled)"
-			}
-			fmt.Fprintf(stdout, "  %s  %-20s  %s (%d turns)\n", s.ID, s.UpdatedAt.Format("2006-01-02 15:04"), title, s.Turns)
-		}
-		return nil
+		return listSessions(args[min(1, len(args)):], stdout)
 	case "search":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: termixgo sessions search <query>")
@@ -1753,11 +1737,7 @@ func runSessions(args []string, stdout io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "Matching sessions (%d):\n", len(sessions))
 		for _, s := range sessions {
-			title := s.Title
-			if title == "" {
-				title = "(untitled)"
-			}
-			fmt.Fprintf(stdout, "  %s  %-20s  %s (%d turns)\n", s.ID, s.UpdatedAt.Format("2006-01-02 15:04"), title, s.Turns)
+			fmt.Fprintln(stdout, sessionLine(s))
 		}
 		return nil
 	case "export":

@@ -234,11 +234,23 @@ func (s *Session) LedgerPath() (string, error) {
 	return SessionLedgerPathIn(s.StoreDir(), s.ID())
 }
 
-// Title is the short summary shown in a listing.
+// Title is the short summary shown in a listing. A title saved before the
+// environment block was kept out of it still carries the block's first words,
+// so it is cut there on the way out.
 func (s *Session) Title() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.title
+	return strings.TrimSpace(stripEnvBlock(s.title))
+}
+
+// stripEnvBlock drops the <env> block the runner appends to every user turn.
+// It is context for the model, not words the operator typed, and a title made
+// from it reads "good morning <env> workspace_root: C:\..." in every listing.
+func stripEnvBlock(text string) string {
+	if index := strings.Index(text, "<env>"); index >= 0 {
+		return text[:index]
+	}
+	return text
 }
 
 // Model is the model id the session runs on.
@@ -442,7 +454,7 @@ func (s *Session) AddUser(text string) {
 	defer s.mu.Unlock()
 	s.messages = append(s.messages, provider.Message{Role: provider.RoleUser, Content: text})
 	if strings.TrimSpace(s.title) == "" {
-		s.title = Shorten(text, 60)
+		s.title = Shorten(stripEnvBlock(text), 60)
 	}
 	s.updatedAt = time.Now()
 }
@@ -458,7 +470,7 @@ func (s *Session) AddUserWithImages(text string, images []provider.Image) {
 		Images:  images,
 	})
 	if strings.TrimSpace(s.title) == "" {
-		s.title = Shorten(text, 60)
+		s.title = Shorten(stripEnvBlock(text), 60)
 	}
 	s.updatedAt = time.Now()
 }
@@ -1023,6 +1035,12 @@ type SessionSummary struct {
 	// Workspace is the folder the conversation ran in, so a resume can refuse
 	// to carry one project's history into another.
 	Workspace string
+	// CostUSD and Tokens are what the conversation spent. A plan model has no
+	// dollar figure, so a session with tokens and no cost reads as unpriced.
+	CostUSD float64
+	Tokens  int
+	// Changes is the estimate of what the session did to files.
+	Changes SessionChanges
 }
 
 // sessionsDir resolves the directory a session file lives in, creating it
@@ -1076,6 +1094,9 @@ func ListSessionsIn(dir string) ([]SessionSummary, error) {
 			UpdatedAt: session.UpdatedAt(),
 			Turns:     session.Turns(),
 			Workspace: session.Workspace(),
+			CostUSD:   state.CostUSD,
+			Tokens:    state.Usage.TotalTokens,
+			Changes:   SummarizeChanges(state.Messages),
 		})
 	}
 	sort.Slice(summaries, func(i, j int) bool { return summaries[i].UpdatedAt.After(summaries[j].UpdatedAt) })
