@@ -342,7 +342,48 @@ func RunOnce(application *app.App, prompt string, out io.Writer) error {
 
 // RunOnceWithContext is RunOnce under a caller-supplied context.
 func RunOnceWithContext(ctx context.Context, application *app.App, prompt string, out io.Writer) error {
-	return runOnceWithOptions(ctx, application, prompt, out, false)
+	return runOnceWithOptions(ctx, application, prompt, nil, out, false)
+}
+
+// RunSpec is a one-shot run as the command line describes it.
+type RunSpec struct {
+	Prompt string
+	// Files are paths to attach: an image goes to a vision model, a document
+	// is extracted and appended to the prompt.
+	Files       []string
+	AutoApprove bool
+	JSON        bool
+}
+
+// RunSpecWithContext runs one prompt with its attachments, in plain text or as
+// line-delimited JSON. A file that cannot be read stops the run before any
+// provider call: sending the question without the file the operator named
+// would get a confident answer about something the model never saw.
+func RunSpecWithContext(ctx context.Context, application *app.App, spec RunSpec, out io.Writer) error {
+	prompt, images, err := prepareRunPrompt(application.Workspace(), spec.Prompt, spec.Files)
+	if err != nil {
+		return err
+	}
+	if spec.JSON {
+		return runOnceJSON(ctx, application, prompt, images, out, spec.AutoApprove)
+	}
+	return runOnceWithOptions(ctx, application, prompt, images, out, spec.AutoApprove)
+}
+
+// prepareRunPrompt resolves the attached files against the workspace.
+func prepareRunPrompt(workspace, prompt string, files []string) (string, []provider.Image, error) {
+	if len(files) == 0 {
+		return prompt, nil, nil
+	}
+	items := make([]attachment, 0, len(files))
+	for _, path := range files {
+		item, err := buildAttachment(workspace, path)
+		if err != nil {
+			return "", nil, err
+		}
+		items = append(items, item)
+	}
+	return prompt + attachmentDocumentBlock(items), attachmentImages(items), nil
 }
 
 // RunOnceAutoApprove runs a single prompt and answers every tool approval
@@ -350,7 +391,7 @@ func RunOnceWithContext(ctx context.Context, application *app.App, prompt string
 // allowance lives only for this one process and is never persisted to config
 // or learned memory.
 func RunOnceAutoApprove(ctx context.Context, application *app.App, prompt string, out io.Writer) error {
-	return runOnceWithOptions(ctx, application, prompt, out, true)
+	return runOnceWithOptions(ctx, application, prompt, nil, out, true)
 }
 
 // JSONEvent is one line-delimited JSON event streamed during RunOnceJSON.
@@ -370,6 +411,10 @@ type JSONEvent struct {
 
 // RunOnceJSON streams agent events as line-delimited JSON objects to out.
 func RunOnceJSON(ctx context.Context, application *app.App, prompt string, out io.Writer, autoApprove bool) error {
+	return runOnceJSON(ctx, application, prompt, nil, out, autoApprove)
+}
+
+func runOnceJSON(ctx context.Context, application *app.App, prompt string, images []provider.Image, out io.Writer, autoApprove bool) error {
 	application.SetInteractor(&plainInteractor{in: os.Stdin, out: out, autoApprove: autoApprove})
 	enc := json.NewEncoder(out)
 	var failure error
@@ -408,7 +453,7 @@ func RunOnceJSON(ctx context.Context, application *app.App, prompt string, out i
 		}
 	}()
 
-	err := application.RunTurn(ctx, ExpandMentions(application.Workspace(), prompt))
+	err := application.RunTurnWithImages(ctx, ExpandMentions(application.Workspace(), prompt), images)
 	close(stop)
 	<-done
 
@@ -457,11 +502,11 @@ func toJSONEvent(event agent.Event) *JSONEvent {
 	}
 }
 
-func runOnceWithOptions(ctx context.Context, application *app.App, prompt string, out io.Writer, autoApprove bool) error {
+func runOnceWithOptions(ctx context.Context, application *app.App, prompt string, images []provider.Image, out io.Writer, autoApprove bool) error {
 	printer := newPlainPrinter(out, isTerminalWriter(out))
 	application.SetInteractor(&plainInteractor{in: os.Stdin, out: out, autoApprove: autoApprove})
 	stop := drainEvents(application, printer)
-	err := application.RunTurn(ctx, ExpandMentions(application.Workspace(), prompt))
+	err := application.RunTurnWithImages(ctx, ExpandMentions(application.Workspace(), prompt), images)
 	// Stopping first waits for the printer, so the answer is fully written and
 	// the recorded failure is safe to read.
 	stop()

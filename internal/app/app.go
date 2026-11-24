@@ -1158,6 +1158,59 @@ func (a *App) AvailableModelsText(lang ...string) string {
 // SetModelByQuery switches model from free text: a catalogue id, a label, a
 // substring, or "provider:id" for anything not in the catalogue.
 func (a *App) SetModelByQuery(query string) (provider.Model, error) {
+	model, err := a.resolveModelQuery(query)
+	if err != nil {
+		return provider.Model{}, err
+	}
+	a.mu.Lock()
+	err = a.applyModel(model)
+	if err == nil {
+		a.cfg.DefaultModel = model.ID
+		a.recordCustomModelLocked(model.Provider, model.ID)
+	}
+	cfg := a.cfg
+	a.mu.Unlock()
+	if err != nil {
+		return provider.Model{}, err
+	}
+	if saveErr := config.Save(cfg); saveErr != nil {
+		return model, saveErr
+	}
+	return model, nil
+}
+
+// UseModelByQuery switches the model for this process only. It resolves the
+// text exactly as SetModelByQuery does but writes nothing: a one-shot
+// termixgo run --model x must not change the model the next terminal opens
+// with.
+func (a *App) UseModelByQuery(query string) (provider.Model, error) {
+	model, err := a.resolveModelQuery(query)
+	if err != nil {
+		return provider.Model{}, err
+	}
+	a.mu.Lock()
+	err = a.applyModel(model)
+	a.mu.Unlock()
+	if err != nil {
+		return provider.Model{}, err
+	}
+	return model, nil
+}
+
+// UseEffort sets the reasoning effort for this process only.
+func (a *App) UseEffort(effort string) error {
+	trimmed := strings.ToLower(strings.TrimSpace(effort))
+	if trimmed != "" && !config.ValidEffort(trimmed) {
+		return fmt.Errorf("effort must be one of %s", strings.Join(config.EffortLevels, ", "))
+	}
+	a.mu.Lock()
+	a.cfg.Effort = trimmed
+	a.mu.Unlock()
+	return nil
+}
+
+// resolveModelQuery turns free text into a model without applying it.
+func (a *App) resolveModelQuery(query string) (provider.Model, error) {
 	trimmed := strings.TrimSpace(query)
 	if trimmed == "" {
 		return provider.Model{}, errors.New("a model id is required")
@@ -1182,20 +1235,6 @@ func (a *App) SetModelByQuery(query string) (provider.Model, error) {
 			providerID = a.guessProvider(resolved)
 		}
 		model = provider.Model{ID: resolved, Provider: providerID, Label: resolved, APIID: resolved}
-	}
-	a.mu.Lock()
-	err := a.applyModel(model)
-	if err == nil {
-		a.cfg.DefaultModel = model.ID
-		a.recordCustomModelLocked(model.Provider, model.ID)
-	}
-	cfg := a.cfg
-	a.mu.Unlock()
-	if err != nil {
-		return provider.Model{}, err
-	}
-	if saveErr := config.Save(cfg); saveErr != nil {
-		return model, saveErr
 	}
 	return model, nil
 }
@@ -1318,6 +1357,34 @@ func (a *App) LoadSession(session *agent.Session) {
 	a.session = session
 	a.mu.Unlock()
 	a.todos.Set(agent.PruneFinished(session.Todos()))
+}
+
+// ResumeSession makes a saved session of the active agent the live one. An
+// empty id or "last" picks the newest session of this workspace, so a
+// continued run never lands in another project's history.
+func (a *App) ResumeSession(id string) error {
+	name := a.ActiveAgent()
+	dir, err := agenthome.SessionsDirFor(name)
+	if err != nil {
+		return err
+	}
+	if id == "" || id == "last" || id == "latest" {
+		summary, ok, err := agent.LatestSessionIn(name, dir, a.Workspace())
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("there is no saved session for this workspace to continue")
+		}
+		id = summary.ID
+	}
+	session, err := agent.LoadSessionIn(dir, id)
+	if err != nil {
+		return err
+	}
+	session.SetAgent(name)
+	a.LoadSession(session)
+	return nil
 }
 
 // Running reports whether a turn is in flight.

@@ -365,7 +365,11 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   the "how many unpriced" information and flips a whole session to unknown.
 - `App.SetEphemeral(true)` is what stops a one-shot `termixgo run` writing
   session files. Persistence is the default for a conversation; a command is
-  not a conversation.- `Session` is written by the goroutine running a turn while the terminal keeps
+  not a conversation. The exception is `run --title`, `-c` or `-s`, which ask
+  for a session on purpose. `run -m`, `--agent` and `--effort` go through
+  `UseModelByQuery`, `UseAgent` and `UseEffort`, which never write config: a
+  flag of one run must not change the next terminal's defaults.
+- `Session` is written by the goroutine running a turn while the terminal keeps
   reading it, so its fields are unexported and every access goes through a
   method that takes its mutex. That is deliberate: an unlocked read does not
   compile. The race detector found this the first time it was run, so keep it

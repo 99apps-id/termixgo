@@ -95,11 +95,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		return runInteractive(stdin, stdout, ui.Options{ResumeSessionID: sessionID})
 	case "run", "-p", "--print":
-		prompt, autoApprove, jsonOutput, err := parseRunArgs(args[1:])
+		opts, err := parseRunArgs(args[1:])
 		if err != nil {
 			return err
 		}
-		return runOnce(prompt, autoApprove, jsonOutput, stdout, stderr)
+		return runOnce(opts, stdout, stderr)
 	case "eval":
 		return runEval(args[1:], stdout)
 	case "map", "repomap":
@@ -171,7 +171,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if !strings.HasPrefix(args[0], "-") && (len(args) > 1 || strings.Contains(args[0], " ")) {
 			prompt := strings.Join(args, " ")
 			if !ui.IsInteractive(stdin, stdout) {
-				return runOnce(prompt, false, false, stdout, stderr)
+				return runOnce(runOptions{prompt: prompt}, stdout, stderr)
 			}
 			return runInteractive(stdin, stdout, ui.Options{InitialPrompt: prompt})
 		}
@@ -203,29 +203,84 @@ func enableChannels(application *app.App) {
 	_ = application.StartChannels()
 }
 
+// runOptions are the parsed flags and prompt of a one-shot run.
+type runOptions struct {
+	prompt      string
+	autoApprove bool
+	json        bool
+	// model, agent and effort apply to this process only; nothing is saved.
+	model  string
+	agent  string
+	effort string
+	files  []string
+	// title, continueLast and session make the run keep a session file. Without
+	// any of them a run leaves nothing behind.
+	title        string
+	continueLast bool
+	session      string
+}
+
+// keepsSession reports whether the run should be saved as a conversation.
+func (o runOptions) keepsSession() bool {
+	return o.title != "" || o.continueLast || o.session != ""
+}
+
 // parseRunArgs splits the run subcommand's tail into the prompt and options.
-// --yes, -y, and --json may appear before or after the prompt, so scripts can
-// pass flags anywhere. Everything else is joined into the prompt.
-func parseRunArgs(args []string) (prompt string, autoApprove, jsonOutput bool, err error) {
+// Flags may appear before or after the prompt, so scripts can pass them
+// anywhere. Everything that is not a known flag is joined into the prompt.
+func parseRunArgs(args []string) (runOptions, error) {
+	var opts runOptions
 	var words []string
-	for _, arg := range args {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		value := func() (string, error) {
+			if index+1 >= len(args) {
+				return "", fmt.Errorf("%s needs a value", arg)
+			}
+			index++
+			return args[index], nil
+		}
+		var err error
 		switch arg {
 		case "--yes", "-y":
-			autoApprove = true
+			opts.autoApprove = true
 		case "--json":
-			jsonOutput = true
+			opts.json = true
+		case "--continue", "-c":
+			opts.continueLast = true
+		case "--model", "-m":
+			opts.model, err = value()
+		case "--agent":
+			opts.agent, err = value()
+		case "--effort":
+			opts.effort, err = value()
+		case "--title":
+			opts.title, err = value()
+		case "--session", "-s":
+			opts.session, err = value()
+		case "--file", "-f":
+			var path string
+			if path, err = value(); err == nil {
+				opts.files = append(opts.files, path)
+			}
 		default:
 			words = append(words, arg)
 		}
+		if err != nil {
+			return runOptions{}, err
+		}
 	}
-	prompt = strings.Join(words, " ")
-	if strings.TrimSpace(prompt) == "" {
-		return "", false, false, fmt.Errorf("run needs a prompt")
+	if opts.continueLast && opts.session != "" {
+		return runOptions{}, fmt.Errorf("--continue and --session cannot be combined")
 	}
-	return prompt, autoApprove, jsonOutput, nil
+	opts.prompt = strings.Join(words, " ")
+	if strings.TrimSpace(opts.prompt) == "" {
+		return runOptions{}, fmt.Errorf("run needs a prompt")
+	}
+	return opts, nil
 }
 
-func runOnce(prompt string, autoApprove, jsonOutput bool, stdout, stderr io.Writer) error {
+func runOnce(opts runOptions, stdout, stderr io.Writer) error {
 	application, err := app.New("")
 	if err != nil {
 		return err
@@ -237,18 +292,48 @@ func runOnce(prompt string, autoApprove, jsonOutput bool, stdout, stderr io.Writ
 	if !application.HasModel() {
 		return fmt.Errorf("no model is configured; run 'termixgo setup'")
 	}
-	// A one-shot run is a command, not a conversation: it must not leave a
-	// session file behind on every invocation.
-	application.SetEphemeral(true)
+	// Agent, model and effort are chosen for this run alone: a script that
+	// asks for another model must not change the one the terminal opens with.
+	if opts.agent != "" {
+		if err := application.UseAgent(opts.agent); err != nil {
+			return err
+		}
+	}
+	if opts.model != "" {
+		if _, err := application.UseModelByQuery(opts.model); err != nil {
+			return err
+		}
+	}
+	if opts.effort != "" {
+		if err := application.UseEffort(opts.effort); err != nil {
+			return err
+		}
+	}
+	switch {
+	case opts.continueLast || opts.session != "":
+		if err := application.ResumeSession(opts.session); err != nil {
+			return err
+		}
+	case opts.keepsSession():
+		// A named run starts its own conversation, not the newest saved one
+		// the app opened with.
+		application.NewSession()
+	default:
+		// A one-shot run is a command, not a conversation: it must not leave a
+		// session file behind on every invocation.
+		application.SetEphemeral(true)
+	}
+	if opts.title != "" {
+		application.Session().SetTitle(opts.title)
+	}
 	ctx, stop := signalContext()
 	defer stop()
-	if jsonOutput {
-		return ui.RunOnceJSON(ctx, application, prompt, stdout, autoApprove)
-	}
-	if autoApprove {
-		return ui.RunOnceAutoApprove(ctx, application, prompt, stdout)
-	}
-	return ui.RunOnceWithContext(ctx, application, prompt, stdout)
+	return ui.RunSpecWithContext(ctx, application, ui.RunSpec{
+		Prompt:      opts.prompt,
+		Files:       opts.files,
+		AutoApprove: opts.autoApprove,
+		JSON:        opts.json,
+	}, stdout)
 }
 
 func runModels(args []string, stdout io.Writer) error {
@@ -2207,8 +2292,12 @@ Usage:
   termixgo -r, --resume [id]      Resume the last (or specified) session
   termixgo -c, --continue         Continue the most recent session
   termixgo setup                  Start the UI in the onboarding wizard
-  termixgo run [--yes] [--json] "<prompt>"
-                                  Run one prompt and stream the answer (plain text or NDJSON)
+  termixgo run [--yes] [--json] [-m <model>] [--agent <name>] [--effort <level>]
+               [-f <file>]... [--title <t>] [-c | -s <id>] "<prompt>"
+                                  Run one prompt and stream the answer (plain text or NDJSON).
+                                  -m, --agent and --effort apply to this run only. -f attaches
+                                  an image or document. --title, -c (continue the last session
+                                  of this folder) and -s keep the run as a saved session
   termixgo -p, --print "<prompt>" Print answer directly to stdout (non-interactive)
   termixgo eval [run|list] [--suite <file>] [--task <id>] [--json]
                                   Run evaluation benchmark suites and compute pass rate

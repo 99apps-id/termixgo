@@ -8,6 +8,12 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Added
 
+- **More flags on `termixgo run`.** `-m/--model`, `--agent` and `--effort` choose the
+  model, persona and reasoning effort for that run only, without touching the saved
+  configuration. `-f/--file` (repeatable) attaches an image or a document, and a file
+  that cannot be read stops the run before any provider call. `--title`, `-c/--continue`
+  (the newest session of this folder) and `-s/--session <id>` keep the run as a saved
+  session; without them a run still leaves no file behind.
 - **`termixgo stats`.** Usage across every saved session in one report: sessions,
   messages and days, total cost and cost per day, fresh input, output, reasoning, cache
   read and write tokens, the average and median tokens per session, and a bar chart of

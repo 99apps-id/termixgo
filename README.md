@@ -1611,6 +1611,10 @@ termixgo setup                  # open the onboarding wizard
 termixgo run "<prompt>"         # one prompt, streamed to stdout
 termixgo run --yes "<prompt>"   # auto-approve tool prompts for this run
 termixgo run --json "<prompt>"  # stream line-delimited JSON events (NDJSON)
+termixgo run -m <model> --effort high "<prompt>"  # model and effort for this run only
+termixgo run -f shot.png -f spec.pdf "<prompt>"   # attach an image or a document
+termixgo run --title "Nightly" "<prompt>"         # keep the run as a saved session
+termixgo run -c "<prompt>"                        # continue this folder's last session
 termixgo eval [run|list]        # benchmark harness for coding accuracy and pass rates
 termixgo map [--path <dir>] [--all] # print structural repository symbol map
 termixgo models [--provider id] # list the model catalogue

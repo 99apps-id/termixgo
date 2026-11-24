@@ -46,7 +46,7 @@ func TestRunOnceCompletesATurnAndLeavesNoSession(t *testing.T) {
 	defer server.Close()
 
 	var stdout, stderr bytes.Buffer
-	if err := runOnce("say hi", false, false, &stdout, &stderr); err != nil {
+	if err := runOnce(runOptions{prompt: "say hi"}, &stdout, &stderr); err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "hello from the model") {
@@ -78,14 +78,13 @@ func TestRunOnceReportsATurnFailure(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if err := runOnce("say hi", false, false, &stdout, &stderr); err == nil {
+	if err := runOnce(runOptions{prompt: "say hi"}, &stdout, &stderr); err == nil {
 		t.Fatalf("a rejected request must fail the command")
 	}
 }
 
-// TestParseRunArgsHandlesYesInEveryPosition pins the --yes/-y placement: the
-// flag may lead or trail the prompt, and prompt words are never eaten by the
-// flag scan.
+// TestParseRunArgsHandlesYesInEveryPosition pins the flag placement: a flag may
+// lead or trail the prompt, and prompt words are never eaten by the flag scan.
 func TestParseRunArgsHandlesYesInEveryPosition(t *testing.T) {
 	cases := []struct {
 		args   []string
@@ -102,16 +101,41 @@ func TestParseRunArgsHandlesYesInEveryPosition(t *testing.T) {
 		{[]string{"inspect", "--json"}, "inspect", false, true},
 	}
 	for _, c := range cases {
-		prompt, yes, jsonOut, err := parseRunArgs(c.args)
+		opts, err := parseRunArgs(c.args)
 		if err != nil {
 			t.Fatalf("%v: %v", c.args, err)
 		}
-		if prompt != c.prompt || yes != c.yes || jsonOut != c.json {
-			t.Errorf("%v = (%q, %v, %v), want (%q, %v, %v)", c.args, prompt, yes, jsonOut, c.prompt, c.yes, c.json)
+		if opts.prompt != c.prompt || opts.autoApprove != c.yes || opts.json != c.json {
+			t.Errorf("%v = (%q, %v, %v), want (%q, %v, %v)", c.args, opts.prompt, opts.autoApprove, opts.json, c.prompt, c.yes, c.json)
 		}
 	}
-	if _, _, _, err := parseRunArgs([]string{"--yes"}); err == nil {
+	if _, err := parseRunArgs([]string{"--yes"}); err == nil {
 		t.Errorf("a --yes with no prompt must fail")
+	}
+}
+
+func TestParseRunArgsReadsTheValueFlags(t *testing.T) {
+	opts, err := parseRunArgs([]string{"-m", "gpt-x", "--agent", "docs", "--effort", "high", "-f", "a.png", "--file", "b.pdf", "--title", "Nightly", "explain", "this", "-c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.model != "gpt-x" || opts.agent != "docs" || opts.effort != "high" || opts.title != "Nightly" || !opts.continueLast {
+		t.Fatalf("opts = %+v", opts)
+	}
+	if len(opts.files) != 2 || opts.files[0] != "a.png" || opts.files[1] != "b.pdf" || opts.prompt != "explain this" {
+		t.Fatalf("files=%v prompt=%q", opts.files, opts.prompt)
+	}
+	if !opts.keepsSession() {
+		t.Errorf("a titled or continued run keeps its session")
+	}
+	plain, _ := parseRunArgs([]string{"-m", "x", "hi"})
+	if plain.keepsSession() {
+		t.Errorf("a model choice alone must not keep a session")
+	}
+	for _, bad := range [][]string{{"hi", "--model"}, {"hi", "-f"}, {"hi", "--title"}, {"-c", "--session", "x", "hi"}} {
+		if _, err := parseRunArgs(bad); err == nil {
+			t.Errorf("%v should be refused", bad)
+		}
 	}
 }
 

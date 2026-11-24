@@ -100,6 +100,17 @@ func (a *App) AgentHome(name string) string {
 // conversation of the agent being left is remembered in process, and the
 // target's last saved conversation is resumed; a first switch starts one.
 func (a *App) SetActiveAgent(name string) error {
+	return a.switchAgent(name, true)
+}
+
+// UseAgent switches the persona for this process only; the saved active agent
+// stays as it was. A one-shot run uses it so --agent does not move the
+// terminal's next start to another persona.
+func (a *App) UseAgent(name string) error {
+	return a.switchAgent(name, false)
+}
+
+func (a *App) switchAgent(name string, persist bool) error {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		return fmt.Errorf("an agent name is required")
@@ -132,7 +143,9 @@ func (a *App) SetActiveAgent(name string) error {
 
 	// The active agent is configuration so a restart resumes the same persona;
 	// a failed write costs the preference, not the switch.
-	_ = a.UpdateConfig(func(c *config.Config) { c.ActiveAgent = trimmed })
+	if persist {
+		_ = a.UpdateConfig(func(c *config.Config) { c.ActiveAgent = trimmed })
+	}
 	return nil
 }
 
