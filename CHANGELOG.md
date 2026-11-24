@@ -8,6 +8,13 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Added
 
+- **`termixgo stats`.** Usage across every saved session in one report: sessions,
+  messages and days, total cost and cost per day, fresh input, output, reasoning, cache
+  read and write tokens, the average and median tokens per session, and a bar chart of
+  which tools did the work. `--models [N]` adds cost and tokens per provider and model
+  (a plan model says "unpriced" instead of printing zero), `--days N` limits it to
+  recent sessions, `--project <path>` (or `.`) to one workspace, `--tools N` shortens
+  the tool list and `--json` prints the numbers.
 - **A long command output is kept whole on disk.** `run_command` cut a long output to
   its head and tail and the middle was gone. The full output (up to the last 256 KB the
   command printed) is now saved under `.termixgo/tool-output/` and the result names the

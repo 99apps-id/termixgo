@@ -23,7 +23,7 @@ func runCompletion(args []string, stdout io.Writer) error {
 }
 
 func completionScript(shell string) (string, bool) {
-	const commands = "setup run models model trust approval harness agent channel mcp secret telegram serve service doctor completion version help"
+	const commands = "setup run models model trust approval harness agent channel mcp secret telegram serve service doctor stats completion version help"
 	switch shell {
 	case "bash":
 		return fmt.Sprintf(`# termixgo completion for bash. Install with:
@@ -72,7 +72,7 @@ _termixgo
 	case "fish":
 		return `# termixgo completion for fish. Install with:
 #   termixgo completion fish > ~/.config/fish/completions/termixgo.fish
-set -l cmds setup run models model trust approval harness agent channel mcp secret telegram serve service doctor completion version help
+set -l cmds setup run models model trust approval harness agent channel mcp secret telegram serve service doctor stats completion version help
 complete -c termixgo -f -n '__fish_use_subcommand' -a "$cmds"
 complete -c termixgo -f -n '__fish_seen_subcommand_from approval' -a "ask edits all plan"
 complete -c termixgo -f -n '__fish_seen_subcommand_from trust' -a "on off"
@@ -86,7 +86,7 @@ complete -c termixgo -f -n '__fish_seen_subcommand_from service' -a "install uni
 #   termixgo completion powershell | Out-String | Invoke-Expression
 Register-ArgumentCompleter -Native -CommandName termixgo -ScriptBlock {
   param($wordToComplete, $commandAst, $cursorPosition)
-  $cmds = @('setup','run','models','model','trust','approval','harness','agent','channel','mcp','secret','telegram','serve','service','doctor','completion','version','help')
+  $cmds = @('setup','run','models','model','trust','approval','harness','agent','channel','mcp','secret','telegram','serve','service','doctor','stats','completion','version','help')
   $modes = @{
     'approval'   = @('ask','edits','all','plan')
     'trust'      = @('on','off')

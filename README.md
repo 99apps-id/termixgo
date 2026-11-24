@@ -225,6 +225,7 @@ termixgo model claude-sonnet-5
 termixgo endpoint add lab https://my-server/v1   # a named OpenAI-compatible server
 termixgo trust on                         # trust this folder
 termixgo doctor                           # show what is configured
+termixgo stats --models 5 --days 30       # cost, tokens, tools and models across your sessions
 ```
 
 Every launch starts a fresh session. To continue an earlier one, use

@@ -144,6 +144,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runHeartbeat(args[1:], stdout)
 	case "sessions":
 		return runSessions(args[1:], stdout)
+	case "stats":
+		return runStats(args[1:], stdout)
 	case "audit":
 		return runAudit(args[1:], stdout)
 	case "audit-code":
@@ -2241,6 +2243,8 @@ Usage:
   termixgo heartbeat [status|on|off|interval <duration>]
                                   Periodic self-check for the 24/7 assistant
   termixgo sessions [list|search|export|delete|rename]
+  termixgo stats [--days N] [--tools N] [--models [N]] [--project <path>|.] [--json]
+                                  Usage across the saved sessions: cost, tokens, tools, models
                                   Manage saved agent sessions
   termixgo audit [count]          Show recent audited actions (metadata only)
   termixgo audit code [--category <cat>] [--json]
