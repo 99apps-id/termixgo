@@ -261,7 +261,7 @@ func TestCompactTranscriptGroupsConsecutiveReadSearchTools(t *testing.T) {
 		{kind: blockAssistant, text: "Found it."},
 	}
 	compact := stripANSI(transcript(blocks, styles, 80, false))
-	if !strings.Contains(compact, "Read 2 files, searched 1 pattern (ctrl+o to expand)") {
+	if !strings.Contains(compact, "Read 2 files, searched 1 pattern"+expandHint()) {
 		t.Fatalf("compact transcript should group consecutive read/search tools:\n%s", compact)
 	}
 	if strings.Contains(compact, "Read a.go") {

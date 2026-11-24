@@ -13,7 +13,7 @@ func TestCommandOutputPreviewInTheCompactView(t *testing.T) {
 	item := block{kind: blockTool, toolLabel: "Ran go test ./...", toolOK: false, toolOutput: output, toolOutputLines: 120}
 
 	compact := stripANSI(renderToolBlock(item, styles, 80, false))
-	for _, want := range []string{"Ran go test ./...", "  ⎿  ok  pkg/a", "     FAIL pkg/c", "… +117 lines (ctrl+o to expand)"} {
+	for _, want := range []string{"Ran go test ./...", "  ⎿  ok  pkg/a", "     FAIL pkg/c", "… +117 lines" + expandHint()} {
 		if !strings.Contains(compact, want) {
 			t.Fatalf("compact view lacks %q:\n%s", want, compact)
 		}

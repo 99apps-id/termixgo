@@ -92,10 +92,21 @@ func TestRenderToolBlockMarksRunningDoneAndFailed(t *testing.T) {
 		t.Errorf("failed = %q, want no duration", failed)
 	}
 
-	// A long label is clipped to the width so one path cannot break the layout.
+	// A long label is wrapped inside the width, so one path can neither break
+	// the layout nor lose its tail.
 	long := stripANSI(renderToolBlock(block{kind: blockTool, toolOK: true, toolLabel: strings.Repeat("p", 200)}, styles, 40, true))
-	if len([]rune(long)) > 42 {
-		t.Errorf("a long label was not clipped: %d runes", len([]rune(long)))
+	for _, line := range strings.Split(long, "\n") {
+		if width := len([]rune(line)); width > 40 {
+			t.Errorf("a label row is %d runes, over the width of 40: %q", width, line)
+		}
+	}
+	if strings.Count(long, "p") != 200 {
+		t.Errorf("the whole label should be shown, got %d of 200 characters", strings.Count(long, "p"))
+	}
+	// The compact line stays on one row and says the label was cut.
+	compactLong := stripANSI(renderToolBlock(block{kind: blockTool, toolOK: true, toolLabel: strings.Repeat("p ", 100)}, styles, 60, false))
+	if strings.Contains(compactLong, "\n") || !strings.Contains(compactLong, "expand") {
+		t.Errorf("a compact label cut to one row should say how to read the rest: %q", compactLong)
 	}
 }
 
@@ -149,7 +160,7 @@ func TestRenderThinkingBlockTrimsALongReasoning(t *testing.T) {
 	}
 	// The compact view is the header with the way to expand.
 	compact := stripANSI(renderThinkingBlock(block{kind: blockThinking, reasoning: "considered", seconds: 2}, styles, 60, false))
-	if compact != "∴ Thought for 2s (ctrl+o to expand)" {
+	if compact != "∴ Thought for 2s"+expandHint() {
 		t.Errorf("compact = %q", compact)
 	}
 }

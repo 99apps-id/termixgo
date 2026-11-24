@@ -191,6 +191,13 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		m.selecting = false
 		m.selFocus, _ = m.mousePoint(msg)
+		if m.selAnchor == m.selFocus {
+			// A press and release on one cell is a click, not a drag: it opens or
+			// closes the tool or thinking block under the pointer.
+			if model, cmd, opened := m.clickExpand(m.selFocus); opened {
+				return model, cmd
+			}
+		}
 		text := selectionText(m.contentLines, m.selAnchor, m.selFocus)
 		if strings.TrimSpace(text) == "" {
 			m.selActive = false

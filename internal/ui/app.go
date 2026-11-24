@@ -262,6 +262,9 @@ type Model struct {
 	// contentLines holds the rendered transcript lines used to map mouse
 	// selections and cut copied text.
 	contentLines []string
+	// spans maps rows of contentLines to the blocks they were drawn from, for
+	// click-to-expand.
+	spans []blockSpan
 
 	// selecting reports a mouse drag in flight over the transcript.
 	// selActive reports an established transcript selection with its
@@ -522,6 +525,7 @@ func RunWithOptions(application *app.App, options Options) error {
 		model.refresh()
 	} else {
 		programOptions = append(programOptions, tea.WithMouseCellMotion())
+		clickToExpand.Store(true)
 		if !options.NoAlternateScreen {
 			programOptions = append(programOptions, tea.WithAltScreen())
 		}
@@ -2539,7 +2543,8 @@ func (m *Model) refresh() {
 		}}, blocks[len(blocks)-transcriptWindowBlocks:]...)
 	}
 	blocks = hideReasoning(blocks, m.app != nil && !m.app.Config().ShowReasoning)
-	content := transcript(blocks, m.styles, m.viewport.Width, m.showDetails)
+	content, spans := transcriptSpans(blocks, m.styles, m.viewport.Width, m.showDetails)
+	m.spans = spans
 	m.contentLines = strings.Split(content, "\n")
 	if m.selecting || m.selActive {
 		content = strings.Join(highlightSelection(m.contentLines, m.selAnchor, m.selFocus), "\n")
@@ -3122,10 +3127,19 @@ func (m *Model) viewApproval() string {
 	available := m.modalRowBudget()
 
 	width := m.dialogTextWidth()
+	// What is being approved is shown whole: a command or path cut at the edge of
+	// the terminal hides the part the operator most needs to read. It wraps, and
+	// is clipped (with an ellipsis) only when the terminal is too short, never
+	// past half of the rows the dialog has.
+	detail := wrapAskText(sanitizeText(request.Detail), width)
+	detailCap := min(12, max(1, available-(4+2+1+len(approvalOptions)+1)))
+	detail = clipAskLines(detail, detailCap, width)
 	header := []string{
 		m.styles.BoxTitle.Render("Approval needed"),
 		m.styles.StatusValue.Render(request.Tool) + m.styles.Dim.Render(" ("+request.Risk+")"),
-		m.styles.Dim.Render(truncate(sanitizeText(request.Detail), width)),
+	}
+	for _, line := range detail {
+		header = append(header, m.styles.Dim.Render(line))
 	}
 	// Rows the box always draws: border(2) + padding(2), the header, the blank
 	// before the options, the options and the hint. The diff gets the rest.
@@ -3219,32 +3233,40 @@ func renderApprovalDiff(diff string, styles Styles, width, maxLines int) string 
 func (m *Model) viewAsk() string {
 	available := m.modalRowBudget()
 	width := m.dialogTextWidth()
-	body := []string{
-		m.styles.BoxTitle.Render("The agent has a question"),
-		m.styles.StatusValue.Render(truncate(sanitizeText(m.pendingAsk.question), width)),
+
+	// The question is wrapped, not cut to one line: an operator who cannot read
+	// the whole question or the whole choice cannot answer it. It is clipped
+	// only when it would leave no room for the choices.
+	question := wrapAskText(sanitizeText(m.pendingAsk.question), width)
+	questionCap := max(1, (available-askFixedRows)/3)
+	question = clipAskLines(question, questionCap, width)
+
+	body := []string{m.styles.BoxTitle.Render("The agent has a question")}
+	for _, line := range question {
+		body = append(body, m.styles.StatusValue.Render(line))
 	}
-	// Border(2) + padding(2), the title and question, the blank before the
-	// options, the blank before the input, the input and the hint.
-	const fixed = 4 + 2 + 1 + 1 + 1 + 1
-	optionRoom := available - fixed
+
+	optionRoom := available - askFixedRows - (len(question) - 1)
 	if optionRoom < 0 {
 		optionRoom = 0
 	}
 	if len(m.pendingAsk.options) > 0 && optionRoom > 0 {
-		options := m.pendingAsk.options
-		hidden := 0
-		if len(options) > optionRoom {
-			// Reserve one row for the "... N more options" line.
-			shown := optionRoom - 1
-			if shown < 1 {
-				shown = 1
-			}
-			hidden = len(options) - shown
-			options = options[:shown]
+		options := make([]string, len(m.pendingAsk.options))
+		for index, option := range m.pendingAsk.options {
+			options[index] = sanitizeText(option)
 		}
+		fitted, hidden := fitAskOptions(options, width, optionRoom)
 		body = append(body, "")
-		for index, option := range options {
-			body = append(body, m.styles.MenuKey.Render(fmt.Sprintf("%d", index+1))+". "+truncate(sanitizeText(option), max(1, width-4)))
+		for index, lines := range fitted {
+			prefix := fmt.Sprintf("%d. ", index+1)
+			indent := strings.Repeat(" ", ansi.StringWidth(prefix))
+			for lineIndex, line := range lines {
+				if lineIndex == 0 {
+					body = append(body, m.styles.MenuKey.Render(fmt.Sprintf("%d", index+1))+". "+line)
+					continue
+				}
+				body = append(body, indent+line)
+			}
 		}
 		if hidden > 0 {
 			body = append(body, m.styles.MenuDesc.Render(fmt.Sprintf("... %d more options", hidden)))
@@ -3252,6 +3274,85 @@ func (m *Model) viewAsk() string {
 	}
 	body = append(body, "", m.input.View(), m.styles.Hint.Render("Enter answer | Esc decline"))
 	return m.styles.Box.Width(m.width - 6).Render(strings.Join(body, "\n"))
+}
+
+// askFixedRows is what the question dialog spends besides the question text and
+// the choices: border and padding (4), the title (1), one question row (1), the
+// blank before the choices (1), the blank before the input (1), the input (1)
+// and the hint (1).
+const askFixedRows = 4 + 1 + 1 + 1 + 1 + 1 + 1
+
+// wrapAskText word-wraps text to a width, keeping explicit newlines.
+func wrapAskText(text string, width int) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return []string{""}
+	}
+	return strings.Split(wrapPlain(text, width), "\n")
+}
+
+// clipAskLines keeps the first limit lines and marks the cut with an ellipsis
+// on the last kept line, so a clipped text never reads as a complete one.
+func clipAskLines(lines []string, limit, width int) []string {
+	if limit < 1 {
+		limit = 1
+	}
+	if len(lines) <= limit {
+		return lines
+	}
+	kept := append([]string(nil), lines[:limit]...)
+	kept[limit-1] = truncate(kept[limit-1]+" ...", width)
+	return kept
+}
+
+// fitAskOptions wraps every choice at the text width left after its number and
+// fits them into room rows. All choices are kept whole when they fit. When they
+// do not, each choice is held to the same number of lines (the largest that
+// still fits every choice), with an ellipsis on a clipped one. Only when even
+// one line per choice does not fit are the later choices dropped and counted.
+func fitAskOptions(options []string, width, room int) (fitted [][]string, hidden int) {
+	wrapped := make([][]string, len(options))
+	for index, option := range options {
+		prefix := ansi.StringWidth(fmt.Sprintf("%d. ", index+1))
+		wrapped[index] = wrapAskText(option, max(1, width-prefix))
+	}
+	total := func(perOption int) int {
+		rows := 0
+		for _, lines := range wrapped {
+			rows += min(len(lines), perOption)
+		}
+		return rows
+	}
+	longest := 1
+	for _, lines := range wrapped {
+		longest = max(longest, len(lines))
+	}
+	for perOption := longest; perOption >= 1; perOption-- {
+		if total(perOption) > room {
+			continue
+		}
+		fitted = make([][]string, len(wrapped))
+		for index, lines := range wrapped {
+			prefix := ansi.StringWidth(fmt.Sprintf("%d. ", index+1))
+			fitted[index] = clipAskLines(lines, perOption, max(1, width-prefix))
+		}
+		return fitted, 0
+	}
+	// One line per choice does not fit: show as many as there is room for, and
+	// keep a row for the "more options" line.
+	shown := room - 1
+	if shown < 1 {
+		shown = 1
+	}
+	if shown > len(wrapped) {
+		shown = len(wrapped)
+	}
+	fitted = make([][]string, shown)
+	for index := 0; index < shown; index++ {
+		prefix := ansi.StringWidth(fmt.Sprintf("%d. ", index+1))
+		fitted[index] = clipAskLines(wrapped[index], 1, max(1, width-prefix))
+	}
+	return fitted, len(wrapped) - shown
 }
 
 func (m *Model) viewHelp() string {

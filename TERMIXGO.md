@@ -144,6 +144,13 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   character, and the terminal then paints a replacement glyph. The same rule
   holds for a Telegram body, where the consequence is worse: the Bot API rejects
   a body that is not valid UTF-8, so the message is never delivered.
+- Nothing the operator must read to decide is cut to one line. The question dialog, the
+  approval dialog (the command or path being approved), table cells, headings, plan items,
+  tool labels and command output wrap inside the width; a text is clipped only when the
+  terminal has no rows left, and a clipped text ends in an ellipsis so it never reads as
+  whole. A compact line that was cut names how to open it (`expandHint`): in the fullscreen
+  layout a click on a tool or thinking block toggles `block.expanded` (the mouse is
+  captured there; the inline layout leaves it to the terminal and keeps `ctrl+o`).
 - The TUI frame must fit the terminal box. Bubble Tea drops the top lines of a
   taller frame and moves the cursor relative to the previous frame, so one row
   too many shifts the whole screen and the operator reads earlier lines in the

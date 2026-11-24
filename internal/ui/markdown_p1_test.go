@@ -32,8 +32,15 @@ func TestMarkdownTableAlignsColumns(t *testing.T) {
 
 func TestMarkdownTableShrinksToTheWidth(t *testing.T) {
 	out := md(t, "| a | b |\n|---|---|\n| "+strings.Repeat("x", 80)+" | "+strings.Repeat("y", 80)+" |", 40)
-	if !strings.Contains(out, "...") {
-		t.Fatalf("over-wide cells should be clipped:\n%s", out)
+	// Cells wrap inside their column: no row is wider than the terminal and no
+	// character is lost to the edge.
+	for _, line := range strings.Split(out, "\n") {
+		if width := len([]rune(line)); width > 40 {
+			t.Fatalf("a row is %d columns wide, over 40:\n%s", width, out)
+		}
+	}
+	if strings.Contains(out, "...") || strings.Count(out, "x") != 80 || strings.Count(out, "y") != 80 {
+		t.Fatalf("over-wide cells must wrap without losing text (x=%d y=%d):\n%s", strings.Count(out, "x"), strings.Count(out, "y"), out)
 	}
 }
 

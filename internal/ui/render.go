@@ -42,6 +42,9 @@ type block struct {
 	// hideBody collapses a thinking block to its header. The transcript sets
 	// it when the operator turned reasoning off with Ctrl+T.
 	hideBody bool
+	// expanded opens a tool or thinking block on its own, whatever the global
+	// details toggle says. A click on the block sets it.
+	expanded bool
 	// streamed counts the bytes of a streaming answer already printed to the
 	// scrollback in the inline layout; continuation marks a block that holds
 	// the rest of an answer whose start was printed, so it carries no marker.
@@ -79,25 +82,41 @@ type block struct {
 // and consecutive finished read/search tool blocks are grouped into one
 // summary line, keeping the transcript focused on the conversation.
 func transcript(blocks []block, styles Styles, width int, showDetails bool) string {
+	text, _ := transcriptSpans(blocks, styles, width, showDetails)
+	return text
+}
+
+// transcriptSpans is transcript that also reports which rows each part took and
+// which blocks it was drawn from, so a click on a row can be traced to its block.
+func transcriptSpans(blocks []block, styles Styles, width int, showDetails bool) (string, []blockSpan) {
 	if width < 24 {
 		width = 24
 	}
 	parts := make([]string, 0, len(blocks))
+	var spans []blockSpan
+	row := 0
+	add := func(part string, first, last int) {
+		rows := strings.Count(part, "\n") + 1
+		spans = append(spans, blockSpan{startRow: row, endRow: row + rows, first: first, last: last})
+		parts = append(parts, part)
+		row += rows + 1
+	}
 	for i := 0; i < len(blocks); {
 		if !showDetails && isCompactGroupableTool(blocks[i]) {
 			j := i + 1
 			for j < len(blocks) && isCompactGroupableTool(blocks[j]) {
 				j++
 			}
-			if j-i >= 2 {
+			if j-i >= 2 && !anyExpanded(blocks[i:j]) {
 				if grouped := renderToolGroup(blocks[i:j], styles, width); strings.TrimSpace(grouped) != "" {
-					parts = append(parts, grouped)
+					add(grouped, i, j)
 				}
 				i = j
 				continue
 			}
 		}
 		item := blocks[i]
+		index := i
 		i++
 		// Model and tool text can carry terminal control characters. They are
 		// dropped before any styling so the terminal never obeys a sequence the
@@ -114,14 +133,25 @@ func transcript(blocks []block, styles Styles, width int, showDetails bool) stri
 		if strings.TrimSpace(rendered) == "" {
 			continue
 		}
-		parts = append(parts, rendered)
+		add(rendered, index, index+1)
 	}
 	// A blank line between blocks keeps the transcript readable.
-	return strings.Join(parts, "\n\n")
+	return strings.Join(parts, "\n\n"), spans
+}
+
+// anyExpanded reports whether the operator opened one of the blocks, which
+// takes it out of a compact group so its own lines show.
+func anyExpanded(blocks []block) bool {
+	for _, item := range blocks {
+		if item.expanded {
+			return true
+		}
+	}
+	return false
 }
 
 func isCompactGroupableTool(item block) bool {
-	if item.kind != blockTool || item.running || !item.toolOK {
+	if item.kind != blockTool || item.running || !item.toolOK || item.expanded {
 		return false
 	}
 	if item.preview != "" || strings.TrimSpace(item.toolOutput) != "" {
@@ -171,8 +201,8 @@ func renderToolGroup(items []block, styles Styles, width int) string {
 	} else {
 		summary = fmt.Sprintf("Ran %d read tools", len(items))
 	}
-	line := truncate(markAgent+" "+summary+" (ctrl+o to expand)", width)
-	hintIdx := strings.LastIndex(line, " (ctrl+o to expand)")
+	line := truncate(markAgent+" "+summary+expandHint(), width)
+	hintIdx := strings.LastIndex(line, expandHint())
 	if hintIdx > 0 {
 		head := line[:hintIdx]
 		tail := line[hintIdx:]
@@ -198,9 +228,9 @@ func renderBlock(item block, styles Styles, width int, showDetails bool) string 
 	case blockAssistant:
 		return renderAssistantBlock(item, styles, width)
 	case blockThinking:
-		return renderThinkingBlock(item, styles, width, showDetails)
+		return renderThinkingBlock(item, styles, width, showDetails || item.expanded)
 	case blockTool:
-		return renderToolBlock(item, styles, width, showDetails)
+		return renderToolBlock(item, styles, width, showDetails || item.expanded)
 	case blockPlan:
 		return renderPlanBlock(item, styles, width)
 	case blockNotice:
@@ -313,7 +343,7 @@ func renderThinkingBlock(item block, styles Styles, width int, showDetails bool)
 	body := strings.TrimSpace(item.reasoning)
 	if !showDetails || item.hideBody {
 		if body != "" && !item.running && !item.hideBody {
-			header += styles.Dim.Render(" (ctrl+o to expand)")
+			header += styles.Dim.Render(expandHint())
 		}
 		return header
 	}
@@ -363,11 +393,21 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 		// Compact: marker and label on one line - plus a few lines of the
 		// diff when this tool changed a file for real, so the operator sees
 		// what changed without opening the details view.
-		line := truncate(fmt.Sprintf("%s %s", marker, label), width)
+		full := fmt.Sprintf("%s %s", marker, label)
+		line := truncate(full, width)
+		hint := ""
+		if !item.running && widthOf(full) > width {
+			// The label was cut: say so, and say how to read the rest.
+			hint = expandHint()
+			line = truncate(full, max(8, width-widthOf(hint)))
+		}
 		if item.running {
 			return shimmerTool(line, styles)
 		}
 		rendered := style.Render(line)
+		if hint != "" {
+			rendered += styles.Dim.Render(hint)
+		}
 		if peek := previewLines(item, styles, width, previewPeekLines); peek != "" {
 			rendered += "\n" + peek
 		}
@@ -387,11 +427,31 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 	if room < 0 {
 		room = 0
 	}
-	line := truncate(fmt.Sprintf("%s %s", marker, label), room)
 	if item.running {
-		return shimmerTool(line, styles)
+		return shimmerTool(truncate(fmt.Sprintf("%s %s", marker, label), room), styles)
 	}
-	rendered := style.Render(line + styles.Dim.Render(timing))
+	// A long command or path is wrapped under its marker instead of cut at the
+	// edge: the details view exists to show the whole of it.
+	labelLines := wrapHanging(label, width-2, 0, toolLabelLines)
+	for index := range labelLines {
+		if index == 0 {
+			labelLines[index] = marker + " " + labelLines[index]
+		} else {
+			labelLines[index] = "  " + labelLines[index]
+		}
+	}
+	if lipgloss.Width(labelLines[len(labelLines)-1])+lipgloss.Width(timing) > width {
+		labelLines = append(labelLines, "  ")
+	}
+	labelLines[len(labelLines)-1] += timing
+	for index, line := range labelLines {
+		if index == len(labelLines)-1 && timing != "" {
+			labelLines[index] = style.Render(strings.TrimSuffix(line, timing)) + styles.Dim.Render(timing)
+			continue
+		}
+		labelLines[index] = style.Render(line)
+	}
+	rendered := strings.Join(labelLines, "\n")
 	if peek := previewLines(item, styles, width, previewFullLines); peek != "" {
 		rendered += "\n" + peek
 	}
@@ -413,6 +473,8 @@ func renderToolBlock(item block, styles Styles, width int, showDetails bool) str
 // shows; the details view renders the whole stored preview, which the agent
 // already caps at its own limit.
 const (
+	// toolLabelLines caps how many rows one tool label may take when wrapped.
+	toolLabelLines   = 12
 	previewPeekLines = 6
 	previewFullLines = 40
 	// outputPeekLines and outputFullLines bound a command's output preview in
@@ -442,19 +504,39 @@ func renderToolOutput(item block, styles Styles, width, maxLines int, compact bo
 		style = styles.ToolError
 	}
 	out := make([]string, 0, len(shown)+1)
+	clipped := false
 	for index, line := range shown {
 		prefix := "     "
 		if index == 0 {
 			prefix = "  ⎿  "
 		}
-		out = append(out, style.Render(truncate(prefix+strings.TrimRight(line, " \r"), width)))
+		line = strings.TrimRight(line, " \r")
+		if !compact && widthOf(prefix+line) > width {
+			// The details view wraps a long line under its own indent, so no part
+			// of the output is lost to the edge of the terminal.
+			pieces := strings.Split(wrapPlain(line, max(8, width-5)), "\n")
+			for pieceIndex, piece := range pieces {
+				if pieceIndex == 0 {
+					out = append(out, style.Render(prefix+piece))
+				} else {
+					out = append(out, style.Render("     "+piece))
+				}
+			}
+			continue
+		}
+		if compact && widthOf(prefix+line) > width {
+			clipped = true
+		}
+		out = append(out, style.Render(truncate(prefix+line, width)))
 	}
 	if hidden := total - len(shown); hidden > 0 {
 		hint := fmt.Sprintf("     … +%d lines", hidden)
 		if compact {
-			hint += " (ctrl+o to expand)"
+			hint += expandHint()
 		}
 		out = append(out, styles.Dim.Render(truncate(hint, width)))
+	} else if clipped {
+		out = append(out, styles.Dim.Render(truncate("     … lines were cut"+expandHint(), width)))
 	}
 	return strings.Join(out, "\n")
 }
@@ -575,10 +657,26 @@ func renderPlanBlock(item block, styles Styles, width int) string {
 			mark = "[x]"
 			style = styles.ToolDone
 		}
-		builder.WriteString("\n")
-		builder.WriteString(style.Render(truncate("    "+mark+" "+todo.Title, width)))
+		for _, line := range wrapTodo("    "+mark+" ", todo.Title, width) {
+			builder.WriteString("\n")
+			builder.WriteString(style.Render(line))
+		}
 	}
 	return builder.String()
+}
+
+// wrapTodo wraps a plan item under its marker, so a long title is read whole.
+func wrapTodo(prefix, title string, width int) []string {
+	lines := strings.Split(wrapPlain(strings.TrimSpace(title), max(8, width-widthOf(prefix))), "\n")
+	indent := strings.Repeat(" ", widthOf(prefix))
+	for index := range lines {
+		if index == 0 {
+			lines[index] = prefix + lines[index]
+		} else {
+			lines[index] = indent + lines[index]
+		}
+	}
+	return lines
 }
 
 func countDone(items []agent.Todo) int {
@@ -678,7 +776,9 @@ func renderMarkdown(text string, styles Styles, width int) string {
 			continue
 		}
 		if _, heading, ok := splitHeading(trimmed); ok {
-			out = append(out, styles.Heading.Render(truncate(linksToText(heading), width)))
+			for _, line := range strings.Split(wrapPlain(linksToText(heading), width), "\n") {
+				out = append(out, styles.Heading.Render(line))
+			}
 			continue
 		}
 		if quote, ok := strings.CutPrefix(strings.TrimLeft(trimmed, " "), ">"); ok {
@@ -813,9 +913,14 @@ func isTableSeparator(line string) bool {
 	return strings.Contains(inner, "-")
 }
 
-// renderTable lays a pipe table out in aligned columns. When the columns do
-// not fit, the widest ones shrink first and their cells are clipped, so the
-// table never wraps and breaks its own alignment.
+// tableMinColumn is the narrowest a column is squeezed before the table is
+// stacked instead: below it a wrapped cell is a column of fragments.
+const tableMinColumn = 8
+
+// renderTable lays a pipe table out in aligned columns. A cell wider than its
+// column is wrapped inside the column, so no text is lost to the edge; the
+// widest columns shrink first. When the columns cannot fit even at the minimum
+// width, each row is stacked as "header: value" lines instead.
 func renderTable(lines []string, styles Styles, width int) []string {
 	var rows [][]string
 	header := false
@@ -828,7 +933,7 @@ func renderTable(lines []string, styles Styles, width int) []string {
 		}
 		cells := strings.Split(strings.Trim(strings.TrimSpace(line), "|"), "|")
 		for i := range cells {
-			cells[i] = linksToText(strings.TrimSpace(cells[i]))
+			cells[i] = strings.ReplaceAll(linksToText(strings.TrimSpace(cells[i])), "`", "")
 		}
 		rows = append(rows, cells)
 	}
@@ -839,50 +944,99 @@ func renderTable(lines []string, styles Styles, width int) []string {
 	if columns == 0 {
 		return nil
 	}
-	widths := make([]int, columns)
+	natural := make([]int, columns)
 	for _, row := range rows {
 		for i, cell := range row {
-			widths[i] = max(widths[i], inlineWidth(strings.ReplaceAll(cell, "`", "")))
+			natural[i] = max(natural[i], inlineWidth(cell))
 		}
 	}
+	widths := append([]int(nil), natural...)
 	// Each column costs its width plus " │ " between columns.
 	budget := width - 3*(columns-1)
 	for total(widths) > budget {
-		widest := 0
+		widest := -1
 		for i := range widths {
-			if widths[i] > widths[widest] {
+			if widths[i] > min(natural[i], tableMinColumn) && (widest < 0 || widths[i] > widths[widest]) {
 				widest = i
 			}
 		}
-		if widths[widest] <= 3 {
-			break
+		if widest < 0 {
+			return renderTableStacked(rows, header, styles, width)
 		}
 		widths[widest]--
 	}
 	separator := styles.Dim.Render(" │ ")
 	var out []string
 	for r, row := range rows {
-		parts := make([]string, columns)
+		cellLines := make([][]string, columns)
+		height := 1
 		for i := 0; i < columns; i++ {
 			cell := ""
 			if i < len(row) {
-				cell = strings.ReplaceAll(row[i], "`", "")
+				cell = row[i]
 			}
-			cell = truncate(cell, widths[i])
-			cell += strings.Repeat(" ", max(0, widths[i]-ansi.StringWidth(cell)))
-			if r == 0 && header {
-				parts[i] = styles.Heading.Render(cell)
-			} else {
-				parts[i] = cell
-			}
+			cellLines[i] = strings.Split(wrapPlain(cell, max(1, widths[i])), "\n")
+			height = max(height, len(cellLines[i]))
 		}
-		out = append(out, strings.TrimRight(strings.Join(parts, separator), " "))
+		for k := 0; k < height; k++ {
+			parts := make([]string, columns)
+			for i := 0; i < columns; i++ {
+				cell := ""
+				if k < len(cellLines[i]) {
+					cell = cellLines[i][k]
+				}
+				cell += strings.Repeat(" ", max(0, widths[i]-ansi.StringWidth(cell)))
+				if r == 0 && header {
+					parts[i] = styles.Heading.Render(cell)
+				} else {
+					parts[i] = cell
+				}
+			}
+			out = append(out, strings.TrimRight(strings.Join(parts, separator), " "))
+		}
 		if r == 0 && header {
 			rule := make([]string, columns)
 			for i := range rule {
 				rule[i] = strings.Repeat("─", widths[i])
 			}
 			out = append(out, styles.Dim.Render(strings.Join(rule, "─┼─")))
+		} else if height > 1 && r < len(rows)-1 {
+			// A row that took several lines is set apart from the next one, so
+			// the fragments of two rows never read as one.
+			out = append(out, styles.Dim.Render(strings.Repeat("┄", min(width, total(widths)+3*(columns-1)))))
+		}
+	}
+	return out
+}
+
+// renderTableStacked draws each data row as "header: value" lines. It is the
+// layout for a table with too many columns for the terminal.
+func renderTableStacked(rows [][]string, header bool, styles Styles, width int) []string {
+	var titles []string
+	data := rows
+	if header && len(rows) > 0 {
+		titles = rows[0]
+		data = rows[1:]
+	}
+	var out []string
+	for index, row := range data {
+		if index > 0 {
+			out = append(out, styles.Dim.Render(strings.Repeat("─", max(1, min(width, 40)))))
+		}
+		for i, cell := range row {
+			label := fmt.Sprintf("column %d", i+1)
+			if i < len(titles) && strings.TrimSpace(titles[i]) != "" {
+				label = titles[i]
+			}
+			prefix := label + ": "
+			wrapped := strings.Split(wrapPlain(prefix+cell, max(8, width)), "\n")
+			for k, line := range wrapped {
+				if k == 0 && strings.HasPrefix(line, prefix) {
+					out = append(out, styles.Heading.Render(prefix)+strings.TrimPrefix(line, prefix))
+					continue
+				}
+				out = append(out, "  "+line)
+			}
 		}
 	}
 	return out

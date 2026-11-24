@@ -30,6 +30,18 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Fixed
 
+- **Text the operator has to read is no longer cut to one line.** The question dialog
+  wrapped nothing: a long question or choice ended in `...` and the rest could not be
+  read. It now wraps each choice under its number and clips only when the terminal is
+  too short, sharing the rows evenly and ending a clipped one in an ellipsis. The
+  approval dialog wraps the command or path being approved instead of cutting its end.
+  Markdown table cells wrap inside their column (a table with too many columns for the
+  width is stacked as `header: value`), and headings, plan items, long tool labels and
+  long lines of command output wrap instead of being clipped.
+- **Click to expand.** In the fullscreen layout a click on a tool line, a group of read
+  tools or a thinking line opens it, and a second click closes it; the global `ctrl+o`
+  toggle is unchanged. A line that was cut says so and how to read the rest. The inline
+  layout leaves the mouse to the terminal, so there `ctrl+o` stays the way to expand.
 - **Antigravity signs in with the IDE's OAuth client.** A token issued to the agy CLI's
   client is read by Google as an account with no tier (`standard-tier`, no project),
   and every chat call answers 403, even for an account the CLI itself uses. The IDE's
