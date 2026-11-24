@@ -6,6 +6,8 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+## 0.2.12 - 2026-11-24
+
 ### Added
 
 - **More flags on `termixgo run`.** `-m/--model`, `--agent` and `--effort` choose the
