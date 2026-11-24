@@ -230,6 +230,9 @@ func (t *browserScreenshotTool) Run(ctx context.Context, env *Env, args map[stri
 		runCtx, cancel := context.WithTimeout(ctx, browserActionTimeout)
 		defer cancel()
 		if targetURL != "" {
+			if err := checkBrowserTarget(env, targetURL); err != nil {
+				return Result{Output: "Browser screenshot failed: " + err.Error(), IsError: true}, nil
+			}
 			if _, err := session.Navigate(runCtx, targetURL); err != nil {
 				return Result{Output: "Browser screenshot failed: " + err.Error(), IsError: true}, nil
 			}
@@ -593,4 +596,34 @@ func buildMermaidHTML(title, diagram string) string {
 </div>
 </body>
 </html>`, escapedTitle, escapedTitle, escapedDiagram)
+}
+
+// checkBrowserTarget keeps a live browser inside the workspace boundary. The
+// one-shot browser tools already confine a file URL; the CDP session did not,
+// so browser_navigate to file:///<anything> followed by browser_read returned
+// any file on the machine, including the secrets store, without ever passing a
+// path check. http, https, about and data targets are not files and pass.
+func checkBrowserTarget(env *Env, raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if !strings.HasPrefix(strings.ToLower(trimmed), "file:") {
+		return nil
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return fmt.Errorf("cannot read %q as a URL", raw)
+	}
+	if parsed.Host != "" && !strings.EqualFold(parsed.Host, "localhost") {
+		return fmt.Errorf("network file shares are not opened in the browser: %s", parsed.Host)
+	}
+	path := parsed.Path
+	if runtime.GOOS == "windows" && len(path) >= 3 && path[0] == '/' && path[2] == ':' {
+		path = path[1:]
+	}
+	if path == "" {
+		return fmt.Errorf("a file URL needs a path")
+	}
+	if err := checkWorkspacePath(env, resolvePath(env, filepath.FromSlash(path))); err != nil {
+		return fmt.Errorf("cannot open file outside workspace: %v", err)
+	}
+	return nil
 }

@@ -130,3 +130,33 @@ func TestDescribe(t *testing.T) {
 		t.Fatalf("line = %q", line)
 	}
 }
+
+// The mount's source is the host workspace on every platform; on Windows the
+// target is a different, fixed path, and mounting the target on both sides
+// gave the command an empty directory instead of the project.
+func TestCommandMountsTheHostWorkspaceAsTheSource(t *testing.T) {
+	engineName := "docker"
+	if runtime.GOOS == "windows" {
+		engineName = "docker.exe"
+	}
+	engine := filepath.Join(t.TempDir(), engineName)
+	if err := os.WriteFile(engine, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Skipf("cannot create a fake engine here: %v", err)
+	}
+	settings := baseConfig()
+	settings.Engine = engine
+	workspace := t.TempDir()
+	_, args, err := Command(settings, workspace, workspace, "ls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, arg := range args {
+		if arg == "--volume" {
+			if !strings.HasPrefix(args[index+1], filepath.Clean(workspace)+":") {
+				t.Fatalf("the mount source is not the host workspace: %q", args[index+1])
+			}
+			return
+		}
+	}
+	t.Fatal("no --volume argument")
+}

@@ -256,6 +256,9 @@ func runFlowStep(ctx context.Context, env *Env, session flowBrowser, step flowSt
 		if err != nil {
 			return "", err
 		}
+		if err := checkBrowserTarget(env, url); err != nil {
+			return "", err
+		}
 		summary, err := session.Navigate(runCtx, url)
 		if err != nil {
 			return "", err

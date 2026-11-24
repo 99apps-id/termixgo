@@ -108,13 +108,16 @@ func Command(settings config.Sandbox, workspace, dir, command string) (string, [
 		return "", nil, err
 	}
 
+	// The source is always the host workspace. Using the container path on
+	// both sides mounted a folder that does not exist on the host when the two
+	// differ (Windows), and the command then ran in an empty directory.
 	args := []string{
 		"run", "--rm", "--init",
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 		"--pids-limit", "512",
 		"--network", network,
-		"--volume", mountTarget + ":" + mountTarget + ":" + mode,
+		"--volume", workspace + ":" + mountTarget + ":" + mode,
 		"--workdir", workdir,
 		"--tmpfs", "/tmp:rw,exec,size=512m,mode=1777",
 		"--env", "HOME=/tmp",

@@ -43,10 +43,13 @@ func (t *browserNavigateTool) Schema() map[string]any {
 	}, "url")
 }
 
-func (t *browserNavigateTool) Run(ctx context.Context, _ *Env, args map[string]any) (Result, error) {
+func (t *browserNavigateTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	raw := strings.TrimSpace(argString(args, "url"))
 	if raw == "" {
 		return Result{Output: "url is required", IsError: true}, nil
+	}
+	if err := checkBrowserTarget(env, raw); err != nil {
+		return Result{Output: err.Error(), IsError: true}, nil
 	}
 	session, err := browserSession(ctx)
 	if err != nil {
@@ -406,7 +409,7 @@ func (t *browserTabsTool) Schema() map[string]any {
 	}, "action")
 }
 
-func (t *browserTabsTool) Run(ctx context.Context, _ *Env, args map[string]any) (Result, error) {
+func (t *browserTabsTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
 	action := strings.ToLower(strings.TrimSpace(argString(args, "action")))
 	if action == "" {
 		action = "list"
@@ -441,7 +444,11 @@ func (t *browserTabsTool) Run(ctx context.Context, _ *Env, args map[string]any) 
 		}
 		return Result{Output: out.String()}, nil
 	case "new":
-		target, err := session.NewTab(runCtx, firstNonEmpty(strings.TrimSpace(argString(args, "url")), "about:blank"))
+		tabURL := firstNonEmpty(strings.TrimSpace(argString(args, "url")), "about:blank")
+		if err := checkBrowserTarget(env, tabURL); err != nil {
+			return Result{Output: err.Error(), IsError: true}, nil
+		}
+		target, err := session.NewTab(runCtx, tabURL)
 		if err != nil {
 			return Result{Output: err.Error(), IsError: true}, nil
 		}
