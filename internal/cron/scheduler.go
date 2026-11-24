@@ -143,6 +143,16 @@ func (s *Scheduler) tickHeartbeat(ctx context.Context, now time.Time) {
 func (s *Scheduler) run(ctx context.Context, job Job) {
 	defer s.wg.Done()
 	defer s.release(job.ID)
+	// A job runs an arbitrary model turn and its tools. A panic in one must
+	// cost that job, not the whole serve process and every other schedule.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.logf("job %s panicked: %v", job.ID, recovered)
+			if s.Store != nil {
+				_ = s.Store.MarkError(job.ID, fmt.Errorf("panic: %v", recovered))
+			}
+		}
+	}()
 	output, err := s.Runner.RunScheduled(ctx, job)
 	if errors.Is(err, ErrBusy) {
 		// The operator or another job holds the single-run slot. Requeue so the

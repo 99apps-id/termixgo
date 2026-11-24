@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -100,6 +101,11 @@ type Bot struct {
 	chatID      int64
 	ownerUserID int64
 	pairingCode string
+	// pairFails and pairLockedUntil throttle /pair guesses. The code is six
+	// digits and never expires on its own, so without a limit a stranger could
+	// try them all and become the operator.
+	pairFails       []time.Time
+	pairLockedUntil time.Time
 
 	// OnPaired persists the pairing. It runs on the handler goroutine.
 	OnPaired func(chatID, ownerUserID int64)
@@ -583,12 +589,15 @@ func (b *Bot) handleCallback(ctx context.Context, query *CallbackQuery) {
 			}
 		}
 	}
-	if !allowed && strings.HasPrefix(query.Data, "appr:") {
+	if !allowed && strings.HasPrefix(query.Data, "appr:") && chat.Type == "private" && query.From != nil && query.From.ID == chat.ID {
+		// A person in a private chat may answer the approval the bot asked in
+		// that chat. A group is different: the card is visible to every member,
+		// and letting any of them press Allow would hand a guest the operator's
+		// tool approvals.
 		parts := strings.Split(query.Data, ":")
 		if len(parts) == 3 {
-			id := parts[2]
 			b.approvalsMu.Lock()
-			appr, ok := b.approvals[id]
+			appr, ok := b.approvals[parts[2]]
 			b.approvalsMu.Unlock()
 			if ok && appr.ChatID == chat.ID {
 				allowed = true
@@ -1747,10 +1756,17 @@ func (b *Bot) tryPair(ctx context.Context, message *Message, code string) {
 		b.reply(ctx, message.Chat.ID, "No pairing code is active. Run /setup in Termixgo.")
 		return
 	}
-	if strings.TrimSpace(code) != strings.TrimSpace(expected) {
+	if b.pairingLocked(time.Now()) {
+		// Silence, not an answer: a guesser learns nothing from a lockout.
+		b.logf("ignored a /pair attempt while pairing is locked")
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(code)), []byte(strings.TrimSpace(expected))) != 1 {
+		b.notePairFailure(time.Now())
 		b.reply(ctx, message.Chat.ID, "Wrong pairing code.")
 		return
 	}
+	b.clearPairFailures()
 	ownerUserID := int64(0)
 	if message.From != nil {
 		ownerUserID = message.From.ID
@@ -1760,6 +1776,43 @@ func (b *Bot) tryPair(ctx context.Context, message *Message, code string) {
 		b.OnPaired(message.Chat.ID, ownerUserID)
 	}
 	b.reply(ctx, message.Chat.ID, fmt.Sprintf("Paired. Send any message to run the agent.\n%s", helpText()))
+}
+
+const (
+	// pairFailLimit wrong codes inside pairFailWindow lock pairing for
+	// pairLockout. The counter is for the whole bot, not per sender: a guesser
+	// can use many accounts, and the real operator needs only one try.
+	pairFailLimit  = 5
+	pairFailWindow = 10 * time.Minute
+	pairLockout    = 15 * time.Minute
+)
+
+func (b *Bot) pairingLocked(now time.Time) bool {
+	b.pairMu.Lock()
+	defer b.pairMu.Unlock()
+	return now.Before(b.pairLockedUntil)
+}
+
+func (b *Bot) notePairFailure(now time.Time) {
+	b.pairMu.Lock()
+	defer b.pairMu.Unlock()
+	kept := b.pairFails[:0]
+	for _, at := range b.pairFails {
+		if now.Sub(at) < pairFailWindow {
+			kept = append(kept, at)
+		}
+	}
+	b.pairFails = append(kept, now)
+	if len(b.pairFails) >= pairFailLimit {
+		b.pairLockedUntil = now.Add(pairLockout)
+		b.pairFails = nil
+	}
+}
+
+func (b *Bot) clearPairFailures() {
+	b.pairMu.Lock()
+	b.pairFails = nil
+	b.pairMu.Unlock()
 }
 
 // requestFrom normalizes one Telegram message into the transport-neutral

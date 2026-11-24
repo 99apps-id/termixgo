@@ -54,15 +54,18 @@ func (l *RateLimiter) Allow(senderID string, now time.Time) bool {
 	return true
 }
 
-// gcLocked drops empty sender entries now and then, so a long-running account
-// does not accumulate one slice per stranger.
+// gcLocked drops the senders whose every hit has left the window, now and
+// then, so a long-running account does not keep one slice per stranger. An
+// entry is never empty while it is stored, so the test has to look at the
+// newest hit rather than the length.
 func (l *RateLimiter) gcLocked(now time.Time) {
 	if now.Sub(l.lastGC) < 10*time.Minute {
 		return
 	}
 	l.lastGC = now
+	cutoff := now.Add(-l.window)
 	for sender, stamps := range l.hits {
-		if len(stamps) == 0 {
+		if len(stamps) == 0 || !stamps[len(stamps)-1].After(cutoff) {
 			delete(l.hits, sender)
 		}
 	}

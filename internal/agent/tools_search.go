@@ -97,6 +97,9 @@ func (t *grepTool) Run(ctx context.Context, env *Env, args map[string]any) (Resu
 			break
 		}
 		relative := relativeSlash(env, path)
+		if env.Guest && guestSensitive(relative) {
+			continue
+		}
 		if matcher != nil && !matcher.match(relative) {
 			continue
 		}
@@ -291,6 +294,9 @@ func (t *globTool) Run(ctx context.Context, env *Env, args map[string]any) (Resu
 	truncated := false
 	for _, path := range listSearchFiles(ctx, root) {
 		relative := relativeSlash(env, path)
+		if env.Guest && guestSensitive(relative) {
+			continue
+		}
 		if !matcher.match(relative) {
 			continue
 		}

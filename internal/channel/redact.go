@@ -2,6 +2,7 @@ package channel
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -34,6 +35,37 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?:\bbot|\b)[0-9]{8,10}:[A-Za-z0-9_-]{30,}\b`),
 	regexp.MustCompile(`eyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`),
 	regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`),
+	// Google OAuth: an access token, a refresh token and a client secret.
+	regexp.MustCompile(`\bya29\.[A-Za-z0-9_-]{20,}`),
+	regexp.MustCompile(`\b1//[A-Za-z0-9_-]{30,}`),
+	regexp.MustCompile(`GOCSPX-[A-Za-z0-9_-]{16,}`),
+	// An Authorization header value that survived into an error line.
+	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{20,}`),
+}
+
+// SecretValues expands one stored secret into the strings worth redacting. An
+// OAuth login is stored as one JSON object, so the whole blob never appears in
+// an answer while its access and refresh tokens easily can; each string field
+// is listed on its own.
+func SecretValues(stored string) []string {
+	trimmed := strings.TrimSpace(stored)
+	if trimmed == "" {
+		return nil
+	}
+	values := []string{trimmed}
+	if !strings.HasPrefix(trimmed, "{") {
+		return values
+	}
+	var fields map[string]any
+	if json.Unmarshal([]byte(trimmed), &fields) != nil {
+		return values
+	}
+	for _, raw := range fields {
+		if text, ok := raw.(string); ok && len(text) >= 12 {
+			values = append(values, text)
+		}
+	}
+	return values
 }
 
 var base64CandidatePattern = regexp.MustCompile(`[A-Za-z0-9+/=_-]{16,}`)

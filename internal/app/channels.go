@@ -248,9 +248,7 @@ func (a *App) RedactForChannel(text string) string {
 	known := []string{}
 	if a.store != nil {
 		for _, key := range a.store.Keys() {
-			if value := a.store.Get(key); value != "" {
-				known = append(known, value)
-			}
+			known = append(known, channel.SecretValues(a.store.Get(key))...)
 		}
 	}
 	return channel.Redact(text, known)

@@ -7,11 +7,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/99apps-id/termixgo/internal/dohnet"
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -57,6 +59,19 @@ func newClientAt(token, baseURL string) *Client {
 			}),
 		},
 	}
+}
+
+// scrub removes the bot token from a transport error. The token is part of
+// every Bot API path, and net/http quotes the full URL in the error it returns,
+// so an error that reached a log line, the status bar or a chat reply carried a
+// working credential. The wrapped cause is kept, so errors.Is still sees a
+// deadline or a refused connection.
+func (c *Client) scrub(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && c.token != "" {
+		urlErr.URL = strings.ReplaceAll(urlErr.URL, c.token, "<token>")
+	}
+	return err
 }
 
 // User is the bot or sender identity.
@@ -220,7 +235,7 @@ func (c *Client) call(ctx context.Context, method string, payload any, result an
 	request.Header.Set("Content-Type", "application/json")
 	response, err := c.http.Do(request)
 	if err != nil {
-		return err
+		return c.scrub(err)
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 4*1024*1024))
@@ -350,7 +365,7 @@ func (c *Client) SendDocument(ctx context.Context, chatID int64, filename string
 	request.Header.Set("Content-Type", writer.FormDataContentType())
 	response, err := c.http.Do(request)
 	if err != nil {
-		return Message{}, err
+		return Message{}, c.scrub(err)
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, 4*1024*1024))
@@ -516,7 +531,7 @@ func (c *Client) DownloadFile(ctx context.Context, filePath string) ([]byte, err
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
-		return nil, err
+		return nil, c.scrub(err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

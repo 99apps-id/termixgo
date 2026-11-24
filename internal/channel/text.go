@@ -291,12 +291,12 @@ func SaveUpload(workspace, rawName string, data []byte) (fileName, relPath strin
 		return fileName, relPath, false
 	}
 	uploadDir := filepath.Join(workspace, ".termixgo", "uploads")
-	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+	if err := os.MkdirAll(uploadDir, 0o700); err != nil {
 		return fileName, relPath, false
 	}
 	CleanupOldUploads(uploadDir, DefaultUploadRetention)
 	fullPath := filepath.Join(uploadDir, fileName)
-	if err := os.WriteFile(fullPath, data, 0o644); err != nil {
+	if err := os.WriteFile(fullPath, data, 0o600); err != nil {
 		return fileName, relPath, false
 	}
 	return fileName, relPath, true

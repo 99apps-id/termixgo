@@ -30,6 +30,16 @@ type PairingRequest struct {
 	CreatedAt  time.Time `json:"createdAt"`
 }
 
+const (
+	// PairingTTL is how long an unanswered request stays open. A request an
+	// operator never looked at is stale: the sender has moved on, and the file
+	// would otherwise grow for as long as strangers keep writing.
+	PairingTTL = 24 * time.Hour
+	// MaxPendingPairings caps the open requests. Past it a new stranger gets no
+	// code, so a flood of senders cannot fill the disk or bury the real request.
+	MaxPendingPairings = 50
+)
+
 // DefaultPairingPath is where pairing requests live.
 func DefaultPairingPath() (string, error) {
 	return config.HomePath(PairingFileName)
@@ -76,10 +86,16 @@ func OpenPairingStore(path string) (*PairingStore, error) {
 func (s *PairingStore) Request(channelName, account, senderID, senderName string) (PairingRequest, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pruneLocked(time.Now())
 	for _, existing := range s.requests {
 		if existing.Channel == channelName && existing.Account == account && CanonicalID(existing.SenderID) == CanonicalID(senderID) {
 			return existing, false
 		}
+	}
+	if len(s.requests) >= MaxPendingPairings {
+		// Nothing is stored and nothing is promised: the caller still gets a
+		// request to show, but it will never be approvable.
+		return PairingRequest{Channel: channelName, Account: account, SenderID: senderID, Code: "------"}, false
 	}
 	request := PairingRequest{
 		Channel:    strings.TrimSpace(channelName),
@@ -94,10 +110,25 @@ func (s *PairingStore) Request(channelName, account, senderID, senderName string
 	return request, true
 }
 
+// pruneLocked drops the requests older than PairingTTL.
+func (s *PairingStore) pruneLocked(now time.Time) {
+	kept := s.requests[:0]
+	for _, request := range s.requests {
+		if request.CreatedAt.IsZero() || now.Sub(request.CreatedAt) < PairingTTL {
+			kept = append(kept, request)
+		}
+	}
+	if len(kept) != len(s.requests) {
+		s.requests = kept
+		_ = s.saveLocked()
+	}
+}
+
 // Pending lists the open requests, oldest first.
 func (s *PairingStore) Pending() []PairingRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pruneLocked(time.Now())
 	out := append([]PairingRequest{}, s.requests...)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out
@@ -121,6 +152,7 @@ func (s *PairingStore) take(code string) (PairingRequest, bool) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pruneLocked(time.Now())
 	for index, request := range s.requests {
 		if !strings.EqualFold(request.Code, needle) {
 			continue

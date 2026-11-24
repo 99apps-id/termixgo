@@ -64,8 +64,21 @@ func CheckWorkspacePath(workspace, path string) error {
 }
 
 // checkWorkspacePath returns an error if the resolved path escapes the
-// workspace. When there is no workspace the path is accepted as-is.
+// workspace. When there is no workspace the path is accepted as-is. A guest
+// turn is held to a stricter rule: credentials and runtime state inside the
+// workspace are off limits too, because a guest chat is open to people the
+// operator never vetted and every read tool answers into that chat.
 func checkWorkspacePath(env *Env, path string) error {
+	if err := checkWorkspaceBounds(env, path); err != nil {
+		return err
+	}
+	if env != nil && env.Guest && strings.TrimSpace(env.Workspace) != "" {
+		return checkGuestPath(env, path)
+	}
+	return nil
+}
+
+func checkWorkspaceBounds(env *Env, path string) error {
 	if env == nil || strings.TrimSpace(env.Workspace) == "" {
 		return nil
 	}
@@ -101,6 +114,68 @@ func checkWorkspacePath(env *Env, path string) error {
 		return fmt.Errorf("path escapes the workspace: %s", displayPath(env, path))
 	}
 	return nil
+}
+
+// checkGuestPath refuses a path a guest must not read, send or change.
+func checkGuestPath(env *Env, path string) error {
+	workspace := env.Workspace
+	if resolved, err := resolveExistingPath(workspace); err == nil {
+		workspace = resolved
+	}
+	resolved, err := resolveExistingPath(path)
+	if err != nil {
+		return nil
+	}
+	rel, err := filepath.Rel(workspace, resolved)
+	if err != nil {
+		return nil
+	}
+	if guestSensitive(filepath.ToSlash(rel)) {
+		return fmt.Errorf("that file is not available in a guest chat")
+	}
+	return nil
+}
+
+// guestSensitiveFiles are base names that hold credentials wherever they sit.
+var guestSensitiveFiles = map[string]bool{
+	".npmrc": true, ".netrc": true, ".pypirc": true, ".pgpass": true,
+	"id_rsa": true, "id_dsa": true, "id_ecdsa": true, "id_ed25519": true,
+	"secrets.json": true, "credentials": true, "credentials.json": true,
+	"service-account.json": true, "kubeconfig": true,
+}
+
+// guestSensitiveDirs are directories whose whole content is private.
+var guestSensitiveDirs = map[string]bool{
+	".git": true, ".ssh": true, ".aws": true, ".gnupg": true, ".kube": true,
+}
+
+// guestSensitive reports whether a workspace-relative, slash separated path
+// is one a guest turn must not touch: version-control internals, key and
+// environment files, and Termixgo's own state apart from the uploads folder a
+// guest's own files land in.
+func guestSensitive(rel string) bool {
+	lowered := strings.ToLower(strings.Trim(rel, "/"))
+	if lowered == "" || lowered == "." {
+		return false
+	}
+	parts := strings.Split(lowered, "/")
+	for index, part := range parts {
+		if guestSensitiveDirs[part] {
+			return true
+		}
+		if part == ".termixgo" && !(len(parts) > index+1 && parts[index+1] == "uploads") {
+			return true
+		}
+	}
+	base := parts[len(parts)-1]
+	if guestSensitiveFiles[base] || strings.HasPrefix(base, ".env") {
+		return true
+	}
+	switch filepath.Ext(base) {
+	case ".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".kdbx", ".ppk":
+		return true
+	}
+	return strings.Contains(base, "secret") || strings.Contains(base, "credential") || strings.Contains(base, "passwd")
 }
 
 // checkProtectedPath prevents direct manipulation of internal VCS (.git) metadata
