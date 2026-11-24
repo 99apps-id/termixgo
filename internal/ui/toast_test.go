@@ -24,6 +24,13 @@ func TestToastTextTravelsOnlyInTheEnvironment(t *testing.T) {
 		}
 	}
 	_, args, env := toastCommand("windows", "t", "m")
+	// -WindowStyle Hidden would hide the shared console, which is the terminal
+	// the operator is typing in. The helper gets its own console instead.
+	for _, arg := range args {
+		if strings.EqualFold(arg, "-WindowStyle") {
+			t.Fatalf("the Windows toast must not ask PowerShell to hide a window: %q", args)
+		}
+	}
 	if !strings.Contains(args[len(args)-1], "SecurityElement]::Escape") || !strings.Contains(strings.Join(env, " "), "WindowsPowerShell") {
 		t.Fatalf("the Windows toast must escape its text and use a registered app id")
 	}

@@ -30,6 +30,11 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Fixed
 
+- **The terminal no longer minimizes when a turn ends.** The end-of-turn notification
+  ran `powershell -WindowStyle Hidden` on the same console as the terminal, so PowerShell
+  hid "its" window and Windows Terminal minimized. The helper now gets its own hidden
+  console (`CREATE_NO_WINDOW`) and no longer asks PowerShell to hide a window.
+  `TERMIXGO_NO_NOTIFY=1` still turns the notification off.
 - **Text the operator has to read is no longer cut to one line.** The question dialog
   wrapped nothing: a long question or choice ended in `...` and the rest could not be
   read. It now wraps each choice under its number and clips only when the terminal is

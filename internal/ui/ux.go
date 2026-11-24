@@ -588,6 +588,7 @@ func sendOSNotification(title, message string) {
 	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = append(os.Environ(), env...)
+	detachFromConsole(cmd)
 	_ = cmd.Run()
 }
 
@@ -614,7 +615,7 @@ func toastCommand(goos, title, message string) (string, []string, []string) {
 	switch goos {
 	case "windows":
 		env = append(env, "TERMIXGO_TOAST_APP="+powershellAppID)
-		return "powershell", []string{"-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", windowsToastScript}, env
+		return "powershell", []string{"-NoProfile", "-NonInteractive", "-Command", windowsToastScript}, env
 	case "darwin":
 		return "osascript", []string{"-e", `display notification (system attribute "TERMIXGO_TOAST_MESSAGE") with title "Termixgo" subtitle (system attribute "TERMIXGO_TOAST_TITLE")`}, env
 	default:
