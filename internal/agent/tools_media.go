@@ -147,15 +147,15 @@ func (t *textToSpeechTool) DoneLabel(a map[string]any) string {
 	return "Spoke: " + Shorten(argString(a, "text"), 50)
 }
 func (t *textToSpeechTool) Description() string {
-	return "Turn text into a spoken audio file (OpenAI gpt-4o-mini-tts, Gemini TTS, or the operating system voice when no key is set; config speechModel picks one). Saves the file in the workspace and returns its path, which send_channel can deliver as audio. Up to 4096 characters per call."
+	return "Turn text into a spoken audio file (OpenAI gpt-4o-mini-tts, Gemini TTS, ElevenLabs when named explicitly, or the operating system voice when no key is set; config speechModel picks one). Saves the file in the workspace and returns its path, which send_channel can deliver as audio. Up to 4096 characters per call."
 }
 func (t *textToSpeechTool) Schema() map[string]any {
 	return object(map[string]any{
 		"text":         strProp("What to say, up to 4096 characters."),
-		"voice":        strProp("Optional voice: alloy, nova, shimmer, onyx (OpenAI); Kore, Puck, Charon (Gemini); an installed voice name for the system voice."),
+		"voice":        strProp("Optional voice: alloy, nova, shimmer, onyx (OpenAI); Kore, Puck, Charon (Gemini); a voice id (ElevenLabs); an installed voice name for the system voice."),
 		"format":       strProp("mp3 (default), opus (best for chat voice notes), wav or aac. Gemini and the system voice save wav."),
 		"instructions": strProp("Optional delivery: tone, pace, accent, for example 'warm and slow, Indonesian accent'."),
-		"model":        strProp("Optional provider:model override, or system for the local voice."),
+		"model":        strProp("Optional provider:model override, or system for the local voice. ElevenLabs runs only when named here or in config speechModel, for example elevenlabs:eleven_multilingual_v2; it is never a silent fallback because it bills per character."),
 		"output":       strProp("Optional workspace path for the file. Defaults to .termixgo/media/."),
 	}, "text")
 }

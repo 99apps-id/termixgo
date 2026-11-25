@@ -29,10 +29,12 @@ func TestShortenKeepsValidUTF8(t *testing.T) {
 }
 
 type recorded struct {
-	path string
-	body map[string]any
-	auth string
-	goog string
+	path  string
+	body  map[string]any
+	auth  string
+	goog  string
+	xi    string
+	query string
 }
 
 // fakeAPI answers every provider endpoint the package calls and records the
@@ -44,7 +46,7 @@ func fakeAPI(t *testing.T, fail map[string]bool) (*httptest.Server, map[string]*
 		raw, _ := io.ReadAll(r.Body)
 		var body map[string]any
 		_ = json.Unmarshal(raw, &body)
-		seen[r.URL.Path] = &recorded{path: r.URL.Path, body: body, auth: r.Header.Get("Authorization"), goog: r.Header.Get("x-goog-api-key")}
+		seen[r.URL.Path] = &recorded{path: r.URL.Path, body: body, auth: r.Header.Get("Authorization"), goog: r.Header.Get("x-goog-api-key"), xi: r.Header.Get("xi-api-key"), query: r.URL.RawQuery}
 		if fail[r.URL.Path] {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"error":{"message":"boom"}}`))
@@ -66,6 +68,8 @@ func fakeAPI(t *testing.T, fail map[string]bool) (*httptest.Server, map[string]*
 				map[string]any{"text": "here it is"},
 				map[string]any{"inlineData": map[string]any{"mimeType": "image/png", "data": encoded}},
 			}}}}})
+		case strings.Contains(r.URL.Path, "/text-to-speech/"):
+			_, _ = w.Write([]byte("ELABSfakeaudio"))
 		case strings.HasSuffix(r.URL.Path, "/audio/speech"):
 			_, _ = w.Write([]byte("ID3fakeaudio"))
 		default:
@@ -204,5 +208,61 @@ func TestSpeakExplicitProviderDoesNotFallBack(t *testing.T) {
 	}
 	if _, _, err := Speak(context.Background(), SpeechRequest{Text: "x", Model: "openai:tts-1"}, credentialsFor(server.URL, "openai")); err == nil {
 		t.Fatalf("a failing explicit provider should error")
+	}
+}
+
+func TestSpeakElevenLabs(t *testing.T) {
+	server, seen := fakeAPI(t, nil)
+	clip, used, err := Speak(context.Background(), SpeechRequest{Text: "halo dunia", Model: "elevenlabs", Format: "opus"}, credentialsFor(server.URL, "elevenlabs"))
+	if err != nil || used != "elevenlabs:eleven_multilingual_v2" || clip.Ext != ".ogg" || string(clip.Data) != "ELABSfakeaudio" {
+		t.Fatalf("clip=%+v used=%q err=%v", clip, used, err)
+	}
+	request := seen["/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"]
+	if request == nil || request.xi != "elevenlabs-key" {
+		t.Fatalf("request = %+v", request)
+	}
+	if request.body["model_id"] != "eleven_multilingual_v2" || request.body["text"] != "halo dunia" {
+		t.Fatalf("body = %+v", request.body)
+	}
+	if request.query != "output_format=opus_48000_128" {
+		t.Fatalf("query = %q", request.query)
+	}
+
+	clip, used, err = Speak(context.Background(), SpeechRequest{Text: "halo", Model: "elevenlabs:eleven_flash_v2_5", Voice: "voice-xyz"}, credentialsFor(server.URL, "elevenlabs"))
+	if err != nil || used != "elevenlabs:eleven_flash_v2_5" || clip.Ext != ".mp3" {
+		t.Fatalf("clip=%+v used=%q err=%v", clip, used, err)
+	}
+	if seen["/v1/text-to-speech/voice-xyz"] == nil {
+		t.Fatalf("the named voice should be in the path, seen %v", seen)
+	}
+}
+
+func TestSpeakElevenLabsStaysOutOfTheDefaultOrder(t *testing.T) {
+	server, seen := fakeAPI(t, nil)
+	original := systemSpeaker
+	t.Cleanup(func() { systemSpeaker = original })
+	systemSpeaker = func(context.Context, string, string, string) ([]byte, string, string, error) {
+		return []byte("RIFFwav"), "audio/wav", ".wav", nil
+	}
+	_, used, err := Speak(context.Background(), SpeechRequest{Text: "halo"}, credentialsFor(server.URL, "elevenlabs"))
+	if err != nil || used != "system" {
+		t.Fatalf("used=%q err=%v", used, err)
+	}
+	for path := range seen {
+		if strings.Contains(path, "/text-to-speech/") {
+			t.Fatalf("the default order must not call ElevenLabs, saw %s", path)
+		}
+	}
+}
+
+func TestSpeakElevenLabsWithoutKey(t *testing.T) {
+	original := systemSpeaker
+	t.Cleanup(func() { systemSpeaker = original })
+	systemSpeaker = func(context.Context, string, string, string) ([]byte, string, string, error) {
+		t.Fatalf("an explicit provider must not silently fall back")
+		return nil, "", "", nil
+	}
+	if _, _, err := Speak(context.Background(), SpeechRequest{Text: "x", Model: "elevenlabs:eleven_multilingual_v2"}, credentialsFor("http://unused")); err == nil {
+		t.Fatalf("a missing key should error")
 	}
 }

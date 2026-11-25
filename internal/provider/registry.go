@@ -380,6 +380,12 @@ func Providers() []Provider {
 		{ID: "cohere", Label: "Cohere", Kind: KindOpenAI, DefaultBaseURL: "https://api.cohere.ai/compatibility/v1", ConsoleURL: "https://dashboard.cohere.com/api-keys", NeedsKey: true, EnvKeys: []string{"COHERE_API_KEY", "CO_API_KEY"}},
 		{ID: "ai21", Label: "AI21 Labs", Kind: KindOpenAI, DefaultBaseURL: "https://api.ai21.com/studio/v1", ConsoleURL: "https://studio.ai21.com/account/api-key", NeedsKey: true, EnvKeys: []string{"AI21_API_KEY"}},
 
+		// Speech-only services. ElevenLabs offers text to speech and no chat
+		// models; it is registered so its key and endpoint resolve like every
+		// other provider's (the secret command, the environment, a baseUrls
+		// override). The media speech backend uses it when named explicitly.
+		{ID: "elevenlabs", Label: "ElevenLabs", Kind: KindOpenAI, DefaultBaseURL: "https://api.elevenlabs.io/v1", ConsoleURL: "https://elevenlabs.io/app/settings/api-keys", NeedsKey: true, KeyPrefix: "sk_", EnvKeys: []string{"ELEVENLABS_API_KEY"}},
+
 		// Endpoints whose URL contains an account or resource id, so there is no
 		// usable default. Set them under `baseUrls` in the config.
 		{ID: "cloudflare", Label: "Cloudflare Workers AI", Kind: KindOpenAI, DefaultBaseURL: "", ConsoleURL: "https://dash.cloudflare.com/?to=/:account/ai/workers-ai", NeedsKey: true, EnvKeys: []string{"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_API_KEY"}},

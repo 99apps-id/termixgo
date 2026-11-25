@@ -84,7 +84,10 @@ internal/mcp        MCP client: stdio and HTTP JSON-RPC, tool listing, dispatch,
 internal/lsp        Language Server Protocol client (Content-Length framing,
                     UTF-16 positions) and the per-workspace server manager
 internal/media      image generation and text to speech over provider HTTP APIs,
-                    with the operating system voice as the speech fallback
+                    with the operating system voice as the speech fallback.
+                    ElevenLabs speech is registered as a provider so its key
+                    resolves normally, but it runs only when a caller names
+                    it, never in the default order: it bills per character
 internal/secrets    0600 secret store for API keys and channel tokens
 internal/search     SQLite full-text index over memory, journal and workspace
 internal/skill      SKILL.md discovery and parsing

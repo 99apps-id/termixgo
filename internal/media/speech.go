@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,6 +64,33 @@ func Speak(ctx context.Context, request SpeechRequest, credentials Credentials) 
 	if strings.EqualFold(strings.TrimSpace(request.Model), "system") {
 		wantProvider = "system"
 	}
+	if wantProvider == "" && strings.EqualFold(wantModel, "elevenlabs") {
+		// A bare "elevenlabs" names the provider, not one of its models.
+		wantProvider, wantModel = "elevenlabs", ""
+	}
+	if wantProvider == "elevenlabs" {
+		// ElevenLabs bills per character, so it is deliberately not one of
+		// the speechBackends the default order tries: it runs only when a
+		// caller names it, and a failure is reported rather than retried
+		// against another provider.
+		key, base := credentials("elevenlabs")
+		if key == "" {
+			return Speech{}, "", errors.New("elevenlabs has no key or does not produce speech")
+		}
+		model := wantModel
+		if model == "" {
+			model = defaultElevenLabsModel
+		}
+		voice := strings.TrimSpace(request.Voice)
+		if voice == "" {
+			voice = defaultElevenLabsVoice
+		}
+		clip, err := speakElevenLabs(ctx, model, voice, key, base, request)
+		if err != nil {
+			return Speech{}, "", fmt.Errorf("speech failed: elevenlabs:%s: %v", model, err)
+		}
+		return clip, "elevenlabs:" + model, nil
+	}
 	var failures []string
 	if wantProvider != "system" {
 		for _, backend := range speechBackends {
@@ -106,6 +134,50 @@ func Speak(ctx context.Context, request SpeechRequest, credentials Credentials) 
 	}
 	failures = append(failures, "system: "+err.Error())
 	return Speech{}, "", fmt.Errorf("speech failed: %s", strings.Join(failures, "; "))
+}
+
+// The ElevenLabs defaults. The multilingual model reads Indonesian and
+// English with one voice; a caller can name eleven_flash_v2_5 instead,
+// which bills half the per-character cost.
+const defaultElevenLabsModel = "eleven_multilingual_v2"
+
+// defaultElevenLabsVoice is the premade voice ElevenLabs ships as Rachel.
+// A caller passes any voice id as the request voice to use another.
+const defaultElevenLabsVoice = "21m00Tcm4TlvDq8ikWAM"
+
+// speakElevenLabs calls the ElevenLabs text to speech endpoint, which takes
+// a voice id in the path and the key in a header of its own. The answer is
+// the audio itself.
+func speakElevenLabs(ctx context.Context, model, voice, key, base string, request SpeechRequest) (Speech, error) {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		base = "https://api.elevenlabs.io/v1"
+	}
+	format, outputFormat := elevenLabsFormat(request.Format)
+	payload := map[string]any{"text": request.Text, "model_id": model}
+	endpoint := base + "/text-to-speech/" + url.PathEscape(voice) + "?output_format=" + outputFormat
+	data, err := postJSON(ctx, endpoint, map[string]string{"xi-api-key": key}, payload)
+	if err != nil {
+		return Speech{}, err
+	}
+	if len(data) == 0 {
+		return Speech{}, errors.New("empty audio")
+	}
+	mime, ext := audioType(format)
+	return Speech{Data: data, MIME: mime, Ext: ext}, nil
+}
+
+// elevenLabsFormat maps a requested format onto an ElevenLabs output
+// format. Anything unlisted is answered as mp3.
+func elevenLabsFormat(format string) (string, string) {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "opus":
+		return "opus", "opus_48000_128"
+	case "wav":
+		return "wav", "wav_44100"
+	default:
+		return "mp3", "mp3_44100_128"
+	}
 }
 
 func speakOpenAI(ctx context.Context, model, voice, key, base string, request SpeechRequest) (Speech, error) {

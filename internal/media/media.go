@@ -1,7 +1,8 @@
 // Package media generates images and speech through the providers that offer
 // them: OpenAI and xAI image endpoints, Gemini image and speech models, the
-// OpenAI speech endpoint, and the operating system's own voice as the last
-// resort for speech. Each backend is plain HTTP, so it needs no SDK.
+// OpenAI speech endpoint, ElevenLabs speech when it is named explicitly, and
+// the operating system's own voice as the last resort for speech. Each backend
+// is plain HTTP, so it needs no SDK.
 package media
 
 import (

@@ -6,6 +6,15 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- **ElevenLabs text to speech.** The `text_to_speech` tool can render speech
+  with ElevenLabs once a key is stored (`termixgo secret elevenlabs` or the
+  `ELEVENLABS_API_KEY` environment variable): name it in the call or in the
+  `speechModel` config, for example `elevenlabs:eleven_multilingual_v2`, or
+  `elevenlabs:eleven_flash_v2_5` for half the per-character cost. ElevenLabs
+  is never tried silently as a fallback, because it bills per character.
+
 ## 0.2.13 - 2026-11-25
 
 ### Added
