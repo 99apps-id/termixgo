@@ -32,7 +32,12 @@ func TestGuestRateLimitsDirectionsAndGuests(t *testing.T) {
 		RatePerMinute: 2, OutboundRatePerMinute: 1,
 	}})
 	now := time.Now()
-	if !limiter.AllowInbound("a", now) || !limiter.AllowInbound("a", now) || limiter.AllowInbound("a", now) {
+	for index := 0; index < 2; index++ {
+		if !limiter.AllowInbound("a", now) {
+			t.Fatalf("inbound message %d was refused inside the quota", index+1)
+		}
+	}
+	if limiter.AllowInbound("a", now) {
 		t.Fatal("inbound quota not enforced")
 	}
 	if !limiter.AllowOutbound("a", now) || limiter.AllowOutbound("a", now) {

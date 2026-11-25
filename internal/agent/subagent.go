@@ -416,8 +416,8 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	// final text never says so. Capture it before any retry overwrites the
 	// runner's last-ledger slot.
 	spend.EditedCode = runner.LastLedger.codeEdited()
-	answer, calls := subagentReportSince(session, mark)
-	answer = session.LastAssistantTextSince(mark)
+	_, calls := subagentReportSince(session, mark)
+	answer := session.LastAssistantTextSince(mark)
 	if stopReason != "" && stopReason != "stop" && !(def.ReadOnly && calls == 0 && stopReason == "loop-guard") {
 		return answer, spend, fmt.Errorf("subagent stopped before completing its task (%s)", stopReason)
 	}

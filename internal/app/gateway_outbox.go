@@ -8,6 +8,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/99apps-id/termixgo/internal/secrets"
 )
 
 // gatewayOutbox holds admin-only notifications until a transport confirms send.
@@ -35,6 +37,8 @@ func openGatewayOutbox(path string) (*gatewayOutbox, error) {
 	if err := f.Close(); err != nil {
 		return nil, err
 	}
+	// Best effort: a share that refuses the change must not stop the bot.
+	_ = secrets.RestrictFile(path)
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err

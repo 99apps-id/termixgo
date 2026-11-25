@@ -6,8 +6,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/channel"
 )
 
 func TestDurableInboxRecoveryAndDeduplication(t *testing.T) {
@@ -46,8 +51,11 @@ func TestDurableInboxRecoveryAndDeduplication(t *testing.T) {
 	if count, err := inbox.uncertainCount(); err != nil || count != 1 {
 		t.Fatalf("uncertain=%d err=%v", count, err)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode=%v err=%v", info, err)
+	// Windows does not report unix permission bits; the file is restricted by ACL there.
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("mode=%v err=%v", info, err)
+		}
 	}
 }
 
@@ -190,4 +198,67 @@ func TestDurableInboxMarksPanickedHandlerUncertain(t *testing.T) {
 	if got, err := inbox.uncertainCount(); err != nil || got != 1 {
 		t.Fatalf("uncertain=%d err=%v", got, err)
 	}
+}
+
+// steeringAgent reports a run in flight and records the steer it is handed.
+type steeringAgent struct {
+	*blockingAgent
+	mu     sync.Mutex
+	steers []string
+}
+
+func (a *steeringAgent) IsRunning(channel.Request) bool { return true }
+
+func (a *steeringAgent) Steer(_ channel.Request, text string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.steers = append(a.steers, text)
+	return true
+}
+
+// A message sent while a turn runs reaches the live run as a steer. The
+// durable queue must not hold it back until the turn is over.
+func TestDurableInboxLetsASteerReachARunningTurn(t *testing.T) {
+	api := newRecordingAPI(t)
+	agent := &steeringAgent{blockingAgent: newBlockingAgent()}
+	bot := New("123:abc", agent)
+	bot.client = api.client()
+	bot.Pair(7, 9)
+	inbox, err := openDurableInbox(filepath.Join(t.TempDir(), "inbox.sqlite"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inbox.close()
+	defer func() {
+		select {
+		case <-agent.release:
+		default:
+			close(agent.release)
+		}
+		bot.handlers.Wait()
+	}()
+	update := func(id int64, text string) Update {
+		return Update{UpdateID: id, Message: &Message{Chat: Chat{ID: 7, Type: "private"}, From: &User{ID: 9}, Text: text}}
+	}
+	// The first message holds the chat, so it runs; the second must not wait.
+	if _, ok := bot.serialInboxChat(update(1, "one")); ok {
+		t.Fatalf("a message during a running turn must not be held in the chat queue")
+	}
+	if err := inbox.accept([]Update{update(2, "add a table")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := bot.dispatchQueued(context.Background(), inbox); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		agent.mu.Lock()
+		got := append([]string(nil), agent.steers...)
+		agent.mu.Unlock()
+		if len(got) == 1 && strings.Contains(got[0], "add a table") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("the steer never reached the running turn")
 }

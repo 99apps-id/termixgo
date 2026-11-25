@@ -448,7 +448,7 @@ func (b *Bot) Verify(ctx context.Context) (User, error) {
 // Run polls until the context is cancelled.
 func (b *Bot) Run(ctx context.Context) error {
 	if b.cursorPath == "" {
-		return errors.New("Telegram durable inbox requires a cursor path")
+		return errors.New("the Telegram durable inbox requires a cursor path")
 	}
 	inbox, err := openDurableInbox(b.cursorPath+".inbox.sqlite", b.loadOffset())
 	if err != nil {
@@ -593,6 +593,16 @@ func (b *Bot) dispatchQueued(ctx context.Context, inbox *durableInbox) error {
 	return nil
 }
 
+// queueRequest is the request handleMessage will build for a message, with
+// the admin flag the access policy gives it. IsRunning is keyed by that flag,
+// because an operator and a guest in one chat run on separate sessions.
+func (b *Bot) queueRequest(message *Message) channel.Request {
+	request := b.requestFrom(message)
+	decision := channel.Decide(b.Policy(), request)
+	request.Admin = decision.Admin || b.isOperator(request)
+	return request
+}
+
 func (b *Bot) releaseInboxChat(chatID int64) {
 	b.queueMu.Lock()
 	delete(b.queueBusy, chatID)
@@ -619,21 +629,13 @@ func (b *Bot) serialInboxChat(update Update) (int64, bool) {
 			return 0, false
 		}
 	}
+	// A message sent while this sender's turn is running is a steer, not the
+	// next prompt: runPrompt forwards it to the live run. Holding it in the
+	// queue until the turn ended turned every steer into a second turn.
+	if steerable, ok := b.agent.(interface{ IsRunning(channel.Request) bool }); ok && steerable.IsRunning(b.queueRequest(message)) {
+		return 0, false
+	}
 	return message.Chat.ID, true
-}
-
-// dispatch runs one update handler on its own goroutine.
-//
-// This is what keeps the bot responsive: a prompt runs for minutes, and while
-// it held the poll loop the operator could not send /stop, /status or a
-// correction, which is precisely when those are needed.
-func (b *Bot) dispatch(ctx context.Context, update Update) {
-	b.handlers.Add(1)
-	go func() {
-		defer b.handlers.Done()
-		defer b.finishUpdate(update.UpdateID)
-		b.handleUpdate(ctx, update)
-	}()
 }
 
 // finishUpdate marks an update done and persists the contiguous watermark: the

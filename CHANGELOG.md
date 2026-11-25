@@ -6,6 +6,15 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+### Fixed
+
+- **A message sent while a Telegram turn runs is a steer again.** The durable inbox held
+  every message of a chat until the running turn ended, so a correction typed mid-turn
+  became a second turn instead of reaching the live run. A message from a sender whose
+  turn is running now bypasses the chat queue; everything else is still processed in order.
+- **The durable inbox and the gateway alert queue are access-restricted on Windows.** They
+  were created 0600, which Windows ignores, and hold every update's text.
+
 ## 0.2.12 - 2026-11-24
 
 ### Added

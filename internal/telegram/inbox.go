@@ -10,6 +10,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/99apps-id/termixgo/internal/secrets"
 )
 
 // durableInbox records updates before the next poll can acknowledge them. An
@@ -32,6 +34,10 @@ func openDurableInbox(path string, initialOffset int64) (*durableInbox, error) {
 	if err := file.Close(); err != nil {
 		return nil, err
 	}
+	// The file holds every update's text. 0600 means nothing on Windows, so the
+	// access rules are set the way the secret store sets them.
+	// Best effort: a share that refuses the change must not stop the bot.
+	_ = secrets.RestrictFile(path)
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
@@ -133,7 +139,7 @@ func (i *durableInbox) acceptPolled(updates []Update, polledOffset int64, now ti
 				return false, err
 			}
 			if err == nil && !bytes.Equal(existing, payload) {
-				return false, fmt.Errorf("Telegram update ID collision requires manual review")
+				return false, fmt.Errorf("a Telegram update ID collision requires manual review")
 			}
 		}
 		if _, err = tx.Exec(`INSERT OR IGNORE INTO updates(id,payload,state) SELECT ?,?,? WHERE ? OR ? >= (SELECT offset FROM metadata WHERE id=1)`, update.UpdateID, payload, state, rebase, update.UpdateID); err != nil {
