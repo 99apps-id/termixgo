@@ -44,7 +44,11 @@ type httpClient struct {
 func (c *httpClient) SetAccountID(id string) { c.accountID = strings.TrimSpace(id) }
 
 // SetSessionID records the conversation or client session id.
-func (c *httpClient) SetSessionID(id string) { c.sessionID = strings.TrimSpace(id) }
+func (c *httpClient) SetSessionID(id string) {
+	c.keyMu.Lock()
+	defer c.keyMu.Unlock()
+	c.sessionID = strings.TrimSpace(id)
+}
 
 // SetKeyResolver sets the dynamic key resolver callback.
 func (c *httpClient) SetKeyResolver(fn KeyResolver) { c.resolveKey = fn }
@@ -82,7 +86,12 @@ func (c *httpClient) refreshKey() string {
 }
 
 // SessionID returns the current session ID, or generates a stable binary-style ID.
+// The id lives under keyMu like the key itself: quota fetchers refresh the key
+// on a background goroutine while a stream reads the id, and an unsynchronised
+// pair raced every refresh.
 func (c *httpClient) SessionID() string {
+	c.keyMu.Lock()
+	defer c.keyMu.Unlock()
 	if c.sessionID != "" {
 		return c.sessionID
 	}

@@ -57,7 +57,7 @@ func TestLongHeadingWrapsInsteadOfBeingCut(t *testing.T) {
 func TestLongPlanItemWrapsUnderItsMarker(t *testing.T) {
 	styles := NewStyles(DefaultPalette())
 	title := "Perbarui seluruh dokumentasi pengguna dan pastikan setiap contoh perintah masih berjalan"
-	out := stripANSI(renderPlanBlock(block{kind: blockPlan, plan: []agent.Todo{{Title: title, Status: "pending"}}}, styles, 40))
+	out := stripANSI(renderPlanBlock(block{kind: blockPlan, plan: []agent.Todo{{Title: title, Status: "pending"}}}, styles, 40, 0))
 	noLongerThan(t, out, 40)
 	for _, word := range strings.Fields(title) {
 		if !strings.Contains(out, word) {

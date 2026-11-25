@@ -90,8 +90,15 @@ func (c *copilotClient) Stream(ctx context.Context, req ChatRequest, emit func(S
 	if effort := compatibleEffortFor(c.info.ID, req.Model, req.Effort); effort != "" {
 		payload["reasoning_effort"] = effort
 	}
-	err := openAICli.streamWithURL(ctx, c.baseURL+"/chat/completions", headers, payload, emit)
-	if err != nil && copilotEscalate(err) && copilotSupportsResponses(req.Model) {
+	// Escalation replays the request on a second endpoint, so it may only
+	// happen before anything was emitted: a stream that already delivered
+	// text and then failed would re-deliver that text on the retry.
+	emitted := 0
+	err := openAICli.streamWithURL(ctx, c.baseURL+"/chat/completions", headers, payload, func(event StreamEvent) error {
+		emitted++
+		return emit(event)
+	})
+	if err != nil && emitted == 0 && copilotEscalate(err) && copilotSupportsResponses(req.Model) {
 		copilotMarkResponses(req.Model)
 		return c.streamResponses(ctx, headers, req, emit)
 	}

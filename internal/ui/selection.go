@@ -128,7 +128,23 @@ func (m *Model) mousePoint(msg tea.MouseMsg) (point selPoint, inside bool) {
 }
 
 // handleMouse routes a mouse event to the selection or the smooth scroll.
+// While a modal overlay is open (approval, ask, plan) or another mode owns
+// the screen, mouse gestures must not reach the transcript underneath: a
+// click on a dialog could toggle a transcript block or copy chat text. Wheel
+// scrolling stays available in the transcript pager.
 func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.pendingApproval != nil || m.pendingAsk != nil || m.pendingPlan != nil {
+		return m, nil
+	}
+	if m.current != modeChat && m.current != modeTranscript {
+		return m, nil
+	}
+	if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+		// Wheel in chat scrolls the transcript; in the pager it scrolls the
+		// pager content. Both go through scrollBy against the viewport.
+	} else if m.current != modeChat {
+		return m, nil
+	}
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
 		return m, m.scrollBy(-wheelStepLines)
@@ -143,14 +159,26 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		// A press in the composer starts a partial selection there; the
 		// transcript selection and the Ctrl+A state are dropped so only one
-		// selection is live.
+		// selection is live. The caret follows the click: move to the
+		// clicked line, then the clicked column, so editing continues from
+		// where the operator pointed instead of from the previous position.
 		if m.hintsVisible() && m.inComposer(msg) {
-			m.composerSelAnchor = m.composerPoint(msg)
-			m.composerSelFocus = m.composerSelAnchor
+			point := m.composerPoint(msg)
+			m.composerSelAnchor = point
+			m.composerSelFocus = point
 			m.composerSelActive = true
 			m.composerSelected = false
 			m.selecting = false
 			m.selActive = false
+			if currentLine := m.composer.Line(); currentLine >= 0 {
+				for range point.line - currentLine {
+					m.composer.CursorDown()
+				}
+				for range currentLine - point.line {
+					m.composer.CursorUp()
+				}
+			}
+			m.composer.SetCursor(point.col)
 			m.refresh()
 			return m, nil
 		}

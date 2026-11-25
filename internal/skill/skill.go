@@ -150,8 +150,14 @@ func Create(workspace, name, description string) (Skill, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Skill{}, fmt.Errorf("create skill folder: %w", err)
 	}
-	content := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\n\n# %s\n\nWhen to use this skill, what to inspect, and the expected output.\n",
-		normalised, description, normalised)
+	// The header is marshalled as YAML so a description with a colon,
+	// newline or leading "---" cannot break the frontmatter and corrupt
+	// every later Discover.
+	header, err := yaml.Marshal(Frontmatter{Name: normalised, Description: strings.TrimSpace(description)})
+	if err != nil {
+		return Skill{}, fmt.Errorf("marshal frontmatter: %w", err)
+	}
+	content := delimiter + "\n" + string(header) + delimiter + "\n\n# " + normalised + "\n\nWhen to use this skill, what to inspect, and the expected output.\n"
 	if err := os.WriteFile(document, []byte(content), 0o644); err != nil {
 		return Skill{}, fmt.Errorf("write SKILL.md: %w", err)
 	}

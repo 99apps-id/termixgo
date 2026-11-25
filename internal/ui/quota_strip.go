@@ -137,8 +137,8 @@ func (m *Model) quotaSegment(row app.QuotaRow, detail quotaDetail) string {
 		parts = append(parts, window(row.Weekly, "wk", detail == quotaFull, detail <= quotaMedium))
 	case row.Other != nil:
 		tag := strings.ToLower(strings.TrimSpace(row.OtherName))
-		if len(tag) > 12 {
-			tag = tag[:12]
+		if runes := []rune(tag); len(runes) > 12 {
+			tag = string(runes[:12])
 		}
 		parts = append(parts, window(row.Other, tag, detail == quotaFull, detail <= quotaMedium))
 	}

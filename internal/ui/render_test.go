@@ -182,7 +182,7 @@ func TestAssistantBlockCarriesTheAgentMarker(t *testing.T) {
 func TestRenderPlanBlockRendersEveryStatus(t *testing.T) {
 	styles := NewStyles(DefaultPalette())
 
-	if got := stripANSI(renderPlanBlock(block{kind: blockPlan}, styles, 80)); !strings.Contains(got, "Plan is empty") {
+	if got := stripANSI(renderPlanBlock(block{kind: blockPlan}, styles, 80, 0)); !strings.Contains(got, "Plan is empty") {
 		t.Errorf("an empty plan = %q", got)
 	}
 
@@ -190,7 +190,7 @@ func TestRenderPlanBlockRendersEveryStatus(t *testing.T) {
 		{ID: "1", Title: "done already", Status: "completed"},
 		{ID: "2", Title: "doing now", Status: "in_progress"},
 		{ID: "3", Title: "not yet", Status: "pending"},
-	}}, styles, 80))
+	}}, styles, 80, 0))
 
 	if !strings.Contains(rendered, "Plan (1/3)") {
 		t.Errorf("rendered = %q, want the progress count", rendered)

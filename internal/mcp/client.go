@@ -436,9 +436,13 @@ const mcpToolPageCap = 64
 
 // Tools lists the server's tools, following pagination to the end.
 func (c *Client) Tools(ctx context.Context) ([]Tool, error) {
+	c.mu.Lock()
 	if len(c.tools) > 0 {
-		return c.tools, nil
+		cached := c.tools
+		c.mu.Unlock()
+		return cached, nil
 	}
+	c.mu.Unlock()
 	var all []Tool
 	cursor := ""
 	pages := 0
@@ -467,7 +471,9 @@ func (c *Client) Tools(ctx context.Context) ([]Tool, error) {
 		}
 		cursor = listing.NextCursor
 	}
+	c.mu.Lock()
 	c.tools = all
+	c.mu.Unlock()
 	return all, nil
 }
 

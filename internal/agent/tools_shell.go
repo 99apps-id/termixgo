@@ -56,11 +56,7 @@ func (t *runCommandTool) Run(ctx context.Context, env *Env, args map[string]any)
 		if parts := argList(args, "args", "argv"); len(parts) > 0 {
 			quoted := make([]string, 0, len(parts))
 			for _, part := range parts {
-				if strings.ContainsAny(part, " \t") {
-					quoted = append(quoted, `"`+strings.ReplaceAll(part, `"`, `\"`)+`"`)
-				} else {
-					quoted = append(quoted, part)
-				}
+				quoted = append(quoted, shellQuoteArg(part))
 			}
 			command = strings.Join(quoted, " ")
 		}
@@ -87,6 +83,24 @@ func (t *runCommandTool) Run(ctx context.Context, env *Env, args map[string]any)
 
 // commandTimeoutSecs resolves the command timeout from any dialect key. The
 // ceiling applies to every key: a timeout_ms of a billion is the model
+// shellQuoteArg quotes one argv element for the target interpreter.
+// On POSIX, single quotes are literal: $, backticks and \ never expand.
+// On Windows (PowerShell), quotes are backtick-escaped so a $ or " inside
+// the argument stays literal instead of breaking the command line.
+func shellQuoteArg(arg string) string {
+	if arg == "" {
+		return "\x22\x22"
+	}
+	if runtime.GOOS == "windows" {
+		quoted := strings.ReplaceAll(arg, "\x60", "\x60\x60")
+		quoted = strings.ReplaceAll(quoted, "$", "\x60$")
+		quoted = strings.ReplaceAll(quoted, "\x22", "\x60\x22")
+		return "\x22" + quoted + "\x22"
+	}
+	escaped := strings.ReplaceAll(arg, "'", "'\\''")
+	return "'" + escaped + "'"
+}
+
 // guessing at a unit, not a licence to run effectively forever.
 func commandTimeoutSecs(args map[string]any) int {
 	timeout := argInt(args, "timeout_secs", defaultCommandTimeout, 1, maxCommandTimeout)

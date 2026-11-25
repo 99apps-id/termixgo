@@ -87,6 +87,38 @@ type clipboardPasteMsg struct {
 	err   error
 }
 
+// pastedImageData returns the decoded bytes when the paste is a single
+// data URL carrying image bytes (data:image/png;base64,...). Other CLIs
+// attach that paste as an image, so the composer does the same instead of
+// typing a long base64 blob into the draft. Any decoding failure leaves the
+// paste as ordinary text.
+func pastedImageData(text string) []byte {
+	trimmed := strings.TrimSpace(text)
+	const prefix = "data:image/"
+	if !strings.HasPrefix(strings.ToLower(trimmed), prefix) {
+		return nil
+	}
+	marker := ";base64,"
+	at := strings.Index(trimmed, marker)
+	if at < 0 {
+		return nil
+	}
+	payload := strings.TrimSpace(trimmed[at+len(marker):])
+	if payload == "" || len(payload) > (maxAttachmentImageBytes*4+2) {
+		return nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		if decoded, err = base64.RawStdEncoding.DecodeString(payload); err != nil {
+			return nil
+		}
+	}
+	if len(decoded) == 0 || len(decoded) > maxAttachmentImageBytes {
+		return nil
+	}
+	return decoded
+}
+
 // readClipboardForPaste reads an image or copied image file first and text second.
 func readClipboardForPaste() tea.Msg {
 	data, paths, imgErr := readClipboardImageOrPaths()
@@ -139,6 +171,18 @@ func (m *Model) applyClipboardPaste(msg clipboardPasteMsg) {
 			m.notice = "Attached clipboard image. Delete the placeholder to drop it."
 		}
 	case strings.TrimSpace(msg.text) != "":
+		if image := pastedImageData(msg.text); len(image) > 0 {
+			if len(m.attachments) >= maxAttachments {
+				m.notice = fmt.Sprintf("Attachment limit is %d.", maxAttachments)
+				break
+			}
+			if path, err := savePastedImage(m.app.Workspace(), image); err == nil {
+				if m.attachImagePath(path) {
+					m.notice = "Attached pasted image data. Delete the placeholder to drop it."
+					break
+				}
+			}
+		}
 		if paths := pastedImagePaths(m.app.Workspace(), msg.text); len(paths) > 0 {
 			attached := 0
 			for _, path := range paths {

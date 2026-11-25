@@ -1,6 +1,8 @@
 package channel
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,11 +56,12 @@ func Chunk(text string, limit int) []string {
 	}
 	// A cut inside a fenced block is closed in its chunk and reopened in the
 	// next, so the second message does not render code as prose. The room for
-	// the added fences is reserved up front so no chunk passes the limit.
-	reserve := 0
-	if limit > 64 {
-		// "\n```" closing, plus "```" + a language of up to 32 bytes + "\n".
-		reserve = 4 + 3 + 32 + 1
+	// the added fences is reserved up front so no chunk passes the limit. The
+	// reserve is small enough to always apply, so a small limit cannot be
+	// exceeded by the balancing the large-limit path reserved for.
+	reserve := 40
+	if limit <= reserve {
+		return chunkPlain(trimmed, limit)
 	}
 	return balanceFences(chunkPlain(trimmed, limit-reserve))
 }
@@ -279,8 +282,14 @@ func CleanupOldUploads(uploadDir string, maxAge time.Duration) {
 	}
 }
 
+// maxUploadBytes bounds one accepted upload. Without a cap a guest can
+// fill the workspace with uploads; Telegram itself caps at 20 MB.
+const maxUploadBytes = 20 << 20
+
 // SaveUpload writes data into <workspace>/.termixgo/uploads/<fileName> and
-// prunes stale files older than DefaultUploadRetention.
+// prunes stale files older than DefaultUploadRetention. Two guests uploading
+// the same name would otherwise overwrite each other, so a collision takes
+// the next free numeric suffix.
 func SaveUpload(workspace, rawName string, data []byte) (fileName, relPath string, saved bool) {
 	fileName = filepath.Base(strings.TrimSpace(rawName))
 	if fileName == "." || fileName == "/" || fileName == "" {
@@ -290,14 +299,26 @@ func SaveUpload(workspace, rawName string, data []byte) (fileName, relPath strin
 	if strings.TrimSpace(workspace) == "" {
 		return fileName, relPath, false
 	}
+	if len(data) > maxUploadBytes {
+		return fileName, relPath, false
+	}
 	uploadDir := filepath.Join(workspace, ".termixgo", "uploads")
 	if err := os.MkdirAll(uploadDir, 0o700); err != nil {
 		return fileName, relPath, false
 	}
 	CleanupOldUploads(uploadDir, DefaultUploadRetention)
-	fullPath := filepath.Join(uploadDir, fileName)
-	if err := os.WriteFile(fullPath, data, 0o600); err != nil {
-		return fileName, relPath, false
+	ext := filepath.Ext(fileName)
+	base := strings.TrimSuffix(fileName, ext)
+	for attempt := 0; attempt < 1000; attempt++ {
+		fullPath := filepath.Join(uploadDir, fileName)
+		if _, err := os.Lstat(fullPath); errors.Is(err, os.ErrNotExist) {
+			if err := os.WriteFile(fullPath, data, 0o600); err != nil {
+				return fileName, relPath, false
+			}
+			relPath = filepath.ToSlash(filepath.Join(".termixgo", "uploads", fileName))
+			return fileName, relPath, true
+		}
+		fileName = fmt.Sprintf("%s-%d%s", base, attempt+1, ext)
 	}
-	return fileName, relPath, true
+	return fileName, relPath, false
 }

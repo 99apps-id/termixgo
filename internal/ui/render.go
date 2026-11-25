@@ -232,7 +232,7 @@ func renderBlock(item block, styles Styles, width int, showDetails bool) string 
 	case blockTool:
 		return renderToolBlock(item, styles, width, showDetails || item.expanded)
 	case blockPlan:
-		return renderPlanBlock(item, styles, width)
+		return renderPlanBlock(item, styles, width, 0)
 	case blockNotice:
 		return renderPrefixed(item.text, "  ", styles.Notice, width)
 	case blockError:
@@ -640,12 +640,19 @@ func padOrClip(line string, width int) string {
 	return line
 }
 
-func renderPlanBlock(item block, styles Styles, width int) string {
+// renderPlanBlock renders the plan header plus one row per item. A maxRows of
+// zero means unbounded (the transcript print path). A positive maxRows windows
+// the list for the inline pinned view: the header plus items fit in maxRows
+// rows, and the overflow is named instead of pushing the frame past the
+// terminal.
+func renderPlanBlock(item block, styles Styles, width int, maxRows int) string {
 	if len(item.plan) == 0 {
 		return styles.Dim.Render("  Plan is empty.")
 	}
 	var builder strings.Builder
 	builder.WriteString(styles.Plan.Render(fmt.Sprintf("  Plan (%d/%d)", countDone(item.plan), len(item.plan))))
+	rows := 1
+	hidden := 0
 	for _, todo := range item.plan {
 		mark := "[ ]"
 		style := styles.Dim
@@ -657,10 +664,20 @@ func renderPlanBlock(item block, styles Styles, width int) string {
 			mark = "[x]"
 			style = styles.ToolDone
 		}
-		for _, line := range wrapTodo("    "+mark+" ", todo.Title, width) {
+		itemLines := wrapTodo("    "+mark+" ", todo.Title, width)
+		if maxRows > 0 && rows+len(itemLines) > maxRows {
+			hidden++
+			continue
+		}
+		for _, line := range itemLines {
 			builder.WriteString("\n")
 			builder.WriteString(style.Render(line))
 		}
+		rows += len(itemLines)
+	}
+	if hidden > 0 {
+		builder.WriteString("\n")
+		builder.WriteString(styles.Dim.Render(fmt.Sprintf("  ... %d more", hidden)))
 	}
 	return builder.String()
 }

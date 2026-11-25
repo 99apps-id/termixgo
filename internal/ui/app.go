@@ -143,7 +143,7 @@ type Model struct {
 	quitArmedAt time.Time
 	quitKey     string
 
-	// pastes maps a "[Pasted text #N +X lines]" placeholder to the text it
+	// pastes maps a "[Pasted text #N ~X lines]" placeholder to the text it
 	// stands for; pasteSeq numbers them.
 	pastes   map[string]string
 	pasteSeq int
@@ -1105,6 +1105,8 @@ func isStandaloneNoise(key tea.KeyMsg) (isNoise bool, isPrefix bool) {
 // isMouseNoiseText reports whether a whole input burst is nothing but SGR mouse
 // reports: it carries a digit and a mouse signature ('<' or a terminating M/m)
 // and no other character. A real paste has letters or punctuation and is kept.
+// Spaces are excluded (SGR reports never contain them), so a pasted formula
+// like "1 < 2; 3 M" survives instead of being dropped whole.
 func isMouseNoiseText(text string) bool {
 	hasDigit := false
 	hasSignature := false
@@ -1114,7 +1116,7 @@ func isMouseNoiseText(text string) bool {
 			hasDigit = true
 		case r == '<' || r == 'M' || r == 'm':
 			hasSignature = true
-		case r == '[', r == ']', r == ';', r == ' ', r == '\t', r == '\n', r == '\r':
+		case r == '[', r == ']', r == ';', r == '\t', r == '\n', r == '\r':
 		default:
 			return false
 		}
@@ -1131,12 +1133,23 @@ func isMouseNoiseText(text string) bool {
 // matched: it is indistinguishable from something a coder typed, and this pass
 // must never rewrite an ordinary draft. Catching those is the job of the key
 // gateway, which sees the running report state and can require a signature.
-var composerNoiseRe = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[^\[]|\[<[0-9;:<=>?Mm]*|;?\d+;\d+(?:;\d+)*[Mm]`)
+// The bare-tail arm below therefore requires at least one parameter with two
+// or more digits (a pixel coordinate), so a version-like "v1;2m" survives
+// while a real "1;15M" or "35;106;27M" tail does not.
+var composerNoiseRe = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[^\[]|\[<[0-9;:<=>?Mm]*|;?(?:\d+;\d{2,}(?:;\d+)*|\d{2,};\d+(?:;\d+)*)[Mm]`)
 
 // scrubComposer removes terminal escape noise that reached the composer by any
 // path, including one the key filter cannot see. It only removes escape and
 // mouse-report shapes, so an ordinary draft is untouched.
+//
+// The common case (a long pasted draft with no escape bytes at all) skips the
+// regex entirely: for a large paste the scan is quadratic-ish work on every
+// keystroke, and a clean draft cannot match any arm, so a cheap precheck
+// keeps pasting responsive.
 func (m *Model) scrubComposer() {
+	if !strings.ContainsAny(m.composer.Value(), "\x1b<[") && !strings.Contains(m.composer.Value(), ";") {
+		return
+	}
 	for i := 0; i < 4; i++ {
 		value := m.composer.Value()
 		clean := composerNoiseRe.ReplaceAllString(value, "")
@@ -1388,6 +1401,14 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.armQuit("ctrl+c", "Ctrl+C")
 	}
 
+	// A raw terminal escape fragment is never text the operator typed, and
+	// it must be dropped before any selection handling below: a split
+	// report arriving during a Ctrl+A select-all otherwise clears the whole
+	// draft before the noise filter ever sees it.
+	if m.isTerminalNoise(key) {
+		return m, nil
+	}
+
 	// Any typing, movement or shortcut drops an active transcript or
 	// composer drag selection so new input is not highlighted.
 	if m.selecting || m.selActive || m.composerSelActive {
@@ -1405,11 +1426,6 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.refresh()
 			return m, nil
 		}
-	}
-
-	// A raw terminal escape fragment is never text the operator typed.
-	if m.isTerminalNoise(key) {
-		return m, nil
 	}
 
 	// A dialog Escape is as ambiguous as a chat one: a split mouse report
@@ -1452,8 +1468,11 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// A terminal delivers a dragged image file as a bracketed paste of its
 	// path. Attaching it, rather than typing the path, is what makes drag and
-	// drop work.
-	if key.Paste {
+	// drop work. A long run of runes without the Paste flag (a split burst,
+	// an old terminal, an IME commit) is still a paste rather than typed
+	// text, so it collapses like one.
+	burstPaste := len(key.Runes) > 1 && !key.Alt && !m.isTerminalNoise(key)
+	if key.Paste || burstPaste {
 		if len(key.Runes) == 0 {
 			// Some terminals emit an empty bracketed paste when Ctrl+V is
 			// pressed while the clipboard holds an image rather than text.
@@ -1476,6 +1495,18 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.refresh()
 			return m, nil
 		}
+		if image := pastedImageData(string(key.Runes)); len(image) > 0 {
+			if len(m.attachments) < maxAttachments {
+				if path, err := savePastedImage(m.app.Workspace(), image); err == nil && m.attachImagePath(path) {
+					m.notice = "Attached pasted image data. Delete the placeholder to drop it."
+				}
+			} else {
+				m.notice = fmt.Sprintf("Attachment limit is %d.", maxAttachments)
+			}
+			m.updateSlashMatches()
+			m.refresh()
+			return m, nil
+		}
 		if text := string(key.Runes); shouldCollapsePaste(text) && !isMouseNoiseText(text) {
 			m.collapsePaste(text)
 			m.updateSlashMatches()
@@ -1485,6 +1516,14 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key.String() {
+	case "shift+enter", "ctrl+j":
+		// Shift+Enter inserts a newline without sending. Where the
+		// terminal does not send Shift+Enter distinctly, Ctrl+J (LF)
+		// also inserts one; a bare Enter still submits.
+		m.composer.InsertString("\n")
+		m.updateSlashMatches()
+		m.refresh()
+		return m, nil
 	case "ctrl+v", "alt+v", "ctrl+shift+v":
 		// A terminal paste carries text only, so an image has to be read from
 		// the host clipboard. Alt+V exists because Windows Terminal keeps
@@ -2873,13 +2912,26 @@ func (m *Model) viewStatus() string {
 	if count := m.queuedCount(); count > 0 {
 		identity = append(identity, m.styles.Dim.Render(fmt.Sprintf("queue %d", count)))
 	}
-	// A scrolled-up transcript stops following new output, so the status names the
-	// way back instead of leaving the operator wondering why the view went still.
-	if !m.viewport.AtBottom() {
-		identity = append(identity, m.styles.Notice.Render("scrolled (End follows)"))
+	// The queue count is live state, not identity: keep it ahead of the
+	// static parts so it survives the drop loop even on narrow terminals.
+	if count := m.queuedCount(); count > 0 {
+		for i, part := range identity {
+			if strings.Contains(stripANSI(part), "queue "+fmt.Sprint(count)) {
+				identity = append(append([]string{part}, identity[:i]...), identity[i+1:]...)
+				break
+			}
+		}
 	}
+	// Transient notices lead the identity: they are the one thing the
+	// operator must read now, so a narrow terminal keeps them instead of
+	// sacrificing them to the session id. A scrolled-up transcript stops
+	// following new output, so the status names the way back too. The
+	// notice is length-capped so it cannot starve the queue count behind it.
 	if m.notice != "" {
-		identity = append(identity, m.styles.Notice.Render(m.notice))
+		identity = append([]string{m.styles.Notice.Render(truncate(sanitizeText(m.notice), 40))}, identity...)
+	}
+	if !m.viewport.AtBottom() {
+		identity = append([]string{m.styles.Notice.Render("scrolled (End follows)")}, identity...)
 	}
 	return m.composeStatus(identity, vitals)
 }
@@ -2982,7 +3034,7 @@ func (m *Model) viewHints() string {
 			text = fmt.Sprintf(" %s working (%s) | Enter steers the run | Ctrl+O details | Esc stop | Ctrl+C copy | Ctrl+X quit", m.spin.View(), elapsed)
 		}
 	} else {
-		text = " Enter send | " + imagePasteKey() + " image | Up history | Ctrl+R search | Shift+Tab " + string(m.appConfig().ApprovalMode) + " | Esc×2 rewind | Ctrl+O transcript | Ctrl+L model | Ctrl+X quit"
+		text = " Enter send | Shift+Enter newline | " + imagePasteKey() + " image | Up history | Ctrl+R search | Shift+Tab " + string(m.appConfig().ApprovalMode) + " | Esc×2 rewind | Ctrl+O transcript | Ctrl+L model | Ctrl+X quit"
 	}
 	// Pending files own the first columns of the hint row: what will be sent
 	// matters more than the key reminder, and the row never grows, so the

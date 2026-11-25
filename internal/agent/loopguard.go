@@ -84,16 +84,28 @@ func repeatNudge(tool string, attempt int) string {
 // noteSuccess clears the repetition state when a call or a step moved the
 // work forward. A rerun that succeeds is progress, not a loop: verification
 // often repeats a read or a check legitimately, and the old counter let a
-// successful rerun arm the tripwire for the next one.
-func (g *loopGuard) noteSuccess() {
+// successful rerun arm the tripwire for the next one. Only the succeeded
+// signature is removed from the failure memory: an unrelated success must
+// not make a known-bad call retriable again.
+func (g *loopGuard) noteSuccess(signature string) {
 	g.repeatCount = 0
 	g.lastCall = ""
-	clear(g.failedCalls)
+	if g.failedCalls != nil {
+		delete(g.failedCalls, signature)
+	}
 }
 
 func (g *loopGuard) noteFailure(signature string) {
-	if g.failedCalls == nil || len(g.failedCalls) >= 32 {
+	if g.failedCalls == nil {
 		g.failedCalls = make(map[string]struct{})
+	}
+	if len(g.failedCalls) >= 32 {
+		// Evict one entry instead of resetting the whole map, so one
+		// verbose failure streak cannot re-enable every other failure.
+		for key := range g.failedCalls {
+			delete(g.failedCalls, key)
+			break
+		}
 	}
 	g.failedCalls[signature] = struct{}{}
 }

@@ -90,7 +90,8 @@ func scrubbedEnvKey(name string) bool {
 		}
 	}
 	if strings.HasSuffix(upper, "_API_KEY") || strings.HasSuffix(upper, "_API_TOKEN") ||
-		strings.HasSuffix(upper, "_AUTH_TOKEN") || strings.HasSuffix(upper, "_SECRET") ||
+		strings.HasSuffix(upper, "_AUTH_TOKEN") || strings.HasSuffix(upper, "_TOKEN") ||
+		strings.HasSuffix(upper, "_KEY") || strings.HasSuffix(upper, "_SECRET") ||
 		strings.HasSuffix(upper, "_PRIVATE_KEY") {
 		return true
 	}

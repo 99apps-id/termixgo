@@ -884,8 +884,21 @@ func (s *Session) Save() error {
 		return fmt.Errorf("encode session: %w", err)
 	}
 	path := filepath.Join(dir, state.ID+".json")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, appendNewline(data), 0o600); err != nil {
+	// The temp name is unique per call: Save is called from the run loop and
+	// the UI persist hook at overlapping times, and one fixed .tmp name let a
+	// second writer clobber the first one's JSON mid-rename.
+	tmpFile, tmpErr := os.CreateTemp(dir, state.ID+"-*.tmp")
+	if tmpErr != nil {
+		return fmt.Errorf("write session: %w", tmpErr)
+	}
+	tmp := tmpFile.Name()
+	if _, err := tmpFile.Write(appendNewline(data)); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("write session: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmp)
 		return fmt.Errorf("write session: %w", err)
 	}
 	// The mode above only counts on POSIX. On Windows a plain write inherits

@@ -219,21 +219,14 @@ func (j *ErrorJournal) readAllLocked() ([]journalEntry, error) {
 	defer f.Close()
 	var entries []journalEntry
 	reader := bufio.NewReaderSize(f, 64*1024)
-	overflow := false
 	for {
 		line, readErr := reader.ReadSlice('\n')
 		if readErr == bufio.ErrBufferFull {
-			// Line longer than the buffer: drain the rest of it and skip.
-			overflow = true
+			// Line longer than the buffer: drain the rest of it and skip only
+			// that line. The drain consumes the newline, so the next read is
+			// the following entry and must not be dropped with it.
 			for readErr == bufio.ErrBufferFull {
 				_, readErr = reader.ReadSlice('\n')
-			}
-			continue
-		}
-		if overflow {
-			overflow = false
-			if readErr != nil {
-				break
 			}
 			continue
 		}

@@ -233,9 +233,21 @@ func (m *Model) inlineView() string {
 	}
 	if m.running && m.app != nil {
 		// A plan with every item done is history, not status: the final list is
-		// already in the transcript.
+		// already in the transcript. The pinned plan is windowed: an unbounded
+		// plan makes the bottom block taller than the terminal, and the frame
+		// fit then drops the top instead of the plan.
 		if todos := m.app.Todos().Items(); len(todos) > 0 && agent.PruneFinished(todos) != nil {
-			if planView := strings.TrimSpace(renderPlanBlock(block{kind: blockPlan, plan: todos}, m.styles, m.renderWidth())); planView != "" {
+			status := m.viewStatus()
+			composer := m.viewComposer() + "\n" + m.viewHints()
+			reserved := lipgloss.Height(status) + lipgloss.Height(composer) + 2
+			if overlay != "" {
+				reserved += lipgloss.Height(overlay)
+			} else if strip := m.viewQuota(); strip != "" {
+				reserved += lipgloss.Height(strip)
+			}
+			maxRows := max(1, m.height-reserved)
+			shown := renderPlanBlock(block{kind: blockPlan, plan: todos}, m.styles, m.renderWidth(), maxRows)
+			if planView := strings.TrimSpace(shown); planView != "" {
 				bottom = append(bottom, planView)
 			}
 		}

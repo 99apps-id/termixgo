@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"encoding/base64"
 	"image"
 	"image/color"
 	"image/png"
@@ -84,6 +85,25 @@ func TestPastedImagePathIsAttached(t *testing.T) {
 	}
 	if strings.Contains(updated.composer.Value(), path) || !strings.Contains(updated.composer.Value(), "[Image #1]") {
 		t.Fatalf("composer = %q", updated.composer.Value())
+	}
+}
+
+// Pasting a data URL holding image bytes attaches the image, like a
+// clipboard screenshot does.
+func TestDataURLImagePasteIsAttached(t *testing.T) {
+	model := chatModel(t)
+	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngData(t))
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(url), Paste: true})
+	updated := next.(*Model)
+	if len(updated.attachments) != 1 || updated.attachments[0].Placeholder != "[Image #1]" {
+		t.Fatalf("attachments = %+v", updated.attachments)
+	}
+	if strings.Contains(updated.composer.Value(), "data:image") {
+		t.Fatalf("composer = %q, want the placeholder", updated.composer.Value())
+	}
+	// A non-image data URL stays text.
+	if got := pastedImageData("data:text/plain;base64," + base64.StdEncoding.EncodeToString([]byte("hi"))); got != nil {
+		t.Fatalf("non-image data URL must stay text, got %d bytes", len(got))
 	}
 }
 

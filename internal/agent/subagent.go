@@ -288,6 +288,21 @@ func subagentRegistry(subType string, depth int) *Registry {
 	return NewRegistry(tools...)
 }
 
+// cloneAllowed copies an approval map. The child inherits the answers, not
+// the map itself: the parent turn and a background child both write these
+// maps on DecisionAllowSession, so a shared instance is a concurrent-map-write
+// crash (or a leaked grant).
+func cloneAllowed(in map[string]bool) map[string]bool {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]bool, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
 // subagentPolicy is the approval policy a nested run gets.
 //
 // It inherits the operator's answers, not just the mode. A policy built from the
@@ -302,8 +317,8 @@ func subagentPolicy(parent *Env) *ApprovalPolicy {
 	}
 	return &ApprovalPolicy{
 		Mode:           ApprovalModeOrDefault(parent.Config),
-		AlwaysAllowed:  parent.AlwaysAllowed,
-		SessionAllowed: parent.SessionAllowed,
+		AlwaysAllowed:  cloneAllowed(parent.AlwaysAllowed),
+		SessionAllowed: cloneAllowed(parent.SessionAllowed),
 	}
 }
 
@@ -318,6 +333,9 @@ func subagentPolicy(parent *Env) *ApprovalPolicy {
 // delegationDepthExceeded reports whether a nested run would pass the depth an
 // agent configured. Zero means the runner's own cap is the only one.
 func delegationDepthExceeded(parent *Env) error {
+	if parent.Depth >= MaxSubagentDepth {
+		return fmt.Errorf("subagents cannot nest more than %d deep", MaxSubagentDepth)
+	}
 	if parent.DelegationMaxDepth > 0 && parent.Depth+1 > parent.DelegationMaxDepth {
 		return fmt.Errorf("delegation depth limit reached (%d)", parent.DelegationMaxDepth)
 	}
@@ -325,6 +343,9 @@ func delegationDepthExceeded(parent *Env) error {
 }
 
 func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model provider.Model, subType, prompt string, maxSteps int) (string, SubagentSpend, error) {
+	if parent != nil && parent.Depth >= MaxSubagentDepth {
+		return "", SubagentSpend{}, fmt.Errorf("subagents cannot nest more than %d deep", MaxSubagentDepth)
+	}
 	def := LookupSubagent(subType)
 	if client == nil {
 		return "", SubagentSpend{}, fmt.Errorf("no provider client is available for a subagent; configure a provider key first")
@@ -367,6 +388,9 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	if err := delegationDepthExceeded(parent); err != nil {
 		return "", SubagentSpend{}, err
 	}
+	// The child inherits the answers, not the maps: the parent turn and a
+	// background child both write SessionAllowed/AlwaysAllowed when the
+	// operator answers a gate, so sharing the instances would race.
 	child := &Env{
 		Workspace:             parent.Workspace,
 		AgentName:             parent.AgentName,
@@ -382,8 +406,8 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		Memory:                parent.Memory,
 		Todos:                 NewTodoStore(),
 		Trusted:               parent.Trusted,
-		SessionAllowed:        parent.SessionAllowed,
-		AlwaysAllowed:         parent.AlwaysAllowed,
+		SessionAllowed:        cloneAllowed(parent.SessionAllowed),
+		AlwaysAllowed:         cloneAllowed(parent.AlwaysAllowed),
 		Depth:                 parent.Depth + 1,
 		Emit: func(event Event) {
 			if event.Kind == EventTurnEnd {

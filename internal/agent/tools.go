@@ -268,6 +268,7 @@ func DefaultRegistry() *Registry {
 		&portProbeTool{},
 		&browserOpenTool{},
 		&renderMermaidTool{},
+		&renderMarkdownTool{},
 		&browserScreenshotTool{},
 		&browserDumpDOMTool{},
 		&browserSessionOpenTool{},

@@ -114,6 +114,7 @@ func clipboardReadCommands() []clipboardCommand {
 		return []clipboardCommand{{name: "pbpaste"}}
 	default:
 		return []clipboardCommand{
+			{name: "wl-paste", args: []string{"--no-newline", "--type", "text/plain"}},
 			{name: "wl-paste", args: []string{"--no-newline"}},
 			{name: "xclip", args: []string{"-selection", "clipboard", "-o"}},
 			{name: "xsel", args: []string{"--clipboard", "--output"}},
@@ -196,22 +197,26 @@ func readClipboardImage() ([]byte, error) {
 	default:
 		wl, err := exec.LookPath("wl-paste")
 		if err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), clipboardReadTimeout)
-			command := exec.CommandContext(ctx, wl, "--no-newline", "--type", "image/png")
-			output, runErr := command.Output()
-			cancel()
-			if runErr == nil && len(output) > 0 {
-				return output, nil
+			for _, mime := range []string{"image/png", "image/jpeg"} {
+				ctx, cancel := context.WithTimeout(context.Background(), clipboardReadTimeout)
+				command := exec.CommandContext(ctx, wl, "--no-newline", "--type", mime)
+				output, runErr := command.Output()
+				cancel()
+				if runErr == nil && len(output) > 0 {
+					return output, nil
+				}
 			}
 		}
 		xclip, err := exec.LookPath("xclip")
 		if err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), clipboardReadTimeout)
-			command := exec.CommandContext(ctx, xclip, "-selection", "clipboard", "-t", "image/png", "-o")
-			output, runErr := command.Output()
-			cancel()
-			if runErr == nil && len(output) > 0 {
-				return output, nil
+			for _, mime := range []string{"image/png", "image/jpeg"} {
+				ctx, cancel := context.WithTimeout(context.Background(), clipboardReadTimeout)
+				command := exec.CommandContext(ctx, xclip, "-selection", "clipboard", "-t", mime, "-o")
+				output, runErr := command.Output()
+				cancel()
+				if runErr == nil && len(output) > 0 {
+					return output, nil
+				}
 			}
 		}
 		return nil, fmt.Errorf("no clipboard image reader found: install wl-clipboard (Wayland) or xclip (X11), or pass the image to /attach")

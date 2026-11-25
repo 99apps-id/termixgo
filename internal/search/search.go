@@ -73,6 +73,10 @@ type Store struct {
 	// queryCache stores recent query results so repeated searches stay fast
 	// without hitting SQLite again.
 	queryCache map[string][]Result
+	// walkedPaths records the workspace-relative files the walk has ever
+	// indexed, so the next walk can remove the ones that vanished without
+	// touching documents indexed by hand.
+	walkedPaths map[string]bool
 	// workspaceFileCap limits how many workspace files are indexed in one
 	// refresh, which keeps a search from spending minutes walking a huge tree.
 	workspaceFileCap int
@@ -563,10 +567,17 @@ func (s *Store) indexWorkspace() {
 		cap = defaultWorkspaceFileCap
 	}
 	_ = filepath.WalkDir(s.root, func(path string, d os.DirEntry, err error) error {
-		if len(files) >= cap {
-			return filepath.SkipDir
-		}
 		if err != nil {
+			return nil
+		}
+		if len(files) >= cap {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			// A file is not a directory: returning SkipDir here would skip
+			// the rest of its containing folder and misapply the cap
+			// per-directory. The cap is a global budget, so the walk just
+			// stops collecting files instead of skipping a folder.
 			return nil
 		}
 		if d.IsDir() {
@@ -591,12 +602,42 @@ func (s *Store) indexWorkspace() {
 		return nil
 	})
 
+	seen := make(map[string]bool, len(files))
 	for _, path := range files {
 		data, err := readIndexFile(path)
 		if err != nil {
 			continue
 		}
 		rel, _ := filepath.Rel(s.root, path)
+		seen[rel] = true
 		_ = s.Index("workspace", rel, filepath.Base(path), clampIndexBytes(string(data)))
+	}
+	// A file the walk found before and no longer finds is a ghost: an empty
+	// body is the only other delete path, and a deleted file's body is never
+	// read again. Only paths the walk itself has previously seen are swept,
+	// so documents a caller indexed by hand are never touched.
+	s.mu.Lock()
+	var stale []string
+	for stored := range s.walkedPaths {
+		if !seen[stored] {
+			stale = append(stale, stored)
+		}
+	}
+	if s.walkedPaths == nil {
+		s.walkedPaths = make(map[string]bool, len(seen))
+	} else {
+		for stored := range s.walkedPaths {
+			if !seen[stored] {
+				delete(s.walkedPaths, stored)
+			}
+		}
+	}
+	for stored := range seen {
+		s.walkedPaths[stored] = true
+	}
+	s.queryCache = nil
+	s.mu.Unlock()
+	for _, stored := range stale {
+		_ = s.Remove("workspace", stored)
 	}
 }

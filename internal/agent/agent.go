@@ -519,7 +519,7 @@ runLoop:
 				// A call that moved the work forward clears the repetition state:
 				// reruns that succeed are progress, and verification legitimately
 				// repeats reads and checks.
-				guard.noteSuccess()
+				guard.noteSuccess(signature)
 			}
 			if !result.IsError && taskJustCompleted(before, r.todoSnapshot()) {
 				pendingVerify = ledger.BuildVerifyNudge(nudges, false)

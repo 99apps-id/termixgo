@@ -7,14 +7,18 @@ import (
 )
 
 // A paste at or above these sizes is collapsed to a placeholder in the
-// composer, the way Claude Code shows "[Pasted text #1 +42 lines]". The model
+// composer, the way Claude Code shows "[Pasted text #1 ~42 lines]". The model
 // still receives the whole text; the composer and the transcript stay short.
+// The line threshold is kept low on purpose: a pasted paragraph of four or
+// more lines is exactly the bulk an operator does not want to stare at.
 const (
-	pasteCollapseLines = 6
-	pasteCollapseChars = 1000
+	pasteCollapseLines = 4
+	pasteCollapseChars = 280
 )
 
-var pastePlaceholderPattern = regexp.MustCompile(`\[Pasted text #\d+(?: \+\d+ lines)?\]`)
+// The pattern also matches the older "+42 lines" spelling so a transcript
+// saved in that shape still expands.
+var pastePlaceholderPattern = regexp.MustCompile(`\[Pasted text #\d+(?: [~+]\d+ lines)?\]`)
 
 // shouldCollapsePaste reports whether a paste is long enough to collapse.
 func shouldCollapsePaste(text string) bool {
@@ -29,7 +33,7 @@ func (m *Model) collapsePaste(text string) {
 	}
 	m.pasteSeq++
 	lines := strings.Count(strings.TrimRight(text, "\n"), "\n") + 1
-	placeholder := fmt.Sprintf("[Pasted text #%d +%d lines]", m.pasteSeq, lines)
+	placeholder := fmt.Sprintf("[Pasted text #%d ~%d lines]", m.pasteSeq, lines)
 	m.pastes[placeholder] = text
 	m.composer.InsertString(placeholder)
 }
