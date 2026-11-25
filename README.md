@@ -227,6 +227,7 @@ termixgo trust on                         # trust this folder
 termixgo doctor                           # show what is configured
 termixgo stats --models 5 --days 30       # cost, tokens, tools and models across your sessions
 termixgo sessions list --limit 10         # recent sessions with cost, tokens and file changes
+termixgo sessions list --json             # export the same session estimates as JSON
 ```
 
 Every launch starts a fresh session. To continue an earlier one, use
@@ -303,7 +304,7 @@ tokens, the prompt-cache hit rate (`cache 87%`) and the spend.
 | Key | Action |
 | --- | --- |
 | `Enter` | send; while a turn runs, steer it |
-| `Ctrl+J` / `Alt+Enter` | insert a newline |
+| `Shift+Enter` / `Ctrl+J` / `Alt+Enter` | insert a newline |
 | `Tab` | complete a slash command or an `@file` mention |
 | `Up` / `Down` | walk persistent prompt history |
 | `Ctrl+R` | reverse-i-search across prompt history (`Tab` edit, `Enter` run, `Esc` cancel) |
@@ -324,7 +325,14 @@ more than a third of the window).
 
 While a turn runs, `Enter` steers it: the message is folded into the running
 turn at its next step so you can change course without stopping it. A slash
-command typed mid-turn is queued and runs when the turn ends.
+command typed mid-turn is queued and runs when the turn ends. A follow-up that
+arrives too late for the current turn runs next. Long pasted text appears as an
+expandable placeholder, and pasted image data URLs can become attachments.
+
+To share a report, ask the agent to use `render_markdown` on a Markdown file in
+the workspace or on report text. The tool writes a standalone HTML preview with
+tables, images, links and Mermaid diagrams. Set `open_browser=false` to write
+the preview without opening it. Browser previews are available to operators.
 
 ### Usage left
 
@@ -1850,6 +1858,20 @@ Interactive in-chat slash commands (`/models`, `/model <name>`, `/status`,
 `/new`, `/stop`, `/diff`, `/help`) work directly in WhatsApp and Telegram,
 automatically adjusting output language based on caller country code (+62
 Indonesian, international English).
+
+### Review interrupted Telegram updates
+
+When the daemon stops mid-turn, the durable Telegram inbox holds the update
+for review. Check the chat for replies or side effects before dropping it.
+
+```sh
+termixgo channel inbox list --account default
+termixgo channel inbox list --account default --json
+termixgo channel inbox drop 123456 --account default
+```
+
+Use an update ID from `list`. The `all` argument clears the interrupted updates
+for the selected account. Queued and running updates stay in the inbox.
 
 ## License
 
