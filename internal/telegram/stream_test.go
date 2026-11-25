@@ -100,6 +100,9 @@ func TestStreamLiveTextDeltasAndFinalization(t *testing.T) {
 	if !strings.Contains(final, "<b>world</b>") || !strings.Contains(final, "<pre><code class=\"language-go\">") {
 		t.Errorf("final message missing expected HTML formatting: %q", final)
 	}
+	if !strings.Contains(final, "Read main.go\n\nHello") || strings.Contains(final, "reasoning...") {
+		t.Errorf("final message must retain the tool but not reasoning deltas: %q", final)
+	}
 }
 
 func TestStreamMultiMessageOverflow(t *testing.T) {
@@ -326,5 +329,13 @@ func TestEnrichedMarkdownTelegram(t *testing.T) {
 	// Multiplication with spaces must not become italics.
 	if math := markdownToTelegramHTML("2 * 3 * 4"); math != "2 * 3 * 4" {
 		t.Errorf("math expression got mangled: %q", math)
+	}
+}
+
+func TestTelegramMarkdownParagraphsAndListVariants(t *testing.T) {
+	input := "#hashtag\r\n\r\nFirst paragraph.\r\n\r\n* *italic*\r\n  + **bold**\r\n  3) ***both*** \U0001F680"
+	want := "#hashtag\n\nFirst paragraph.\n\n• <i>italic</i>\n  • <b>bold</b>\n  3. <b><i>both</i></b> \U0001F680"
+	if got := markdownToTelegramHTML(input); got != want {
+		t.Fatalf("Markdown = %q, want %q", got, want)
 	}
 }
