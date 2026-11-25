@@ -33,6 +33,19 @@ usage figures are samples; everything around the model (the layout, the tool
 steps, the approval dialogs, the diffs) is the program itself. The capture
 kit is in [`scripts/screenshots/`](scripts/screenshots/).
 
+### Termixgo 0.2.13
+
+These two captures come from the released Linux x64 binary running in tmux
+with a demo workspace.
+
+<p><img src="docs/screenshots/14-v0213-composer.png" width="880" alt="Termixgo 0.2.13 shows a three-line draft in the terminal composer"></p>
+
+Use Ctrl+J or Shift+Enter to add a line before sending the draft.
+
+<p><img src="docs/screenshots/15-v0213-command-palette.png" width="880" alt="Termixgo 0.2.13 command palette filtered to sessions"></p>
+
+Type a bare slash, press Enter, and search for `sessions` to find session commands.
+
 ### First run and login
 
 <p><img src="docs/screenshots/01-setup-provider.png" width="880" alt="First run: the setup wizard asks for a provider and marks which need an API key and which use a login"></p>
