@@ -114,11 +114,29 @@ func TestGuestRateLimitRefusesTheSecondMessage(t *testing.T) {
 	message := &Message{Chat: Chat{ID: 7, Type: "private"}, From: &User{ID: 42}, Text: "halo"}
 	bot.handleMessage(context.Background(), message)
 	bot.handleMessage(context.Background(), message)
+	bot.handleMessage(context.Background(), message)
 
 	if agent.promptCount() != 1 {
 		t.Errorf("the second message must be throttled, prompts = %d", agent.promptCount())
 	}
 	if reply := lastText(t, api, "sendMessage"); !strings.Contains(reply, "Terlalu banyak") {
 		t.Errorf("a throttled guest must be told so, got %q", reply)
+	}
+	warnings := 0
+	for _, call := range api.calls("sendMessage") {
+		if text, _ := call["text"].(string); strings.Contains(text, "Terlalu banyak") {
+			warnings++
+		}
+	}
+	if warnings != 1 {
+		t.Fatalf("warnings = %d, want 1", warnings)
+	}
+	message.Text = "/stop"
+	bot.handleMessage(context.Background(), message)
+	agent.mu.Lock()
+	stops := agent.stopCalls
+	agent.mu.Unlock()
+	if stops != 1 {
+		t.Fatalf("/stop blocked by guest rate limit: %d", stops)
 	}
 }

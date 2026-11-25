@@ -123,10 +123,11 @@ type Bot struct {
 	pairing *channel.PairingStore
 	// selfID and username identify the bot itself, which is what a group
 	// mention is matched against.
-	selfID   int64
-	username string
+	selfID    int64
+	username  string
+	lifecycle func(string)
 	// limiter bounds how fast one guest sender may post.
-	limiter *channel.RateLimiter
+	limiter *channel.GuestRateLimits
 
 	offset int64
 	// cursorPath, when set, is where the last confirmed update id is kept so a
@@ -141,6 +142,10 @@ type Bot struct {
 	offsetMu  sync.Mutex
 	persisted int64
 	inflight  map[int64]bool
+	inboxMu   sync.RWMutex
+	inbox     *durableInbox
+	queueMu   sync.Mutex
+	queueBusy map[int64]bool
 
 	// handlers tracks in-flight update handlers so shutdown waits for them
 	// instead of leaving a goroutine writing to a dead client.
@@ -259,7 +264,7 @@ func (b *Bot) SetAccount(name string, policy config.ChannelAccount, pairing *cha
 	b.accountName = strings.TrimSpace(name)
 	b.policy = policy
 	b.pairing = pairing
-	b.limiter = channel.ForAccount(policy)
+	b.limiter = channel.NewGuestRateLimits(policy)
 	b.identityMu.Unlock()
 }
 
@@ -376,6 +381,25 @@ func (b *Bot) logf(format string, args ...any) {
 	}
 }
 
+// SetLifecycleObserver observes sustained polling failures and recovery.
+func (b *Bot) SetLifecycleObserver(observer func(string)) {
+	b.identityMu.Lock()
+	b.lifecycle = observer
+	b.identityMu.Unlock()
+}
+
+func (b *Bot) reportLifecycle(ctx context.Context, state string) {
+	if ctx.Err() != nil {
+		return
+	}
+	b.identityMu.RLock()
+	observer := b.lifecycle
+	b.identityMu.RUnlock()
+	if observer != nil {
+		observer(state)
+	}
+}
+
 // SetCursorPath records where the confirmed update id is persisted. The file is
 // scoped to one bot by the caller, so two bots never share a cursor.
 func (b *Bot) SetCursorPath(path string) { b.cursorPath = path }
@@ -423,21 +447,35 @@ func (b *Bot) Verify(ctx context.Context) (User, error) {
 
 // Run polls until the context is cancelled.
 func (b *Bot) Run(ctx context.Context) error {
-	// Handlers may outlive a poll iteration; wait for them on the way out so
-	// a stopping bot does not keep working in the background.
-	defer b.handlers.Wait()
-
-	// Resume from the last confirmed update so a restart does not replay the
-	// prompts Telegram still holds.
-	b.offsetMu.Lock()
-	if b.offset == 0 {
-		b.offset = b.loadOffset()
+	if b.cursorPath == "" {
+		return errors.New("Telegram durable inbox requires a cursor path")
 	}
-	b.persisted = b.offset
-	if b.inflight == nil {
-		b.inflight = map[int64]bool{}
+	inbox, err := openDurableInbox(b.cursorPath+".inbox.sqlite", b.loadOffset())
+	if err != nil {
+		return fmt.Errorf("open Telegram durable inbox: %w", err)
 	}
-	b.offsetMu.Unlock()
+	ctx, cancel := context.WithCancel(ctx)
+	b.inboxMu.Lock()
+	b.inbox = inbox
+	b.inboxMu.Unlock()
+	defer func() {
+		cancel()
+		b.handlers.Wait()
+		b.inboxMu.Lock()
+		b.inbox = nil
+		if err := inbox.close(); err != nil {
+			b.logf("close durable inbox: %v", err)
+		}
+		b.inboxMu.Unlock()
+	}()
+	if count, err := inbox.uncertainCount(); err != nil {
+		return fmt.Errorf("read uncertain Telegram updates: %w", err)
+	} else if count > 0 {
+		b.logf("durable inbox contains %d interrupted update(s) requiring manual review", count)
+	}
+	if err := b.dispatchQueued(ctx, inbox); err != nil {
+		return fmt.Errorf("recover Telegram inbox: %w", err)
+	}
 
 	commands := []BotCommand{
 		{Command: "run", Description: "Run a prompt with live progress"},
@@ -458,41 +496,130 @@ func (b *Bot) Run(ctx context.Context) error {
 	}
 
 	backoff := 3 * time.Second
+	failures := 0
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		b.offsetMu.Lock()
-		offset := b.offset
-		b.offsetMu.Unlock()
+		offset, err := inbox.pollOffset(time.Now())
+		if err != nil {
+			return fmt.Errorf("read Telegram inbox offset: %w", err)
+		}
 		updates, err := b.client.GetUpdates(ctx, offset, 30)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			failures++
+			if failures >= 3 {
+				b.reportLifecycle(ctx, "offline")
+			}
 			backoff = b.handlePollError(ctx, err, backoff)
 			continue
 		}
+		failures = 0
+		b.reportLifecycle(ctx, "online")
 		backoff = 3 * time.Second
-		for _, update := range updates {
-			// Telegram returns updates from the current offset onwards, so an
-			// id below it has already been handled. It must be skipped rather
-			// than dispatched: running it again would repeat the command.
-			// The offset is "the first update to return", not "the last one
-			// seen", which is why the comparison is below rather than at.
-			b.offsetMu.Lock()
-			if update.UpdateID < b.offset {
-				b.offsetMu.Unlock()
-				continue
-			}
-			// Mark it in flight before the cursor moves past it, so the
-			// persisted watermark can never step over an unfinished update.
-			b.inflight[update.UpdateID] = true
-			b.offset = update.UpdateID + 1
-			b.offsetMu.Unlock()
-			b.dispatch(ctx, update)
+		rebased, err := inbox.acceptPolled(updates, offset, time.Now())
+		if err != nil {
+			return fmt.Errorf("persist Telegram updates before acknowledgement: %w", err)
+		}
+		if rebased {
+			b.logf("Telegram update ID sequence changed; ambiguous updates require manual review")
+		}
+		if err := b.dispatchQueued(ctx, inbox); err != nil {
+			return fmt.Errorf("dispatch Telegram inbox: %w", err)
 		}
 	}
+}
+
+// dispatchQueued claims each update durably before starting a handler. A
+// crash after claim leaves an uncertain record rather than repeating effects.
+func (b *Bot) dispatchQueued(ctx context.Context, inbox *durableInbox) error {
+	updates, err := inbox.queued()
+	if err != nil {
+		return err
+	}
+	for _, update := range updates {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		chatID, serial := b.serialInboxChat(update)
+		if serial {
+			b.queueMu.Lock()
+			if b.queueBusy == nil {
+				b.queueBusy = make(map[int64]bool)
+			}
+			if b.queueBusy[chatID] {
+				b.queueMu.Unlock()
+				continue
+			}
+			b.queueBusy[chatID] = true
+			b.queueMu.Unlock()
+		}
+		claimed, err := inbox.claim(update.UpdateID)
+		if err != nil {
+			if serial {
+				b.releaseInboxChat(chatID)
+			}
+			return err
+		}
+		if !claimed {
+			if serial {
+				b.releaseInboxChat(chatID)
+			}
+			continue
+		}
+		b.handlers.Add(1)
+		go func(update Update, chatID int64, serial bool) {
+			defer b.handlers.Done()
+			completed := false
+			defer func() {
+				if err := inbox.finish(update.UpdateID, !completed || ctx.Err() != nil); err != nil {
+					b.logf("persist Telegram update completion: %v", err)
+				}
+				if serial {
+					b.releaseInboxChat(chatID)
+					if ctx.Err() == nil {
+						if err := b.dispatchQueued(ctx, inbox); err != nil {
+							b.logf("dispatch Telegram inbox: %v", err)
+						}
+					}
+				}
+			}()
+			completed = b.handleUpdate(ctx, update)
+		}(update, chatID, serial)
+	}
+	return nil
+}
+
+func (b *Bot) releaseInboxChat(chatID int64) {
+	b.queueMu.Lock()
+	delete(b.queueBusy, chatID)
+	b.queueMu.Unlock()
+}
+
+// Control messages bypass the chat queue so an in-flight run can still be
+// stopped or an approval answered. Other messages wait in durable storage.
+func (b *Bot) serialInboxChat(update Update) (int64, bool) {
+	if update.CallbackQuery != nil || update.Message == nil {
+		return 0, false
+	}
+	message := update.Message
+	text := strings.TrimSpace(message.Text)
+	if commandText, ok := channel.ExtractCommandText(text); ok {
+		command, _ := splitCommand(commandText)
+		if command == "stop" || command == "cancel" || command == "status" {
+			return 0, false
+		}
+	}
+	if b.HasPendingApproval(message.Chat.ID) {
+		switch strings.ToLower(text) {
+		case "y", "yes", "ya", "iya", "allow", "ok", "1", "s", "session", "sesi", "2", "a", "always", "selalu", "3", "n", "no", "deny", "tidak", "tolak", "cancel", "batal", "4":
+			return 0, false
+		}
+	}
+	return message.Chat.ID, true
 }
 
 // dispatch runs one update handler on its own goroutine.
@@ -549,10 +676,11 @@ func (b *Bot) handlePollError(ctx context.Context, err error, backoff time.Durat
 
 // handleUpdate dispatches one update. A failure is reported to the chat and
 // never stops the loop.
-func (b *Bot) handleUpdate(ctx context.Context, update Update) {
+func (b *Bot) handleUpdate(ctx context.Context, update Update) (completed bool) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			b.logf("recovered from panic while handling an update: %v", recovered)
+			completed = false
 		}
 	}()
 	switch {
@@ -561,6 +689,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update Update) {
 	case update.Message != nil:
 		b.handleMessage(ctx, update.Message)
 	}
+	return true
 }
 
 func (b *Bot) handleCallback(ctx context.Context, query *CallbackQuery) {
@@ -869,13 +998,21 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 		b.identityMu.RLock()
 		limiter := b.limiter
 		b.identityMu.RUnlock()
-		if limiter != nil && !limiter.Allow(request.SenderID, time.Now()) {
+		command, _ := splitCommand(text)
+		control := isCommand && (command == "stop" || command == "cancel")
+		if !control && limiter != nil && !limiter.AllowInbound(request.SenderID, time.Now()) {
+			if !limiter.AllowNotice(request.SenderID, time.Now()) {
+				return
+			}
 			if message.From != nil && message.From.LanguageCode != "" && !strings.HasPrefix(strings.ToLower(message.From.LanguageCode), "id") {
 				b.reply(ctx, chatID, "Too many messages. Please try again in a moment.")
 			} else {
 				b.reply(ctx, chatID, "Terlalu banyak pesan. Coba lagi sebentar ya.")
 			}
 			return
+		}
+		if !control {
+			ctx = channel.WithGuestOutbound(ctx, limiter, request.SenderID)
 		}
 		b.handleGuestMessage(ctx, request, message, text, isCommand)
 		return
@@ -939,7 +1076,17 @@ func (b *Bot) handleMessage(ctx context.Context, message *Message) {
 	case "help", "start", "menu":
 		b.reply(ctx, chatID, helpText())
 	case "status":
-		b.reply(ctx, chatID, b.agent.Status())
+		status := b.agent.Status()
+		b.inboxMu.RLock()
+		if b.inbox != nil {
+			if count, err := b.inbox.uncertainCount(); err != nil {
+				status += "\nTelegram inbox: unable to check interrupted updates."
+			} else if count > 0 {
+				status += fmt.Sprintf("\nTelegram inbox: %d interrupted update(s) require manual review.", count)
+			}
+		}
+		b.inboxMu.RUnlock()
+		b.reply(ctx, chatID, status)
 	case "cost":
 		if inspector, ok := b.agent.(SessionInspector); ok {
 			b.reply(ctx, chatID, inspector.CostInfo(request, lang))
@@ -1609,7 +1756,11 @@ func (b *Bot) replyMarkdown(ctx context.Context, chatID int64, text string) {
 	sendCtx := ctx
 	if sendCtx == nil || sendCtx.Err() != nil {
 		var cancel context.CancelFunc
-		sendCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+		base := context.Background()
+		if sendCtx != nil {
+			base = context.WithoutCancel(sendCtx)
+		}
+		sendCtx, cancel = context.WithTimeout(base, 15*time.Second)
 		defer cancel()
 	}
 	for len(text) > 0 {
@@ -2018,7 +2169,11 @@ func (b *Bot) reply(ctx context.Context, chatID int64, text string) {
 	sendCtx := ctx
 	if sendCtx == nil || sendCtx.Err() != nil {
 		var cancel context.CancelFunc
-		sendCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+		base := context.Background()
+		if sendCtx != nil {
+			base = context.WithoutCancel(sendCtx)
+		}
+		sendCtx, cancel = context.WithTimeout(base, 15*time.Second)
 		defer cancel()
 	}
 	if _, err := b.client.SendMessage(sendCtx, chatID, text, nil); err != nil {

@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/99apps-id/termixgo/internal/channel"
 )
 
 // apiBase is the Telegram Bot API root.
@@ -168,6 +170,19 @@ type Update struct {
 	UpdateID      int64          `json:"update_id"`
 	Message       *Message       `json:"message"`
 	CallbackQuery *CallbackQuery `json:"callback_query"`
+	// raw retains fields not currently represented in Update for durable recovery.
+	raw json.RawMessage
+}
+
+func (u *Update) UnmarshalJSON(data []byte) error {
+	type decodedUpdate Update
+	var decoded decodedUpdate
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*u = Update(decoded)
+	u.raw = append(json.RawMessage(nil), data...)
+	return nil
 }
 
 // InlineButton is one keyboard button.
@@ -213,6 +228,11 @@ func (e *APIError) Error() string {
 
 // call performs one Bot API method.
 func (c *Client) call(ctx context.Context, method string, payload any, result any) error {
+	if method == "sendMessage" {
+		if err := channel.WaitGuestOutbound(ctx); err != nil {
+			return fmt.Errorf("waiting for guest outbound quota: %w", err)
+		}
+	}
 	// Sends never run on a bare caller's context alone: a black-holed route
 	// makes the POST block for kernel TCP retries, and one stuck handler
 	// goroutine per chat update is how the long-poll loop ended up starving
@@ -331,6 +351,9 @@ func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, key
 
 // SendDocument uploads and posts a file as a document via multipart/form-data.
 func (c *Client) SendDocument(ctx context.Context, chatID int64, filename string, data []byte, caption string) (Message, error) {
+	if err := channel.WaitGuestOutbound(ctx); err != nil {
+		return Message{}, fmt.Errorf("waiting for guest outbound quota: %w", err)
+	}
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 60*time.Second)

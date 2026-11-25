@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -15,6 +16,53 @@ import (
 	"github.com/99apps-id/termixgo/internal/channel"
 	"github.com/99apps-id/termixgo/internal/config"
 )
+
+func TestLifecycleObserverIgnoresIntentionalCancellation(t *testing.T) {
+	bot := &Bot{}
+	var states []string
+	bot.SetLifecycleObserver(func(state string) { states = append(states, state) })
+	bot.reportLifecycle(context.Background(), "offline")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	bot.reportLifecycle(ctx, "offline")
+	if len(states) != 1 || states[0] != "offline" {
+		t.Fatalf("states=%v", states)
+	}
+}
+
+func TestLifecycleEventClassification(t *testing.T) {
+	for _, test := range []struct {
+		event any
+		want  string
+	}{
+		{&events.Connected{}, "online"},
+		{&events.Disconnected{}, "offline"},
+		{&events.LoggedOut{}, "offline"},
+		{&events.ConnectFailure{}, "offline"},
+		{&events.TemporaryBan{}, "offline"},
+		{&events.Message{}, ""},
+	} {
+		if got := lifecycleState(test.event); got != test.want {
+			t.Fatalf("%T = %q, want %q", test.event, got, test.want)
+		}
+	}
+}
+
+func TestGuestOutboundLimitDoesNotAffectAdmin(t *testing.T) {
+	bot := &Bot{}
+	var sent []string
+	bot.sendHook = func(_, text string) { sent = append(sent, text) }
+	limiter := channel.NewGuestRateLimits(config.ChannelAccount{Guest: &config.GuestLimits{OutboundRatePerMinute: 1}})
+	guest := channel.WithGuestOutbound(context.Background(), limiter, "guest")
+	bot.reply(guest, "guest-chat", "one")
+	blocked, cancel := context.WithTimeout(guest, 20*time.Millisecond)
+	defer cancel()
+	bot.reply(blocked, "guest-chat", "two")
+	bot.reply(context.Background(), "admin-chat", "admin")
+	if len(sent) != 2 || sent[0] != "one" || sent[1] != "admin" {
+		t.Fatalf("unexpected messages: %v", sent)
+	}
+}
 
 func testEvent(text string, mentioned ...string) *events.Message {
 	return &events.Message{
@@ -167,6 +215,30 @@ func (a *fakeAgent) Status() string {
 
 func (a *fakeAgent) GitDiff(ctx context.Context) (string, error) {
 	return a.diff, a.diffErr
+}
+
+func TestGuestThrottleWarnsOnceAndDoesNotBlockStop(t *testing.T) {
+	agent := &fakeAgent{}
+	bot := New(nil, agent)
+	var replies []string
+	bot.sendHook = func(_, text string) { replies = append(replies, text) }
+	bot.SetAccount("default", config.ChannelAccount{Enabled: true, DMPolicy: config.DMPolicyOpen, Guest: &config.GuestLimits{RatePerMinute: 1}}, nil)
+	for i := 0; i < 3; i++ {
+		bot.handleMessage(context.Background(), testEvent("/help"))
+	}
+	warnings := 0
+	for _, text := range replies {
+		if strings.Contains(text, "Terlalu banyak") || strings.Contains(text, "Too many") {
+			warnings++
+		}
+	}
+	if warnings != 1 {
+		t.Fatalf("warnings=%d, replies=%v", warnings, replies)
+	}
+	bot.handleMessage(context.Background(), testEvent("/stop"))
+	if agent.stopCalls != 1 {
+		t.Fatalf("/stop blocked by throttle: %d", agent.stopCalls)
+	}
 }
 
 func TestWhatsAppSlashCommandsAdmin(t *testing.T) {

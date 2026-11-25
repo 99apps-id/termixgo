@@ -77,7 +77,8 @@ type Bot struct {
 	policy       config.ChannelAccount
 	pairing      *channel.PairingStore
 	selfIDs      map[string]bool
-	limiter      *channel.RateLimiter
+	limiter      *channel.GuestRateLimits
+	lifecycle    func(string)
 	logf         func(string)
 	sendHook     func(chatID, text string)
 	sendFileHook func(chatID, filename string, data []byte, caption string)
@@ -122,7 +123,7 @@ func (b *Bot) SetAccount(name string, policy config.ChannelAccount, pairing *cha
 	b.account = strings.TrimSpace(name)
 	b.policy = policy
 	b.pairing = pairing
-	b.limiter = channel.ForAccount(policy)
+	b.limiter = channel.NewGuestRateLimits(policy)
 	b.mu.Unlock()
 }
 
@@ -188,6 +189,37 @@ func (b *Bot) SetLogger(logf func(string)) {
 	b.mu.Unlock()
 }
 
+// SetLifecycleObserver observes connection transitions; it is not called for
+// an intentional context cancellation.
+func (b *Bot) SetLifecycleObserver(observer func(string)) {
+	b.mu.Lock()
+	b.lifecycle = observer
+	b.mu.Unlock()
+}
+
+func (b *Bot) reportLifecycle(ctx context.Context, state string) {
+	if ctx.Err() != nil {
+		return
+	}
+	b.mu.RLock()
+	observer := b.lifecycle
+	b.mu.RUnlock()
+	if observer != nil {
+		observer(state)
+	}
+}
+
+func lifecycleState(event any) string {
+	switch event.(type) {
+	case *events.Connected:
+		return "online"
+	case *events.Disconnected, *events.ConnectFailure, *events.StreamError, *events.TemporaryBan, *events.ClientOutdated, *events.LoggedOut:
+		return "offline"
+	default:
+		return ""
+	}
+}
+
 // Run registers the event handlers and keeps the connection until the context
 // ends. whatsmeow reconnects on its own; a logout is reported and left for the
 // operator to relink.
@@ -198,6 +230,9 @@ func (b *Bot) Run(ctx context.Context) error {
 	b.client.SetForceActiveDeliveryReceipts(true)
 	b.refreshSelf()
 	b.client.AddEventHandler(func(evt any) {
+		if state := lifecycleState(evt); state != "" {
+			b.reportLifecycle(ctx, state)
+		}
 		switch event := evt.(type) {
 		case *events.Message:
 			b.handlers.Add(1)
@@ -209,10 +244,11 @@ func (b *Bot) Run(ctx context.Context) error {
 			b.refreshSelf()
 			_ = b.client.SendPresence(ctx, types.PresenceAvailable)
 		case *events.LoggedOut:
-			b.logf("logged out; run 'termixgo channel login whatsapp " + b.accountName() + "'")
+			b.logfLine("logged out; run 'termixgo channel login whatsapp " + b.accountName() + "'")
 		}
 	})
 	if err := b.client.Connect(); err != nil {
+		b.reportLifecycle(ctx, "offline")
 		return fmt.Errorf("connect WhatsApp: %w", err)
 	}
 	_ = b.client.SendPresence(ctx, types.PresenceAvailable)
@@ -341,13 +377,22 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 		b.mu.RLock()
 		limiter := b.limiter
 		b.mu.RUnlock()
-		if limiter != nil && !limiter.Allow(request.SenderID, time.Now()) {
+		cmdText, isCommand := channel.ExtractCommandText(request.Text)
+		command, _ := splitCommand(cmdText)
+		control := isCommand && (command == "stop" || command == "cancel")
+		if !control && limiter != nil && !limiter.AllowInbound(request.SenderID, time.Now()) {
+			if !limiter.AllowNotice(request.SenderID, time.Now()) {
+				return
+			}
 			if lang == "id" {
 				b.reply(ctx, request.ChatID, "Terlalu banyak pesan. Coba lagi sebentar ya.")
 			} else {
 				b.reply(ctx, request.ChatID, "Too many messages. Please try again in a moment.")
 			}
 			return
+		}
+		if !control {
+			ctx = channel.WithGuestOutbound(ctx, limiter, request.SenderID)
 		}
 	}
 
@@ -1062,6 +1107,9 @@ func (b *Bot) SendTo(ctx context.Context, chatID, text string) error {
 	formatted := formatWhatsApp(b.redact(text))
 	if hook != nil {
 		for _, chunk := range channel.Chunk(formatted, b.policySnapshot().EffectiveTextChunkLimit()) {
+			if err := channel.WaitGuestOutbound(ctx); err != nil {
+				return err
+			}
 			hook(chatID, chunk)
 		}
 		return nil
@@ -1074,6 +1122,9 @@ func (b *Bot) SendTo(ctx context.Context, chatID, text string) error {
 		return fmt.Errorf("bad chat id %q: %w", chatID, err)
 	}
 	for _, chunk := range channel.Chunk(formatted, b.policySnapshot().EffectiveTextChunkLimit()) {
+		if err := channel.WaitGuestOutbound(ctx); err != nil {
+			return err
+		}
 		if _, err := b.client.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(chunk)}); err != nil {
 			return err
 		}
@@ -1083,6 +1134,9 @@ func (b *Bot) SendTo(ctx context.Context, chatID, text string) error {
 
 // SendFileTo uploads and sends an image or document to one WhatsApp chat.
 func (b *Bot) SendFileTo(ctx context.Context, chatID, filename string, data []byte, caption string) error {
+	if err := channel.WaitGuestOutbound(ctx); err != nil {
+		return err
+	}
 	chatID = NormalizeJID(chatID)
 	filename = filepath.Base(strings.TrimSpace(filename))
 	if filename == "" || filename == "." || filename == "/" {
@@ -1167,6 +1221,10 @@ func detectMimeType(filename string, data []byte) string {
 
 // reply sends one message. A failure is logged, never surfaced to the chat.
 func (b *Bot) reply(ctx context.Context, chatID, text string) {
+	if err := channel.WaitGuestOutbound(ctx); err != nil {
+		b.logfLine("waiting for guest outbound quota: " + err.Error())
+		return
+	}
 	b.mu.RLock()
 	hook := b.sendHook
 	b.mu.RUnlock()

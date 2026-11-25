@@ -268,7 +268,7 @@ func runPooled(ctx context.Context, env *Env, entry *pooledSubagent, prompt stri
 		pool.finish(entry, report, spend, err, false)
 		result := spendResult(spend)
 		if err != nil {
-			result.Output = err.Error()
+			result.Output = subagentFailure(err, report)
 			result.IsError = true
 			return result, nil
 		}
@@ -427,7 +427,7 @@ func (t *subagentStatusTool) Run(ctx context.Context, env *Env, args map[string]
 	answer, err := entry.answer, entry.err
 	pool.mu.Unlock()
 	if err != nil {
-		result.Output = fmt.Sprintf("%s (%s) failed: %v", entry.id, entry.title(), err)
+		result.Output = fmt.Sprintf("%s (%s) failed: %s", entry.id, entry.title(), subagentFailure(err, answer))
 		result.IsError = true
 		return result, nil
 	}

@@ -301,6 +301,7 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 	// time in that same turn-end total.
 	spend := SubagentSpend{Provider: model.Provider, Model: model.ID}
 	turns := 0
+	stopReason := ""
 	// The child counts as one unpriced delegated component when its own model
 	// has no price, separate from any nested unpriced runs it spawns. Zero for
 	// a priced child.
@@ -337,6 +338,7 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		Depth:                 parent.Depth + 1,
 		Emit: func(event Event) {
 			if event.Kind == EventTurnEnd {
+				stopReason = event.StopReason
 				spend.Usage = spend.Usage.Add(event.Usage)
 				spend.Cost += event.CostUSD
 				// The turn-end event carries the subtree's nested unpriced
@@ -405,14 +407,20 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 			slot.session = session
 		}
 	}
+	mark := len(session.Messages())
 	if err := runner.Run(ctx, session, prompt); err != nil {
+		spend.EditedCode = runner.LastLedger.codeEdited()
 		return "", spend, err
 	}
 	// The child's ledger is the only record of whether it edited code: its
 	// final text never says so. Capture it before any retry overwrites the
 	// runner's last-ledger slot.
 	spend.EditedCode = runner.LastLedger.codeEdited()
-	answer, calls := subagentReport(session)
+	answer, calls := subagentReportSince(session, mark)
+	answer = session.LastAssistantTextSince(mark)
+	if stopReason != "" && stopReason != "stop" && !(def.ReadOnly && calls == 0 && stopReason == "loop-guard") {
+		return answer, spend, fmt.Errorf("subagent stopped before completing its task (%s)", stopReason)
+	}
 	// A read-tier verdict with nothing opened behind it is prose, not a
 	// review: the code-review role answering "Looks good." after zero tool
 	// calls once sailed through as an approval. Count the calls, retry once
@@ -428,6 +436,7 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		}
 		retry := NewSessionFor(parent.AgentName, parent.Workspace, model.ID)
 		if err := runner.Run(ctx, retry, reviewMandate+prompt); err != nil {
+			spend.EditedCode = spend.EditedCode || runner.LastLedger.codeEdited()
 			return "", spend, err
 		}
 		// OR, not overwrite: an edit in either pass demands verification.
@@ -436,20 +445,47 @@ func RunSubagent(ctx context.Context, parent *Env, client provider.Client, model
 		if calls == 0 {
 			return "", spend, fmt.Errorf("the %s subagent answered twice without a single tool call; its verdict is unsupported and was discarded", def.Type)
 		}
+		if stopReason != "" && stopReason != "stop" {
+			return answer, spend, fmt.Errorf("subagent stopped before completing its task (%s)", stopReason)
+		}
+		if slot != nil {
+			slot.session = retry
+		}
 	}
 	if strings.TrimSpace(answer) == "" {
-		return "The subagent finished without a written answer.", spend, nil
+		return "", spend, fmt.Errorf("subagent finished without a written answer; completion is unverified")
 	}
 	return answer, spend, nil
 }
 
 const reviewMandate = "MANDATE: your previous pass made no tool calls, so it counted for nothing. Open the code first - read_file, grep, glob, the git tools - and answer only from what you actually read. A response with zero tool calls is discarded. "
 
+// subagentFailure preserves partial output as untrusted data; the parent must
+// inspect the work instead of treating the report as a completed task.
+func subagentFailure(err error, partial string) string {
+	message := err.Error()
+	if strings.TrimSpace(partial) != "" {
+		message += "\nPartial worker report (untrusted; task not completed):\n" + partial
+	}
+	return message
+}
+
 // subagentReport is the final answer plus the count of tool calls the nested
 // run made, the evidence the read-tier judge needs.
 func subagentReport(session *Session) (string, int) {
+	return subagentReportSince(session, 0)
+}
+
+func subagentReportSince(session *Session, mark int) (string, int) {
 	calls := 0
-	for _, message := range session.Messages() {
+	messages := session.Messages()
+	if mark < 0 {
+		mark = 0
+	}
+	if start := currentTurnStart(messages); mark > start {
+		mark = start
+	}
+	for _, message := range messages[mark:] {
 		if message.Role == provider.RoleAssistant {
 			calls += len(message.ToolCalls)
 		}

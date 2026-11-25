@@ -609,18 +609,6 @@ func (a *App) startTelegramAccount(name string) error {
 	a.ensureOutboxWatcher()
 
 	go func() {
-		if _, err := bot.Verify(ctx); err != nil {
-			a.setChannelStatus(key, "token rejected: "+err.Error())
-			a.dropChannelRuntime(key)
-			return
-		}
-		status := "connected"
-		if bot.Paired() {
-			status = "paired"
-		} else if strings.TrimSpace(bot.PairingCode()) != "" {
-			status = "waiting for pairing"
-		}
-		a.setChannelStatus(key, status)
 		lockName := fmt.Sprintf("poller-%s-%s.lock", key.Channel, key.Account)
 		lock, lockPID, lockErr := config.TryAcquireInstanceLock(lockName)
 		if errors.Is(lockErr, config.ErrAlreadyLocked) {
@@ -633,7 +621,36 @@ func (a *App) startTelegramAccount(name string) error {
 		}
 		defer lock.Release()
 
+		notifier, alertErr := a.ensureGatewayNotifier()
+		if alertErr != nil {
+			a.emit(agent.Event{Kind: agent.EventNotice, Text: "Gateway alert queue unavailable: " + alertErr.Error()})
+		} else {
+			notifier.record(a, key, "starting")
+		}
+		bot.SetLifecycleObserver(func(state string) {
+			if notifier != nil {
+				notifier.record(a, key, state)
+			}
+		})
+		if _, err := bot.Verify(ctx); err != nil {
+			if notifier != nil && ctx.Err() == nil {
+				notifier.record(a, key, "offline")
+			}
+			a.setChannelStatus(key, "token rejected: "+err.Error())
+			a.dropChannelRuntime(key)
+			return
+		}
+		status := "connected"
+		if bot.Paired() {
+			status = "paired"
+		} else if strings.TrimSpace(bot.PairingCode()) != "" {
+			status = "waiting for pairing"
+		}
+		a.setChannelStatus(key, status)
 		if err := bot.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			if notifier != nil {
+				notifier.record(a, key, "offline")
+			}
 			a.setChannelStatus(key, "stopped: "+err.Error())
 		}
 		// The loop exited on its own (token rejected, conflict, network
@@ -902,12 +919,14 @@ func (b *telegramBridge) session(request channel.Request) (*agent.Session, error
 	id := channelSessionIDFor(config.ChannelTelegram, b.name, request)
 	if loaded, err := agent.LoadSessionIn(dir, id); err == nil {
 		loaded.SetAgent(agentName)
+		loaded.SetGuest(!request.Admin)
 		return loaded, nil
 	}
 	session, err := agent.NewSessionWithID(agentName, id, b.app.AgentWorkspace(agentName), b.app.CurrentModel().ID)
 	if err != nil {
 		return nil, err
 	}
+	session.SetGuest(!request.Admin)
 	session.SetStoreDir(dir)
 	return session, nil
 }
@@ -923,6 +942,7 @@ func (b *telegramBridge) freshSession(request channel.Request) (*agent.Session, 
 	if err != nil {
 		return nil, err
 	}
+	session.SetGuest(!request.Admin)
 	session.SetStoreDir(dir)
 	return session, nil
 }

@@ -755,7 +755,7 @@ func (t *subagentTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	report, spend, err := env.RunSubagent(ctx, subType, prompt)
 	if err != nil {
 		return Result{
-			Output:             err.Error(),
+			Output:             subagentFailure(err, report),
 			IsError:            true,
 			SubagentUsage:      spend.Usage,
 			SubagentCost:       spend.Cost,

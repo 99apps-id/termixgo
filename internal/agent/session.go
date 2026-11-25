@@ -35,6 +35,7 @@ type Session struct {
 	// agent names the persona this conversation belongs to. Empty on sessions
 	// written before the agent registry existed; they read as the default.
 	agent string
+	guest bool
 	// dir overrides the sessions directory this file is saved to and loaded
 	// from. Empty means the shared config.SessionsDir(), which is where the
 	// default agent's conversations live.
@@ -78,6 +79,7 @@ type sessionJSON struct {
 	ID        string             `json:"id"`
 	Title     string             `json:"title"`
 	Agent     string             `json:"agent,omitempty"`
+	Guest     bool               `json:"guest,omitempty"`
 	Workspace string             `json:"workspace"`
 	Model     string             `json:"model"`
 	CreatedAt time.Time          `json:"createdAt"`
@@ -194,6 +196,21 @@ func (s *Session) SetAgent(name string) {
 	s.mu.Lock()
 	s.agent = strings.TrimSpace(name)
 	s.mu.Unlock()
+}
+
+// SetGuest marks the session as guest-owned for retention. Existing sessions
+// are unclassified unless explicitly marked; callers must not infer ownership.
+func (s *Session) SetGuest(guest bool) {
+	s.mu.Lock()
+	s.guest = guest
+	s.mu.Unlock()
+}
+
+// Guest reports whether the session was explicitly marked as guest-owned.
+func (s *Session) Guest() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.guest
 }
 
 // StoreDir is the sessions directory this file lives in, or "" for the shared
@@ -812,6 +829,7 @@ func (s *Session) snapshot() sessionJSON {
 		ID:         s.id,
 		Title:      s.title,
 		Agent:      s.agent,
+		Guest:      s.guest,
 		Workspace:  s.workspace,
 		Model:      s.model,
 		CreatedAt:  s.createdAt,
@@ -977,6 +995,7 @@ func fromJSON(state sessionJSON) *Session {
 		id:         state.ID,
 		title:      state.Title,
 		agent:      state.Agent,
+		guest:      state.Guest,
 		workspace:  state.Workspace,
 		model:      state.Model,
 		createdAt:  created,

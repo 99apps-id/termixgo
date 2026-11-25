@@ -8,15 +8,86 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/channel"
+	"github.com/99apps-id/termixgo/internal/config"
 )
 
 // ------------------------------------------------------------------ API client
+
+func TestLifecycleReportsSustainedPollFailureAndRecovery(t *testing.T) {
+	var mu sync.Mutex
+	polls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/getUpdates") {
+			_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
+			return
+		}
+		mu.Lock()
+		polls++
+		count := polls
+		mu.Unlock()
+		if count <= 3 {
+			_, _ = io.WriteString(w, `{"ok":false,"error_code":429,"description":"retry","parameters":{"retry_after":1}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"ok":true,"result":[]}`)
+	}))
+	defer server.Close()
+	bot := New("123:abc", nil)
+	bot.client = newClientAt("123:abc", server.URL)
+	bot.SetCursorPath(filepath.Join(t.TempDir(), "cursor"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	states := make(chan string, 4)
+	bot.SetLifecycleObserver(func(state string) {
+		states <- state
+		if state == "online" {
+			cancel()
+		}
+	})
+	done := make(chan error, 1)
+	go func() { done <- bot.Run(ctx) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("poll loop did not stop")
+	}
+	close(states)
+	var got []string
+	for state := range states {
+		got = append(got, state)
+	}
+	if len(got) != 2 || got[0] != "offline" || got[1] != "online" {
+		t.Fatalf("states=%v", got)
+	}
+}
+
+func TestGuestOutboundLimitDoesNotAffectAdmin(t *testing.T) {
+	api := newRecordingAPI(t)
+	client := api.client()
+	limiter := channel.NewGuestRateLimits(config.ChannelAccount{Guest: &config.GuestLimits{OutboundRatePerMinute: 1}})
+	guest := channel.WithGuestOutbound(context.Background(), limiter, "guest")
+	if _, err := client.SendMessage(guest, 7, "one", nil); err != nil {
+		t.Fatal(err)
+	}
+	blocked, cancel := context.WithTimeout(guest, 20*time.Millisecond)
+	defer cancel()
+	if _, err := client.SendMessage(blocked, 7, "two", nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline while waiting for quota, got %v", err)
+	}
+	if _, err := client.SendMessage(context.Background(), 7, "admin", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(api.calls("sendMessage")); got != 2 {
+		t.Fatalf("sent %d messages, want 2", got)
+	}
+}
 
 // recordingAPI is a fake Bot API that captures the payload of every call, so a
 // test can assert on what would have gone over the wire.
@@ -397,6 +468,7 @@ func TestRunAdvancesTheOffsetAndHandlesUpdates(t *testing.T) {
 	defer stop()
 
 	done := make(chan error, 1)
+	bot.SetCursorPath(filepath.Join(t.TempDir(), "cursor"))
 	go func() { done <- bot.Run(ctx) }()
 
 	select {
@@ -426,6 +498,20 @@ func TestRunAdvancesTheOffsetAndHandlesUpdates(t *testing.T) {
 	if offsets[1] != float64(11) {
 		t.Errorf("second poll offset = %v, want 11", offsets[1])
 	}
+}
+
+func testInboxOffset(t *testing.T, bot *Bot) int64 {
+	t.Helper()
+	inbox, err := openDurableInbox(bot.cursorPath+".inbox.sqlite", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inbox.close()
+	offset, err := inbox.offset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return offset
 }
 
 // TestRunSkipsAReplayedUpdate covers the offset guard: Telegram may resend an
@@ -464,13 +550,14 @@ func TestRunSkipsAReplayedUpdate(t *testing.T) {
 	bot := New("123:abc", agent)
 	bot.client = api.client()
 	bot.Pair(7, 9)
-	bot.offset = 5
 
 	ctx, stop := context.WithCancel(context.Background())
 	cancel = stop
 	defer stop()
 
 	done := make(chan error, 1)
+	bot.SetCursorPath(filepath.Join(t.TempDir(), "cursor"))
+	bot.saveOffset(5)
 	go func() { done <- bot.Run(ctx) }()
 	select {
 	case <-done:
@@ -482,8 +569,8 @@ func TestRunSkipsAReplayedUpdate(t *testing.T) {
 	if agent.called() {
 		t.Errorf("an update below the current offset must not be handled again")
 	}
-	if bot.offset != 5 {
-		t.Errorf("offset = %d, want it unchanged at 5", bot.offset)
+	if got := testInboxOffset(t, bot); got != 5 {
+		t.Errorf("offset = %d, want it unchanged at 5", got)
 	}
 }
 
@@ -522,13 +609,14 @@ func TestRunHandlesTheUpdateAtTheOffset(t *testing.T) {
 	bot := New("123:abc", agent)
 	bot.client = api.client()
 	bot.Pair(7, 9)
-	bot.offset = 5
 
 	ctx, stop := context.WithCancel(context.Background())
 	cancel = stop
 	defer stop()
 
 	done := make(chan error, 1)
+	bot.SetCursorPath(filepath.Join(t.TempDir(), "cursor"))
+	bot.saveOffset(5)
 	go func() { done <- bot.Run(ctx) }()
 	select {
 	case <-done:
@@ -540,8 +628,8 @@ func TestRunHandlesTheUpdateAtTheOffset(t *testing.T) {
 	if !agent.called() {
 		t.Errorf("the update at the current offset is new and must be handled")
 	}
-	if bot.offset != 6 {
-		t.Errorf("offset = %d, want 6 after handling update 5", bot.offset)
+	if got := testInboxOffset(t, bot); got != 6 {
+		t.Errorf("offset = %d, want 6 after handling update 5", got)
 	}
 }
 
@@ -604,6 +692,7 @@ func TestRunRetriesAfterAPollFailure(t *testing.T) {
 	}()
 
 	done := make(chan error, 1)
+	bot.SetCursorPath(filepath.Join(t.TempDir(), "cursor"))
 	go func() { done <- bot.Run(ctx) }()
 
 	select {
@@ -641,6 +730,7 @@ func TestRunStopsPromptlyOnCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	bot.SetCursorPath(filepath.Join(t.TempDir(), "cursor"))
 	go func() { done <- bot.Run(ctx) }()
 
 	// Let it reach the poll, then cancel.
@@ -696,6 +786,7 @@ func TestRunWaitsForHandlers(t *testing.T) {
 	defer stop()
 
 	done := make(chan error, 1)
+	bot.SetCursorPath(filepath.Join(t.TempDir(), "cursor"))
 	go func() { done <- bot.Run(ctx) }()
 
 	// The handler blocks, so Run must not return while it is in flight.

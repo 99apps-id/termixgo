@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -91,6 +94,67 @@ func TestBackgroundSubagentWakesAndHandsOverItsSpend(t *testing.T) {
 	defer mu.Unlock()
 	if len(*wakes) != 1 || (*wakes)[0].Kind != EventWake || !strings.Contains((*wakes)[0].Text, "agent-1") {
 		t.Fatalf("wakes = %+v", *wakes)
+	}
+}
+
+func TestBackgroundFailedSubagentPreservesPartialReport(t *testing.T) {
+	env, wakes, mu := pooledEnv(t, &fakeClient{})
+	env.RunSubagent = func(context.Context, string, string) (string, SubagentSpend, error) {
+		return "partial work", SubagentSpend{EditedCode: true}, errors.New("step-cap")
+	}
+	started, _ := (&subagentTool{}).Run(context.Background(), env, map[string]any{"prompt": "build", "background": true})
+	if started.IsError {
+		t.Fatalf("start = %+v", started)
+	}
+	status, _ := (&subagentStatusTool{}).Run(context.Background(), env, map[string]any{"id": "agent-1", "wait_seconds": 10})
+	if !status.IsError || !status.SubagentEditedCode || !strings.Contains(status.Output, "step-cap") || !strings.Contains(status.Output, "partial work") {
+		t.Fatalf("status = %+v", status)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		ready := len(*wakes) > 0
+		mu.Unlock()
+		if ready || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(*wakes) != 1 || !strings.Contains((*wakes)[0].Text, "failed") {
+		t.Fatalf("expected failed wake, got %+v", *wakes)
+	}
+}
+
+func TestParentCanContinueAfterSubagentStepCap(t *testing.T) {
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{callChunk("parent-1", "run_subagent", `{"type":"builder","prompt":"inspect"}`)},
+		{callChunk("child-1", "list_directory", `{"path":"."}`)},
+		{callChunk("parent-2", "write_file", `{"path":"takeover.txt","content":"completed"}`)},
+		{textChunk("Completed the work.")},
+	}}
+	runner, env, _ := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	env.RunSubagent = func(ctx context.Context, kind, prompt string) (string, SubagentSpend, error) {
+		return RunSubagent(ctx, env, client, provider.Model{ID: "test-model"}, kind, prompt, 1)
+	}
+	session := NewSession(env.Workspace, "test-model")
+	if err := runner.Run(context.Background(), session, "Complete the work."); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(env.Workspace, "takeover.txt"))
+	if err != nil || string(data) != "completed" {
+		t.Fatalf("takeover output = %q, err = %v", data, err)
+	}
+	if len(client.requests) < 3 {
+		t.Fatalf("expected parent to resume after child, got %d requests", len(client.requests))
+	}
+	var history strings.Builder
+	for _, message := range client.requests[2].Messages {
+		history.WriteString(message.Content)
+	}
+	if !strings.Contains(history.String(), "step-cap") {
+		t.Fatalf("parent was not told why the worker stopped: %q", history.String())
 	}
 }
 

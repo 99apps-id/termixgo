@@ -92,10 +92,22 @@ func (a *App) startWhatsAppAccount(name string) error {
 		}
 		defer lock.Release()
 
-		// Report the live state: without this the status view kept showing
-		// "connecting" forever on a healthy account whose bot never reports
-		// back, and a logout that Run only logs left the same stale line.
-		a.setChannelStatus(key, "connected")
+		notifier, alertErr := a.ensureGatewayNotifier()
+		if alertErr != nil {
+			a.emit(agent.Event{Kind: agent.EventNotice, Text: "Gateway alert queue unavailable: " + alertErr.Error()})
+		} else {
+			notifier.record(a, key, "starting")
+		}
+		bot.SetLifecycleObserver(func(state string) {
+			if state == "online" {
+				a.setChannelStatus(key, "connected")
+			} else {
+				a.setChannelStatus(key, "disconnected")
+			}
+			if notifier != nil {
+				notifier.record(a, key, state)
+			}
+		})
 		if err := bot.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			a.setChannelStatus(key, "stopped: "+err.Error())
 		}
@@ -440,12 +452,14 @@ func (b *whatsappBridge) session(request channel.Request) (*agent.Session, error
 	id := channelSessionIDFor(config.ChannelWhatsApp, b.name, request)
 	if loaded, err := agent.LoadSessionIn(dir, id); err == nil {
 		loaded.SetAgent(agentName)
+		loaded.SetGuest(!request.Admin)
 		return loaded, nil
 	}
 	session, err := agent.NewSessionWithID(agentName, id, b.app.AgentWorkspace(agentName), b.app.CurrentModel().ID)
 	if err != nil {
 		return nil, err
 	}
+	session.SetGuest(!request.Admin)
 	session.SetStoreDir(dir)
 	return session, nil
 }
@@ -461,6 +475,7 @@ func (b *whatsappBridge) freshSession(request channel.Request) (*agent.Session, 
 	if err != nil {
 		return nil, err
 	}
+	session.SetGuest(!request.Admin)
 	session.SetStoreDir(dir)
 	return session, nil
 }

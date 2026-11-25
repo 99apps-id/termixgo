@@ -407,6 +407,43 @@ func TestRunSubagentNeedsAClient(t *testing.T) {
 	}
 }
 
+func TestSubagentReportSinceIgnoresPreviousTurnCalls(t *testing.T) {
+	s := NewSessionFor("default", t.TempDir(), "test")
+	s.AddUser("first")
+	s.AddAssistant("", "", []provider.ToolCall{{ID: "old", Name: "read_file"}}, nil)
+	s.AddToolResult("old", "read_file", "content")
+	s.AddAssistant("old answer", "", nil, nil)
+	mark := len(s.Messages())
+	s.AddUser("follow-up")
+	s.AddAssistant("new answer", "", nil, nil)
+	_, calls := subagentReportSince(s, mark)
+	if calls != 0 {
+		t.Fatalf("previous turn leaked into call count: %d", calls)
+	}
+}
+
+func TestSubagentStepCapIsNotReportedAsSuccess(t *testing.T) {
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{callChunk("c1", "list_directory", `{"path":"."}`)},
+		{callChunk("c2", "list_directory", `{"path":"./"}`)},
+	}}
+	parent := testEnv(t)
+	parent.Config = config.Default()
+	_, _, err := RunSubagent(context.Background(), parent, client, provider.Model{ID: "test-model"}, string(SubagentBuilder), "inspect", 1)
+	if err == nil || !strings.Contains(err.Error(), "step-cap") {
+		t.Fatalf("expected explicit step-cap failure, got %v", err)
+	}
+}
+
+func TestSubagentProviderFailureIsNotReportedAsSuccess(t *testing.T) {
+	parent := testEnv(t)
+	parent.Config = config.Default()
+	_, _, err := RunSubagent(context.Background(), parent, errorClient{}, provider.Model{ID: "test-model"}, string(SubagentBuilder), "inspect", 2)
+	if err == nil || !strings.Contains(err.Error(), "error") {
+		t.Fatalf("expected provider failure, got %v", err)
+	}
+}
+
 func TestRunSubagentWithoutAnAnswerSaysSo(t *testing.T) {
 	// A run that produces only tool calls and no text ends with nothing to
 	// report, which has to be stated rather than returned as an empty string.
@@ -418,11 +455,8 @@ func TestRunSubagentWithoutAnAnswerSaysSo(t *testing.T) {
 	parent.Config = config.Default()
 
 	answer, _, err := RunSubagent(context.Background(), parent, client, provider.Model{ID: "test-model"}, string(SubagentExplore), "look around", 3)
-	if err != nil {
-		t.Fatalf("RunSubagent: %v", err)
-	}
-	if strings.TrimSpace(answer) == "" {
-		t.Errorf("an empty answer should be described, not returned blank")
+	if err == nil || strings.TrimSpace(answer) != "" {
+		t.Fatalf("an unfinished run without an answer must fail: answer=%q err=%v", answer, err)
 	}
 }
 
@@ -453,8 +487,8 @@ func TestRunSubagentRespectsItsStepBudget(t *testing.T) {
 	}()
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("RunSubagent: %v", err)
+		if err == nil || !strings.Contains(err.Error(), "step-cap") {
+			t.Fatalf("expected step-cap, got %v", err)
 		}
 	case <-time.After(60 * time.Second):
 		t.Fatalf("the subagent did not stop at its step budget")

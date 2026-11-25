@@ -1,8 +1,34 @@
 package config
 
 import (
+	"encoding/json"
 	"testing"
 )
+
+func TestGuestOutboundRateJSON(t *testing.T) {
+	var account ChannelAccount
+	if err := json.Unmarshal([]byte(`{"guest":{"ratePerMinute":4,"outboundRatePerMinute":8}}`), &account); err != nil {
+		t.Fatal(err)
+	}
+	limits := account.EffectiveGuestLimits()
+	if limits.RatePerMinute != 4 || limits.OutboundRatePerMinute != 8 {
+		t.Fatalf("limits = %+v", limits)
+	}
+	b, err := json.Marshal(account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip ChannelAccount
+	if err := json.Unmarshal(b, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip.EffectiveGuestLimits() != limits {
+		t.Fatalf("round trip = %+v", roundTrip.Guest)
+	}
+	if (ChannelAccount{}).EffectiveGuestLimits().OutboundRatePerMinute != DefaultGuestOutboundRatePerMinute {
+		t.Fatal("outbound must use the default limit")
+	}
+}
 
 func TestNormaliseChannelsMigratesLegacyTelegram(t *testing.T) {
 	cfg := Default()

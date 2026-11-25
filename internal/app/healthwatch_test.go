@@ -98,6 +98,32 @@ func TestHealthAlerterCooldown(t *testing.T) {
 	}
 }
 
+func TestHealthDeliveryRetriesFailuresAndReportsActiveCooldown(t *testing.T) {
+	alerter := newHealthAlerter(healthThresholds{disk: 90, memory: 90, swap: 90}, time.Hour)
+	report := health.Report{DiskTotalBytes: 100, DiskFreeBytes: 1, DiskUsedPercent: 99}
+	now := time.Now()
+	calls := 0
+	deliver := func(string) int {
+		calls++
+		if calls == 1 {
+			return 1
+		}
+		return 0
+	}
+	if status := evaluateHealthDelivery(alerter, report, now, deliver); !strings.Contains(status, "delivery failure") {
+		t.Fatalf("missing delivery failure: %s", status)
+	}
+	if status := evaluateHealthDelivery(alerter, report, now.Add(time.Minute), deliver); calls != 2 || strings.Contains(status, "failure") {
+		t.Fatalf("failed delivery was not retried: calls=%d status=%s", calls, status)
+	}
+	if status := evaluateHealthDelivery(alerter, report, now.Add(2*time.Minute), deliver); calls != 2 || !strings.Contains(status, "still active") {
+		t.Fatalf("cooldown hid active condition: calls=%d status=%s", calls, status)
+	}
+	if status := evaluateHealthDelivery(alerter, health.Report{}, now.Add(3*time.Minute), deliver); !strings.Contains(status, "all clear") {
+		t.Fatalf("healthy state not reported: %s", status)
+	}
+}
+
 func TestHealthAlerterIgnoresUnknownCounters(t *testing.T) {
 	alerter := newHealthAlerter(healthThresholds{disk: 0, memory: 0, swap: 0}, time.Hour)
 	// A host that reports no swap total must not be read as 0% used and must

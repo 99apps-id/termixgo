@@ -129,6 +129,7 @@ func TestReviewRoleAcceptsTheInspectedRetry(t *testing.T) {
 	client := &fakeClient{steps: [][]provider.StreamEvent{
 		{textChunk("Looks good.")},
 		{callChunk("c1", "list_directory", `{"path":"."}`), textChunk("[MUST] - judge untested -> add the test")},
+		{textChunk("[MUST] - judge untested -> add the test")},
 	}}
 	parent := testEnv(t)
 	parent.Config = config.Default()

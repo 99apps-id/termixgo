@@ -40,14 +40,18 @@ type GuestLimits struct {
 	MaxSteps      int     `json:"maxSteps,omitempty"`
 	CostBudgetUSD float64 `json:"costBudgetUsd,omitempty"`
 	RatePerMinute int     `json:"ratePerMinute,omitempty"`
+	// OutboundRatePerMinute limits messages sent to each guest. Zero selects
+	// the default; a negative value disables the limit.
+	OutboundRatePerMinute int `json:"outboundRatePerMinute,omitempty"`
 }
 
 // Defaults for a guest turn. A zero value in the config means "use the
 // default"; a negative value means "no limit".
 const (
-	DefaultGuestMaxSteps      = 25
-	DefaultGuestCostBudgetUSD = 0.5
-	DefaultGuestRatePerMinute = 6
+	DefaultGuestMaxSteps              = 25
+	DefaultGuestCostBudgetUSD         = 0.5
+	DefaultGuestRatePerMinute         = 6
+	DefaultGuestOutboundRatePerMinute = 12
 )
 
 // Effective fills the guest defaults, keeping an explicit negative value as
@@ -62,6 +66,9 @@ func (g GuestLimits) Effective() GuestLimits {
 	}
 	if out.RatePerMinute == 0 {
 		out.RatePerMinute = DefaultGuestRatePerMinute
+	}
+	if out.OutboundRatePerMinute == 0 {
+		out.OutboundRatePerMinute = DefaultGuestOutboundRatePerMinute
 	}
 	return out
 }

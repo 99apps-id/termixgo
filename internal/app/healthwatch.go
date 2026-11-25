@@ -153,34 +153,50 @@ func (a *App) StartHealthWatch(ctx context.Context) error {
 // for the status line. A delivery failure is named rather than hidden: an
 // alert nobody received is the failure that matters here.
 func (a *App) checkHealth(ctx context.Context, alerter *healthAlerter, notify []string) {
-	report := health.Collect(a.workspace)
-	alerts := alerter.evaluate(report, time.Now())
-	if len(alerts) == 0 {
-		a.mu.Lock()
-		a.healthStatus = fmt.Sprintf("last check %s, all clear", time.Now().Format("15:04"))
-		a.mu.Unlock()
-		return
-	}
-	text := "Termixgo health warning:\n" + strings.Join(alerts, "\n")
-	deliveryErrors := 0
-	if len(notify) == 0 {
-		if err := a.Notify(ctx, text); err != nil {
-			deliveryErrors++
-		}
-	} else {
-		for _, target := range notify {
-			if err := a.DeliverTo(ctx, target, text); err != nil {
+	status := evaluateHealthDelivery(alerter, health.Collect(a.workspace), time.Now(), func(text string) int {
+		deliveryErrors := 0
+		if len(notify) == 0 {
+			if err := a.Notify(ctx, text); err != nil {
 				deliveryErrors++
 			}
+		} else {
+			for _, target := range notify {
+				if err := a.DeliverTo(ctx, target, text); err != nil {
+					deliveryErrors++
+				}
+			}
 		}
-	}
-	status := fmt.Sprintf("last check %s, %d alert(s)", time.Now().Format("15:04"), len(alerts))
-	if deliveryErrors > 0 {
-		status += fmt.Sprintf(", %d delivery failure(s)", deliveryErrors)
-	}
+		return deliveryErrors
+	})
 	a.mu.Lock()
 	a.healthStatus = status
 	a.mu.Unlock()
+}
+
+func evaluateHealthDelivery(alerter *healthAlerter, report health.Report, now time.Time, deliver func(string) int) string {
+	previous := make(map[string]time.Time, len(alerter.last))
+	for key, last := range alerter.last {
+		previous[key] = last
+	}
+	alerts := alerter.evaluate(report, now)
+	if len(alerts) == 0 {
+		active := newHealthAlerter(alerter.thresholds, alerter.cooldown).evaluate(report, now)
+		status := "all clear"
+		if len(active) > 0 {
+			status = fmt.Sprintf("%d condition(s) still active, notification on cooldown", len(active))
+		}
+		return fmt.Sprintf("last check %s, %s", now.Format("15:04"), status)
+	}
+	text := "Termixgo health warning:\n" + strings.Join(alerts, "\n")
+	deliveryErrors := deliver(text)
+	status := fmt.Sprintf("last check %s, %d alert(s)", now.Format("15:04"), len(alerts))
+	if deliveryErrors > 0 {
+		// Retry on the next check if any destination failed. This may repeat
+		// notifications at destinations that already received the alert.
+		alerter.last = previous
+		status += fmt.Sprintf(", %d delivery failure(s)", deliveryErrors)
+	}
+	return status
 }
 
 // HealthStatus reports the watcher for /status and the serve banner.

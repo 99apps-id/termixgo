@@ -205,6 +205,8 @@ type App struct {
 	// is the file of unknown DM senders waiting for the operator's answer.
 	channels        map[channel.AccountID]*channelRuntime
 	channelProblems map[channel.AccountID]string
+	gatewayAlerts   *gatewayNotifier
+	gatewayStopping bool
 	pairing         *channel.PairingStore
 	outboxCancel    context.CancelFunc
 
@@ -1936,6 +1938,7 @@ func (a *App) Processes() *agent.ProcessManager { return a.processes }
 // dev server does not outlive the terminal that started it.
 func (a *App) Shutdown() {
 	a.StopScheduler()
+	a.stopGatewayNotifier()
 	a.StopChannels()
 	a.StopTelegram()
 	defer agent.CloseLanguageServers()
