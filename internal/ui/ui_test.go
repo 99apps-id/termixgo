@@ -38,6 +38,21 @@ func TestBannerHasOneGlyphPerLetter(t *testing.T) {
 	}
 }
 
+// Every row of one glyph must share the same width: RenderBanner joins the
+// rows without per-glyph padding, so a ragged glyph shifts every letter
+// after it one cell sideways on the short rows and breaks the wordmark.
+func TestBannerGlyphRowsShareOneWidth(t *testing.T) {
+	for index, glyph := range bannerGlyphs {
+		width := lipgloss.Width(glyph[0])
+		for row, line := range glyph {
+			if got := lipgloss.Width(line); got != width {
+				t.Errorf("glyph %d (%c) row %d width = %d, want %d",
+					index, BannerWord()[index], row, got, width)
+			}
+		}
+	}
+}
+
 func TestRenderBannerContainsArt(t *testing.T) {
 	rendered := RenderBanner(NewStyles(DefaultPalette()))
 	if !strings.Contains(stripANSI(rendered), "██ ██") {
