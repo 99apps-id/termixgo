@@ -9,11 +9,27 @@ import (
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/channel"
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/version"
 )
+
+// gatewayGraceFor is how long a gateway must stay down before the operator is
+// told. A WhatsApp link drops and returns on its own all the time, and an
+// expired session needs the operator anyway, so it waits an hour. Telegram
+// polling recovers faster, and five minutes is already a real outage. A
+// variable so a test can shorten it.
+var gatewayGraceFor = func(channelName string) time.Duration {
+	if channelName == config.ChannelWhatsApp {
+		return time.Hour
+	}
+	return 5 * time.Minute
+}
 
 type gatewayNotifier struct {
 	mu     sync.Mutex
 	outbox *gatewayOutbox
+	// timers hold the offline alerts that are waiting out their grace period,
+	// one per source. They are guarded by mu.
+	timers map[string]*time.Timer
 	ctx    context.Context
 	cancel context.CancelFunc
 	wake   chan struct{}
@@ -37,6 +53,11 @@ func (a *App) ensureGatewayNotifier() (*gatewayNotifier, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Why this process started decides what the first reconnect says.
+	if err := outbox.beginRun(version.Version, currentBootTime()); err != nil {
+		_ = outbox.db.Close()
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &gatewayNotifier{outbox: outbox, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	a.gatewayAlerts = n
@@ -54,13 +75,70 @@ func (a *App) stopGatewayNotifier() {
 		return
 	}
 	n.cancel()
+	n.cancelAllOffline()
 	<-n.done
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	_ = n.outbox.db.Close()
 }
 
+// record takes a gateway state change. An offline state is held for its grace
+// period and dropped if the gateway returns first, so a brief disconnect is
+// never an alert. Every other state is applied at once.
 func (n *gatewayNotifier) record(a *App, key channel.AccountID, state string) {
+	source := key.Channel + "/" + key.Account
+	if state == "offline" {
+		if grace := gatewayGraceFor(key.Channel); grace > 0 {
+			n.armOffline(a, key, source, grace)
+			return
+		}
+	} else {
+		n.cancelOffline(source)
+	}
+	n.recordNow(a, key, state)
+}
+
+// armOffline starts the grace period of one source. A second offline report
+// while one is already waiting keeps the first start: the outage began then.
+func (n *gatewayNotifier) armOffline(a *App, key channel.AccountID, source string, grace time.Duration) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.ctx != nil && n.ctx.Err() != nil {
+		return
+	}
+	if n.timers == nil {
+		n.timers = map[string]*time.Timer{}
+	}
+	if _, waiting := n.timers[source]; waiting {
+		return
+	}
+	n.timers[source] = time.AfterFunc(grace, func() {
+		n.mu.Lock()
+		delete(n.timers, source)
+		n.mu.Unlock()
+		n.recordNow(a, key, "offline")
+	})
+}
+
+func (n *gatewayNotifier) cancelOffline(source string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if timer, ok := n.timers[source]; ok {
+		timer.Stop()
+		delete(n.timers, source)
+	}
+}
+
+func (n *gatewayNotifier) cancelAllOffline() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for source, timer := range n.timers {
+		timer.Stop()
+		delete(n.timers, source)
+	}
+}
+
+func (n *gatewayNotifier) recordNow(a *App, key channel.AccountID, state string) {
 	source := key.Channel + "/" + key.Account
 	targets := a.gatewayTargets(a.Config())
 	n.mu.Lock()

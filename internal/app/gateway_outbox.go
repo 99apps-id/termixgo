@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -14,7 +16,15 @@ import (
 
 // gatewayOutbox holds admin-only notifications until a transport confirms send.
 // A crash after send but before ack can duplicate a notification (at least once).
-type gatewayOutbox struct{ db *sql.DB }
+type gatewayOutbox struct {
+	db *sql.DB
+
+	// restartReason is why this process started, set once by beginRun. It is
+	// empty on the first run ever and for a store that never called beginRun.
+	mu            sync.Mutex
+	restartReason string
+	announced     bool
+}
 
 type gatewayDelivery struct {
 	id     int64
@@ -51,6 +61,7 @@ func openGatewayOutbox(path string) (*gatewayOutbox, error) {
 		`CREATE TABLE IF NOT EXISTS gateway_state (source TEXT PRIMARY KEY, status TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS gateway_outbox (id INTEGER PRIMARY KEY, channel TEXT NOT NULL, account TEXT NOT NULL, recipient TEXT NOT NULL, body TEXT NOT NULL, created INTEGER NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS gateway_pending_transitions (source TEXT PRIMARY KEY, status TEXT NOT NULL, updated INTEGER NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS gateway_run (id INTEGER PRIMARY KEY CHECK(id=1), version TEXT NOT NULL, boot INTEGER NOT NULL)`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			db.Close()
@@ -94,20 +105,39 @@ func (o *gatewayOutbox) transition(source, status string, targets []gatewayAdmin
 	if _, err := tx.Exec(`INSERT INTO gateway_state(source,status) VALUES(?,?) ON CONFLICT(source) DO UPDATE SET status=excluded.status`, source, status); err != nil {
 		return false, err
 	}
-	if (previous == "" || previous == "first_start") && status == "online" {
+	// A start is not an alert by itself: the alert is sent once the gateway is
+	// back, and says why it restarted. A first connection is only a baseline.
+	if status == "starting" || ((previous == "" || previous == "first_start") && status == "online") {
 		if _, err := tx.Exec(`DELETE FROM gateway_pending_transitions WHERE source=?`, source); err != nil {
 			return false, err
 		}
 		return false, tx.Commit()
 	}
+	announce := false
+	// The text names the kind of gateway, never the account. An account name
+	// such as "raka" is an internal id: it told the reader nothing they could
+	// act on and showed one account's name in another's alert.
+	label := gatewayLabel(source)
 	var body string
 	switch status {
 	case "offline":
-		body = "Peringatan gateway " + source + ": koneksi terputus."
+		body = "Gateway alert: " + label + " connection lost and not yet recovered."
 	case "online":
-		body = "Gateway " + source + " tersambung kembali."
-	case "starting":
-		body = "Gateway " + source + " dimulai ulang; menunggu koneksi."
+		if previous == "starting" {
+			// Coming back from a restart: one message per process, with the
+			// cause, however many accounts reconnect.
+			text, ok := o.restartNotice()
+			if !ok {
+				if _, err := tx.Exec(`DELETE FROM gateway_pending_transitions WHERE source=?`, source); err != nil {
+					return false, err
+				}
+				return false, tx.Commit()
+			}
+			body = text
+			announce = true
+		} else {
+			body = "Gateway " + label + " is connected again."
+		}
 	}
 	if len(targets) == 0 {
 		return false, fmt.Errorf("gateway notification has no configured private admin target")
@@ -130,7 +160,76 @@ func (o *gatewayOutbox) transition(source, status string, targets []gatewayAdmin
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
+	if announce {
+		o.mu.Lock()
+		o.announced = true
+		o.mu.Unlock()
+	}
 	return true, nil
+}
+
+// restartNotice is the one message of a restart, or false when this process
+// did not restart (the first run) or has already announced it.
+func (o *gatewayOutbox) restartNotice() (string, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.restartReason == "" || o.announced {
+		return "", false
+	}
+	return "Termixgo restarted " + o.restartReason + "; the gateway is connected.", true
+}
+
+// beginRun records this process and works out why it started: a new version
+// (an update), a new boot of the machine (the VPS restarted), or neither (the
+// service restarted). The first run ever has nothing to compare with and is
+// not a restart.
+func (o *gatewayOutbox) beginRun(version string, boot int64) error {
+	var previousVersion string
+	var previousBoot int64
+	err := o.db.QueryRow(`SELECT version, boot FROM gateway_run WHERE id=1`).Scan(&previousVersion, &previousBoot)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	reason := ""
+	switch {
+	case err == sql.ErrNoRows:
+	case previousVersion != version:
+		reason = fmt.Sprintf("because of an update from version %s to %s", previousVersion, version)
+	case boot != 0 && previousBoot != 0 && absInt64(boot-previousBoot) > 120:
+		reason = "because the VPS restarted"
+	default:
+		reason = "because the service restarted"
+	}
+	if _, err := o.db.Exec(`INSERT INTO gateway_run(id,version,boot) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version, boot=excluded.boot`, version, boot); err != nil {
+		return err
+	}
+	o.mu.Lock()
+	o.restartReason = reason
+	o.announced = false
+	o.mu.Unlock()
+	return nil
+}
+
+func absInt64(value int64) int64 {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+// gatewayLabel is the reader-facing name of a source ("whatsapp/raka" reads
+// "WhatsApp"). The state table still keys on the full source, so two accounts
+// of one channel keep separate state.
+func gatewayLabel(source string) string {
+	kind, _, _ := strings.Cut(source, "/")
+	switch strings.ToLower(kind) {
+	case "whatsapp":
+		return "WhatsApp"
+	case "telegram":
+		return "Telegram"
+	default:
+		return kind
+	}
 }
 
 type gatewayPendingTransition struct {

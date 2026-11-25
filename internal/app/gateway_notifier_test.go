@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/99apps-id/termixgo/internal/channel"
 	"github.com/99apps-id/termixgo/internal/config"
 )
 
 func TestGatewayDisconnectAlertsAdminsAndRetriesOfflineChannel(t *testing.T) {
+	setGatewayGrace(t, 0)
 	a := newTestApp(t)
 	defer a.Shutdown()
 	tgKey := channel.AccountID{Channel: config.ChannelTelegram, Account: "main"}
@@ -117,6 +120,7 @@ func TestGatewayNotificationRetriesAndRevalidatesAdmin(t *testing.T) {
 }
 
 func TestGatewayFailedTransitionPersistsAndRetriesWhenAdminAppears(t *testing.T) {
+	setGatewayGrace(t, 0)
 	a := newTestApp(t)
 	defer a.Shutdown()
 	tgKey := channel.AccountID{Channel: config.ChannelTelegram, Account: "main"}
@@ -162,5 +166,79 @@ func TestGatewayFailedTransitionPersistsAndRetriesWhenAdminAppears(t *testing.T)
 	remaining, err := outbox.pendingTransitions()
 	if err != nil || len(remaining) != 0 {
 		t.Fatalf("pending transitions not cleared: remaining=%v err=%v", remaining, err)
+	}
+}
+
+func setGatewayGrace(t *testing.T, grace time.Duration) {
+	t.Helper()
+	previous := gatewayGraceFor
+	gatewayGraceFor = func(string) time.Duration { return grace }
+	t.Cleanup(func() { gatewayGraceFor = previous })
+}
+
+func graceFixture(t *testing.T) (*App, *gatewayNotifier, channel.AccountID) {
+	t.Helper()
+	a := newTestApp(t)
+	t.Cleanup(a.Shutdown)
+	key := channel.AccountID{Channel: config.ChannelWhatsApp, Account: "wa"}
+	a.mu.Lock()
+	a.cfg.Channels.Telegram.Accounts = map[string]config.TelegramAccount{
+		"main": {ChannelAccount: config.ChannelAccount{Enabled: true}, OwnerUserID: 123},
+	}
+	a.mu.Unlock()
+	outbox, err := openGatewayOutbox(filepath.Join(t.TempDir(), "gateway.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = outbox.db.Close() })
+	n := &gatewayNotifier{outbox: outbox, ctx: context.Background()}
+	t.Cleanup(n.cancelAllOffline)
+	n.record(a, key, "online")
+	return a, n, key
+}
+
+// A disconnect that heals inside the grace period is not an alert.
+func TestGatewayBriefDisconnectIsNotAnAlert(t *testing.T) {
+	setGatewayGrace(t, 150*time.Millisecond)
+	a, n, key := graceFixture(t)
+	n.record(a, key, "offline")
+	n.record(a, key, "online")
+	time.Sleep(300 * time.Millisecond)
+	if pending, err := n.outbox.pending(); err != nil || len(pending) != 0 {
+		t.Fatalf("a brief disconnect queued %v (err=%v)", pending, err)
+	}
+}
+
+// One that outlasts it is, and the recovery after it is announced too.
+func TestGatewayLongOutageAlertsAfterTheGracePeriod(t *testing.T) {
+	setGatewayGrace(t, 80*time.Millisecond)
+	a, n, key := graceFixture(t)
+	n.record(a, key, "offline")
+	if pending, _ := n.outbox.pending(); len(pending) != 0 {
+		t.Fatalf("the alert came before the grace period: %v", pending)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if pending, _ := n.outbox.pending(); len(pending) == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	pending, _ := n.outbox.pending()
+	if len(pending) != 1 || !strings.Contains(pending[0].text, "connection lost") {
+		t.Fatalf("the outage was not announced: %v", pending)
+	}
+	n.record(a, key, "online")
+	if pending, _ := n.outbox.pending(); len(pending) != 2 {
+		t.Fatalf("the recovery was not announced: %v", pending)
+	}
+}
+
+func TestGatewayGraceIsAnHourForWhatsAppAndShorterForTelegram(t *testing.T) {
+	if got := gatewayGraceFor(config.ChannelWhatsApp); got != time.Hour {
+		t.Errorf("whatsapp grace = %v, want 1h", got)
+	}
+	if got := gatewayGraceFor(config.ChannelTelegram); got <= 0 || got >= time.Hour {
+		t.Errorf("telegram grace = %v", got)
 	}
 }

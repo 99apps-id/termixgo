@@ -22,6 +22,13 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Fixed
 
+- **Gateway alerts are for real restarts and real outages, and name no account.** A brief
+  disconnect no longer sends "lost" and "connected again" messages. A gateway must stay down
+  for an hour (WhatsApp, which includes an expired session) or five minutes (Telegram)
+  before the admins are told. A restart is announced once, when the gateway is back, with
+  its cause: an update (old and new version), a restart of the VPS, or a restart of the
+  service. The text names the kind of gateway, not the account, so one account's name no
+  longer appears in another's chat. Alerts are in English.
 - **Session titles no longer start with the environment block.** A title made from a turn
   carried "<env> workspace_root: ..." after the operator's first words, in every listing
   and in the picker. New titles leave the block out, and saved ones are cleaned when read.
