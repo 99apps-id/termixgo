@@ -820,6 +820,21 @@ func TestMuseAttestationDeniedNamesThePolicy(t *testing.T) {
 	}
 }
 
+func TestMuseTextToolResultsIdentifyFailure(t *testing.T) {
+	items := encodeTextToolsInput(ChatRequest{Messages: []Message{
+		{Role: RoleTool, ToolID: "first", Name: "read_file", Content: "file not found", ToolFailed: true},
+		{Role: RoleTool, ToolID: "second", Name: "read_file", Content: "ok"},
+	}})
+	for i, failed := range []bool{true, false} {
+		content := items[i]["content"].([]map[string]any)[0]["text"].(string)
+		body := strings.TrimSuffix(strings.TrimPrefix(content, "```tool_result\n"), "\n```")
+		var result map[string]any
+		if err := json.Unmarshal([]byte(body), &result); err != nil || result["is_error"] != failed {
+			t.Fatalf("result %d = %q, want is_error=%t (err=%v)", i, body, failed, err)
+		}
+	}
+}
+
 func TestParseMuseTextToolCallVariants(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -846,5 +861,175 @@ func TestParseMuseTextToolCallLeavesOrdinaryJSONAlone(t *testing.T) {
 	prose, calls := parseTextToolCalls(text)
 	if len(calls) != 0 || prose != text {
 		t.Fatalf("ordinary JSON changed: prose=%q calls=%+v", prose, calls)
+	}
+}
+
+// TestParseTextToolCallsRecoversAnUnclosedFence pins the cut-off recovery: a
+// step the backend cut mid-block still carries its call, instead of the
+// fence going out as prose and the call never running.
+func TestParseTextToolCallsRecoversAnUnclosedFence(t *testing.T) {
+	for _, text := range []string{
+		"checking now\n```tool_call\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"a.go\"}}",
+		"checking now\n<tool_call>{\"name\":\"read_file\",\"arguments\":{\"path\":\"a.go\"}}",
+	} {
+		prose, calls := parseTextToolCalls(text)
+		if len(calls) != 1 || calls[0].Name != "read_file" {
+			t.Fatalf("text=%q calls=%+v, want one read_file call", text, calls)
+		}
+		if strings.Contains(prose, "tool_call") {
+			t.Fatalf("tool block leaked into prose: %q", prose)
+		}
+	}
+}
+
+// TestEncodeResponsesInputSkipsUncorrelatedToolOutput pins the replay guard:
+// a tool result with no call id would make Meta reject the whole history, so
+// it is dropped instead of sent as an invalid output item.
+func TestEncodeResponsesInputSkipsUncorrelatedToolOutput(t *testing.T) {
+	items := encodeResponsesInput(ChatRequest{Messages: []Message{
+		{Role: RoleTool, Content: "orphan"},
+		{Role: RoleTool, ToolID: "call_1", Content: "kept"},
+	}})
+	found := 0
+	for _, item := range items {
+		if item["type"] != "function_call_output" {
+			continue
+		}
+		found++
+		if item["call_id"] != "call_1" {
+			t.Errorf("output item = %v, want only the correlated one", item)
+		}
+	}
+	if found != 1 {
+		t.Fatalf("output items = %v, want exactly one", items)
+	}
+}
+
+// TestMuseTransientDoesNotDoubleRetryServerErrors pins the retry split: the
+// shared post layer already retries 5xx and 429, so the Muse layer only
+// replays the 404 Meta reuses for overload, instead of up to twelve posts.
+func TestMuseTransientDoesNotDoubleRetryServerErrors(t *testing.T) {
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusInternalServerError, http.StatusTooManyRequests} {
+		err := &providerStatusError{label: "Meta Muse Code", status: status, message: "boom"}
+		if museTransient(err) {
+			t.Errorf("status %d is the post layer's to retry, must not also retry here", status)
+		}
+	}
+	if !museTransient(&providerStatusError{label: "Meta Muse Code", status: http.StatusNotFound, message: "not found"}) {
+		t.Errorf("a 404 is the one status the Muse layer must replay")
+	}
+}
+
+// TestParseTextToolCallsAcceptsMuseDialects pins the fallback protocol
+// tolerance: Muse models emit input/params/args and tool_name spellings from
+// their CLI training, and the call must survive instead of degrading to {}.
+func TestParseTextToolCallsAcceptsMuseDialects(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		text string
+		call string
+		args string
+	}{
+		{name: "input shape", text: "```tool_call\n{\"name\":\"exec\",\"input\":{\"cmd\":\"go test\"}}\n```", call: "exec", args: `{"cmd":"go test"}`},
+		{name: "params shape", text: "```tool_call\n{\"name\":\"read_file\",\"params\":{\"path\":\"a.go\"}}\n```", call: "read_file", args: `{"path":"a.go"}`},
+		{name: "tool_name shape", text: "```tool_call\n{\"tool_name\":\"read_file\",\"arguments\":{\"path\":\"a.go\"}}\n```", call: "read_file", args: `{"path":"a.go"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, calls := parseTextToolCalls(test.text)
+			if len(calls) != 1 || calls[0].Name != test.call || calls[0].Arguments != test.args {
+				t.Fatalf("parsed calls=%+v, want one %s call with %s", calls, test.call, test.args)
+			}
+		})
+	}
+}
+
+// TestMuseNamespaceSchemasArePermissive pins the parity rule: inner schemas
+// carry no required/additionalProperties block, so a CLI-dialect argument
+// (cmd, workdir) reaches the tolerant executor instead of a backend refusal.
+func TestMuseNamespaceSchemasArePermissive(t *testing.T) {
+	payload := (&museClient{}).payload(ChatRequest{
+		Model: "muse-spark-1.3",
+		Tools: []ToolDef{{Name: "run_command", Description: "exec", Schema: map[string]any{
+			"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}},
+			"required": []string{"command"}, "additionalProperties": false,
+		}}},
+	})
+	tools, ok := payload["tools"].([]map[string]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %v", payload["tools"])
+	}
+	inner, _ := tools[0]["tools"].([]map[string]any)
+	if len(inner) != 1 {
+		t.Fatalf("inner tools = %v", tools[0]["tools"])
+	}
+	parameters, _ := inner[0]["parameters"].(map[string]any)
+	if _, present := parameters["required"]; present {
+		t.Errorf("inner schema keeps required, backend would reject dialect args: %v", parameters)
+	}
+	if _, present := parameters["additionalProperties"]; present {
+		t.Errorf("inner schema keeps additionalProperties, backend would reject dialect args: %v", parameters)
+	}
+}
+
+// TestMuseCatalogueSendsSessionIdentity pins header parity: the model-list
+// read goes out with the same CLI identity as a streaming request.
+func TestMuseCatalogueSendsSessionIdentity(t *testing.T) {
+	var headers http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		headers = request.Header
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"data":[{"id":"muse-spark-1.3"}]}`))
+	}))
+	defer server.Close()
+	client, err := newHTTPClient(Provider{ID: "muse", Label: "Meta Muse Code", Kind: KindMuse}, server.URL, "LLM|muse-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	muse, ok := client.(*museClient)
+	if !ok {
+		t.Fatalf("client = %T, want *museClient", client)
+	}
+	ids, err := muse.catalogue(context.Background())
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("catalogue = %v, err=%v", ids, err)
+	}
+	if headers.Get("User-Agent") != museUserAgent {
+		t.Errorf("User-Agent = %q, want %q", headers.Get("User-Agent"), museUserAgent)
+	}
+	if headers.Get("x-tbh-session-id") == "" || headers.Get("x-tbh-agent-role") != "main" {
+		t.Errorf("catalogue missing session identity: %v", headers)
+	}
+}
+
+// TestMuseNamespacedToolCallResolves pins the decode path: a call the
+// backend qualifies with its namespace reaches the runner under the plain
+// tool name, not as an unknown qualified name.
+func TestMuseNamespacedToolCallResolves(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(writer, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_1\",\"namespace\":\"muse\",\"name\":\"read_file\",\"arguments\":\"{}\"}}\n\n")
+		fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+	}))
+	defer server.Close()
+	client, err := newHTTPClient(Provider{ID: "muse", Label: "Meta Muse Code", Kind: KindMuse}, server.URL, "LLM|muse-key")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	var calls []ToolCall
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "muse-spark-1.3",
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		Tools:    []ToolDef{{Name: "read_file", Description: "read", Schema: map[string]any{"type": "object"}}},
+	}, func(event StreamEvent) error {
+		if event.Type == EventToolCall {
+			calls = append(calls, *event.ToolCall)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if len(calls) != 1 || calls[0].Name != "read_file" {
+		t.Fatalf("calls = %+v, want one read_file call", calls)
 	}
 }

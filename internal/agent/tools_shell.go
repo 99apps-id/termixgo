@@ -48,15 +48,31 @@ const (
 )
 
 func (t *runCommandTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
-	command := strings.TrimSpace(argString(args, "command"))
+	// Muse CLI dialect: exec tools arrive as exec/bash/shell with command,
+	// cmd, script or an argv array, and workdir/timeout variants. Accept them
+	// all so a call the model knows how to make does not fail on the key name.
+	command := strings.TrimSpace(argString(args, "command", "cmd", "script", "command_line", "shell_command", "shell"))
+	if command == "" {
+		if parts := argList(args, "args", "argv"); len(parts) > 0 {
+			quoted := make([]string, 0, len(parts))
+			for _, part := range parts {
+				if strings.ContainsAny(part, " \t") {
+					quoted = append(quoted, `"`+strings.ReplaceAll(part, `"`, `\"`)+`"`)
+				} else {
+					quoted = append(quoted, part)
+				}
+			}
+			command = strings.Join(quoted, " ")
+		}
+	}
 	if command == "" {
 		return Result{Output: "command is required", IsError: true}, nil
 	}
-	timeout := argInt(args, "timeout_secs", defaultCommandTimeout, 1, maxCommandTimeout)
+	timeout := commandTimeoutSecs(args)
 	if looksLikeInstall(command) && timeout < installTimeoutFloor {
 		timeout = installTimeoutFloor
 	}
-	dir := resolvePath(env, argString(args, "cwd"))
+	dir := resolvePath(env, argString(args, "cwd", "workdir", "directory", "dir"))
 	if dir == "" {
 		dir = env.Workspace
 	}
@@ -67,6 +83,30 @@ func (t *runCommandTool) Run(ctx context.Context, env *Env, args map[string]any)
 		return Result{Output: fmt.Sprintf("working directory %s is not available", dir), IsError: true}, nil
 	}
 	return execute(ctx, env, command, dir, time.Duration(timeout)*time.Second)
+}
+
+// commandTimeoutSecs resolves the command timeout from any dialect key. The
+// ceiling applies to every key: a timeout_ms of a billion is the model
+// guessing at a unit, not a licence to run effectively forever.
+func commandTimeoutSecs(args map[string]any) int {
+	timeout := argInt(args, "timeout_secs", defaultCommandTimeout, 1, maxCommandTimeout)
+	if value := argInt(args, "timeout", 0, 0, 0); value > 0 {
+		timeout = value
+	} else if value := argInt(args, "timeout_seconds", 0, 0, 0); value > 0 {
+		timeout = value
+	} else if millis := argInt(args, "timeout_ms", 0, 0, 0); millis > 0 {
+		timeout = millis / 1000
+		if timeout < 1 {
+			timeout = 1
+		}
+	}
+	if timeout > maxCommandTimeout {
+		timeout = maxCommandTimeout
+	}
+	if timeout < 1 {
+		timeout = 1
+	}
+	return timeout
 }
 
 // looksLikeServer reports whether timed-out output reads as a server that was

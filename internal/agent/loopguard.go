@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -14,6 +15,7 @@ type loopGuard struct {
 	repeatCount int
 	errorStreak int
 	emptyStreak int
+	failedCalls map[string]struct{}
 	// nudges is how many recovery messages the guard already delivered. The
 	// first repetition is answered with a nudge that names what to change; the
 	// run only stops when the nudges are exhausted and the loop is still
@@ -37,14 +39,24 @@ const MaxEmptySteps = 3
 const MaxLoopNudges = 2
 
 func callSignature(name, args string) string {
-	return strings.ToLower(strings.TrimSpace(name)) + "|" + strings.TrimSpace(args)
+	args = strings.TrimSpace(args)
+	var value any
+	if json.Valid([]byte(args)) {
+		dec := json.NewDecoder(strings.NewReader(args))
+		dec.UseNumber()
+		if dec.Decode(&value) == nil {
+			if canonical, err := json.Marshal(value); err == nil {
+				args = string(canonical)
+			}
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(name)) + "|" + args
 }
 
 // noteCall records one tool call and reports whether the run must stop.
 // The first repeat answers with a nudge rather than a stop, so the model is
 // told what is wrong while it still has budget to fix it.
-func (g *loopGuard) noteCall(name, args string) (stop bool, reason string) {
-	signature := callSignature(name, args)
+func (g *loopGuard) noteCall(name, signature string) (stop bool, reason string) {
 	if signature == g.lastCall && signature != "|" {
 		g.repeatCount++
 	} else {
@@ -76,6 +88,14 @@ func repeatNudge(tool string, attempt int) string {
 func (g *loopGuard) noteSuccess() {
 	g.repeatCount = 0
 	g.lastCall = ""
+	clear(g.failedCalls)
+}
+
+func (g *loopGuard) noteFailure(signature string) {
+	if g.failedCalls == nil || len(g.failedCalls) >= 32 {
+		g.failedCalls = make(map[string]struct{})
+	}
+	g.failedCalls[signature] = struct{}{}
 }
 
 // noteResult records whether the tool result was an error. A streak of errors

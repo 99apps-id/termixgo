@@ -312,3 +312,56 @@ func TestStepToolsLoadsOnDemand(t *testing.T) {
 		t.Errorf("with search off every tool is visible")
 	}
 }
+
+// TestRegistryLookupStripsMuseNamespace pins the namespace parity: calls
+// qualified by the Muse backend resolve to the plain Termixgo tool, and the
+// exec dialect names resolve through the run_command aliases.
+func TestRegistryLookupStripsMuseNamespace(t *testing.T) {
+	registry := DefaultRegistry()
+	for _, name := range []string{"muse.read_file", "muse__read_file", "muse_read_file", "muse:read_file"} {
+		tool, ok := registry.Lookup(name)
+		if !ok || tool.Name() != "read_file" {
+			t.Errorf("Lookup(%q) = %v,%t, want read_file", name, tool, ok)
+		}
+	}
+	for _, name := range []string{"exec", "bash", "shell"} {
+		tool, ok := registry.Lookup(name)
+		if !ok || tool.Name() != "run_command" {
+			t.Errorf("Lookup(%q) = %v,%t, want run_command", name, tool, ok)
+		}
+	}
+}
+
+// TestCommandTimeoutRespectsCeiling pins the guard: every dialect key is
+// clamped to the same ceiling, so an oversized timeout_ms is bounded.
+func TestCommandTimeoutRespectsCeiling(t *testing.T) {
+	for _, args := range []map[string]any{
+		{"timeout": 3600}, {"timeout_seconds": 3600}, {"timeout_ms": 3600000},
+		{"timeout_secs": 3600}, {"timeout_ms": 50},
+	} {
+		if got := commandTimeoutSecs(args); got > maxCommandTimeout || got < 1 {
+			t.Errorf("args %v: timeout = %d, want within 1..%d", args, got, maxCommandTimeout)
+		}
+	}
+	if got := commandTimeoutSecs(map[string]any{"timeout_ms": 30000}); got != 30 {
+		t.Errorf("timeout_ms = %d, want 30", got)
+	}
+}
+
+// TestRunCommandAcceptsMuseDialect pins the exec parity: command keys, workdir
+// and timeout spellings from the Muse CLI all reach the executor.
+func TestRunCommandAcceptsMuseDialect(t *testing.T) {
+	env := &Env{Workspace: t.TempDir()}
+	tool := &runCommandTool{}
+	for _, args := range []map[string]any{
+		{"cmd": "echo dialet-cmd"},
+		{"script": "echo dialet-script"},
+		{"command": "echo dialet-command", "workdir": env.Workspace, "timeout_ms": 30000},
+		{"args": []any{"echo", "dialet-args"}},
+	} {
+		result, err := tool.Run(context.Background(), env, args)
+		if err != nil || result.IsError || !strings.Contains(result.Output, "dialet-") {
+			t.Errorf("args %v: err=%v output=%q", args, err, result.Output)
+		}
+	}
+}

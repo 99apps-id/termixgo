@@ -1108,6 +1108,10 @@ failed is skipped, and the result reports what completed, failed and was skipped
 Background work lets the model keep going while something else runs, and
 brings it back when that work needs attention.
 
+- **Built-in specialists.** Delegate bug diagnosis to `debugger`, regression
+  tests to `tester`, and documentation to `docs`. Use `architecture-review`
+  and `dependency-review` for read-only reviews. Set `subagentModels` to
+  choose a different model for any of these roles.
 - **Subagents keep their context.** Every `run_subagent` call returns an id
   such as `agent-1`. `send_subagent` continues that worker with a follow-up
   and its whole earlier context, so a second question costs only the new turn.

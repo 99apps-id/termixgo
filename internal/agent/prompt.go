@@ -253,6 +253,7 @@ const basePrompt = `You are Termixgo, an agentic personal coding and operations 
 
 ## TOOL USE
 - Paths may be absolute or relative to the workspace root.
+- Shell execution is run_command (aliases: exec, bash, shell); it accepts command or cmd, cwd or workdir, and timeout_secs or timeout_ms. File reads are read_file (alias: read). Prefer the canonical names.
 - edit requires old_string to match the file byte for byte and to be unique. Copy it from read_file output, without any line-number prefix.
  - run_command runs through PowerShell on Windows and sh elsewhere. Use run_checks when the project has its own task for a check.
  - A dev server, file watcher, or any command that keeps running belongs in run_background, never run_command. Read it with run_logs and stop it with run_kill.

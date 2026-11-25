@@ -189,7 +189,14 @@ func (c *museClient) catalogue(ctx context.Context) ([]string, error) {
 	}
 	request.Header.Set("Authorization", "Bearer "+c.currentKey())
 	request.Header.Set("User-Agent", museUserAgent)
+	request.Header.Set("Accept", "application/json")
 	request.Header.Set("x-client-id", "tbh:exec")
+	session := c.session()
+	request.Header.Set("x-tbh-session-id", session)
+	request.Header.Set("x-meta-ai-gateway-session-id", session)
+	request.Header.Set("x-tbh-thread-id", session)
+	request.Header.Set("x-tbh-root-session-id", session)
+	request.Header.Set("x-tbh-agent-role", "main")
 	response, err := c.http.Do(request)
 	if err != nil {
 		return nil, err
@@ -297,22 +304,15 @@ func (c *museClient) sendWithRetry(ctx context.Context, key string, payload map[
 }
 
 // museTransient reports whether an error is worth retrying with the same key.
-// The 404 matters most: Meta uses it both for a stale key and for its own
-// overload, so it is retried first and only treated as stale after that.
+// Only the 404 is replayed here: Meta uses it both for a stale key and for
+// its own overload, so it is retried first and only treated as stale after
+// that. Every other retryable status (408, 429, 5xx) is already retried by
+// the shared post layer, so replaying it here would multiply one failed step
+// into up to a dozen posts.
 func museTransient(err error) bool {
 	var status *providerStatusError
 	if errors.As(err, &status) {
-		switch status.status {
-		case http.StatusNotFound,
-			http.StatusRequestTimeout,
-			http.StatusTooManyRequests,
-			http.StatusInternalServerError,
-			http.StatusBadGateway,
-			http.StatusServiceUnavailable,
-			http.StatusGatewayTimeout:
-			return true
-		}
-		return false
+		return status.status == http.StatusNotFound
 	}
 	return retryableTransport(err)
 }
@@ -369,7 +369,7 @@ func (c *museClient) payload(req ChatRequest) map[string]any {
 			"type":        "namespace",
 			"name":        "muse",
 			"description": "Muse Code tool set.",
-			"tools":       encodeResponsesTools(req.Tools),
+			"tools":       encodeMuseNamespaceTools(req.Tools),
 		}}
 	}
 	// The CLI asks for a reasoning summary and the encrypted reasoning
@@ -382,6 +382,28 @@ func (c *museClient) payload(req ChatRequest) map[string]any {
 		payload["prompt_cache_key"] = "tbh:main:" + c.session()
 	}
 	return payload
+}
+
+// encodeMuseNamespaceTools encodes the namespace inner tools. Muse models
+// were trained on the Muse Code CLI dialect, so they emit CLI spellings
+// (cmd, workdir, input) that Termixgo's tolerant executors accept. A strict
+// schema (required + additionalProperties:false) would make the backend
+// reject those spellings before they reach the executor, so the inner
+// schemas stay permissive and Termixgo validates at runtime instead.
+func encodeMuseNamespaceTools(tools []ToolDef) []map[string]any {
+	out := encodeResponsesTools(tools)
+	for _, tool := range out {
+		if parameters, ok := tool["parameters"].(map[string]any); ok {
+			copied := make(map[string]any, len(parameters))
+			for key, value := range parameters {
+				copied[key] = value
+			}
+			delete(copied, "required")
+			delete(copied, "additionalProperties")
+			tool["parameters"] = copied
+		}
+	}
+	return out
 }
 
 // museEffort maps the shared effort levels onto Meta's reasoning effort.
@@ -478,10 +500,18 @@ func (c *museClient) textToolsPayload(req ChatRequest) map[string]any {
 	payload := map[string]any{
 		"model":  req.Model,
 		"stream": true,
+		"store":  false,
 		"input":  encodeTextToolsInput(req),
 	}
 	if instructions != "" {
 		payload["instructions"] = instructions
+	}
+	// Same reasoning contract as a native step: the summary keeps the loop
+	// guard honest and the encrypted content rides back on the next step.
+	payload["reasoning"] = map[string]any{"summary": "auto", "effort": museEffort(req.Effort)}
+	payload["include"] = []string{"reasoning.encrypted_content"}
+	if c.httpClient != nil {
+		payload["prompt_cache_key"] = "tbh:main:" + c.session()
 	}
 	return payload
 }
@@ -493,7 +523,7 @@ func textToolProtocol(tools []ToolDef) string {
 	out.WriteString("Tool use (text protocol): the tools below are available, but they are not registered with this API request. Termixgo executes them on the operator's machine and returns their output to you.\n")
 	out.WriteString("To call a tool, end your reply with one block per call, in exactly this shape and with no text after the last block:\n")
 	out.WriteString("```tool_call\n{\"name\":\"tool_name\",\"arguments\":{\"arg\":value}}\n```\n")
-	out.WriteString("Tool outputs come back as tool_result blocks; read them and continue. When the task is finished, answer in plain text with no tool_call block.\n\nAvailable tools:\n")
+	out.WriteString("Tool outputs come back as tool_result blocks. If is_error is true, diagnose the output and change the arguments or approach; do not repeat the unchanged call. When the task is finished, answer in plain text with no tool_call block.\n\nAvailable tools:\n")
 	for _, tool := range tools {
 		schema, err := json.Marshal(tool.Schema)
 		if err != nil || len(schema) == 0 {
@@ -520,6 +550,15 @@ func encodeTextToolsInput(req ChatRequest) []map[string]any {
 				"content": responsesUserContent(message),
 			})
 		case RoleAssistant:
+			for _, item := range message.ReasoningItems {
+				if item.Kind != "" {
+					continue
+				}
+				if strings.TrimSpace(item.EncryptedContent) == "" && !validResponsesID(item.ID) {
+					continue
+				}
+				items = append(items, reasoningItemInput(item))
+			}
 			var parts []string
 			if strings.TrimSpace(message.Content) != "" {
 				parts = append(parts, message.Content)
@@ -536,10 +575,11 @@ func encodeTextToolsInput(req ChatRequest) []map[string]any {
 				"content": []map[string]any{{"type": "output_text", "text": strings.Join(parts, "\n\n")}},
 			})
 		case RoleTool:
-			block, err := json.Marshal(map[string]string{
-				"name":    message.Name,
-				"call_id": message.ToolID,
-				"output":  message.Content,
+			block, err := json.Marshal(map[string]any{
+				"name":     message.Name,
+				"call_id":  message.ToolID,
+				"output":   message.Content,
+				"is_error": message.ToolFailed,
 			})
 			if err != nil {
 				continue
@@ -583,6 +623,19 @@ func parseTextToolCalls(text string) (string, []ToolCall) {
 	blockRE := regexp.MustCompile("(?s)(```(?:tool_call|tool-call|json)\\s*(.*?)```|<tool_call>\\s*(.*?)\\s*</tool_call>)")
 	matches := blockRE.FindAllStringSubmatchIndex(text, -1)
 	if len(matches) == 0 {
+		// A step the backend cut mid-block ends with an unclosed fence. The
+		// call inside is still valid; recovering it keeps one truncated
+		// step from losing the work, instead of the fence going out as
+		// prose and the call never running.
+		if tail := unclosedToolCallTail(text); tail != "" {
+			closer := "```\n"
+			if strings.HasPrefix(tail, "<tool_call>") {
+				closer = "</tool_call>"
+			}
+			if prose, calls := parseTextToolCalls(tail + closer); len(calls) == 1 {
+				return prose, calls
+			}
+		}
 		return strings.TrimSpace(text), nil
 	}
 	var prose strings.Builder
@@ -596,14 +649,38 @@ func parseTextToolCalls(text string) (string, []ToolCall) {
 		}
 		var parsed struct {
 			Name      string          `json:"name"`
+			ToolName  string          `json:"tool_name"`
 			Arguments json.RawMessage `json:"arguments"`
+			Input     json.RawMessage `json:"input"`
+			Params    json.RawMessage `json:"params"`
+			Args      json.RawMessage `json:"args"`
 		}
-		if bodyStart < 0 || json.Unmarshal([]byte(strings.TrimSpace(text[bodyStart:bodyEnd])), &parsed) != nil || strings.TrimSpace(parsed.Name) == "" {
+		if bodyStart < 0 || json.Unmarshal([]byte(strings.TrimSpace(text[bodyStart:bodyEnd])), &parsed) != nil {
 			prose.WriteString(text[match[0]:match[1]])
 			cursor = match[1]
 			continue
 		}
+		name := strings.TrimSpace(parsed.Name)
+		if name == "" {
+			name = strings.TrimSpace(parsed.ToolName)
+		}
+		if name == "" {
+			prose.WriteString(text[match[0]:match[1]])
+			cursor = match[1]
+			continue
+		}
+		// Muse models also emit the Anthropic shape (input) and the Go
+		// shape (params, args); accept every spelling so the call survives.
 		arguments := strings.TrimSpace(string(parsed.Arguments))
+		if arguments == "" || arguments == "null" {
+			arguments = strings.TrimSpace(string(parsed.Input))
+		}
+		if arguments == "" || arguments == "null" {
+			arguments = strings.TrimSpace(string(parsed.Params))
+		}
+		if arguments == "" || arguments == "null" {
+			arguments = strings.TrimSpace(string(parsed.Args))
+		}
 		if arguments == "" || arguments == "null" {
 			arguments = "{}"
 		}
@@ -618,7 +695,7 @@ func parseTextToolCalls(text string) (string, []ToolCall) {
 		}
 		calls = append(calls, ToolCall{
 			ID:        fmt.Sprintf("call_muse_%d", sessionSeq.Add(1)),
-			Name:      strings.TrimSpace(parsed.Name),
+			Name:      name,
 			Arguments: arguments,
 		})
 		cursor = match[1]
@@ -628,6 +705,35 @@ func parseTextToolCalls(text string) (string, []ToolCall) {
 		return text, nil
 	}
 	return strings.TrimSpace(prose.String()), calls
+}
+
+// unclosedToolCallTail returns the trailing tool-call block when the text
+// ends inside one, or "" when it does not. A fenced block that already has
+// its closing fence is complete (and simply invalid), so it stays prose.
+func unclosedToolCallTail(text string) string {
+	opens := []string{"```tool_call", "```tool-call", "```json", "<tool_call>"}
+	start := -1
+	open := ""
+	for _, candidate := range opens {
+		if index := strings.LastIndex(text, candidate); index > start {
+			start, open = index, candidate
+		}
+	}
+	if start < 0 {
+		return ""
+	}
+	tail := text[start:]
+	switch open {
+	case "<tool_call>":
+		if strings.Contains(tail, "</tool_call>") {
+			return ""
+		}
+	default:
+		if strings.Contains(tail[len(open):], "```") {
+			return ""
+		}
+	}
+	return tail
 }
 
 // isAttestationDenied reports whether an error is Meta's client

@@ -367,6 +367,15 @@ func (r *Registry) Lookup(name string) (Tool, bool) {
 			return tool, true
 		}
 	}
+	// Namespaced calls: the Muse backend qualifies inner tools as
+	// muse__read_file or muse_read_file on the wire.
+	for _, prefix := range []string{"muse__", "muse_"} {
+		if lower := strings.ToLower(trimmed); strings.HasPrefix(lower, prefix) && len(trimmed) > len(prefix) {
+			if tool, ok := r.Lookup(trimmed[len(prefix):]); ok {
+				return tool, true
+			}
+		}
+	}
 	return nil, false
 }
 

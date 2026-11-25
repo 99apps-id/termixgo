@@ -8,6 +8,35 @@ import (
 	"github.com/99apps-id/termixgo/internal/provider"
 )
 
+func TestFailedToolIsNotExecutedAgainWithEquivalentJSON(t *testing.T) {
+	steps := [][]provider.StreamEvent{
+		{callChunk("first", "read_file", `{"path":"missing.txt","limit":3}`)},
+		{callChunk("repeat", "read_file", ` { "limit": 3, "path": "missing.txt" } `)},
+		{callChunk("changed", "read_file", `{"path":"present.txt"}`)},
+		{textChunk("recovered")},
+	}
+	runner, _, recorder := newTestRunner(t, &fakeClient{steps: steps}, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	session := NewSession(t.TempDir(), "test-model")
+	if err := runner.Run(context.Background(), session, "read"); err != nil {
+		t.Fatal(err)
+	}
+	var starts int
+	for _, event := range recorder.events {
+		if event.Kind == EventToolStart && event.ToolName == "read_file" {
+			starts++
+		}
+	}
+	if starts != 2 {
+		t.Errorf("read executions = %d, want first and changed only", starts)
+	}
+	for _, msg := range session.Messages() {
+		if msg.ToolID == "repeat" && msg.ToolFailed && strings.Contains(msg.Content, "Not executed") {
+			return
+		}
+	}
+	t.Error("repeat lacked a failed tool result explaining the skip")
+}
+
 // TestLoopGuardTripsOnRepeatedCalls is the no-loop contract: the same tool
 // call over and over first earns recovery nudges, and a run that ignores
 // them ends with an explanation instead of burning the whole step budget.

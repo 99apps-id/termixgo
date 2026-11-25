@@ -58,9 +58,10 @@ type Message struct {
 	ToolCalls      []ToolCall
 	// ToolID correlates a tool result with the assistant call (OpenAI,
 	// Anthropic). Name is the tool name (Google matches results by name).
-	ToolID string
-	Name   string
-	Images []Image
+	ToolID     string
+	ToolFailed bool `json:",omitempty"`
+	Name       string
+	Images     []Image
 }
 
 // ToolDef is a tool offered to the model. Schema is a JSON Schema object.

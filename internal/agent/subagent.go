@@ -3,15 +3,13 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/99apps-id/termixgo/internal/provider"
 )
 
-// SubagentType names one worker role. The types differ only in the system
-// prompt they are pointed at, not in what they may touch: like Termigo, a
-// subagent is a peer of the main agent with the full toolset and no sandbox.
-// Only the nesting cap withholds the spawn tool.
+// SubagentType names a worker or a read-only reviewer.
 type SubagentType string
 
 const (
@@ -21,6 +19,11 @@ const (
 	SubagentCodeReview SubagentType = "code-review"
 	SubagentSecurity   SubagentType = "security"
 	SubagentImage      SubagentType = "image"
+	SubagentDebugger   SubagentType = "debugger"
+	SubagentTester     SubagentType = "tester"
+	SubagentDocs       SubagentType = "docs"
+	SubagentArchReview SubagentType = "architecture-review"
+	SubagentDepsReview SubagentType = "dependency-review"
 	// Authorized security testing: the operator scopes the engagement and
 	// these roles work inside it. Recon is read-tier; the specialist roles
 	// may run scanners and probes through the normal approval policy.
@@ -118,6 +121,38 @@ var Subagents = map[SubagentType]SubagentDef{
 		Description:  "Implements one self-contained piece of work.",
 		SystemPrompt: "You are a builder subagent. Implement ONE self-contained piece of work described in your prompt, then stop. Read before you write. Stay inside the files your prompt names. Verify with the smallest check and return a short summary of files changed and anything unfinished.",
 	},
+	SubagentDebugger: {
+		Type:         SubagentDebugger,
+		Label:        "Debugger",
+		Description:  "Reproduces and diagnoses a bug, then verifies an authorized fix.",
+		SystemPrompt: "Reproduce the reported problem with the smallest deterministic check. Distinguish evidence from hypotheses. Fix only if requested, and verify with the regression case and the project's check. Report any missing reproduction details.",
+	},
+	SubagentTester: {
+		Type:         SubagentTester,
+		Label:        "Test engineer",
+		Description:  "Writes targeted regression tests and checks their failure and success paths.",
+		SystemPrompt: "Work on the named tests and fixtures. Prefer deterministic assertions that catch a real regression; verify the negative and positive cases. Do not change production code without explicit authorization. Report commands and outcomes.",
+	},
+	SubagentDocs: {
+		Type:         SubagentDocs,
+		Label:        "Documentation",
+		Description:  "Updates documentation and examples against actual repository behavior.",
+		SystemPrompt: "Check the requested behavior and public interfaces in source or tests, then update only the specified documents and examples. Verify commands or examples when possible and name unverified claims.",
+	},
+	SubagentArchReview: {
+		Type:         SubagentArchReview,
+		Label:        "Architecture review",
+		Description:  "Reviews module boundaries, coupling and migration risks without editing.",
+		SystemPrompt: "Trace relevant module boundaries and callers. Explain observable costs of the current design, feasible alternatives and migration risks. Cite files and lines, distinguish evidence from inference, and do not edit.",
+		ReadOnly:     true,
+	},
+	SubagentDepsReview: {
+		Type:         SubagentDepsReview,
+		Label:        "Dependency review",
+		Description:  "Audits manifests, pinned versions and dependency impact without editing.",
+		SystemPrompt: "Read manifests and lockfiles, trace why named dependencies are needed and report compatibility or upgrade risks. Verify version and advisory claims with evidence. Do not install, upgrade or edit anything.",
+		ReadOnly:     true,
+	},
 	SubagentCodeReview: {
 		Type:         SubagentCodeReview,
 		Label:        "Code review",
@@ -180,11 +215,25 @@ var Subagents = map[SubagentType]SubagentDef{
 // LookupSubagent resolves a type, falling back to the general worker so a
 // free-form string never has to handle a miss.
 func LookupSubagent(raw string) SubagentDef {
-	trimmed := SubagentType(strings.ToLower(strings.TrimSpace(raw)))
-	if def, ok := Subagents[trimmed]; ok {
+	if def, ok := findSubagent(raw); ok {
 		return def
 	}
 	return Subagents[SubagentGeneral]
+}
+
+func findSubagent(raw string) (SubagentDef, bool) {
+	role := SubagentType(strings.ToLower(strings.TrimSpace(raw)))
+	def, ok := Subagents[role]
+	return def, ok
+}
+
+func subagentRoleNames() []string {
+	roles := make([]string, 0, len(Subagents))
+	for role := range Subagents {
+		roles = append(roles, string(role))
+	}
+	sort.Strings(roles)
+	return roles
 }
 
 // SubagentIsReadOnly reports whether a role is read-tier by design.

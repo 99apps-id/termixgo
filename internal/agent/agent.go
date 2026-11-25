@@ -452,17 +452,19 @@ runLoop:
 				answerSkippedCalls(session, calls[index:], "the turn was stopped")
 				break
 			}
-			if stop, reason := guard.noteCall(call.Name, call.Arguments); stop {
+			signature := callSignature(call.Name, call.Arguments)
+			if stop, reason := guard.noteCall(call.Name, signature); stop {
 				stopReason = "loop-guard"
 				emit(Event{Kind: EventNotice, Text: reason})
 				answerSkippedCalls(session, calls[index:], reason)
 				break
 			} else if reason != "" {
-				// A repetition nudge, not a stop: the call still runs, and the
-				// reason rides along as a user message after the batch so the next
-				// step answers the diagnosis instead of repeating blind.
 				diagnose = reason
 				emit(Event{Kind: EventNotice, Text: reason})
+			}
+			if _, failed := guard.failedCalls[signature]; failed {
+				session.addToolResult(call.ID, call.Name, "Not executed: this tool already failed with the same arguments. Read the original error and change the arguments or approach before trying again.", true)
+				continue
 			}
 			before := r.todoSnapshot()
 			editsBefore := len(ledger.ChangedCodePaths)
@@ -483,7 +485,7 @@ runLoop:
 				r.Journal.Record(call.Name, call.Arguments, result.Output)
 				failedTools[strings.ToLower(strings.TrimSpace(call.Name))] = true
 			}
-			session.AddToolResult(call.ID, call.Name, result.Output)
+			session.addToolResult(call.ID, call.Name, result.Output, result.IsError)
 			if len(result.Images) > 0 {
 				pendingImages = append(pendingImages, result.Images...)
 			}
@@ -511,7 +513,9 @@ runLoop:
 					emit(Event{Kind: EventUsage, Usage: result.SubagentUsage, CostUSD: sessionCost, CostKnown: costKnown, CostUnpriced: unpriced, UsageProvider: result.SubagentProvider, UsageModel: result.SubagentModel})
 				}
 			}
-			if !result.IsError {
+			if result.IsError {
+				guard.noteFailure(signature)
+			} else {
 				// A call that moved the work forward clears the repetition state:
 				// reruns that succeed are progress, and verification legitimately
 				// repeats reads and checks.
@@ -696,7 +700,7 @@ func taskJustCompleted(before, after []Todo) bool {
 // has nothing to do with the operator's work.
 func answerSkippedCalls(session *Session, calls []provider.ToolCall, reason string) {
 	for _, call := range calls {
-		session.AddToolResult(call.ID, call.Name, "Not run: "+reason)
+		session.addToolResult(call.ID, call.Name, "Not run: "+reason, true)
 	}
 }
 

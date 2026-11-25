@@ -233,7 +233,14 @@ func decodeResponsesStream(label string, body io.Reader, emit func(StreamEvent) 
 						}
 					}
 				}
-				call := ToolCall{ID: event.Item.CallID, Name: event.Item.Name, Arguments: arguments}
+				// A namespaced tool call may carry the namespace in a
+				// separate field, so the bare name would resolve to an
+				// unknown tool. Join them: muse + read_file.
+				name := event.Item.Name
+				if event.Item.Namespace != "" {
+					name = event.Item.Namespace + "." + name
+				}
+				call := ToolCall{ID: event.Item.CallID, Name: name, Arguments: arguments}
 				if err := emit(StreamEvent{Type: EventToolCall, ToolCall: &call}); err != nil {
 					return err
 				}
@@ -347,12 +354,16 @@ func encodeResponsesInput(req ChatRequest) []map[string]any {
 				})
 			}
 		case RoleTool:
-			if message.ToolID != "" {
-				if _, seen := seenToolOutputs[message.ToolID]; seen {
-					continue
-				}
-				seenToolOutputs[message.ToolID] = struct{}{}
+			// An output with no call id correlates with nothing: the
+			// backend rejects the whole history over it, so it is
+			// dropped instead of poisoning every later step.
+			if message.ToolID == "" {
+				continue
 			}
+			if _, seen := seenToolOutputs[message.ToolID]; seen {
+				continue
+			}
+			seenToolOutputs[message.ToolID] = struct{}{}
 			items = append(items, map[string]any{
 				"type":    "function_call_output",
 				"call_id": message.ToolID,
@@ -433,6 +444,14 @@ func withResponseToolNames(tools []ToolDef, emit func(StreamEvent) error) func(S
 		wireName := responsesFunctionName(tool.Name)
 		if _, exists := aliases[wireName]; !exists {
 			aliases[wireName] = tool.Name
+		}
+		// Namespaced backends qualify the wire name: muse.read_file,
+		// muse__read_file, muse_read_file. Map the qualified forms too so
+		// the agent registry sees the plain tool name.
+		for _, qualified := range []string{"muse." + wireName, "muse__" + wireName, "muse_" + wireName} {
+			if _, exists := aliases[qualified]; !exists {
+				aliases[qualified] = tool.Name
+			}
 		}
 	}
 	return func(event StreamEvent) error {

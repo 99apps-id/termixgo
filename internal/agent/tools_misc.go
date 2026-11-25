@@ -720,13 +720,13 @@ func (t *subagentTool) DoneLabel(a map[string]any) string {
 	return "Delegated (" + LookupSubagent(argString(a, "type")).Label + "): " + Shorten(argString(a, "prompt", "description"), 50)
 }
 func (t *subagentTool) Description() string {
-	return "Spawn a subagent worker (explore, general, builder, code-review, security, image, vision, pentest, pentest-recon, pentest-web, pentest-network) with the full toolset and no sandbox. Use it for a self-contained task so the main context stays lean. Review types only read. The result names the subagent id: continue it with send_subagent; with background it runs while you work and subagent_status reads its report."
+	return "Delegate a self-contained task to a built-in role. Choose debugger for bug diagnosis, tester for regression tests, docs for documentation, architecture-review for module design, or dependency-review for manifests and upgrades. Review types are read-only. Continue an existing worker with send_subagent or read its background report with subagent_status."
 }
 func (t *subagentTool) Schema() map[string]any {
 	return object(map[string]any{
 		"prompt":      strProp("The task to carry out, stated precisely."),
 		"description": strProp("Three to five words naming the task."),
-		"type":        strProp("Worker type: explore, general, builder, code-review, security, image, vision, pentest, pentest-recon, pentest-web, pentest-network. Defaults to general."),
+		"type":        strProp("Built-in role: " + strings.Join(subagentRoleNames(), ", ") + ". Defaults to general."),
 		"background":  boolProp("Run it in the background and keep working; you are notified when it finishes."),
 	}, "prompt")
 }
@@ -746,6 +746,11 @@ func (t *subagentTool) Run(ctx context.Context, env *Env, args map[string]any) (
 	if subType == "" {
 		subType = string(SubagentGeneral)
 	}
+	def, ok := findSubagent(subType)
+	if !ok {
+		return Result{Output: "Unknown subagent role. Choose one of: " + strings.Join(subagentRoleNames(), ", ") + ".", IsError: true}, nil
+	}
+	subType = string(def.Type)
 	// With a pool the worker keeps its session, so it can be continued with
 	// send_subagent, and it may run in the background.
 	if env.Subagents != nil {

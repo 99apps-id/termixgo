@@ -491,13 +491,18 @@ func (s *Session) AddAssistant(text, reasoning string, calls []provider.ToolCall
 
 // AddToolResult appends a tool result.
 func (s *Session) AddToolResult(id, name, output string) {
+	s.addToolResult(id, name, output, false)
+}
+
+func (s *Session) addToolResult(id, name, output string, failed bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.messages = append(s.messages, provider.Message{
-		Role:    provider.RoleTool,
-		Content: output,
-		ToolID:  id,
-		Name:    name,
+		Role:       provider.RoleTool,
+		Content:    output,
+		ToolID:     id,
+		Name:       name,
+		ToolFailed: failed,
 	})
 	s.updatedAt = time.Now()
 }

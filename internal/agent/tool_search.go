@@ -267,10 +267,10 @@ func (t *findToolsTool) Aliases() []string { return []string{"search_tools"} }
 func (t *findToolsTool) Mutating() bool    { return false }
 func (t *findToolsTool) Risk() Risk        { return RiskEdit }
 func (t *findToolsTool) Label(a map[string]any) string {
-	return "Finding tools " + Shorten(argString(a, "query"), 30)
+	return "Finding tools " + Shorten(argString(a, "query", "keyword", "name", "search", "q"), 30)
 }
 func (t *findToolsTool) DoneLabel(a map[string]any) string {
-	return "Found tools " + Shorten(argString(a, "query"), 30)
+	return "Found tools " + Shorten(argString(a, "query", "keyword", "name", "search", "q"), 30)
 }
 func (t *findToolsTool) Description() string {
 	return "Find tools by keyword and make the matches available. Call this before saying a capability is missing. One or two words works better than a sentence."
@@ -283,7 +283,7 @@ func (t *findToolsTool) Schema() map[string]any {
 }
 
 func (t *findToolsTool) Run(ctx context.Context, env *Env, args map[string]any) (Result, error) {
-	query := strings.TrimSpace(argString(args, "query"))
+	query := strings.TrimSpace(argString(args, "query", "keyword", "name", "search", "q"))
 	if env == nil || len(env.ToolIndex) == 0 {
 		return Result{Output: "Tool discovery is not available in this session; every tool is already loaded."}, nil
 	}

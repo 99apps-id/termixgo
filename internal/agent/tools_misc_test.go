@@ -251,6 +251,32 @@ func TestThinkRecordsReasoningAsEvents(t *testing.T) {
 	}
 }
 
+func TestSubagentToolOffersAndDispatchesBuiltInSpecialists(t *testing.T) {
+	tool := &subagentTool{}
+	env := testEnv(t)
+	var dispatched string
+	env.RunSubagent = func(_ context.Context, role, _ string) (string, SubagentSpend, error) {
+		dispatched = role
+		return "report", SubagentSpend{}, nil
+	}
+	schema := fmt.Sprint(tool.Schema())
+	for _, role := range []string{"debugger", "tester", "docs", "architecture-review", "dependency-review"} {
+		result, err := tool.Run(context.Background(), env, map[string]any{"type": strings.ToUpper(role), "prompt": "audit this"})
+		if err != nil || result.IsError || dispatched != role || !strings.Contains(schema, role) {
+			t.Fatalf("role %q: dispatched=%q result=%+v err=%v", role, dispatched, result, err)
+		}
+		_, canEdit := subagentRegistry(role, 0).Lookup("edit")
+		if canEdit == strings.HasSuffix(role, "-review") {
+			t.Errorf("role %q has incorrect edit access: %t", role, canEdit)
+		}
+	}
+	dispatched = ""
+	result, err := tool.Run(context.Background(), env, map[string]any{"type": "dependecy-review", "prompt": "audit this"})
+	if err != nil || !result.IsError || dispatched != "" || !strings.Contains(result.Output, "dependency-review") {
+		t.Fatalf("unknown role: dispatched=%q result=%+v err=%v", dispatched, result, err)
+	}
+}
+
 func TestSubagentToolGuardsAndHandOff(t *testing.T) {
 	tool := &subagentTool{}
 	env := testEnv(t)
