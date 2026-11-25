@@ -22,6 +22,9 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Fixed
 
+- **A data race in the Telegram typing keepalive.** The refresh interval was a plain
+  variable that a test rewrote while a keepalive goroutine of an earlier test could still read
+  it; it is atomic now, and the race detector in CI stays green.
 - **Gateway alerts are for real restarts and real outages, and name no account.** A brief
   disconnect no longer sends "lost" and "connected again" messages. A gateway must stay down
   for an hour (WhatsApp, which includes an expired session) or five minutes (Telegram)

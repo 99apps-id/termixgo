@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -1583,15 +1584,21 @@ func (b *Bot) runVoice(ctx context.Context, chatID int64, request channel.Reques
 // typingRefresh is how often the typing action is renewed while a turn runs.
 // Telegram clears the indicator after about five seconds, so four keeps it
 // continuous without sending a request the API would ignore anyway. It is a
-// variable so a test can exercise the keepalive without waiting out the real
-// interval.
-var typingRefresh = 4 * time.Second
+// atomic so a test can exercise the keepalive without waiting out the real
+// interval: a keepalive goroutine from an earlier test may still be reading it
+// when the next test sets a shorter one, and a plain variable made that a
+// data race.
+var typingRefreshNanos atomic.Int64
+
+func init() { typingRefreshNanos.Store(int64(4 * time.Second)) }
+
+func typingRefresh() time.Duration { return time.Duration(typingRefreshNanos.Load()) }
 
 // keepTyping renews the chat's typing indicator until done is closed or the
 // bot's context ends. It runs off the run's own goroutine so a slow network
 // call cannot delay the turn.
 func (b *Bot) keepTyping(ctx context.Context, chatID int64, done <-chan struct{}) {
-	ticker := time.NewTicker(typingRefresh)
+	ticker := time.NewTicker(typingRefresh())
 	defer ticker.Stop()
 	for {
 		select {

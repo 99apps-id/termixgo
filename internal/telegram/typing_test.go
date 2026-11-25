@@ -16,9 +16,9 @@ import (
 // nothing afterwards, which read as the bot having stopped. The indicator is
 // now re-sent until the turn returns.
 func TestTypingIndicatorIsRenewedWhileTheRunContinues(t *testing.T) {
-	previous := typingRefresh
-	typingRefresh = 20 * time.Millisecond
-	t.Cleanup(func() { typingRefresh = previous })
+	previous := typingRefreshNanos.Load()
+	typingRefreshNanos.Store(int64(20 * time.Millisecond))
+	t.Cleanup(func() { typingRefreshNanos.Store(previous) })
 
 	api := newRecordingAPI(t)
 	agent := newBlockingAgent()
@@ -57,7 +57,7 @@ func TestTypingIndicatorIsRenewedWhileTheRunContinues(t *testing.T) {
 	// Once the turn ends the keepalive must stop, so a finished run does not
 	// leave a goroutine sending typing actions forever.
 	settled := len(api.calls("sendChatAction"))
-	time.Sleep(10 * typingRefresh)
+	time.Sleep(10 * typingRefresh())
 	if after := len(api.calls("sendChatAction")); after > settled+1 {
 		t.Errorf("the typing indicator kept being sent after the turn ended: %d then %d", settled, after)
 	}
