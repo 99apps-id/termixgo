@@ -352,6 +352,36 @@ func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, key
 
 // SendDocument uploads and posts a file as a document via multipart/form-data.
 func (c *Client) SendDocument(ctx context.Context, chatID int64, filename string, data []byte, caption string) (Message, error) {
+	return c.sendMultipartFile(ctx, "sendDocument", "document", chatID, filename, data, caption, 0)
+}
+
+// SendVoice uploads and posts an OGG/Opus audio clip as a playable Telegram
+// voice note (PTT with waveform) via /sendVoice.
+func (c *Client) SendVoice(ctx context.Context, chatID int64, filename string, data []byte, caption string) (Message, error) {
+	duration := channel.AudioDurationSeconds(filename, data)
+	return c.sendMultipartFile(ctx, "sendVoice", "voice", chatID, filename, data, caption, duration)
+}
+
+// SendAudio uploads and posts an audio file (such as .mp3 or .m4a) via
+// /sendAudio so Telegram renders an inline audio player.
+func (c *Client) SendAudio(ctx context.Context, chatID int64, filename string, data []byte, caption string) (Message, error) {
+	duration := channel.AudioDurationSeconds(filename, data)
+	return c.sendMultipartFile(ctx, "sendAudio", "audio", chatID, filename, data, caption, duration)
+}
+
+// SendFile routes a file upload to SendVoice (.ogg/.opus), SendAudio (other
+// supported audio formats), or SendDocument (everything else).
+func (c *Client) SendFile(ctx context.Context, chatID int64, filename string, data []byte, caption string) (Message, error) {
+	if channel.IsVoiceNoteExtension(filename) {
+		return c.SendVoice(ctx, chatID, filename, data, caption)
+	}
+	if channel.IsAudioExtension(filename) {
+		return c.SendAudio(ctx, chatID, filename, data, caption)
+	}
+	return c.SendDocument(ctx, chatID, filename, data, caption)
+}
+
+func (c *Client) sendMultipartFile(ctx context.Context, method, fieldName string, chatID int64, filename string, data []byte, caption string, duration uint32) (Message, error) {
 	if err := channel.WaitGuestOutbound(ctx); err != nil {
 		return Message{}, fmt.Errorf("waiting for guest outbound quota: %w", err)
 	}
@@ -370,7 +400,12 @@ func (c *Client) SendDocument(ctx context.Context, chatID int64, filename string
 			return Message{}, err
 		}
 	}
-	part, err := writer.CreateFormFile("document", filename)
+	if duration > 0 {
+		if err := writer.WriteField("duration", strconv.FormatUint(uint64(duration), 10)); err != nil {
+			return Message{}, err
+		}
+	}
+	part, err := writer.CreateFormFile(fieldName, filename)
 	if err != nil {
 		return Message{}, err
 	}
@@ -381,7 +416,7 @@ func (c *Client) SendDocument(ctx context.Context, chatID int64, filename string
 		return Message{}, err
 	}
 
-	url := fmt.Sprintf("%s/bot%s/sendDocument", c.baseURL, c.token)
+	url := fmt.Sprintf("%s/bot%s/%s", c.baseURL, c.token, method)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
 	if err != nil {
 		return Message{}, err

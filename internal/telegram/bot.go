@@ -2093,9 +2093,10 @@ func (b *Bot) SendTo(ctx context.Context, chatID int64, text string) error {
 	return nil
 }
 
-// SendFileTo uploads a document or image to one Telegram chat.
+// SendFileTo uploads a voice note (.ogg/.opus), audio file (.mp3/.m4a/.aac/.wav),
+// or general document to one Telegram chat.
 func (b *Bot) SendFileTo(ctx context.Context, chatID int64, filename string, data []byte, caption string) error {
-	_, err := b.client.SendDocument(ctx, chatID, filename, data, b.redact(caption))
+	_, err := b.client.SendFile(ctx, chatID, filename, data, b.redact(caption))
 	return err
 }
 

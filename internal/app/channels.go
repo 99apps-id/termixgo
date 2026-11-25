@@ -1150,7 +1150,7 @@ func (a *App) sendTelegramChannel(ctx context.Context, rawAccount, rawRecipient,
 			return "", fmt.Errorf("no token stored for telegram/%s", account)
 		}
 		client := telegram.NewClient(token)
-		if _, err := client.SendDocument(ctx, chatID, filename, fileData, message); err != nil {
+		if _, err := client.SendFile(ctx, chatID, filename, fileData, message); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Sent attachment %q (%d bytes) to telegram/%s (chat %d).", filename, len(fileData), account, chatID), nil

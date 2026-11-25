@@ -88,6 +88,8 @@ type Bot struct {
 	logf             func(string)
 	sendHook         func(chatID, text string)
 	sendFileHook     func(chatID, filename string, data []byte, caption string)
+	uploadHook       func(ctx context.Context, data []byte, mediaType whatsmeow.MediaType) (whatsmeow.UploadResponse, error)
+	sendMessageHook  func(ctx context.Context, to types.JID, msg *waE2E.Message) error
 	downloadHook     func(ctx context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error)
 	interceptor      channel.MessageInterceptor
 	hookURL          string
@@ -1196,7 +1198,7 @@ func (b *Bot) SendTo(ctx context.Context, chatID, text string) error {
 	return nil
 }
 
-// SendFileTo uploads and sends an image or document to one WhatsApp chat.
+// SendFileTo uploads and sends an image, audio/voice note, or document to one WhatsApp chat.
 func (b *Bot) SendFileTo(ctx context.Context, chatID, filename string, data []byte, caption string) error {
 	if err := channel.WaitGuestOutbound(ctx); err != nil {
 		return err
@@ -1209,21 +1211,36 @@ func (b *Bot) SendFileTo(ctx context.Context, chatID, filename string, data []by
 	formattedCaption := formatWhatsApp(b.redact(strings.TrimSpace(caption)))
 	b.mu.RLock()
 	hook := b.sendFileHook
+	uploadHook := b.uploadHook
+	sendMsgHook := b.sendMessageHook
 	b.mu.RUnlock()
 	if hook != nil {
 		hook(chatID, filename, data, formattedCaption)
 		return nil
 	}
-	if b.client == nil {
+	if b.client == nil && (uploadHook == nil || sendMsgHook == nil) {
 		return errors.New("no WhatsApp client available")
 	}
 	jid, err := types.ParseJID(chatID)
 	if err != nil {
 		return fmt.Errorf("bad chat id %q: %w", chatID, err)
 	}
+	upload := func(mediaType whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
+		if uploadHook != nil {
+			return uploadHook(ctx, data, mediaType)
+		}
+		return b.client.Upload(ctx, data, mediaType)
+	}
+	sendMsg := func(msg *waE2E.Message) error {
+		if sendMsgHook != nil {
+			return sendMsgHook(ctx, jid, msg)
+		}
+		_, err := b.client.SendMessage(ctx, jid, msg)
+		return err
+	}
 	mimeType := detectMimeType(filename, data)
 	if isImageExtension(filename) {
-		up, err := b.client.Upload(ctx, data, whatsmeow.MediaImage)
+		up, err := upload(whatsmeow.MediaImage)
 		if err != nil {
 			return fmt.Errorf("upload WhatsApp image: %w", err)
 		}
@@ -1239,10 +1256,52 @@ func (b *Bot) SendFileTo(ctx context.Context, chatID, filename string, data []by
 		if formattedCaption != "" {
 			imgMsg.Caption = proto.String(formattedCaption)
 		}
-		_, err = b.client.SendMessage(ctx, jid, &waE2E.Message{ImageMessage: imgMsg})
-		return err
+		return sendMsg(&waE2E.Message{ImageMessage: imgMsg})
 	}
-	up, err := b.client.Upload(ctx, data, whatsmeow.MediaDocument)
+	if isAudioExtension(filename) {
+		up, err := upload(whatsmeow.MediaAudio)
+		if err != nil {
+			return fmt.Errorf("upload WhatsApp audio: %w", err)
+		}
+		isPTT := isVoiceNoteExtension(filename)
+		audioMime := channel.AudioMimeType(filename)
+		if audioMime == "" {
+			audioMime = mimeType
+		}
+		audioMsg := &waE2E.AudioMessage{
+			URL:           proto.String(up.URL),
+			DirectPath:    proto.String(up.DirectPath),
+			MediaKey:      up.MediaKey,
+			FileEncSHA256: up.FileEncSHA256,
+			FileSHA256:    up.FileSHA256,
+			FileLength:    proto.Uint64(up.FileLength),
+			Mimetype:      proto.String(audioMime),
+			PTT:           proto.Bool(isPTT),
+		}
+		if secs := channel.AudioDurationSeconds(filename, data); secs > 0 {
+			audioMsg.Seconds = proto.Uint32(secs)
+		}
+		if isPTT {
+			if wf := channel.AudioWaveform(data); len(wf) > 0 {
+				audioMsg.Waveform = wf
+			}
+		}
+		if err := sendMsg(&waE2E.Message{AudioMessage: audioMsg}); err != nil {
+			return err
+		}
+		if formattedCaption != "" {
+			for _, chunk := range channel.Chunk(formattedCaption, b.policySnapshot().EffectiveTextChunkLimit()) {
+				if err := channel.WaitGuestOutbound(ctx); err != nil {
+					return err
+				}
+				if err := sendMsg(&waE2E.Message{Conversation: proto.String(chunk)}); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	up, err := upload(whatsmeow.MediaDocument)
 	if err != nil {
 		return fmt.Errorf("upload WhatsApp document: %w", err)
 	}
@@ -1260,8 +1319,7 @@ func (b *Bot) SendFileTo(ctx context.Context, chatID, filename string, data []by
 	if formattedCaption != "" {
 		docMsg.Caption = proto.String(formattedCaption)
 	}
-	_, err = b.client.SendMessage(ctx, jid, &waE2E.Message{DocumentMessage: docMsg})
-	return err
+	return sendMsg(&waE2E.Message{DocumentMessage: docMsg})
 }
 
 func detectMimeType(filename string, data []byte) string {
@@ -1406,6 +1464,14 @@ func unwrapMessage(msg *waE2E.Message) *waE2E.Message {
 
 func isImageExtension(name string) bool {
 	return channel.IsImageExtension(name)
+}
+
+func isAudioExtension(name string) bool {
+	return channel.IsAudioExtension(name)
+}
+
+func isVoiceNoteExtension(name string) bool {
+	return channel.IsVoiceNoteExtension(name)
 }
 
 func isPDFVisionModel(modelID string) bool {
