@@ -210,6 +210,7 @@ func (n *gatewayNotifier) flush(a *App) {
 		n.mu.Unlock()
 		return
 	}
+	_, _ = n.outbox.purgeStale(time.Now())
 	deliveries, err := n.outbox.pending()
 	n.mu.Unlock()
 	if err != nil {
@@ -276,6 +277,9 @@ func (n *gatewayNotifier) flush(a *App) {
 		}
 		n.mu.Lock()
 		err = n.outbox.ack(delivery.id)
+		if err == nil {
+			err = n.outbox.ackSiblings(delivery)
+		}
 		n.mu.Unlock()
 		if err != nil {
 			a.emit(agent.Event{Kind: agent.EventNotice, Text: fmt.Sprintf("Gateway alert delivered but not acknowledged: %v", err)})

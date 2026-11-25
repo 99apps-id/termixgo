@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/99apps-id/termixgo/internal/config"
 )
@@ -147,5 +148,61 @@ func TestGatewayRestartIsAnnouncedOnceWithItsCause(t *testing.T) {
 				t.Errorf("text = %q, want the cause %q", pending[0].text, tc.want)
 			}
 		})
+	}
+}
+
+func TestGatewayPurgeStaleDropsOnlyOldAlerts(t *testing.T) {
+	outbox, err := openGatewayOutbox(filepath.Join(t.TempDir(), "alerts.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outbox.db.Close()
+	now := time.Now()
+	for _, age := range []time.Duration{time.Minute, gatewayAlertTTL + time.Hour} {
+		if _, err := outbox.db.Exec(`INSERT INTO gateway_outbox(channel,account,recipient,body,created) VALUES('telegram','a','1','b',?)`, now.Add(-age).Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed, err := outbox.purgeStale(now)
+	if err != nil || removed != 1 {
+		t.Fatalf("removed=%d err=%v, want only the old one", removed, err)
+	}
+	if pending, _ := outbox.pending(); len(pending) != 1 {
+		t.Fatalf("pending = %v", pending)
+	}
+}
+
+// One person who is an admin through two accounts of a channel gets the alert
+// once, whichever account delivered it.
+func TestGatewayDeliveredAlertRemovesItsSiblings(t *testing.T) {
+	outbox, err := openGatewayOutbox(filepath.Join(t.TempDir(), "alerts.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outbox.db.Close()
+	targets := []gatewayAdminTarget{
+		{channel: "telegram", account: "default", user: "42"},
+		{channel: "telegram", account: "raka", user: "42"},
+		{channel: "whatsapp", account: "default", user: "628@s.whatsapp.net"},
+	}
+	if _, err := outbox.transition("whatsapp/x", "online", targets); err != nil {
+		t.Fatal(err)
+	}
+	if emitted, err := outbox.transition("whatsapp/x", "offline", targets); err != nil || !emitted {
+		t.Fatalf("emitted=%v err=%v", emitted, err)
+	}
+	pending, _ := outbox.pending()
+	if len(pending) != 3 {
+		t.Fatalf("pending = %v", pending)
+	}
+	if err := outbox.ack(pending[0].id); err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.ackSiblings(pending[0]); err != nil {
+		t.Fatal(err)
+	}
+	left, _ := outbox.pending()
+	if len(left) != 1 || left[0].target.channel != "whatsapp" {
+		t.Fatalf("after the Telegram copy was delivered: %v", left)
 	}
 }

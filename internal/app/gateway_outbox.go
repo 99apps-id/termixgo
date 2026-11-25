@@ -288,3 +288,29 @@ func (o *gatewayOutbox) ack(id int64) error {
 	_, err := o.db.Exec(`DELETE FROM gateway_outbox WHERE id=?`, id)
 	return err
 }
+
+// gatewayAlertTTL is how long an undelivered alert stays worth sending. An
+// alert about an outage from yesterday is noise, and a target that can never
+// receive one would otherwise be retried for as long as the file lives.
+const gatewayAlertTTL = 6 * time.Hour
+
+// purgeStale drops the alerts that outlived their usefulness and reports how
+// many it removed.
+func (o *gatewayOutbox) purgeStale(now time.Time) (int, error) {
+	result, err := o.db.Exec(`DELETE FROM gateway_outbox WHERE created < ?`, now.Add(-gatewayAlertTTL).Unix())
+	if err != nil {
+		return 0, err
+	}
+	n, err := result.RowsAffected()
+	return int(n), err
+}
+
+// ackSiblings removes the copies of a delivered alert that were queued for the
+// same person through another account of the same channel. One person who is
+// an admin on two accounts needs the message once, and whichever account could
+// send it first is enough.
+func (o *gatewayOutbox) ackSiblings(delivered gatewayDelivery) error {
+	_, err := o.db.Exec(`DELETE FROM gateway_outbox WHERE channel=? AND recipient=? AND body=? AND id<>?`,
+		delivered.target.channel, delivered.target.user, delivered.text, delivered.id)
+	return err
+}

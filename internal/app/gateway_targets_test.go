@@ -55,3 +55,14 @@ func TestGatewayTargetsIncludeLinkedWhatsAppOwner(t *testing.T) {
 	}
 	t.Fatalf("linked owner missing from targets: %#v", targets)
 }
+
+// An operator's LID kept in the admin list is not a phone number: a message to
+// it would never arrive and would be retried for good.
+func TestGatewayTargetsSkipAnAdminThatIsAWhatsAppLID(t *testing.T) {
+	if _, ok := privateWhatsAppAdmin("258213484179645"); ok {
+		t.Errorf("a 15 digit LID was taken for a phone number")
+	}
+	if id, ok := privateWhatsAppAdmin("6282113487323"); !ok || id != "6282113487323@s.whatsapp.net" {
+		t.Errorf("a real number was refused: %q %v", id, ok)
+	}
+}

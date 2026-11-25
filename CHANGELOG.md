@@ -22,6 +22,11 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Fixed
 
+- **Gateway alerts no longer pile up for a target that cannot receive them.** An admin
+  entry that is a WhatsApp internal id (a 15 digit LID kept for access matching) was taken
+  for a phone number, so every alert to it failed and was retried forever. Such an entry is
+  skipped, undelivered alerts expire after six hours, and a person who is an admin through
+  two accounts of one channel gets each alert once.
 - **A data race in the Telegram typing keepalive.** The refresh interval was a plain
   variable that a test rewrote while a keepalive goroutine of an earlier test could still read
   it; it is atomic now, and the race detector in CI stays green.

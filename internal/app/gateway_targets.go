@@ -112,5 +112,12 @@ func privateWhatsAppAdmin(raw string) (string, bool) {
 			return "", false
 		}
 	}
+	// WhatsApp's internal user ids (LIDs) are bare digit strings too, and an
+	// operator's own LID is often kept in the admin list so access matching
+	// works. They are 15 digits where a real phone number is shorter, and a
+	// message to "<lid>@s.whatsapp.net" reaches nobody.
+	if len(raw) >= 15 {
+		return "", false
+	}
 	return whatsapp.NormalizeJID(raw), true
 }
