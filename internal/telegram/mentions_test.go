@@ -102,7 +102,7 @@ func TestPairingPolicyAnswersWithACode(t *testing.T) {
 }
 
 func TestGuestRateLimitRefusesTheSecondMessage(t *testing.T) {
-	agent := &scriptedAgent{answer: "ok"}
+	agent := &stopChatMockAgent{scriptedAgent: scriptedAgent{answer: "ok"}, stopChatResult: true}
 	bot, api := pairedBot(t, agent)
 	bot.SetAccount("default", config.ChannelAccount{
 		Enabled:   true,
@@ -133,9 +133,7 @@ func TestGuestRateLimitRefusesTheSecondMessage(t *testing.T) {
 	}
 	message.Text = "/stop"
 	bot.handleMessage(context.Background(), message)
-	agent.mu.Lock()
-	stops := agent.stopCalls
-	agent.mu.Unlock()
+	stops := agent.stopChatCalls
 	if stops != 1 {
 		t.Fatalf("/stop blocked by guest rate limit: %d", stops)
 	}

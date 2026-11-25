@@ -283,3 +283,20 @@ func TestGuestSteerIsWrappedAsData(t *testing.T) {
 		t.Fatalf("operator steer = %q", adminRun.steer)
 	}
 }
+
+// A run whose loop has ended is still registered while its history is condensed
+// and named. It must refuse a steer there: accepting one dropped it silently.
+func TestSteerIsRefusedOnceTheLoopHasEnded(t *testing.T) {
+	application, server := readyApp(t)
+	defer server.Close()
+
+	run := &activeRun{key: "chat-1"}
+	application.activeRuns = map[string]*activeRun{"chat-1": run}
+	if !application.IsSessionSteerable("chat-1") {
+		t.Fatal("a live run takes steers")
+	}
+	run.closeSteer()
+	if application.IsSessionSteerable("chat-1") || application.SteerSession("chat-1", "too late") {
+		t.Fatal("a finished loop accepted a steer it can never read")
+	}
+}

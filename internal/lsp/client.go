@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // maxMessageBytes bounds one message from the server. A references answer on a
@@ -83,6 +85,7 @@ func Start(ctx context.Context, name string, argv []string, root string) (*Clien
 		return nil, fmt.Errorf("%s is not installed (%s not found on PATH)", name, argv[0])
 	}
 	cmd := exec.Command(path, argv[1:]...)
+	proc.Detach(cmd)
 	cmd.Dir = root
 	cmd.Env = os.Environ()
 	stdin, err := cmd.StdinPipe()

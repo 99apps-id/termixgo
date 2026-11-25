@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -225,5 +226,38 @@ func TestSaveUploadAndCleanupOldUploads(t *testing.T) {
 	}
 	if _, err := os.Stat(staleFile); !os.IsNotExist(err) {
 		t.Errorf("stale upload should have been cleaned up")
+	}
+}
+
+func TestSaveUploadConcurrentSameName(t *testing.T) {
+	workspace := t.TempDir()
+	const count = 24
+	type upload struct {
+		path, body string
+		saved      bool
+	}
+	start := make(chan struct{})
+	results := make(chan upload, count)
+	for i := range count {
+		go func() {
+			body := fmt.Sprintf("report %d", i)
+			<-start
+			_, path, saved := SaveUpload(workspace, "report.txt", []byte(body))
+			results <- upload{path, body, saved}
+		}()
+	}
+	close(start)
+	seen := make(map[string]bool, count)
+	for range count {
+		result := <-results
+		if !result.saved || seen[result.path] {
+			t.Errorf("upload %q returned saved=%v, path=%q", result.body, result.saved, result.path)
+			continue
+		}
+		seen[result.path] = true
+		got, err := os.ReadFile(filepath.Join(workspace, result.path))
+		if err != nil || string(got) != result.body {
+			t.Errorf("upload %q read back as %q, err=%v", result.body, got, err)
+		}
 	}
 }

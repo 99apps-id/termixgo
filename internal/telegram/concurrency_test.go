@@ -153,7 +153,7 @@ func TestSecondPromptIsRejectedWhileARunIsInFlight(t *testing.T) {
 	first := make(chan struct{})
 	go func() {
 		defer close(first)
-		bot.runPrompt(context.Background(), 42, channel.Request{ChatID: "42"}, "do the long thing")
+		bot.runPrompt(context.Background(), 42, channel.Request{Admin: true, ChatID: "42"}, "do the long thing")
 	}()
 
 	select {
@@ -164,7 +164,7 @@ func TestSecondPromptIsRejectedWhileARunIsInFlight(t *testing.T) {
 
 	// The second prompt must be refused with an explanation, not queued and
 	// not run in parallel.
-	bot.runPrompt(context.Background(), 42, channel.Request{ChatID: "42"}, "a second thing")
+	bot.runPrompt(context.Background(), 42, channel.Request{Admin: true, ChatID: "42"}, "a second thing")
 	if !api.contains("already in progress") {
 		t.Errorf("the second prompt should be refused politely, got %v", api.messages())
 	}
@@ -189,7 +189,7 @@ func TestCommandsAreAnsweredWhileARunIsInFlight(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		bot.runPrompt(context.Background(), 42, channel.Request{ChatID: "42"}, "long task")
+		bot.runPrompt(context.Background(), 42, channel.Request{Admin: true, ChatID: "42"}, "long task")
 	}()
 	<-agent.started
 

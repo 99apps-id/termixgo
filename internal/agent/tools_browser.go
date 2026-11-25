@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/browser"
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // browserOpenTool opens a web URL or local file path in the default system browser.
@@ -301,6 +302,7 @@ func (t *browserScreenshotTool) Run(ctx context.Context, env *Env, args map[stri
 	cmdArgs = append(cmdArgs, targetURL)
 
 	cmd := exec.CommandContext(execCtx, browserBin, cmdArgs...)
+	proc.Detach(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil && !fileExists(outPath) {
 		return Result{
@@ -407,6 +409,7 @@ func (t *browserDumpDOMTool) Run(ctx context.Context, env *Env, args map[string]
 	}
 
 	cmd := exec.CommandContext(execCtx, browserBin, cmdArgs...)
+	proc.Detach(cmd)
 	domOutput, err := cmd.Output()
 	if err != nil {
 		return Result{Output: fmt.Sprintf("Failed to dump DOM: %v", err), IsError: true}, nil

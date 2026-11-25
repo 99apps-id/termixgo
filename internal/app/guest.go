@@ -27,6 +27,7 @@ var guestDeniedTools = []string{
 	"env_get",
 	"http_request", "probe_url", "dns_recon", "port_probe", "tls_inspect", "http_headers_audit",
 	"browser_open", "browser_screenshot", "browser_dump_dom",
+	"render_markdown", "render_mermaid",
 	"browser_session_open", "browser_session_read", "browser_session_close",
 	"browser_navigate", "browser_read", "browser_click", "browser_type",
 	"browser_press", "browser_scroll", "browser_wait_for", "browser_eval",

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/99apps-id/termixgo/internal/proc"
 	"github.com/99apps-id/termixgo/internal/search"
 )
 
@@ -805,6 +806,7 @@ var _ = bytes.MinRead
 
 func gitOutput(ctx context.Context, workspace string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, "git", args...)
+	proc.Detach(command)
 	command.Dir = workspace
 	var buffer bytes.Buffer
 	command.Stdout = &buffer

@@ -613,7 +613,9 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   the approval mode is `ask`, and the rate/step/cost limits are the account's.
 - A guest also never sees what is the operator's. Its session id carries a
   `-guest` suffix (`channelSessionIDFor`), so the operator's turns and a
-  guest's never share a history in one chat; its prompt omits the operator
+  guest's never share a history in one chat. A group guest's session also
+  includes a digest of the sender ID. The legacy shared group guest history
+  is never imported. The guest prompt omits the operator
   profile, the learned memory and the project notes; and `checkWorkspacePath`
   refuses credential files and runtime state (`guestSensitive`) for a guest.
   Every file tool goes through that one function, so a new tool inherits the
@@ -623,6 +625,14 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   or the owner; a private chat may answer its own card. `/pair` locks after
   five wrong codes (`pairFailLimit`). A secret never goes in a URL: the bot
   token is scrubbed from transport errors and the Gemini key is a header.
+- Channel voice fallback uses the channel runner with the configured voice
+  model, preserving the caller's tools, limits, approvals and session. A
+  busy or cancelled turn, or one that already called a tool, is not replayed.
+  Guest deliveries are bound to the inbound transport, account and chat.
+- WhatsApp reads the account's current admin list for each message. Phone
+  numbers and private IDs (`@lid`) are separate identities. If an inbound
+  LID has no alternate number or stored mapping, the bot asks WhatsApp for
+  the LIDs of configured admin numbers and compares the verified result.
 - Chat answers are final text only. A WhatsApp chat sees a typing presence and
   then one answer, never a tool line, a path or a raw error; every answer is
   redacted for token shapes and stored secret values before it is sent.

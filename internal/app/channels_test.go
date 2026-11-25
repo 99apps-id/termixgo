@@ -1,14 +1,120 @@
 package app
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/99apps-id/termixgo/internal/agenthome"
 	"github.com/99apps-id/termixgo/internal/channel"
 	"github.com/99apps-id/termixgo/internal/config"
 	"github.com/99apps-id/termixgo/internal/telegram"
 )
+
+func TestSlowClaimedOutboxDeliveryIsAcknowledged(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	key := channel.AccountID{Channel: config.ChannelWhatsApp, Account: "sales"}
+	a := &App{channels: map[channel.AccountID]*channelRuntime{
+		key: {send: func(context.Context, string, string) error {
+			time.Sleep(3200 * time.Millisecond)
+			return nil
+		}},
+	}}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				a.processOutboxFiles(ctx)
+			}
+		}
+	}()
+	handled, err := a.deliverViaOutbox(ctx, key.Channel, key.Account, "42", "", nil, "hello")
+	cancel()
+	<-done
+	if !handled || err != nil {
+		t.Fatalf("slow delivery must be acknowledged once, handled=%v err=%v", handled, err)
+	}
+}
+
+func TestGroupGuestConversationIdentity(t *testing.T) {
+	for _, kind := range []string{config.ChannelTelegram, config.ChannelWhatsApp} {
+		request := channel.Request{ChatID: "100", IsGroup: true, SenderID: "42"}
+		first := channelSessionIDFor(kind, "sales", request)
+		request.SenderID = "43"
+		if first == channelSessionIDFor(kind, "sales", request) {
+			t.Errorf("%s group guests share a conversation", kind)
+		}
+		request.IsGroup = false
+		if got := channelSessionIDFor(kind, "sales", request); got != channelSessionID(kind, "sales", "100")+"-guest" {
+			t.Errorf("%s private history moved to %s", kind, got)
+		}
+	}
+}
+
+func TestRunningWhatsAppAccountSeesAdminChanges(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	cfg := config.Default()
+	admins := whatsAppAdmins("sales")
+	for _, expected := range []string{"628123", "628456", ""} {
+		account := config.ChannelAccount{Enabled: true}
+		if expected != "" {
+			account.Admins = []string{expected}
+		}
+		cfg = cfg.WithWhatsAppAccount("sales", account)
+		if err := config.Save(cfg); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(admins(), ","); got != expected {
+			t.Fatalf("runtime admins = %q, want %q", got, expected)
+		}
+	}
+}
+
+func TestGuestVoiceFallbackUsesChannelPolicy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil || !strings.Contains(string(body), "## GUEST SESSION") || !strings.Contains(string(body), "## MESSAGING CHANNEL RULES") {
+			t.Error("fallback request is missing guest or channel policy")
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"Harga paket dasar adalah seratus ribu rupiah.\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+	a := newTestApp(t)
+	a.cfg.BaseURLs = map[string]string{"ollama": server.URL}
+	a.cfg.VoiceModel = "ollama/test"
+	b := &telegramBridge{app: a, name: "sales"}
+	answer, err := b.RunVoicePrompt(t.Context(), channel.Request{ChatID: "42"}, "harga?", nil)
+	if err != nil || !strings.Contains(answer, unverifiedNote) {
+		t.Fatalf("expected an explicitly unverified sales answer, got %q, %v", answer, err)
+	}
+}
+
+func TestBusyVoiceChatReturnsBusy(t *testing.T) {
+	a := newTestApp(t)
+	a.cfg.VoiceModel = "unknown-fallback"
+	b := &whatsappBridge{app: a, name: "sales"}
+	req := channel.Request{ChatID: "42"}
+	id := channelSessionIDFor(config.ChannelWhatsApp, b.name, req)
+	a.activeRuns = map[string]*activeRun{id: {}}
+	if _, err := b.RunVoicePrompt(t.Context(), req, "hello", nil); !errors.Is(err, channel.ErrBusy) {
+		t.Fatalf("busy voice chat returned %v", err)
+	}
+}
 
 func TestChannelSessionIDIsStableAndSafe(t *testing.T) {
 	first := channelSessionID(config.ChannelTelegram, "sales", "-1001234567890")

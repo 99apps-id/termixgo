@@ -311,14 +311,22 @@ func SaveUpload(workspace, rawName string, data []byte) (fileName, relPath strin
 	base := strings.TrimSuffix(fileName, ext)
 	for attempt := 0; attempt < 1000; attempt++ {
 		fullPath := filepath.Join(uploadDir, fileName)
-		if _, err := os.Lstat(fullPath); errors.Is(err, os.ErrNotExist) {
-			if err := os.WriteFile(fullPath, data, 0o600); err != nil {
-				return fileName, relPath, false
-			}
-			relPath = filepath.ToSlash(filepath.Join(".termixgo", "uploads", fileName))
-			return fileName, relPath, true
+		file, err := os.OpenFile(fullPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			fileName = fmt.Sprintf("%s-%d%s", base, attempt+1, ext)
+			continue
 		}
-		fileName = fmt.Sprintf("%s-%d%s", base, attempt+1, ext)
+		if err != nil {
+			return fileName, relPath, false
+		}
+		_, writeErr := file.Write(data)
+		closeErr := file.Close()
+		if writeErr != nil || closeErr != nil {
+			_ = os.Remove(fullPath)
+			return fileName, relPath, false
+		}
+		relPath = filepath.ToSlash(filepath.Join(".termixgo", "uploads", fileName))
+		return fileName, relPath, true
 	}
 	return fileName, relPath, false
 }

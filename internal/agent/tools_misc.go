@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/proc"
 	"github.com/99apps-id/termixgo/internal/skill"
 )
 
@@ -287,6 +288,7 @@ func cloneGitRepo(ctx context.Context, source string) (string, error) {
 		return "", err
 	}
 	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", source, tmp)
+	proc.Detach(cmd)
 	cmd.Dir = os.TempDir()
 	output, err := cmd.CombinedOutput()
 	if err != nil {

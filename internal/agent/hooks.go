@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // hookBlockExit is the exit status a hook uses to say "stop": a pre_tool hook
@@ -188,6 +189,7 @@ func runHookCommand(ctx context.Context, hook config.Hook, dir string, payload [
 
 	shell, shellArgs := shellForTool(hook.Command)
 	process := exec.CommandContext(runCtx, shell, shellArgs...)
+	proc.Detach(process)
 	process.Dir = dir
 	// The hook is the operator's own command, so it keeps the operator's
 	// environment: a reporting hook legitimately needs its tokens. Only the

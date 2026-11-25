@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // DiagnoseFile validates the syntax of a single file and returns any diagnostic
@@ -119,6 +121,7 @@ func diagnosePythonFile(targetPath, display string) string {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, bin, "-m", "py_compile", targetPath)
+	proc.Detach(cmd)
 	output, err := cmd.CombinedOutput()
 	if err == nil {
 		return ""
@@ -153,6 +156,7 @@ func diagnoseJSFile(targetPath, display string) string {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, bin, "--check", targetPath)
+	proc.Detach(cmd)
 	output, err := cmd.CombinedOutput()
 	if err == nil {
 		return ""

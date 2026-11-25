@@ -26,7 +26,17 @@ func Decide(policy config.ChannelAccount, in Request) Decision {
 	if !policy.Enabled {
 		return Decision{Reason: "account disabled"}
 	}
-	isAdmin := matchesAny(policy.Admins, in.SenderID) || (in.SenderAlt != "" && matchesAny(policy.Admins, in.SenderAlt))
+	matchesSender := func(list []string) bool {
+		primary, alternate := SenderKey(in.Channel, in.SenderID), SenderKey(in.Channel, in.SenderAlt)
+		for _, id := range list {
+			key := SenderKey(in.Channel, id)
+			if key != "" && (key == primary || key == alternate) {
+				return true
+			}
+		}
+		return false
+	}
+	isAdmin := matchesSender(policy.Admins)
 	if in.IsGroup {
 		switch config.NormalizeGroupPolicy(policy.GroupPolicy) {
 		case config.GroupPolicyDisabled:
@@ -57,10 +67,40 @@ func Decide(policy config.ChannelAccount, in Request) Decision {
 	case config.DMPolicyPairing:
 		return Decision{Reason: "waiting for pairing approval"}
 	default:
-		if matchesAny(policy.AllowFrom, in.SenderID) || (in.SenderAlt != "" && matchesAny(policy.AllowFrom, in.SenderAlt)) {
+		if matchesSender(policy.AllowFrom) {
 			return Decision{Allow: true, Reason: "allowlisted"}
 		}
 		return Decision{Reason: "sender is not on the allowlist"}
+	}
+}
+
+var phoneSeparators = strings.NewReplacer(" ", "", "-", "", "(", "", ")", "")
+
+// SenderKey keeps a WhatsApp private ID distinct from a phone number with
+// the same digits. Bare numbers in a WhatsApp account refer to phones.
+func SenderKey(kind, raw string) string {
+	if kind != config.ChannelWhatsApp {
+		return CanonicalID(raw)
+	}
+	user, domain, _ := strings.Cut(strings.ToLower(strings.TrimSpace(raw)), "@")
+	if n := strings.IndexByte(user, ':'); n >= 0 {
+		user, _, _ = strings.Cut(user[:n], ".")
+	}
+	user = phoneSeparators.Replace(user)
+	user = strings.TrimPrefix(user, "+")
+	if user == "" || strings.Trim(user, "0123456789") != "" {
+		return ""
+	}
+	switch domain {
+	case "lid", "hosted.lid":
+		return user + "@lid"
+	case "", "s.whatsapp.net", "c.us", "hosted":
+		if strings.HasPrefix(user, "08") {
+			user = "62" + user[1:]
+		}
+		return user + "@s.whatsapp.net"
+	default:
+		return ""
 	}
 }
 
@@ -104,19 +144,33 @@ func matchesAny(list []string, id string) bool {
 // AddID returns the list with an identity appended when it is not already
 // there, comparing canonical forms.
 func AddID(list []string, id string) []string {
-	trimmed := strings.TrimSpace(id)
-	if trimmed == "" || matchesAny(list, trimmed) {
-		return append([]string{}, list...)
+	return AddSenderID("", list, id)
+}
+
+func AddSenderID(kind string, list []string, id string) []string {
+	out := append([]string{}, list...)
+	target := SenderKey(kind, id)
+	if target == "" {
+		return out
 	}
-	return append(append([]string{}, list...), trimmed)
+	for _, existing := range list {
+		if SenderKey(kind, existing) == target {
+			return out
+		}
+	}
+	return append(out, strings.TrimSpace(id))
 }
 
 // RemoveID returns the list without an identity, comparing canonical forms.
 func RemoveID(list []string, id string) []string {
-	target := CanonicalID(id)
+	return RemoveSenderID("", list, id)
+}
+
+func RemoveSenderID(kind string, list []string, id string) []string {
+	target := SenderKey(kind, id)
 	out := make([]string, 0, len(list))
 	for _, candidate := range list {
-		if target != "" && CanonicalID(candidate) == target {
+		if target != "" && SenderKey(kind, candidate) == target {
 			continue
 		}
 		out = append(out, candidate)

@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/99apps-id/termixgo/internal/agent"
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // osc52MaxBytes caps the clipboard payload. Terminals limit the length of an
@@ -71,6 +72,7 @@ func copyToOSClipboard(text string) {
 			continue
 		}
 		command := exec.Command(path, candidate.args...)
+		proc.Detach(command)
 		command.Stdin = strings.NewReader(text)
 		if command.Run() == nil {
 			return
@@ -139,6 +141,7 @@ func readClipboardText() (string, error) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), clipboardReadTimeout)
 		command := exec.CommandContext(ctx, path, candidate.args...)
+		proc.Detach(command)
 		output, err := command.Output()
 		cancel()
 		if err != nil {
@@ -249,6 +252,7 @@ exit 2`
 	ctx, cancel := context.WithTimeout(context.Background(), clipboardReadTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, "powershell.exe", "-STA", "-NoProfile", "-NonInteractive", "-Command", script)
+	proc.Detach(command)
 	output, err := command.Output()
 	if err != nil {
 		return nil, fmt.Errorf("the clipboard holds no image")

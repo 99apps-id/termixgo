@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -254,13 +255,6 @@ func (a *App) RedactForChannel(text string) string {
 	return channel.Redact(text, known)
 }
 
-// runChannelTurn runs one turn owned by a channel chat. The answer is what
-// this turn produced, not the session's last answer: a model that said nothing
-// must not make the bot repeat an earlier reply.
-func (a *App) runChannelTurn(ctx context.Context, agentName string, session *agent.Session, interactor Interactor, prompt string, images []provider.Image, guest bool, maxSteps int, costBudgetUSD float64, callerName, callerChannel, callerChatID, callerAccount string, progress func(string)) (string, error) {
-	return a.runChannelTurnStream(ctx, agentName, session, interactor, prompt, images, guest, maxSteps, costBudgetUSD, callerName, callerChannel, callerChatID, callerAccount, progress, nil)
-}
-
 func telegramStreamEvent(event agent.Event) (telegram.StreamEvent, bool) {
 	switch event.Kind {
 	case agent.EventTurnStart:
@@ -302,7 +296,7 @@ func telegramStreamEvent(event agent.Event) (telegram.StreamEvent, bool) {
 	}
 }
 
-func (a *App) runChannelTurnStream(ctx context.Context, agentName string, session *agent.Session, interactor Interactor, prompt string, images []provider.Image, guest bool, maxSteps int, costBudgetUSD float64, callerName, callerChannel, callerChatID, callerAccount string, progress func(string), onStream func(telegram.StreamEvent)) (string, error) {
+func (a *App) runChannelTurn(ctx context.Context, agentName string, session *agent.Session, interactor Interactor, prompt string, images []provider.Image, guest bool, maxSteps int, costBudgetUSD float64, callerName, callerChannel, callerChatID, callerAccount string, voice bool, progress func(string), onStream func(telegram.StreamEvent)) (string, error) {
 	notice := ""
 	stopReason := ""
 	// The emitter also runs on the process manager's goroutine, so the
@@ -374,7 +368,19 @@ func (a *App) runChannelTurnStream(ctx context.Context, agentName string, sessio
 	}
 	mark := session.MessageCount()
 	if err := a.runWithOptions(ctx, prompt, options); err != nil {
-		return "", err
+		if !voice || ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrBusy) || session.ToolCallCountSince(mark) > 0 {
+			return "", err
+		}
+		options.modelOverride = a.VoiceModel()
+		if options.modelOverride == "" {
+			return "", err
+		}
+		if channelObserver != nil {
+			channelObserver(agent.Event{Kind: agent.EventNotice, Text: fmt.Sprintf("Falling back to voice model (%s)...", options.modelOverride)})
+		}
+		if retryErr := a.runWithOptions(ctx, prompt, options); retryErr != nil {
+			return "", fmt.Errorf("primary voice turn failed (%v), fallback failed: %w", err, retryErr)
+		}
 	}
 	answer := strings.TrimSpace(session.LastAssistantTextSince(mark))
 
@@ -392,7 +398,7 @@ func (a *App) runChannelTurnStream(ctx context.Context, agentName string, sessio
 				answer = second
 			}
 		}
-		if session.ToolCallCountSince(retryMark) == 0 && !guest {
+		if evidenceRetryNeeded(grounding, answer, session.ToolCallCountSince(retryMark)) {
 			answer += "\n\n" + unverifiedNote
 		}
 	}
@@ -403,7 +409,7 @@ func (a *App) runChannelTurnStream(ctx context.Context, agentName string, sessio
 	capturedNotice := notice
 	capturedStop := stopReason
 	captureMu.Unlock()
-	if capturedNotice != "" {
+	if capturedNotice != "" && !guest {
 		return capturedNotice, nil
 	}
 	return emptyTurnMessage(capturedStop), nil
@@ -669,30 +675,22 @@ type telegramBridge struct {
 // RunPrompt runs one turn for one chat. The session is the chat's own, never
 // the operator's terminal conversation.
 func (b *telegramBridge) RunPrompt(ctx context.Context, request channel.Request, prompt string, progress func(string)) (string, error) {
-	session, err := b.session(request)
-	if err != nil {
-		return "", err
-	}
-	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, request.SenderName, "Telegram", request.ChatID, b.name, progress)
-	if errors.Is(err, ErrBusy) {
-		return "", channel.ErrBusy
-	}
-	if err != nil {
-		return "", err
-	}
-	return b.app.RedactForChannel(answer), nil
+	return b.runPrompt(ctx, request, prompt, nil, false, progress, nil)
 }
 
 // RunPromptStream runs one turn for one chat and pushes structured stream events
 // (thinking, text deltas, tool starts/ends) for live Telegram streaming.
 func (b *telegramBridge) RunPromptStream(ctx context.Context, request channel.Request, prompt string, onEvent func(telegram.StreamEvent)) (string, error) {
+	return b.runPrompt(ctx, request, prompt, nil, false, nil, onEvent)
+}
+
+func (b *telegramBridge) runPrompt(ctx context.Context, request channel.Request, prompt string, images []provider.Image, voice bool, progress func(string), onEvent func(telegram.StreamEvent)) (string, error) {
 	session, err := b.session(request)
 	if err != nil {
 		return "", err
 	}
 	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurnStream(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, request.SenderName, "Telegram", request.ChatID, b.name, nil, onEvent)
+	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, request.SenderName, "Telegram", request.ChatID, b.name, voice, progress, onEvent)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}
@@ -713,38 +711,12 @@ func (b *telegramBridge) promptFor(request channel.Request, prompt string) strin
 
 // RunPromptWithImage is RunPrompt with an image attached for a vision model.
 func (b *telegramBridge) RunPromptWithImage(ctx context.Context, request channel.Request, prompt, mediaType, data string, progress func(string)) (string, error) {
-	session, err := b.session(request)
-	if err != nil {
-		return "", err
-	}
-	images := []provider.Image{{MediaType: mediaType, Data: data}}
-	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, request.SenderName, "Telegram", request.ChatID, b.name, progress)
-	if errors.Is(err, ErrBusy) {
-		return "", channel.ErrBusy
-	}
-	if err != nil {
-		return "", err
-	}
-	return b.app.RedactForChannel(answer), nil
+	return b.runPrompt(ctx, request, prompt, []provider.Image{{MediaType: mediaType, Data: data}}, false, progress, nil)
 }
 
 // RunPromptWithImageStream is RunPromptWithImage with live stream events.
 func (b *telegramBridge) RunPromptWithImageStream(ctx context.Context, request channel.Request, prompt, mediaType, data string, onEvent func(telegram.StreamEvent)) (string, error) {
-	session, err := b.session(request)
-	if err != nil {
-		return "", err
-	}
-	images := []provider.Image{{MediaType: mediaType, Data: data}}
-	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurnStream(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, request.SenderName, "Telegram", request.ChatID, b.name, nil, onEvent)
-	if errors.Is(err, ErrBusy) {
-		return "", channel.ErrBusy
-	}
-	if err != nil {
-		return "", err
-	}
-	return b.app.RedactForChannel(answer), nil
+	return b.runPrompt(ctx, request, prompt, []provider.Image{{MediaType: mediaType, Data: data}}, false, nil, onEvent)
 }
 
 // Steer forwards a steering message into an active turn in this chat.
@@ -757,7 +729,7 @@ func (b *telegramBridge) Steer(request channel.Request, prompt string) bool {
 // IsRunning reports whether a turn is active for this chat.
 func (b *telegramBridge) IsRunning(request channel.Request) bool {
 	id := channelSessionIDFor(config.ChannelTelegram, b.name, request)
-	return b.app.IsSessionRunning(id)
+	return b.app.IsSessionSteerable(id)
 }
 
 // StopChat cancels the turn in flight for this chat.
@@ -774,34 +746,12 @@ func (b *telegramBridge) TranscribeAudio(ctx context.Context, data []byte, filen
 // RunVoicePrompt runs a voice-originated turn for one chat, falling back to the
 // configured voice model when the primary model fails.
 func (b *telegramBridge) RunVoicePrompt(ctx context.Context, request channel.Request, prompt string, progress func(string)) (string, error) {
-	answer, err := b.RunPrompt(ctx, request, prompt, progress)
-	if err == nil {
-		return answer, nil
-	}
-	session, sessErr := b.session(request)
-	if sessErr != nil {
-		return "", err
-	}
-	return b.app.runChannelVoiceFallback(ctx, b.account.AgentName(b.name), session, b.promptFor(request, prompt), err, progress)
+	return b.runPrompt(ctx, request, prompt, nil, true, progress, nil)
 }
 
 // RunVoicePromptStream runs a voice-originated turn with live stream events.
 func (b *telegramBridge) RunVoicePromptStream(ctx context.Context, request channel.Request, prompt string, onEvent func(telegram.StreamEvent)) (string, error) {
-	answer, err := b.RunPromptStream(ctx, request, prompt, onEvent)
-	if err == nil {
-		return answer, nil
-	}
-	session, sessErr := b.session(request)
-	if sessErr != nil {
-		return "", err
-	}
-	var progress func(string)
-	if onEvent != nil {
-		progress = func(line string) {
-			onEvent(telegram.StreamEvent{Kind: "notice", Text: line})
-		}
-	}
-	return b.app.runChannelVoiceFallback(ctx, b.account.AgentName(b.name), session, b.promptFor(request, prompt), err, progress)
+	return b.runPrompt(ctx, request, prompt, nil, true, nil, onEvent)
 }
 
 // ActiveProviders lists the providers configured and ready to use right now.
@@ -967,38 +917,6 @@ func sanitizeSessionPart(value string) string {
 		out = "chat"
 	}
 	return out
-}
-
-// runChannelVoiceFallback retries a failed voice-originated turn with the
-// configured voice fallback model on the chat's own session.
-func (a *App) runChannelVoiceFallback(ctx context.Context, agentName string, session *agent.Session, prompt string, primaryErr error, progress func(string)) (string, error) {
-	a.mu.Lock()
-	voiceModelID := strings.TrimSpace(a.cfg.VoiceModel)
-	maxSteps := a.cfg.MaxSteps
-	a.mu.Unlock()
-
-	if voiceModelID == "" {
-		return "", primaryErr
-	}
-	if progress != nil {
-		progress(fmt.Sprintf("Falling back to voice model (%s)...", voiceModelID))
-	}
-	roleClient, roleModel, clientErr := a.subagentClient(voiceModelID)
-	if clientErr != nil {
-		return "", fmt.Errorf("active turn failed (%v), and voice fallback model error: %w", primaryErr, clientErr)
-	}
-	report, spend, subErr := agent.RunSubagent(ctx, a.envFor(agentName), roleClient, roleModel, string(agent.SubagentGeneral), prompt, maxSteps)
-	if subErr != nil {
-		return "", fmt.Errorf("active turn failed (%v), and voice fallback turn error: %w", primaryErr, subErr)
-	}
-	if session != nil {
-		session.AddUser(prompt)
-		session.AddAssistant(report, "", nil, nil)
-		session.AddUsage(spend.Usage)
-		_ = session.Save()
-	}
-	a.AddUsage(spend.Usage)
-	return a.RedactForChannel(report), nil
 }
 
 // sessionCostInfo formats token and dollar spend for one channel session.
@@ -1459,6 +1377,12 @@ func (a *App) processOutboxFiles(ctx context.Context) {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
+		if strings.HasPrefix(name, "res-") && strings.HasSuffix(name, ".json") {
+			if info, err := entry.Info(); err == nil && time.Since(info.ModTime()) > 24*time.Hour {
+				_ = os.Remove(filepath.Join(dir, name))
+			}
+			continue
+		}
 		if !strings.HasPrefix(name, "req-") || !strings.HasSuffix(name, ".json") {
 			continue
 		}
@@ -1468,7 +1392,7 @@ func (a *App) processOutboxFiles(ctx context.Context) {
 			continue
 		}
 		var req channelOutboxRequest
-		if err := json.Unmarshal(raw, &req); err != nil || req.ID == "" {
+		if err := json.Unmarshal(raw, &req); err != nil || req.ID == "" || name != "req-"+req.ID+".json" {
 			_ = os.Remove(reqPath)
 			continue
 		}
@@ -1479,7 +1403,10 @@ func (a *App) processOutboxFiles(ctx context.Context) {
 		if runtime == nil || (runtime.waBot != nil && !runtime.waBot.Connected()) {
 			continue
 		}
-		_ = os.Remove(reqPath)
+		// Only the process that removes the pending request owns the send.
+		if err := os.Remove(reqPath); err != nil {
+			continue
+		}
 		var sendErr error
 		if len(req.Data) > 0 {
 			if runtime.sendFile != nil {
@@ -1524,7 +1451,13 @@ func (a *App) deliverViaOutbox(ctx context.Context, ch, account, recipient, file
 	}
 	reqPath := filepath.Join(dir, "req-"+id+".json")
 	resPath := filepath.Join(dir, "res-"+id+".json")
-	if err := os.WriteFile(reqPath, encoded, 0o600); err != nil {
+	// Publish only complete JSON, including when an attachment is large.
+	tempPath := reqPath + ".tmp"
+	defer os.Remove(tempPath)
+	if err := os.WriteFile(tempPath, encoded, 0o600); err != nil {
+		return false, nil
+	}
+	if err := os.Rename(tempPath, reqPath); err != nil {
 		return false, nil
 	}
 	defer func() {
@@ -1532,8 +1465,12 @@ func (a *App) deliverViaOutbox(ctx context.Context, ch, account, recipient, file
 		_ = os.Remove(resPath)
 	}()
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
+	timeout := time.NewTimer(3 * time.Second)
+	defer timeout.Stop()
+	poll := time.NewTicker(150 * time.Millisecond)
+	defer poll.Stop()
+	claimed := false
+	for {
 		if raw, err := os.ReadFile(resPath); err == nil {
 			var res channelOutboxResponse
 			if err := json.Unmarshal(raw, &res); err == nil {
@@ -1546,20 +1483,31 @@ func (a *App) deliverViaOutbox(ctx context.Context, ch, account, recipient, file
 		select {
 		case <-ctx.Done():
 			return true, ctx.Err()
-		case <-time.After(150 * time.Millisecond):
+		case <-timeout.C:
+			if claimed {
+				return true, errors.New("channel delivery was claimed but its outcome is unknown")
+			}
+			if err := os.Remove(reqPath); err == nil {
+				return false, nil
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return true, fmt.Errorf("withdraw channel delivery: %w", err)
+			}
+			claimed = true
+			timeout.Reset(time.Minute)
+		case <-poll.C:
 		}
 	}
-	return false, nil
 }
 
-// channelSessionIDFor is the session of one sender class in one chat. A group
-// holds the operator and strangers at once; with one shared session, what the
-// operator's turns read (a file, a command's output) stayed in the history a
-// guest's next turn was given, and the guest could simply ask for it. Guests
-// get their own session beside the operator's, so the two histories never meet.
+// Group guests each own their history and turn controls. Private chats and
+// operator sessions retain their existing IDs.
 func channelSessionIDFor(kind, account string, request channel.Request) string {
 	id := channelSessionID(kind, account, request.ChatID)
 	if !request.Admin {
+		if request.IsGroup {
+			digest := sha256.Sum256([]byte(request.SenderID))
+			return fmt.Sprintf("%s-%x-guest", id, digest[:16])
+		}
 		return id + "-guest"
 	}
 	return id

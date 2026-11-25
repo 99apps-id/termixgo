@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // readPDFTool extracts text from a PDF file.
@@ -43,6 +45,7 @@ func (t *readPDFTool) Run(_ context.Context, env *Env, args map[string]any) (Res
 
 	// Try pdftotext first.
 	cmd := exec.Command("pdftotext")
+	proc.Detach(cmd)
 	if pages != "" {
 		cmd.Args = append(cmd.Args, "-l", pages)
 	}
@@ -62,6 +65,7 @@ func (t *readPDFTool) Run(_ context.Context, env *Env, args map[string]any) (Res
 		" except: pass; "+
 		"print(text or '')", path)
 	cmd = exec.Command("python", "-c", pyCmd)
+	proc.Detach(cmd)
 	out, err = cmd.CombinedOutput()
 	if err == nil && strings.TrimSpace(string(out)) != "" {
 		return Result{Output: truncateOutput(string(out), 16000)}, nil

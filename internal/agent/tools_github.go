@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // githubCommandTimeout bounds one gh invocation.
@@ -28,6 +30,7 @@ func runGH(ctx context.Context, env *Env, args ...string) (string, error) {
 	defer cancel()
 
 	command := exec.CommandContext(runCtx, "gh", args...)
+	proc.Detach(command)
 	command.Dir = env.Workspace
 	// gh authenticates with its own stored login, so it needs no inherited
 	// provider keys; scrub them the same way shell children are scrubbed.

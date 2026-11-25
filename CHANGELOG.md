@@ -6,8 +6,17 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+## 0.2.13 - 2026-11-25
+
 ### Added
 
+- **Markdown previews with `render_markdown`.** Render Markdown text or a workspace
+  file into a standalone HTML page with tables, task lists, links, images and Mermaid.
+- **Clipboard images and multiline composition.** Paste image data URLs as
+  attachments, collapse long pastes into an expandable placeholder and insert a
+  newline with Shift+Enter or Ctrl+J.
+- **Additional subagent roles.** Debugger, tester and documentation workers join
+  read-only architecture and dependency reviewers.
 - **`termixgo channel inbox list|drop`.** An update the Telegram inbox held when the service
   stopped mid-turn is kept as "uncertain" and never run again on its own, because it may
   already have sent a message or changed a file. `list` shows what is held (state, chat,
@@ -22,6 +31,18 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Fixed
 
+- **Follow-up instructions and queued input.** A running turn can pick up a steer
+  that arrives while its answer streams. Late terminal steers and queued commands
+  continue in order, and Windows child processes stay off the terminal console.
+- **Channel isolation and identity.** Group guests have separate sessions and turn
+  controls. WhatsApp distinguishes verified phone identities from LIDs and reloads
+  admin grants. Voice fallback keeps the channel session's tools and limits.
+- **Telegram activity and attachments.** Activity stays above the first answer
+  chunk for administrators. Guests receive a final reply, and concurrent uploads
+  with the same name keep separate files.
+- **Provider and command reliability.** Muse recognizes more tool-call shapes,
+  shell argument lists retain literal values, and Copilot avoids replaying a
+  response after streaming begins.
 - **Gateway alerts no longer pile up for a target that cannot receive them.** An admin
   entry that is a WhatsApp internal id (a 15 digit LID kept for access matching) was taken
   for a phone number, so every alert to it failed and was retried forever. Such an entry is

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -153,11 +154,8 @@ var markdownFenceRE = regexp.MustCompile("^```([^`]*)$")
 // markdownHeadingRE matches ATX headings.
 var markdownHeadingRE = regexp.MustCompile(`^(#{1,6})\s+(.*?)\s*#*\s*$`)
 
-// markdownLinkRE matches [text](url) links.
-var markdownLinkRE = regexp.MustCompile(`\[([^\]]+)\]\(([^)\s]+)(?: \"[^\"]*\")?\)`)
-
-// markdownImageRE matches ![alt](src) images.
-var markdownImageRE = regexp.MustCompile(`!\[([^\]]*)\]\(([^)\s]+)\)`)
+var markdownInlineTokenRE = regexp.MustCompile("`([^`]+)`" +
+	`|(!?)\[([^\]]*)\]\(([^)\s]+)(?: "[^"]*")?\)`)
 
 // markdownRuleRE matches horizontal rules.
 // markdownRuleRE matches horizontal rules: ---, *** or ___ (compact: tests use ---).
@@ -389,25 +387,31 @@ func splitMarkdownTableRow(row string) []string {
 	return parts
 }
 
-// renderMarkdownInline renders inline Markdown: images, links, bold, italic
-// and inline code, in dependency order.
 func renderMarkdownInline(text string) string {
-	text = markdownImageRE.ReplaceAllStringFunc(text, func(match string) string {
-		img := markdownImageRE.FindStringSubmatch(match)
-		return `<img src="` + html.EscapeString(img[2]) + `" alt="` + html.EscapeString(img[1]) + `">`
+	text = strings.ReplaceAll(text, "\x00", "")
+	var fragments []string
+	text = markdownInlineTokenRE.ReplaceAllStringFunc(text, func(match string) string {
+		parts := markdownInlineTokenRE.FindStringSubmatch(match)
+		var fragment string
+		if code := parts[1]; code != "" {
+			fragment = "<code>" + html.EscapeString(code) + "</code>"
+		} else {
+			image, label, target := parts[2] == "!", parts[3], parts[4]
+			if markdownTargetAllowed(target, image) {
+				if image {
+					fragment = `<img src="` + html.EscapeString(target) + `" alt="` + html.EscapeString(label) + `">`
+				} else {
+					fragment = `<a href="` + html.EscapeString(target) + `">` + renderMarkdownInline(label) + `</a>`
+				}
+			} else {
+				fragment = html.EscapeString(label)
+			}
+		}
+		token := fmt.Sprintf("\x00%d\x00", len(fragments)/2)
+		fragments = append(fragments, token, fragment)
+		return token
 	})
-	text = markdownLinkRE.ReplaceAllStringFunc(text, func(match string) string {
-		link := markdownLinkRE.FindStringSubmatch(match)
-		return `<a href="` + html.EscapeString(link[2]) + `">` + renderMarkdownInline(link[1]) + `</a>`
-	})
-	// Escape once, then protect code spans so bold/italic markers inside
-	// them stay literal.
 	escaped := html.EscapeString(text)
-	var codes []string
-	escaped = regexp.MustCompile("`([^`]+)`").ReplaceAllStringFunc(escaped, func(match string) string {
-		codes = append(codes, strings.Trim(match, "`"))
-		return fmt.Sprintf("\x00%d\x00", len(codes)-1)
-	})
 	for _, line := range []struct {
 		pattern *regexp.Regexp
 		open    string
@@ -420,8 +424,20 @@ func renderMarkdownInline(text string) string {
 	} {
 		escaped = line.pattern.ReplaceAllString(escaped, line.open+"$1"+line.close)
 	}
-	for i, code := range codes {
-		escaped = strings.ReplaceAll(escaped, fmt.Sprintf("\x00%d\x00", i), "<code>"+code+"</code>")
+	return strings.NewReplacer(fragments...).Replace(escaped)
+}
+
+func markdownTargetAllowed(target string, image bool) bool {
+	parsed, err := url.Parse(target)
+	if err != nil || strings.Contains(target, "\\") {
+		return false
 	}
-	return escaped
+	switch strings.ToLower(parsed.Scheme) {
+	case "", "http", "https":
+		return true
+	case "mailto":
+		return !image
+	default:
+		return false
+	}
 }

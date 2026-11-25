@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // gitCommandTimeout bounds one git invocation.
@@ -32,6 +34,7 @@ func runGit(ctx context.Context, env *Env, args ...string) (string, error) {
 
 	argv := append([]string{"--no-pager"}, args...)
 	command := exec.CommandContext(runCtx, "git", argv...)
+	proc.Detach(command)
 	command.Dir = env.Workspace
 	var buffer bytes.Buffer
 	command.Stdout = &buffer
@@ -93,6 +96,7 @@ func isGitRepository(workspace string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
+	proc.Detach(command)
 	command.Dir = workspace
 	output, err := command.Output()
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,41 @@ import (
 // approvalTimeout bounds how long an in-chat approval waits for the operator
 // to answer before it fails closed, the same window the Telegram buttons get.
 var approvalTimeout = 3 * time.Minute
+
+// A separate CLI process can grant or revoke an admin while the bot runs.
+// Config.Save replaces the file atomically, so an unchanged file can reuse
+// its parsed admin list. An unreadable configuration grants no listed admins.
+func whatsAppAdmins(account string) func() []string {
+	var mu sync.Mutex
+	var previous os.FileInfo
+	var admins []string
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		path, err := config.Path()
+		if err != nil {
+			return nil
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil
+		}
+		if previous != nil && previous.ModTime() == info.ModTime() && previous.Size() == info.Size() && os.SameFile(previous, info) {
+			return admins
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			return nil
+		}
+		entry, ok := cfg.WhatsAppAccount(account)
+		admins = nil
+		if ok && entry.Enabled {
+			admins = entry.Admins
+		}
+		previous = info
+		return admins
+	}
+}
 
 // startWhatsAppAccount starts one linked-device account.
 //
@@ -53,6 +89,7 @@ func (a *App) startWhatsAppAccount(name string) error {
 	bot := whatsapp.New(client, bridge)
 	bridge.send = bot.SendTo
 	bot.SetAccount(name, entry, a.pairingStore())
+	bot.SetAdminSource(whatsAppAdmins(name))
 	bot.SetRedactor(a.RedactForChannel)
 
 	key := channel.AccountID{Channel: config.ChannelWhatsApp, Account: name}
@@ -292,12 +329,16 @@ func approvalResultText(_ string, decision agent.Decision) string {
 
 // RunPrompt runs one turn for one chat.
 func (b *whatsappBridge) RunPrompt(ctx context.Context, request channel.Request, prompt string, progress func(string)) (string, error) {
+	return b.runPrompt(ctx, request, prompt, nil, false, progress)
+}
+
+func (b *whatsappBridge) runPrompt(ctx context.Context, request channel.Request, prompt string, images []provider.Image, voice bool, progress func(string)) (string, error) {
 	session, err := b.session(request)
 	if err != nil {
 		return "", err
 	}
 	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), nil, guest, maxSteps, budget, request.SenderName, "WhatsApp", request.ChatID, b.name, progress)
+	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, request.SenderName, "WhatsApp", request.ChatID, b.name, voice, progress, nil)
 	if errors.Is(err, ErrBusy) {
 		return "", channel.ErrBusy
 	}
@@ -318,20 +359,7 @@ func (b *whatsappBridge) promptFor(request channel.Request, prompt string) strin
 
 // RunPromptWithImage is RunPrompt with an image attached for a vision model.
 func (b *whatsappBridge) RunPromptWithImage(ctx context.Context, request channel.Request, prompt, mediaType, data string, progress func(string)) (string, error) {
-	session, err := b.session(request)
-	if err != nil {
-		return "", err
-	}
-	images := []provider.Image{{MediaType: mediaType, Data: data}}
-	guest, maxSteps, budget := b.limits(request)
-	answer, err := b.app.runChannelTurn(ctx, b.account.AgentName(b.name), session, b.interactorFor(request), b.promptFor(request, prompt), images, guest, maxSteps, budget, request.SenderName, "WhatsApp", request.ChatID, b.name, progress)
-	if errors.Is(err, ErrBusy) {
-		return "", channel.ErrBusy
-	}
-	if err != nil {
-		return "", err
-	}
-	return b.app.RedactForChannel(answer), nil
+	return b.runPrompt(ctx, request, prompt, []provider.Image{{MediaType: mediaType, Data: data}}, false, progress)
 }
 
 // Steer forwards a steering message into an active turn in this chat.
@@ -344,7 +372,7 @@ func (b *whatsappBridge) Steer(request channel.Request, prompt string) bool {
 // IsRunning reports whether a turn is active for this chat.
 func (b *whatsappBridge) IsRunning(request channel.Request) bool {
 	id := channelSessionIDFor(config.ChannelWhatsApp, b.name, request)
-	return b.app.IsSessionRunning(id)
+	return b.app.IsSessionSteerable(id)
 }
 
 // StopChat cancels the turn in flight for this chat.
@@ -361,15 +389,7 @@ func (b *whatsappBridge) TranscribeAudio(ctx context.Context, data []byte, filen
 // RunVoicePrompt runs a voice-originated turn for one chat, falling back to the
 // configured voice model when the primary model fails.
 func (b *whatsappBridge) RunVoicePrompt(ctx context.Context, request channel.Request, prompt string, progress func(string)) (string, error) {
-	answer, err := b.RunPrompt(ctx, request, prompt, progress)
-	if err == nil {
-		return answer, nil
-	}
-	session, sessErr := b.session(request)
-	if sessErr != nil {
-		return "", err
-	}
-	return b.app.runChannelVoiceFallback(ctx, b.account.AgentName(b.name), session, b.promptFor(request, prompt), err, progress)
+	return b.runPrompt(ctx, request, prompt, nil, true, progress)
 }
 
 // ActiveProviders lists the providers configured and ready to use right now.

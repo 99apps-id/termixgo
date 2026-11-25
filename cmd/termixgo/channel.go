@@ -576,6 +576,9 @@ func editChannelList(args []string, verb string, stdout io.Writer) error {
 		return fmt.Errorf("usage: termixgo channel %s add|rm <whatsapp|telegram> [agent] <id...>", verb)
 	}
 	action := strings.ToLower(strings.TrimSpace(args[0]))
+	if action != "add" && action != "rm" && action != "del" && action != "remove" {
+		return fmt.Errorf("unknown %s action %q; use add or rm", verb, action)
+	}
 	kind, err := channelType(args[1])
 	if err != nil {
 		return err
@@ -589,6 +592,11 @@ func editChannelList(args []string, verb string, stdout io.Writer) error {
 	if len(rest) == 0 {
 		return fmt.Errorf("usage: termixgo channel %s add|rm <whatsapp|telegram> [agent] <id...>", verb)
 	}
+	for _, id := range rest {
+		if channel.SenderKey(kind, id) == "" {
+			return fmt.Errorf("invalid %s sender ID", kind)
+		}
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -596,12 +604,12 @@ func editChannelList(args []string, verb string, stdout io.Writer) error {
 	apply := func(list []string) []string {
 		if action == "rm" || action == "remove" || action == "del" {
 			for _, id := range rest {
-				list = channel.RemoveID(list, id)
+				list = channel.RemoveSenderID(kind, list, id)
 			}
 			return list
 		}
 		for _, id := range rest {
-			list = channel.AddID(list, id)
+			list = channel.AddSenderID(kind, list, id)
 		}
 		return list
 	}
@@ -927,7 +935,7 @@ func pairingCommand(args []string, stdout io.Writer) error {
 		if !exists {
 			return fmt.Errorf("the account no longer exists")
 		}
-		entry.AllowFrom = channel.AddID(entry.AllowFrom, request.SenderID)
+		entry.AllowFrom = channel.AddSenderID(request.Channel, entry.AllowFrom, request.SenderID)
 		cfg = cfg.WithWhatsAppAccount(request.Account, entry)
 	default:
 		return fmt.Errorf("unknown channel %q in the request", request.Channel)

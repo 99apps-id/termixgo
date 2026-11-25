@@ -77,3 +77,11 @@ func TestDelegationDepthExceeded(t *testing.T) {
 		t.Errorf("depth 3 must be refused at maxDepth 2")
 	}
 }
+func TestChannelPromptCarriesVerifiedRole(t *testing.T) {
+	for _, guest := range []bool{false, true} {
+		prompt, _ := BuildSystemParts(&Env{Workspace: t.TempDir(), AgentName: "sales", CallerChannel: "WhatsApp", Guest: guest}, "test-model")
+		if strings.Contains(prompt, "verified channel admin") == guest {
+			t.Errorf("unexpected admin role in sales prompt, guest=%v", guest)
+		}
+	}
+}

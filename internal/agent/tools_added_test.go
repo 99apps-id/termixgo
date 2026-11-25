@@ -365,3 +365,13 @@ func TestRunCommandAcceptsMuseDialect(t *testing.T) {
 		}
 	}
 }
+
+func TestRunCommandPreservesLiteralArgv(t *testing.T) {
+	literal := "  one 'two' \"three\" $TERMIXGO_TEST $()  "
+	result, err := (&runCommandTool{}).Run(context.Background(), testEnv(t), map[string]any{
+		"argv": []any{"echo", literal},
+	})
+	if err != nil || result.IsError || !strings.Contains(result.Output, "\n"+literal) {
+		t.Fatalf("literal argv argument lost: err=%v output=%q", err, result.Output)
+	}
+}

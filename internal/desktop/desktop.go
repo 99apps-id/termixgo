@@ -15,6 +15,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // Point is a screen coordinate in pixels, origin at the top left.
@@ -100,6 +102,7 @@ func run(ctx context.Context, binary string, args ...string) error {
 	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	command := exec.CommandContext(runCtx, binary, args...)
+	proc.Detach(command)
 	var stderr strings.Builder
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
@@ -117,6 +120,7 @@ func output(ctx context.Context, binary string, args ...string) (string, error) 
 	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	command := exec.CommandContext(runCtx, binary, args...)
+	proc.Detach(command)
 	var stderr strings.Builder
 	command.Stderr = &stderr
 	out, err := command.Output()
@@ -138,6 +142,7 @@ func outputEnv(ctx context.Context, binary string, env []string, args ...string)
 	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	command := exec.CommandContext(runCtx, binary, args...)
+	proc.Detach(command)
 	command.Env = env
 	var stderr strings.Builder
 	command.Stderr = &stderr

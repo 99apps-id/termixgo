@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // maxSpeechChars bounds one request. OpenAI caps input at 4096 characters.
@@ -265,6 +267,7 @@ $s.Dispose()
 			return nil, "", "", err
 		}
 		cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-In", textPath, "-Out", out, "-Voice", voice)
+		proc.Detach(cmd)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return nil, "", "", fmt.Errorf("windows speech: %v %s", err, strings.TrimSpace(string(output)))
 		}

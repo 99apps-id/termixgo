@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // agyIdentity is the release identity of an installed Antigravity CLI: the
@@ -135,7 +136,9 @@ func writeAgyIdentityCache(entry agyIdentityCache) {
 func readAgyIdentity(path string) (agyIdentity, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, path, "--version").Output()
+	command := exec.CommandContext(ctx, path, "--version")
+	proc.Detach(command)
+	output, err := command.Output()
 	if err != nil {
 		return agyIdentity{}, false
 	}

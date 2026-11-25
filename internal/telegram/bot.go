@@ -947,6 +947,10 @@ func (b *Bot) handleApprovalCallback(ctx context.Context, query *CallbackQuery) 
 }
 
 func (b *Bot) handleMessage(ctx context.Context, message *Message) {
+	// Anonymous group posts can carry a shared placeholder user in From.
+	if !message.Chat.IsPrivate() && (message.SenderChat != nil || message.From == nil || message.From.ID == 0) {
+		return
+	}
 	chatID := message.Chat.ID
 	text := strings.TrimSpace(message.Text)
 	// A command is only a command when a slash introduces it (optionally preceded
@@ -1289,6 +1293,29 @@ func (b *Bot) runPrompt(ctx context.Context, chatID int64, request channel.Reque
 		}
 	}
 
+	if !request.Admin {
+		_ = b.client.SendChatAction(ctx, chatID, "typing")
+		done := make(chan struct{})
+		go b.keepTyping(ctx, chatID, done)
+		defer close(done)
+		answer, err := b.agent.RunPrompt(ctx, request, prompt, nil)
+		if err != nil {
+			b.reply(ctx, chatID, channel.NaturalError(err))
+			return
+		}
+		b.notifyHookTurnCompleted(ctx, request, prompt, answer)
+		if strings.TrimSpace(answer) == "" {
+			b.reply(ctx, chatID, "Belum ada jawaban. Silakan coba lagi.")
+			return
+		}
+		if channel.Silent(answer) {
+			return
+		}
+		if err := b.SendTo(ctx, chatID, answer); err != nil {
+			b.logf("could not send guest answer: %v", err)
+		}
+		return
+	}
 	if streamer, ok := b.agent.(StreamingAgent); ok {
 		b.runWithStream(ctx, chatID, func(runCtx context.Context, onEvent func(StreamEvent)) (string, error) {
 			answer, err := streamer.RunPromptStream(runCtx, request, prompt, onEvent)
@@ -1970,7 +1997,7 @@ func (b *Bot) handleGuestMessage(ctx context.Context, request channel.Request, m
 	if text == "" {
 		return
 	}
-	if b.HasPendingApproval(chatID) {
+	if !request.IsGroup && b.HasPendingApproval(chatID) {
 		if b.ResolveApprovalByText(chatID, text) {
 			return
 		}
@@ -1995,7 +2022,7 @@ func (b *Bot) handleGuestMessage(ctx context.Context, request channel.Request, m
 	case "new", "reset", "clear":
 		b.agent.NewSession(request)
 		b.reply(ctx, chatID, "Mulai sesi baru ya.")
-	case "stop":
+	case "stop", "cancel":
 		if stopper, ok := b.agent.(interface{ StopChat(channel.Request) bool }); ok {
 			if stopper.StopChat(request) {
 				b.reply(ctx, chatID, "Menghentikan proses yang sedang berjalan di sesi ini.")
@@ -2003,8 +2030,7 @@ func (b *Bot) handleGuestMessage(ctx context.Context, request channel.Request, m
 				b.reply(ctx, chatID, "Tidak ada proses yang sedang berjalan di sesi ini.")
 			}
 		} else {
-			b.agent.Stop()
-			b.reply(ctx, chatID, "Menghentikan proses.")
+			b.reply(ctx, chatID, "Tidak ada proses yang bisa dihentikan di sesi ini.")
 		}
 	case "run", "query":
 		prompt := strings.TrimSpace(rest)

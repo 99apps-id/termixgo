@@ -14,7 +14,7 @@ func TestGuestToolRegistryDropsTheAdminClass(t *testing.T) {
 	for _, name := range []string{
 		"run_command", "run_checks", "run_background", "kill", "subagent",
 		"parallel_batch", "git_push", "checkpoint", "rewind", "env_get",
-		"http_request", "browser_open", "github_create_pr", "ask_user", "remember",
+		"http_request", "browser_open", "render_markdown", "render_mermaid", "github_create_pr", "ask_user", "remember",
 	} {
 		if _, ok := guest.Lookup(name); ok {
 			t.Errorf("%s must not be offered to a guest", name)

@@ -25,6 +25,7 @@ func (m *Model) handleWake(event agent.Event) (tea.Model, tea.Cmd) {
 	prompt := agent.WakePrompt(text)
 	if m.running {
 		m.app.Steer(prompt)
+		m.steerEcho = append(m.steerEcho, strings.TrimSpace(prompt))
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: headline})
 		m.refresh()
 		return m, next

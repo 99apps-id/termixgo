@@ -9,6 +9,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // processTree groups a spawned process with everything it starts, so stopping
@@ -43,13 +45,9 @@ func newProcessTree() (*processTree, error) {
 }
 
 // prepare runs before the process starts, which is where the POSIX build sets
-// a process group. A job object is assigned after start, so there is nothing
-// to do here.
-//
-// This stays as an empty no-op rather than being deleted: the two builds share
-// one call site, and a test that reports it as uncovered is showing the
-// coverage tool's handling of an empty function body, not dead code.
-func (t *processTree) prepare(cmd *exec.Cmd) {}
+// a process group. A job object is assigned after start, so the only thing to
+// do here is to keep the command off the operator's console.
+func (t *processTree) prepare(cmd *exec.Cmd) { proc.Detach(cmd) }
 
 // attach puts the started process in the job, so its children join too.
 //

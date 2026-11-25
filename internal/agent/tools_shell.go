@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +13,9 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf16"
 
+	"github.com/99apps-id/termixgo/internal/proc"
 	"github.com/99apps-id/termixgo/internal/sandbox"
 )
 
@@ -52,13 +56,19 @@ func (t *runCommandTool) Run(ctx context.Context, env *Env, args map[string]any)
 	// cmd, script or an argv array, and workdir/timeout variants. Accept them
 	// all so a call the model knows how to make does not fail on the key name.
 	command := strings.TrimSpace(argString(args, "command", "cmd", "script", "command_line", "shell_command", "shell"))
+	pickShell := shellForTool
 	if command == "" {
-		if parts := argList(args, "args", "argv"); len(parts) > 0 {
-			quoted := make([]string, 0, len(parts))
-			for _, part := range parts {
-				quoted = append(quoted, shellQuoteArg(part))
+		if parts := commandArgv(args); len(parts) > 0 && strings.TrimSpace(parts[0]) != "" {
+			windows := runtime.GOOS == "windows" && !env.Config.Sandbox.Enabled
+			quoted := make([]string, len(parts))
+			for i, part := range parts {
+				quoted[i] = shellQuoteArg(part, windows)
 			}
 			command = strings.Join(quoted, " ")
+			if windows {
+				command = "& " + command
+				pickShell = windowsArgvShell
+			}
 		}
 	}
 	if command == "" {
@@ -78,30 +88,37 @@ func (t *runCommandTool) Run(ctx context.Context, env *Env, args map[string]any)
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		return Result{Output: fmt.Sprintf("working directory %s is not available", dir), IsError: true}, nil
 	}
-	return execute(ctx, env, command, dir, time.Duration(timeout)*time.Second)
+	return executeWithShell(ctx, env, command, dir, time.Duration(timeout)*time.Second, pickShell)
 }
 
-// commandTimeoutSecs resolves the command timeout from any dialect key. The
-// ceiling applies to every key: a timeout_ms of a billion is the model
-// shellQuoteArg quotes one argv element for the target interpreter.
-// On POSIX, single quotes are literal: $, backticks and \ never expand.
-// On Windows (PowerShell), quotes are backtick-escaped so a $ or " inside
-// the argument stays literal instead of breaking the command line.
-func shellQuoteArg(arg string) string {
-	if arg == "" {
-		return "\x22\x22"
+func commandArgv(args map[string]any) []string {
+	for _, key := range []string{"args", "argv"} {
+		switch value := args[key].(type) {
+		case []any:
+			parts := make([]string, 0, len(value))
+			for _, item := range value {
+				parts = append(parts, toString(item))
+			}
+			return parts
+		case []string:
+			return value
+		case string:
+			return argList(args, key)
+		}
 	}
-	if runtime.GOOS == "windows" {
-		quoted := strings.ReplaceAll(arg, "\x60", "\x60\x60")
-		quoted = strings.ReplaceAll(quoted, "$", "\x60$")
-		quoted = strings.ReplaceAll(quoted, "\x22", "\x60\x22")
-		return "\x22" + quoted + "\x22"
+	return nil
+}
+
+// shellQuoteArg quotes one argv element for the target interpreter.
+func shellQuoteArg(arg string, windows bool) string {
+	if windows {
+		return "'" + strings.NewReplacer("'", "''", "‘", "‘‘", "’", "’’").Replace(arg) + "'"
 	}
 	escaped := strings.ReplaceAll(arg, "'", "'\\''")
 	return "'" + escaped + "'"
 }
 
-// guessing at a unit, not a licence to run effectively forever.
+// commandTimeoutSecs applies the same ceiling to every dialect key.
 func commandTimeoutSecs(args map[string]any) int {
 	timeout := argInt(args, "timeout_secs", defaultCommandTimeout, 1, maxCommandTimeout)
 	if value := argInt(args, "timeout", 0, 0, 0); value > 0 {
@@ -224,10 +241,14 @@ var shellForTool = shellInvocation
 
 // execute runs one command line and folds the outcome into a Result.
 func execute(ctx context.Context, env *Env, command, dir string, timeout time.Duration) (Result, error) {
+	return executeWithShell(ctx, env, command, dir, timeout, shellForTool)
+}
+
+func executeWithShell(ctx context.Context, env *Env, command, dir string, timeout time.Duration, pickShell func(string) (string, []string)) (Result, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	shell, shellArgs := shellForTool(command)
+	shell, shellArgs := pickShell(command)
 	if env != nil && env.Config.Sandbox.Enabled {
 		// The container is the only shell that runs while the sandbox is on.
 		// A configuration error refuses the command instead of quietly falling
@@ -240,6 +261,7 @@ func execute(ctx context.Context, env *Env, command, dir string, timeout time.Du
 		shell, shellArgs = engine, args
 	}
 	process := exec.CommandContext(runCtx, shell, shellArgs...)
+	proc.Detach(process)
 	process.Dir = dir
 	// A foreground command runs on model-authored input, so it gets the same
 	// scrubbed inheritance as a background one: builds and tests need PATH
@@ -366,6 +388,20 @@ func shellInvocation(command string) (string, []string) {
 // windowsShell is split out so the flags are readable as a list.
 func windowsShell(command string) []string {
 	return []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command}
+}
+
+// Encoding keeps Windows command-line parsing from rewriting quotes before
+// PowerShell can parse the command.
+func windowsArgvShell(command string) (string, []string) {
+	units := utf16.Encode([]rune("$ProgressPreference = 'SilentlyContinue'; " + command))
+	data := make([]byte, 0, len(units)*2)
+	for _, unit := range units {
+		data = binary.LittleEndian.AppendUint16(data, unit)
+	}
+	args := windowsShell(command)
+	args[len(args)-2] = "-EncodedCommand"
+	args[len(args)-1] = base64.StdEncoding.EncodeToString(data)
+	return "powershell.exe", args
 }
 
 // posixShell prefers bash for a login shell, which is what picks up a version

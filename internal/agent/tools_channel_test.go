@@ -58,7 +58,17 @@ func TestSendChannelToolDeliversAttachmentAndRespectsGuestRestriction(t *testing
 		t.Fatalf("expected guest sending to own chat to succeed, got: %+v, err: %v", allowedOwn, err)
 	}
 	if guestCaptured.Recipient != "450913223" || guestCaptured.Channel != "telegram" || guestCaptured.FilePath != ".termixgo/uploads/report.pdf" {
-		t.Fatalf("expected guest delivery to own chat 450913223 via telegram with path resolved, got %+v", guestCaptured)
+		t.Fatalf("expected delivery on the caller's route, got %+v", guestCaptured)
+	}
+	for _, args := range []map[string]any{
+		{"channel": "whatsapp", "message": "hi"},
+		{"account": "elsewhere", "message": "hi"},
+	} {
+		guestCaptured = ChannelSendRequest{}
+		result, _ := tool.Run(t.Context(), guestEnv, args)
+		if !result.IsError || guestCaptured.Message != "" {
+			t.Error("guest delivery must remain on the originating account and channel")
+		}
 	}
 
 	// 2. Operator session forwards attachment and caption to SendChannel.

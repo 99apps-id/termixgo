@@ -83,6 +83,9 @@ func BuildSystemParts(env *Env, model string) (staticPrompt, dynamicPlan string)
 	}
 	if strings.TrimSpace(env.CallerChannel) != "" {
 		builder.WriteString("\n## MESSAGING CHANNEL RULES\n")
+		if !env.Guest {
+			builder.WriteString("- The sender is a verified channel admin for this account. Handle their request with this agent's configured tools and approval rules.\n")
+		}
 		builder.WriteString("- Never reply with only a promise to check later (such as \"sebentar saya cek dulu...\" or \"let me check...\") without executing a tool: run the tool first and reply with the actual result.\n")
 		builder.WriteString("- Never repeat the same sentence or acknowledgement multiple times in a reply.\n")
 		builder.WriteString("- Format replies cleanly for chat using enriched Markdown where helpful: **bold**, *italic*, bullet lists (- item), numbered lists (1. item), blockquotes (> quote), code blocks, and natural emojis/emoticons to keep the conversation clear and friendly.\n")

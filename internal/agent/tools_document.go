@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // ----------------------------------------------------------------------------
@@ -570,6 +572,7 @@ func extractPDFText(ctx context.Context, path string) (string, error) {
 	// First attempt pdftotext if available on the system
 	if bin, err := exec.LookPath("pdftotext"); err == nil {
 		cmd := exec.CommandContext(ctx, bin, "-layout", path, "-")
+		proc.Detach(cmd)
 		if out, err := cmd.Output(); err == nil && len(bytes.TrimSpace(out)) > 0 {
 			return string(out), nil
 		}
@@ -588,6 +591,7 @@ except Exception:
     pass
 `, path)
 		cmd := exec.CommandContext(ctx, py, "-c", code)
+		proc.Detach(cmd)
 		if out, err := cmd.Output(); err == nil && len(bytes.TrimSpace(out)) > 0 {
 			return string(out), nil
 		}

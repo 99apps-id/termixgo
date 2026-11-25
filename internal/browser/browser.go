@@ -26,6 +26,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // startupTimeout bounds how long the browser may take to publish its debugging
@@ -224,6 +226,7 @@ func start(ctx context.Context) (*Session, error) {
 		"about:blank",
 	}
 	command := exec.Command(binary, args...)
+	proc.Detach(command)
 	command.Stdout = io.Discard
 	command.Stderr = io.Discard
 	if err := command.Start(); err != nil {

@@ -72,23 +72,29 @@ type Bot struct {
 	client *whatsmeow.Client
 	agent  channel.Agent
 
-	mu           sync.RWMutex
-	account      string
-	policy       config.ChannelAccount
-	pairing      *channel.PairingStore
-	selfIDs      map[string]bool
-	limiter      *channel.GuestRateLimits
-	lifecycle    func(string)
-	logf         func(string)
-	sendHook     func(chatID, text string)
-	sendFileHook func(chatID, filename string, data []byte, caption string)
-	downloadHook func(ctx context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error)
-	interceptor  channel.MessageInterceptor
-	hookURL      string
-	hookSecret   string
-	markReadHook func(ctx context.Context, chat, sender types.JID, id types.MessageID)
-	redactor     func(string) string
-	handlers     sync.WaitGroup
+	mu               sync.RWMutex
+	account          string
+	policy           config.ChannelAccount
+	lookupUsers      func(context.Context, []types.JID) (map[types.JID]types.UserInfo, error)
+	adminSource      func() []string
+	adminLookupMu    sync.Mutex
+	adminLookupAt    time.Time
+	adminLookupList  string
+	adminPhonesByLID map[types.JID]types.JID
+	pairing          *channel.PairingStore
+	selfIDs          map[string]bool
+	limiter          *channel.GuestRateLimits
+	lifecycle        func(string)
+	logf             func(string)
+	sendHook         func(chatID, text string)
+	sendFileHook     func(chatID, filename string, data []byte, caption string)
+	downloadHook     func(ctx context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error)
+	interceptor      channel.MessageInterceptor
+	hookURL          string
+	hookSecret       string
+	markReadHook     func(ctx context.Context, chat, sender types.JID, id types.MessageID)
+	redactor         func(string) string
+	handlers         sync.WaitGroup
 }
 
 // SetRedactor installs the outbound redactor. Nil keeps the pattern-only
@@ -111,10 +117,12 @@ func (b *Bot) redact(text string) string {
 
 // New builds the bot for one client and bridge.
 func New(client *whatsmeow.Client, agent channel.Agent) *Bot {
+	bot := &Bot{client: client, agent: agent}
 	if client != nil {
 		client.SetForceActiveDeliveryReceipts(true)
+		bot.lookupUsers = client.GetUserInfo
 	}
-	return &Bot{client: client, agent: agent}
+	return bot
 }
 
 // SetAccount installs the account identity, policy and pairing store.
@@ -125,6 +133,13 @@ func (b *Bot) SetAccount(name string, policy config.ChannelAccount, pairing *cha
 	b.pairing = pairing
 	b.limiter = channel.NewGuestRateLimits(policy)
 	b.mu.Unlock()
+}
+
+// SetAdminSource reads the account's current grants before classifying a sender.
+func (b *Bot) SetAdminSource(source func() []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.adminSource = source
 }
 
 // SetInterceptor installs a native Go message interceptor.
@@ -296,10 +311,10 @@ func (b *Bot) refreshSelf() {
 	}
 	set := map[string]bool{}
 	if b.client.Store.ID != nil {
-		set[channel.CanonicalID(b.client.Store.ID.String())] = true
+		set[channel.SenderKey(config.ChannelWhatsApp, b.client.Store.ID.String())] = true
 	}
 	if !b.client.Store.LID.IsEmpty() {
-		set[channel.CanonicalID(b.client.Store.LID.String())] = true
+		set[channel.SenderKey(config.ChannelWhatsApp, b.client.Store.LID.String())] = true
 	}
 	b.mu.Lock()
 	b.selfIDs = set
@@ -309,7 +324,8 @@ func (b *Bot) refreshSelf() {
 func (b *Bot) isSelf(senderID string) bool {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	return b.selfIDs[channel.CanonicalID(senderID)]
+	key := channel.SenderKey(config.ChannelWhatsApp, senderID)
+	return key != "" && b.selfIDs[key]
 }
 
 func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
@@ -352,6 +368,15 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 	}
 
 	policy := b.policySnapshot()
+	b.mu.RLock()
+	adminSource := b.adminSource
+	b.mu.RUnlock()
+	if adminSource != nil {
+		policy.Admins = adminSource()
+	}
+	if evt.Info.Sender.Server == types.HiddenUserServer && request.SenderAlt == "" {
+		request.SenderAlt = b.adminPhoneForLID(ctx, evt.Info.Sender.ToNonAD(), policy.Admins)
+	}
 	decision := channel.Decide(policy, request)
 	if b.isSelf(request.SenderID) || (request.SenderAlt != "" && b.isSelf(request.SenderAlt)) {
 		// The account's own number is the operator.
@@ -421,7 +446,7 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 
 	if cmdText, isCmd := channel.ExtractCommandText(request.Text); isCmd {
 		cmdName, _ := splitCommand(cmdText)
-		if cmdName == "stop" || cmdName == "cancel" {
+		if decision.Admin && (cmdName == "stop" || cmdName == "cancel") {
 			if router, ok := b.agent.(ApprovalRouter); ok {
 				if hasPending, ok := b.agent.(interface{ HasPendingApproval(channel.Request) bool }); ok && hasPending.HasPendingApproval(request) {
 					router.ResolveApproval(request, "n")
@@ -430,7 +455,7 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 			}
 		}
 		isGuestAllowed := cmdName == "help" || cmdName == "start" || cmdName == "menu" ||
-			cmdName == "status" || cmdName == "new" || cmdName == "reset" || cmdName == "clear" || cmdName == "stop"
+			cmdName == "status" || cmdName == "new" || cmdName == "reset" || cmdName == "clear" || cmdName == "stop" || cmdName == "cancel"
 		if !decision.Admin && !isGuestAllowed {
 			if lang == "id" {
 				b.reply(ctx, request.ChatID, "Maaf, perintah itu hanya untuk operator.")
@@ -445,7 +470,7 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 	}
 
 	// An operator's reply to a pending approval answers it.
-	if router, ok := b.agent.(ApprovalRouter); ok {
+	if router, ok := b.agent.(ApprovalRouter); ok && decision.Admin {
 		if router.ResolveApproval(request, request.Text) {
 			return
 		}
@@ -902,10 +927,10 @@ func (b *Bot) requestFrom(evt *events.Message) channel.Request {
 	info := evt.Info
 	senderAlt := ""
 	if !info.SenderAlt.IsEmpty() {
-		senderAlt = info.SenderAlt.String()
-	} else if b.client != nil && b.client.Store != nil {
-		if alt, err := b.client.Store.GetAltJID(context.Background(), info.Sender); err == nil && !alt.IsEmpty() {
-			senderAlt = alt.String()
+		senderAlt = info.SenderAlt.ToNonAD().String()
+	} else if b.client != nil && b.client.Store != nil && b.client.Store.LIDs != nil {
+		if alt, err := b.client.Store.GetAltJID(context.Background(), info.Sender.ToNonAD()); err == nil && !alt.IsEmpty() {
+			senderAlt = alt.ToNonAD().String()
 		}
 	}
 	rawMsg := unwrapMessage(evt.Message)
@@ -914,13 +939,52 @@ func (b *Bot) requestFrom(evt *events.Message) channel.Request {
 		Account:    b.accountName(),
 		ChatID:     info.Chat.String(),
 		IsGroup:    info.IsGroup || info.Chat.Server == types.GroupServer,
-		SenderID:   info.Sender.String(),
+		SenderID:   info.Sender.ToNonAD().String(),
 		SenderAlt:  senderAlt,
 		SenderName: strings.TrimSpace(info.PushName),
 		Text:       messageText(rawMsg),
 	}
 	request.MentionsBot = b.mentionsSelf(rawMsg)
 	return request
+}
+
+// A LID-only message on a newly linked device may have no local phone
+// mapping. Resolve the configured phones through WhatsApp, once per account
+// per minute even when many unknown senders arrive together.
+func (b *Bot) adminPhoneForLID(ctx context.Context, lid types.JID, admins []string) string {
+	if b.lookupUsers == nil || len(admins) == 0 {
+		return ""
+	}
+	b.adminLookupMu.Lock()
+	defer b.adminLookupMu.Unlock()
+	list := strings.Join(admins, "\x00")
+	if list != b.adminLookupList || time.Since(b.adminLookupAt) >= time.Minute {
+		b.adminLookupAt, b.adminLookupList = time.Now(), list
+		b.adminPhonesByLID = nil
+		var phones []types.JID
+		for _, admin := range admins {
+			key := channel.SenderKey(config.ChannelWhatsApp, admin)
+			if phone, err := types.ParseJID(key); err == nil && phone.Server == types.DefaultUserServer && phone.User != "" {
+				phones = append(phones, phone)
+			}
+		}
+		if len(phones) > 0 {
+			lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			users, err := b.lookupUsers(lookupCtx, phones)
+			if err != nil {
+				b.logfLine("WhatsApp admin phone lookup unavailable")
+				return ""
+			}
+			b.adminPhonesByLID = make(map[types.JID]types.JID, len(phones))
+			for _, phone := range phones {
+				if alternate := users[phone].LID; alternate.Server == types.HiddenUserServer && alternate.User != "" {
+					b.adminPhonesByLID[alternate.ToNonAD()] = phone
+				}
+			}
+		}
+	}
+	return b.adminPhonesByLID[lid].String()
 }
 
 // mentionsSelf reports whether the message names this account, in either the
@@ -934,11 +998,11 @@ func (b *Bot) mentionsSelf(msg *waE2E.Message) bool {
 	self := b.selfIDs
 	b.mu.RUnlock()
 	for _, mentioned := range contextInfo.GetMentionedJID() {
-		if self[channel.CanonicalID(mentioned)] {
+		if self[channel.SenderKey(config.ChannelWhatsApp, mentioned)] {
 			return true
 		}
 	}
-	if contextInfo.GetQuotedMessage() != nil && self[channel.CanonicalID(contextInfo.GetParticipant())] {
+	if contextInfo.GetQuotedMessage() != nil && self[channel.SenderKey(config.ChannelWhatsApp, contextInfo.GetParticipant())] {
 		return true
 	}
 	return false
@@ -1394,7 +1458,15 @@ func (b *Bot) handleCommand(ctx context.Context, request channel.Request) {
 			b.sendReply(ctx, request.ChatID, "Model successfully switched to: "+updated)
 		}
 	case "status":
-		b.sendReply(ctx, request.ChatID, b.agent.Status())
+		if !request.Admin {
+			status := "Your guest session is active."
+			if lang == "id" {
+				status = "Sesi tamu Anda aktif."
+			}
+			b.sendReply(ctx, request.ChatID, status)
+			return
+		}
+		b.sendReply(ctx, request.ChatID, "Role: admin\n"+b.agent.Status())
 	case "cost":
 		if inspector, ok := b.agent.(SessionInspector); ok {
 			b.sendReply(ctx, request.ChatID, inspector.CostInfo(request, lang))
@@ -1428,7 +1500,7 @@ func (b *Bot) handleCommand(ctx context.Context, request channel.Request) {
 		} else {
 			b.sendReply(ctx, request.ChatID, "A new conversation session has been started.")
 		}
-	case "stop":
+	case "stop", "cancel":
 		if stopper, ok := b.agent.(interface{ StopChat(channel.Request) bool }); ok {
 			if stopper.StopChat(request) {
 				if lang == "id" {
@@ -1442,6 +1514,14 @@ func (b *Bot) handleCommand(ctx context.Context, request channel.Request) {
 				} else {
 					b.sendReply(ctx, request.ChatID, "No process is currently running in this session.")
 				}
+			}
+			return
+		}
+		if !request.Admin {
+			if lang == "id" {
+				b.sendReply(ctx, request.ChatID, "Tidak ada proses yang bisa dihentikan di sesi ini.")
+			} else {
+				b.sendReply(ctx, request.ChatID, "No process can be stopped in this session.")
 			}
 			return
 		}

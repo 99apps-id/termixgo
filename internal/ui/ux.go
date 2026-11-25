@@ -17,6 +17,7 @@ import (
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/proc"
 	"github.com/99apps-id/termixgo/internal/provider"
 )
 
@@ -588,7 +589,7 @@ func sendOSNotification(title, message string) {
 	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = append(os.Environ(), env...)
-	detachFromConsole(cmd)
+	proc.Detach(cmd)
 	_ = cmd.Run()
 }
 

@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // maxDocumentText bounds one extraction. A long report is meant to inform the
@@ -180,6 +182,7 @@ func extractPDF(path string) (string, int, error) {
 	}
 	var stderr bytes.Buffer
 	command := exec.Command(binary, "-layout", "-enc", "UTF-8", path, "-")
+	proc.Detach(command)
 	command.Stderr = &stderr
 	out, err := command.Output()
 	if err != nil {

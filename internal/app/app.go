@@ -26,6 +26,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/cron"
 	"github.com/99apps-id/termixgo/internal/mcp"
 	"github.com/99apps-id/termixgo/internal/oauth"
+	"github.com/99apps-id/termixgo/internal/proc"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/sandbox"
 	"github.com/99apps-id/termixgo/internal/search"
@@ -1434,6 +1435,14 @@ type activeRun struct {
 	cancel    context.CancelFunc
 	mu        sync.Mutex
 	steer     []string
+	// closed is set once the loop has ended: nothing will read a later steer.
+	closed bool
+}
+
+func (r *activeRun) closeSteer() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
 }
 
 // IsSessionRunning reports whether a turn is active for the given session or run key.
@@ -1442,6 +1451,20 @@ func (a *App) IsSessionRunning(runKey string) bool {
 	defer a.activeRunsMu.Unlock()
 	_, ok := a.activeRuns[runKey]
 	return ok
+}
+
+// IsSessionSteerable reports whether a running turn can still read a steer. A
+// run whose loop has ended is running but only condensing and saving.
+func (a *App) IsSessionSteerable(runKey string) bool {
+	a.activeRunsMu.Lock()
+	run := a.activeRuns[runKey]
+	a.activeRunsMu.Unlock()
+	if run == nil {
+		return false
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	return !run.closed
 }
 
 // SteerSession queues a steer message into the turn in flight for the given session.
@@ -1457,8 +1480,11 @@ func (a *App) SteerSession(runKey, input string) bool {
 		return false
 	}
 	run.mu.Lock()
+	defer run.mu.Unlock()
+	if run.closed {
+		return false
+	}
 	run.steer = append(run.steer, trimmed)
-	run.mu.Unlock()
 	return true
 }
 
@@ -2395,7 +2421,7 @@ func subagentChain(primary string, fallbacks []string) []string {
 // subagentClient resolves a subagent's configured model and returns a cached
 // client for its provider.
 func (a *App) subagentClient(query string) (provider.Client, provider.Model, error) {
-	model, err := resolveSubagentModel(a.cfg, query)
+	model, err := resolveSubagentModel(a.Config(), query)
 	if err != nil {
 		return nil, provider.Model{}, err
 	}
@@ -2513,8 +2539,9 @@ func (a *App) runTurnWithImages(ctx context.Context, input string, images []prov
 // operator conversation; a session passed in belongs to the caller (a
 // scheduled job, one channel chat) and never becomes the operator's session.
 type runOptions struct {
-	images  []provider.Image
-	session *agent.Session
+	modelOverride string
+	images        []provider.Image
+	session       *agent.Session
 	// agentName is whose workspace, persona and model the turn uses. Empty
 	// means the active terminal agent.
 	agentName string
@@ -2600,7 +2627,10 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 		a.activeRunsMu.Unlock()
 		return ErrBusy
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	curRun := &activeRun{
+		cancel:    cancel,
 		key:       runKey,
 		agentName: agentName,
 		sessionID: runKey,
@@ -2631,6 +2661,14 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 	}
 
 	client, currentModel, model := a.agentModel(agentName)
+	if opts.modelOverride != "" {
+		var err error
+		client, currentModel, err = a.subagentClient(opts.modelOverride)
+		if err != nil {
+			return err
+		}
+		model = provider.WireModel(a.Config(), currentModel)
+	}
 	if client == nil {
 		a.mu.Lock()
 		modelErr := a.modelErr
@@ -2641,30 +2679,19 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 		return ErrNoModel
 	}
 	window := currentModel.Window()
+	price, costKnown := a.pricingFor(currentModel)
 
-	a.mu.Lock()
-	price := a.pricing
-	costKnown := a.costKnown
-	if opts.session == nil {
-		a.running = true
-	}
-	a.mu.Unlock()
-
-	runCtx, cancel := context.WithCancel(ctx)
-	curRun.cancel = cancel
 	if opts.session == nil {
 		a.mu.Lock()
+		a.running = true
 		a.cancel = cancel
 		a.mu.Unlock()
 		defer func() {
-			cancel()
 			a.mu.Lock()
 			a.cancel = nil
 			a.running = false
 			a.mu.Unlock()
 		}()
-	} else {
-		defer cancel()
 	}
 
 	runEnv := a.envForRun(agentName, opts.guest)
@@ -2813,7 +2840,9 @@ func (a *App) runWithOptions(ctx context.Context, input string, opts runOptions)
 		}()
 		runner.Persist = func() { _ = session.Save() }
 	}
-	if err := runner.Run(runCtx, session, input); err != nil {
+	err := runner.Run(runCtx, session, input)
+	curRun.closeSteer()
+	if err != nil {
 		return err
 	}
 	if opts.session == nil {
@@ -2890,6 +2919,7 @@ func (a *App) maybeNameSession(ctx context.Context, session *agent.Session) {
 func (a *App) GitDiff(ctx context.Context) (string, error) {
 	env := a.env()
 	cmd := exec.CommandContext(ctx, "git", "diff")
+	proc.Detach(cmd)
 	cmd.Dir = env.Workspace
 	out, err := cmd.CombinedOutput()
 	if err != nil {

@@ -43,6 +43,23 @@ func TestRenderMarkdownBodyEscapesHTMLAndProtectsCode(t *testing.T) {
 	}
 }
 
+func TestRenderMarkdownBodyLinksAndImages(t *testing.T) {
+	out := renderMarkdownBody("[**Docs**](https://example.com/a?x=1&y=2) ![A & B](plot.png) [Custom](custom:doc) `[Literal](file.md)`")
+	for _, want := range []string{
+		`<a href="https://example.com/a?x=1&amp;y=2"><strong>Docs</strong></a>`,
+		`<img src="plot.png" alt="A &amp; B">`,
+		"<code>[Literal](file.md)</code>",
+		"Custom",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in %s", want, out)
+		}
+	}
+	if strings.Contains(out, `href="custom:doc"`) {
+		t.Errorf("unsupported scheme became an active link: %s", out)
+	}
+}
+
 func TestRenderMarkdownToolWritesHTML(t *testing.T) {
 	env := &Env{Workspace: t.TempDir()}
 	tool := &renderMarkdownTool{}

@@ -28,7 +28,7 @@ func TestTypingIndicatorIsRenewedWhileTheRunContinues(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		bot.runPrompt(context.Background(), 42, channel.Request{ChatID: "42"}, "a long task")
+		bot.runPrompt(context.Background(), 42, channel.Request{Admin: true, ChatID: "42"}, "a long task")
 	}()
 
 	select {

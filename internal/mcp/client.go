@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // defaultTimeout bounds a single request. A tool call runs its own deadline
@@ -136,6 +138,7 @@ func Start(ctx context.Context, options Options) (*Client, error) {
 		}
 	}
 	command := exec.Command(cmdName, cmdArgs...)
+	proc.Detach(command)
 	command.Dir = options.Dir
 	// An MCP server is a third-party binary on model-reachable input, so it
 	// inherits a scrubbed environment: PATH to find its interpreter, never

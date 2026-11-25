@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/99apps-id/termixgo/internal/app"
 	"github.com/99apps-id/termixgo/internal/command"
 	"github.com/99apps-id/termixgo/internal/config"
+	"github.com/99apps-id/termixgo/internal/proc"
 	"github.com/99apps-id/termixgo/internal/provider"
 	"github.com/99apps-id/termixgo/internal/version"
 )
@@ -50,6 +52,7 @@ type (
 	eventMsg            agent.Event
 	tickMsg             time.Time
 	runDoneMsg          struct{ err error }
+	drainQueueMsg       struct{}
 	quotaRefreshDoneMsg struct {
 		snap *provider.QuotaSnapshot
 	}
@@ -230,7 +233,9 @@ type Model struct {
 	// queue holds operator inputs typed while a turn is running. Enter
 	// queues the composer text instead of refusing it, and each runDone
 	// starts the next queued input, so a steer message is never lost.
-	queue []string
+	queue          []string
+	lateSteers     []string
+	drainScheduled bool
 	// autoWakes counts turns background work started since the operator last
 	// typed, so a chatty monitor cannot run turns unattended forever.
 	autoWakes int
@@ -704,6 +709,10 @@ func (m *Model) windowTitle() string {
 // the blocks that became final into the scrollback.
 func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.updateInline(message)
+	if !m.drainScheduled && m.canDrainQueue() {
+		m.drainScheduled = true
+		cmd = tea.Batch(cmd, func() tea.Msg { return drainQueueMsg{} })
+	}
 	if m.app != nil {
 		if current := m.app.CurrentModel().Provider; current != m.quotaProvider {
 			first := m.quotaProvider == ""
@@ -759,6 +768,11 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.reprintAll()
 
 	case tea.KeyMsg:
+		// A console reader can deliver Return as a character rather than a
+		// virtual key. Normalize it before the control-character noise filter.
+		if !typed.Paste && typed.Type == tea.KeyRunes && string(typed.Runes) == "\r" {
+			typed.Type, typed.Runes = tea.KeyEnter, nil
+		}
 		// While a lone Escape is held for settlement, the next key burst
 		// decides its meaning: a CSI report fragment that follows means the
 		// Escape was the leading byte of a split mouse report, so the burst is
@@ -893,33 +907,20 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Anything the finished turn never took becomes the next input, in the
 		// order it was typed, so a steer that arrived too late still runs.
-		if steered := m.app.TakeSteer(); len(steered) > 0 {
-			m.queue = append(m.queue, steered...)
-			for range steered {
-				m.queueAttachments = append(m.queueAttachments, nil)
-			}
-		}
-		if len(m.queue) > 0 {
-			next := m.queue[0]
-			m.queue = m.queue[1:]
-			var nextAttachments []attachment
-			if len(m.queueAttachments) > 0 {
-				nextAttachments = m.queueAttachments[0]
-				m.queueAttachments = m.queueAttachments[1:]
-			}
-			m.notice = ""
-			m.refresh()
-			// A wake the finished turn never folded in runs under its notice,
-			// not as a user message showing the raw event markup.
-			if isWakePrompt(next) {
-				updated, cmd := m.startRunBlock(block{kind: blockNotice, text: wakeHeadline(strings.TrimPrefix(next, "<background-event>\n"))}, next, nil)
-				return updated, tea.Batch(cmd, doneCmd)
-			}
-			updated, cmd := m.submitWith(next, nextAttachments)
+		m.lateSteers = append(m.lateSteers, m.app.TakeSteer()...)
+		if m.canDrainQueue() {
+			updated, cmd := m.drainNext()
 			return updated, tea.Batch(cmd, doneCmd)
 		}
 		m.refresh()
 		return m, tea.Batch(tea.SetWindowTitle(m.windowTitle()), doneCmd)
+
+	case drainQueueMsg:
+		m.drainScheduled = false
+		if m.canDrainQueue() {
+			return m.drainNext()
+		}
+		return m, nil
 
 	case quotaTickMsg:
 		return m, tea.Batch(m.refreshQuotaStrip(false), quotaTick())
@@ -1755,9 +1756,6 @@ func (m *Model) submitComposerValue(raw string) (tea.Model, tea.Cmd) {
 				m.mentionMatches = nil
 				return m.submit(value)
 			}
-			m.composer.SetValue("")
-			m.slashMatches = nil
-			m.mentionMatches = nil
 			return m.enqueue(value)
 		}
 	}
@@ -2014,6 +2012,33 @@ func (m *Model) handleAskKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// Local commands may finish synchronously or open a picker. Keep draining
+// when control returns to chat without requiring a second runDoneMsg.
+func (m *Model) canDrainQueue() bool {
+	return !m.running && m.current == modeChat && !m.slashOpen && !m.historySearchActive &&
+		m.pendingApproval == nil && m.pendingPlan == nil && m.pendingAsk == nil &&
+		(len(m.lateSteers) > 0 || len(m.queue) > 0)
+}
+
+func (m *Model) drainNext() (tea.Model, tea.Cmd) {
+	m.notice = ""
+	if len(m.lateSteers) > 0 {
+		prompt := m.lateSteers[0]
+		m.lateSteers = m.lateSteers[1:]
+		// The steer already has a transcript entry. Its expanded text is
+		// model input, even if a pasted passage begins with a slash.
+		return m.launchTurn(prompt, nil)
+	}
+	next := m.queue[0]
+	m.queue = m.queue[1:]
+	files := []attachment{}
+	if len(m.queueAttachments) > 0 {
+		files = append(files, m.queueAttachments[0]...)
+		m.queueAttachments = m.queueAttachments[1:]
+	}
+	return m.submitWith(next, files)
+}
+
 // maxQueuedInputs bounds the steer queue so a held Enter key cannot grow
 // memory without limit on a small machine.
 const maxQueuedInputs = 5
@@ -2034,12 +2059,13 @@ func (m *Model) enqueue(value string) (tea.Model, tea.Cmd) {
 	// An attachment cannot steer a turn that already started, because its
 	// first user message is fixed. A message carrying one therefore waits for
 	// the next turn, alongside its files.
-	steered := shouldSteer(value, m.running && m.app.Running()) && len(m.attachments) == 0
+	m.attachments = keptAttachments(m.attachments, value)
+	steered := shouldSteer(value, m.running) && len(m.attachments) == 0 && len(m.queue) == 0 && len(m.lateSteers) == 0
 	if steered {
 		m.recordSteer(value)
 	} else {
 		m.queue = append(m.queue, value)
-		m.queueAttachments = append(m.queueAttachments, keptAttachments(m.attachments, value))
+		m.queueAttachments = append(m.queueAttachments, m.attachments)
 		m.attachments = nil
 	}
 	m.composer.SetValue("")
@@ -2063,7 +2089,7 @@ func (m *Model) recordSteer(value string) {
 	if trimmed == "" {
 		return
 	}
-	full := m.expandPastes(trimmed)
+	full := m.preparePrompt(m.expandPastes(trimmed))
 	m.forgetPastes(trimmed)
 	m.app.Steer(full)
 	m.steerEcho = append(m.steerEcho, strings.TrimSpace(full))
@@ -2085,7 +2111,7 @@ func shouldSteer(value string, turnRunning bool) bool {
 
 // queuedCount is everything still waiting: what the UI holds plus what the
 // live turn has been handed but not yet taken.
-func (m *Model) queuedCount() int { return len(m.queue) + m.app.SteerCount() }
+func (m *Model) queuedCount() int { return len(m.lateSteers) + len(m.queue) + m.app.SteerCount() }
 
 // liveSlashCommands are the commands that may run while a turn is in flight.
 //
@@ -2147,9 +2173,10 @@ func execLocalCommand(workspace, cmdline string) localCommandDoneMsg {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	shell, args := localShellCommand(cmdline)
-	proc := exec.CommandContext(ctx, shell, args...)
-	proc.Dir = workspace
-	out, err := proc.CombinedOutput()
+	child := exec.CommandContext(ctx, shell, args...)
+	proc.Detach(child)
+	child.Dir = workspace
+	out, err := child.CombinedOutput()
 	output := strings.TrimSpace(string(out))
 	if err != nil {
 		if output != "" {
@@ -2221,6 +2248,22 @@ func (m *Model) startRunWith(display, prompt string, images []provider.Image) (t
 // message, or a notice for a turn background work started.
 func (m *Model) startRunBlock(head block, prompt string, images []provider.Image) (tea.Model, tea.Cmd) {
 	m.blocks = append(m.blocks, head)
+	return m.startTurn(prompt, images)
+}
+
+func (m *Model) startTurn(prompt string, images []provider.Image) (tea.Model, tea.Cmd) {
+	return m.launchTurn(m.preparePrompt(prompt), images)
+}
+
+// preparePrompt turns typed text into model input: @file mentions are attached
+// and a very long text is spooled to a file.
+func (m *Model) preparePrompt(prompt string) string {
+	workspace := m.app.Workspace()
+	return ExpandMentions(workspace, spoolLongInput(workspace, prompt))
+}
+
+// launchTurn runs a turn on input that is already prepared.
+func (m *Model) launchTurn(prompt string, images []provider.Image) (tea.Model, tea.Cmd) {
 	m.running = true
 	m.runStarted = time.Now()
 	m.beginTurnStats()
@@ -2231,7 +2274,6 @@ func (m *Model) startRunBlock(head block, prompt string, images []provider.Image
 	m.refresh()
 
 	application := m.app
-	prompt = ExpandMentions(application.Workspace(), spoolLongInput(application.Workspace(), prompt))
 	go func() {
 		err := application.RunTurnWithImages(context.Background(), prompt, images)
 		if m.program != nil {
@@ -2340,8 +2382,10 @@ func (m *Model) applyEvent(event agent.Event) {
 	case agent.EventNotice:
 		// A steer already shown as a user block is not repeated as a notice.
 		if steer, ok := strings.CutPrefix(event.Text, "Steering: "); ok {
-			if len(m.steerEcho) > 0 && strings.TrimSpace(steer) == m.steerEcho[0] {
-				m.steerEcho = m.steerEcho[1:]
+			// The whole list is searched: a notice the event queue dropped
+			// must not leave every later steer shown twice.
+			if index := slices.Index(m.steerEcho, strings.TrimSpace(steer)); index >= 0 {
+				m.steerEcho = m.steerEcho[index+1:]
 				return
 			}
 		}
@@ -3022,7 +3066,9 @@ func (m *Model) hintsVisible() bool {
 
 func (m *Model) viewHints() string {
 	text := ""
-	if m.running && m.inline {
+	if m.running && m.queuedCount() >= maxQueuedInputs {
+		text = fmt.Sprintf(" Queue is full (%d). Your draft stays here until you send it.", maxQueuedInputs)
+	} else if m.running && m.inline {
 		// The activity line carries the spinner, the time and the stop key,
 		// so the hint row only names what else can be done meanwhile.
 		text = " Enter steers the run | Ctrl+O transcript | Shift+Tab " + string(m.appConfig().ApprovalMode) + " | Ctrl+X quit"

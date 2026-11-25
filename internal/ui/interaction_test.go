@@ -521,21 +521,21 @@ func TestEscClearsTheComposerOnlyOnASecondPress(t *testing.T) {
 	}
 }
 
-func TestEnterWhileRunningQueues(t *testing.T) {
+func TestEnterWhileStartingAcceptsSteer(t *testing.T) {
 	model := chatModel(t)
 	model.running = true
 	model.composer.SetValue("a second request")
 	before := len(model.blocks)
 
 	updated := press(t, model, "enter")
-	if len(updated.blocks) != before {
-		t.Errorf("a queued submit must not add a block yet")
+	if len(updated.blocks) != before+1 {
+		t.Errorf("an accepted steer should appear immediately")
 	}
 	if updated.composer.Value() != "" {
 		t.Errorf("the composer should be cleared for the next steer, got %q", updated.composer.Value())
 	}
-	if len(updated.queue) != 1 || updated.queue[0] != "a second request" {
-		t.Errorf("queue = %q, want the second request held", updated.queue)
+	if got := updated.app.TakeSteer(); len(got) != 1 || got[0] != "a second request" {
+		t.Errorf("steers = %q", got)
 	}
 	if updated.notice == "" {
 		t.Errorf("the queueing should be explained")

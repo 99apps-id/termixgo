@@ -97,6 +97,44 @@ func TestMessageText(t *testing.T) {
 	}
 }
 
+func TestSalesAccountRecognizesVerifiedAdminPhone(t *testing.T) {
+	const phone = "6281234567890"
+	bot := New(nil, &fakeAgent{models: "admin model list"})
+	var reply string
+	bot.sendHook = func(_, text string) { reply = text }
+	bot.SetAccount("sales", config.ChannelAccount{Enabled: true, DMPolicy: config.DMPolicyOpen, Admins: []string{"+" + phone}}, nil)
+	pn := types.NewJID(phone, types.DefaultUserServer)
+	lid := types.NewJID("123456789", types.HiddenUserServer)
+	lookups := 0
+	bot.lookupUsers = func(_ context.Context, jids []types.JID) (map[types.JID]types.UserInfo, error) {
+		lookups++
+		if len(jids) != 1 || jids[0] != pn {
+			t.Fatalf("expected lookup of the configured admin phone")
+		}
+		return map[types.JID]types.UserInfo{pn: {LID: lid}}, nil
+	}
+	for _, tc := range []struct {
+		sender, alt types.JID
+		admin       bool
+	}{
+		{pn, types.EmptyJID, true},
+		{lid, pn, true},
+		{lid, types.EmptyJID, true},
+		{types.NewJID(phone, types.HiddenUserServer), types.EmptyJID, false},
+	} {
+		event := testEvent("/models")
+		event.Info.Sender, event.Info.SenderAlt, event.Info.Chat = tc.sender, tc.alt, tc.sender
+		reply = ""
+		bot.handleMessage(t.Context(), event)
+		if (reply == "admin model list") != tc.admin {
+			t.Errorf("wrong role for %s, explicit alternate=%v, want admin=%v", tc.sender.Server, !tc.alt.IsEmpty(), tc.admin)
+		}
+	}
+	if lookups != 1 {
+		t.Fatalf("lookups=%d want 1", lookups)
+	}
+}
+
 func TestRequestFromNormalizesTheMessage(t *testing.T) {
 	bot := &Bot{}
 	bot.SetAccount("sales", config.ChannelAccount{Enabled: true}, nil)
@@ -125,7 +163,7 @@ func TestRequestFromNormalizesTheMessage(t *testing.T) {
 func TestMentionsSelfUsesTheLinkedJIDs(t *testing.T) {
 	bot := &Bot{}
 	bot.SetAccount("sales", config.ChannelAccount{Enabled: true}, nil)
-	bot.selfIDs = map[string]bool{channel.CanonicalID("628111@s.whatsapp.net"): true}
+	bot.selfIDs = map[string]bool{channel.SenderKey(config.ChannelWhatsApp, "628111@s.whatsapp.net"): true}
 
 	if !bot.mentionsSelf(testEvent("halo @628111", "628111@s.whatsapp.net").Message) {
 		t.Errorf("a mention of the linked number must count")
@@ -218,7 +256,7 @@ func (a *fakeAgent) GitDiff(ctx context.Context) (string, error) {
 }
 
 func TestGuestThrottleWarnsOnceAndDoesNotBlockStop(t *testing.T) {
-	agent := &fakeAgent{}
+	agent := &stopChatApprovalAgent{stopChatResult: true}
 	bot := New(nil, agent)
 	var replies []string
 	bot.sendHook = func(_, text string) { replies = append(replies, text) }
@@ -236,8 +274,8 @@ func TestGuestThrottleWarnsOnceAndDoesNotBlockStop(t *testing.T) {
 		t.Fatalf("warnings=%d, replies=%v", warnings, replies)
 	}
 	bot.handleMessage(context.Background(), testEvent("/stop"))
-	if agent.stopCalls != 1 {
-		t.Fatalf("/stop blocked by throttle: %d", agent.stopCalls)
+	if agent.stopChatCalls != 1 || agent.stopCalls != 0 {
+		t.Fatal("guest stop should reach only its own session")
 	}
 }
 
@@ -287,7 +325,7 @@ func TestWhatsAppSlashCommandsAdmin(t *testing.T) {
 	// /status
 	req.Text = "/status"
 	bot.handleCommand(ctx, req)
-	if replies[len(replies)-1] != "agent online" {
+	if got := replies[len(replies)-1]; !strings.Contains(got, "admin") || !strings.Contains(got, "agent online") {
 		t.Errorf("unexpected /status reply: %v", replies[len(replies)-1])
 	}
 
@@ -317,6 +355,17 @@ func TestWhatsAppSlashCommandsAdmin(t *testing.T) {
 	bot.handleCommand(ctx, req)
 	if !strings.Contains(replies[len(replies)-1], "Daftar Perintah Slash Termixgo:") {
 		t.Errorf("unexpected /menu reply: %v", replies[len(replies)-1])
+	}
+}
+
+func TestGuestStatusShowsOnlyAccountRole(t *testing.T) {
+	bot := New(nil, &fakeAgent{status: "private operator details"})
+	bot.SetAccount("sales", config.ChannelAccount{Enabled: true, DMPolicy: config.DMPolicyOpen}, nil)
+	var reply string
+	bot.sendHook = func(_, text string) { reply = text }
+	bot.handleMessage(t.Context(), testEvent("/status"))
+	if !strings.Contains(reply, "tamu") || strings.Contains(reply, "private") {
+		t.Fatalf("unexpected guest status %q", reply)
 	}
 }
 
@@ -593,7 +642,7 @@ func TestEphemeralGroupMentionCommandAndQuotedContext(t *testing.T) {
 	bot.downloadHook = func(ctx context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error) {
 		return []byte("fake-audio"), nil
 	}
-	bot.selfIDs = map[string]bool{channel.CanonicalID("628111@s.whatsapp.net"): true}
+	bot.selfIDs = map[string]bool{channel.SenderKey(config.ChannelWhatsApp, "628111@s.whatsapp.net"): true}
 	bot.SetAccount("default", config.ChannelAccount{
 		Enabled:     true,
 		Admins:      []string{"628999@s.whatsapp.net"},

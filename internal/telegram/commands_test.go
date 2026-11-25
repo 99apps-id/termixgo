@@ -162,6 +162,35 @@ func pairedBot(t *testing.T, agent Agent) (*Bot, *recordingAPI) {
 	return bot, api
 }
 
+func TestGroupGuestStopOnlyAffectsOwnTurn(t *testing.T) {
+	agent := &stopChatMockAgent{stopChatResult: true}
+	bot, _ := pairedBot(t, agent)
+	decision := make(chan string, 1)
+	bot.approvals = map[string]*PendingApproval{"pending": {ChatID: -100, Decision: decision}}
+	request := channel.Request{ChatID: "-100", SenderID: "42", IsGroup: true}
+	msg := &Message{Chat: Chat{ID: -100, Type: "supergroup"}}
+	bot.handleGuestMessage(t.Context(), request, msg, "/stop", true)
+	if len(decision) != 0 || agent.stopChatCalls != 1 {
+		t.Fatal("guest stop must target its own turn while the admin approval stays pending")
+	}
+}
+
+func TestGroupChatSenderNeedsIndividualIdentity(t *testing.T) {
+	agent := &scriptedAgent{}
+	bot, _ := pairedBot(t, agent)
+	bot.SetAccount("sales", config.ChannelAccount{Enabled: true, GroupPolicy: config.GroupPolicyAll}, nil)
+	group := Chat{ID: -100, Type: "supergroup"}
+	for _, msg := range []*Message{
+		{Chat: group}, {Chat: group, From: &User{}}, {Chat: group, From: &User{ID: 42}, SenderChat: &group},
+	} {
+		msg.Text = "/new"
+		bot.handleMessage(t.Context(), msg)
+	}
+	if agent.newCalls != 0 {
+		t.Fatal("messages without an individual sender cannot reset a conversation")
+	}
+}
+
 // message is one incoming owner message.
 func message(text string) *Message {
 	return &Message{
@@ -518,7 +547,7 @@ func TestCardRetainsMostRecentActivityAboveAnswer(t *testing.T) {
 	agent := &scriptedAgent{answer: "done", progressLines: lines}
 	bot, api := pairedBot(t, agent)
 
-	bot.runPrompt(context.Background(), 7, channel.Request{ChatID: "7"}, "do the thing")
+	bot.runPrompt(context.Background(), 7, channel.Request{Admin: true, ChatID: "7"}, "do the thing")
 
 	edits := api.calls("editMessageText")
 	if len(edits) == 0 {
@@ -545,7 +574,7 @@ func TestLongAnswerGoesOnTheCardAndAsFollowUps(t *testing.T) {
 	agent := &scriptedAgent{answer: answer, progressLines: []string{"step one"}}
 	bot, api := pairedBot(t, agent)
 
-	bot.runPrompt(context.Background(), 7, channel.Request{ChatID: "7"}, "do it")
+	bot.runPrompt(context.Background(), 7, channel.Request{Admin: true, ChatID: "7"}, "do it")
 
 	edits := api.calls("editMessageText")
 	if len(edits) == 0 {
@@ -569,7 +598,7 @@ func TestRunPromptSaysSoWhenThereIsNoOutput(t *testing.T) {
 	agent := &scriptedAgent{answer: "   "}
 	bot, api := pairedBot(t, agent)
 
-	bot.runPrompt(context.Background(), 7, channel.Request{ChatID: "7"}, "say nothing")
+	bot.runPrompt(context.Background(), 7, channel.Request{Admin: true, ChatID: "7"}, "say nothing")
 
 	edits := api.calls("editMessageText")
 	if len(edits) == 0 {
@@ -585,7 +614,7 @@ func TestRunPromptReportsAFailedTurn(t *testing.T) {
 	agent := &scriptedAgent{runErr: errors.New("provider is down")}
 	bot, api := pairedBot(t, agent)
 
-	bot.runPrompt(context.Background(), 7, channel.Request{ChatID: "7"}, "hello")
+	bot.runPrompt(context.Background(), 7, channel.Request{Admin: true, ChatID: "7"}, "hello")
 
 	edits := api.calls("editMessageText")
 	if len(edits) == 0 {
@@ -614,7 +643,7 @@ func TestRunPromptFallsBackToANewMessageWhenTheCardFails(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		bot.runPrompt(context.Background(), 7, channel.Request{ChatID: "7"}, "hello")
+		bot.runPrompt(context.Background(), 7, channel.Request{Admin: true, ChatID: "7"}, "hello")
 	}()
 	select {
 	case <-done:
@@ -631,7 +660,7 @@ func TestRunPromptRefusesASecondRun(t *testing.T) {
 	bot, api := pairedBot(t, agent)
 	bot.running = true
 
-	bot.runPrompt(context.Background(), 7, channel.Request{ChatID: "7"}, "hello")
+	bot.runPrompt(context.Background(), 7, channel.Request{Admin: true, ChatID: "7"}, "hello")
 
 	got := lastText(t, api, "sendMessage")
 	if !strings.Contains(got, "already in progress") {
@@ -740,7 +769,7 @@ func TestRunPromptDeletesStatusCardOnSilent(t *testing.T) {
 	agent := &scriptedAgent{answer: "[SILENT]"}
 	bot, api := pairedBot(t, agent)
 
-	bot.runPrompt(context.Background(), 7, channel.Request{ChatID: "7"}, "do silent work")
+	bot.runPrompt(context.Background(), 7, channel.Request{Admin: true, ChatID: "7"}, "do silent work")
 
 	if !api.called("deleteMessage") {
 		t.Errorf("deleteMessage should have been called for silent response")
@@ -777,6 +806,9 @@ func TestGuestCanRunPromptWithRunCommand(t *testing.T) {
 	}
 	if !api.called("sendMessage") {
 		t.Errorf("sendMessage should have been called")
+	}
+	if len(api.calls("sendMessage")) != 1 || !strings.Contains(lastText(t, api, "sendMessage"), "guest answer") || api.called("editMessageText") {
+		t.Error("a guest should receive only the final answer")
 	}
 }
 

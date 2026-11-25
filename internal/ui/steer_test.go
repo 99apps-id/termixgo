@@ -86,20 +86,39 @@ func TestQueuedInputSteersALiveTurn(t *testing.T) {
 		t.Fatalf("RunTurn: %v", err)
 	}
 
-	// The turn ended before it could take the steer, so the UI has to run it
-	// rather than let it disappear.
-	steer := model.app.TakeSteer()
-	if len(steer) != 1 || steer[0] != "also check the tests" {
-		t.Fatalf("late steer = %q, want the queued follow-up", steer)
+	// The live turn now folds in a steer that arrived while its answer was
+	// streaming, instead of leaving it behind for a separate turn.
+	if got := model.app.SteerCount(); got != 0 {
+		t.Fatalf("live turn should have consumed the steer, got %d remaining", got)
 	}
-	model.app.Steer(steer[0])
+	found := false
+	for _, msg := range model.app.Session().Messages() {
+		if strings.Contains(msg.Content, "also check the tests") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("live turn did not record the steer in the session")
+	}
+
+	// A steer that lands after the loop closed cannot be folded in, so the UI
+	// drains it on runDoneMsg and runs it as the next turn without duplicating
+	// its transcript block.
+	model.app.Steer("run this after the turn")
 	before := len(model.app.Session().Messages())
+	blocksBefore := len(queued.blocks)
 	next, _ := send(t, queued, runDoneMsg{})
-	if len(next.queue) != 0 {
-		t.Errorf("the late steer should have started, got %d held", len(next.queue))
+	if len(next.queue) != 0 || len(next.lateSteers) != 0 {
+		t.Errorf("the late steer should have started, got queue=%d lateSteers=%d", len(next.queue), len(next.lateSteers))
 	}
 	if !next.running {
 		t.Errorf("a late steer should start the next turn")
+	}
+	for _, b := range next.blocks[blocksBefore:] {
+		if b.kind == blockUser {
+			t.Errorf("late steer duplicated a user block: %+v", b)
+		}
 	}
 	// That turn runs on its own goroutine and writes the workspace state
 	// directory. Ending the test under it races the temp-dir cleanup, which

@@ -222,3 +222,71 @@ func conversationContains(session *Session, text string) bool {
 	}
 	return false
 }
+
+// A steer typed while the model is writing its final answer has no next step to
+// wait for, so the turn takes one more instead of dropping it.
+func TestSteerDuringTheFinalAnswerIsNotLost(t *testing.T) {
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{textChunk("first answer.")},
+		{textChunk("second answer, with the table.")},
+	}}
+	runner, env, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	// Nothing is waiting at the first step; the message lands while it streams.
+	calls := 0
+	runner.Steer = func() []string {
+		calls++
+		if calls == 2 {
+			return []string{"add a table"}
+		}
+		return nil
+	}
+	session := NewSession(env.Workspace, "test-model")
+
+	if err := runner.Run(context.Background(), session, "summarise"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := session.LastAssistantTextSince(0); got != "second answer, with the table." {
+		t.Errorf("last answer = %q, want the one written after the steer", got)
+	}
+	if got := stopReason(recorder); got != "stop" {
+		t.Errorf("stop reason = %q, want stop", got)
+	}
+}
+
+// A steer arriving on the last allowed step cannot be answered inside the same
+// turn, so the loop leaves it in the queue for the caller's next turn instead
+// of swallowing it and ending on step-cap.
+func TestSteerOnFinalStepStaysQueuedForNextTurn(t *testing.T) {
+	client := &fakeClient{steps: [][]provider.StreamEvent{
+		{textChunk("done on the final step.")},
+	}}
+	runner, env, recorder := newTestRunner(t, client, &ApprovalPolicy{Mode: ApprovalAll}, nil)
+	runner.MaxSteps = 1
+	pending := []string{}
+	calls := 0
+	runner.Steer = func() []string {
+		calls++
+		if calls == 1 {
+			// Simulate a steer arriving after step 0 began streaming.
+			pending = []string{"follow up later"}
+			return nil
+		}
+		out := pending
+		pending = nil
+		return out
+	}
+	session := NewSession(env.Workspace, "test-model")
+
+	if err := runner.Run(context.Background(), session, "do one step"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := stopReason(recorder); got != "stop" {
+		t.Errorf("stop reason = %q, want stop", got)
+	}
+	if len(pending) != 1 || pending[0] != "follow up later" {
+		t.Errorf("pending steer = %q, want it left for the next turn", pending)
+	}
+	if conversationContains(session, "follow up later") {
+		t.Errorf("an unanswered steer was injected on the final step")
+	}
+}

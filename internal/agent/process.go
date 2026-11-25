@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // Bounds on managed background processes. A dev server is meant to outlive a
@@ -352,6 +354,7 @@ func (m *ProcessManager) start(ctx context.Context, dir, shell string, args []st
 	// server must survive the turn that started it. It is still tied to the
 	// manager, which kills it on shutdown.
 	cmd := exec.CommandContext(processCtx, shell, args...)
+	proc.Detach(cmd)
 	cmd.Dir = dir
 	// A background command inherits the operator's shell environment the way
 	// any terminal child would, minus the provider credentials: a dev server

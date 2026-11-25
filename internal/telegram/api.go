@@ -136,6 +136,7 @@ type MessageEntity struct {
 type Message struct {
 	MessageID       int64           `json:"message_id"`
 	From            *User           `json:"from"`
+	SenderChat      *Chat           `json:"sender_chat,omitempty"`
 	Chat            Chat            `json:"chat"`
 	Text            string          `json:"text"`
 	Caption         string          `json:"caption"`

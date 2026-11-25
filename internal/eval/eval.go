@@ -14,6 +14,7 @@ import (
 
 	"github.com/99apps-id/termixgo/internal/agent"
 	"github.com/99apps-id/termixgo/internal/app"
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // Task is one self-contained coding or auditing benchmark scenario.
@@ -352,12 +353,15 @@ func validFixturePath(path string) bool {
 
 func initGitRepo(dir string) {
 	cmd := exec.Command("git", "init", "-q")
+	proc.Detach(cmd)
 	cmd.Dir = dir
 	_ = cmd.Run()
 	addCmd := exec.Command("git", "add", ".")
+	proc.Detach(addCmd)
 	addCmd.Dir = dir
 	_ = addCmd.Run()
 	commitCmd := exec.Command("git", "-c", "user.name=eval", "-c", "user.email=eval@termixgo.internal", "commit", "-q", "-m", "initial benchmark commit", "--allow-empty")
+	proc.Detach(commitCmd)
 	commitCmd.Dir = dir
 	_ = commitCmd.Run()
 }
@@ -372,6 +376,7 @@ func runVerifyCommand(ctx context.Context, dir, command string) (string, error) 
 	} else {
 		cmd = exec.CommandContext(ctx, "sh", "-c", command)
 	}
+	proc.Detach(cmd)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return string(out), err

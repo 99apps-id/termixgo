@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/99apps-id/termixgo/internal/proc"
 	"github.com/99apps-id/termixgo/internal/search"
 )
 
@@ -59,6 +60,7 @@ func gitListFiles(ctx context.Context, root string) ([]string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	proc.Detach(cmd)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, false

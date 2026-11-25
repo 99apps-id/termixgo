@@ -3,7 +3,30 @@ package ui
 import (
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestStartingTurnAcceptsConsoleEnterAsSteer(t *testing.T) {
+	model := chatModel(t)
+	model.running = true
+	model.composer.SetValue("check the parser")
+	model, _ = send(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\r'}})
+	if model.composer.Value() != "" || model.app.SteerCount() != 1 {
+		t.Fatalf("Enter left draft %q and %d steers", model.composer.Value(), model.app.SteerCount())
+	}
+}
+
+func TestRemovedAttachmentDoesNotDeferSteer(t *testing.T) {
+	model := chatModel(t)
+	model.running = true
+	model.attachments = []attachment{{Placeholder: "[Image #1]"}}
+	model.composer.SetValue("text only")
+	model = press(t, model, "enter")
+	if model.app.SteerCount() != 1 || len(model.attachments) != 0 {
+		t.Fatal("a removed image kept a plain-text steer out of the current turn")
+	}
+}
 
 // TestQueueDrainsOnRunDone proves the steer contract: an input typed while
 // busy runs right after the current turn instead of being lost.
@@ -49,7 +72,10 @@ func TestQueueHoldsOrderAcrossTurns(t *testing.T) {
 		t.Fatalf("queue = %q, want only the second input left", first.queue)
 	}
 
-	second, _ := send(t, first, runDoneMsg{})
+	if first.running {
+		t.Fatal("/new has already finished")
+	}
+	second, _ := send(t, first, drainQueueMsg{})
 	if len(second.queue) != 0 {
 		t.Errorf("queue = %d, want every held input started", len(second.queue))
 	}
@@ -78,6 +104,9 @@ func TestQueueIsBounded(t *testing.T) {
 	}
 	if !strings.Contains(full.notice, "full") {
 		t.Errorf("the refusal should say the queue is full, got %q", full.notice)
+	}
+	if full.composer.Value() != "/new" || !strings.Contains(full.viewHints(), "Queue is full") {
+		t.Fatal("a full queue must keep the draft and explain why Enter did not send it")
 	}
 }
 

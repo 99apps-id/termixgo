@@ -132,21 +132,17 @@ func (t *sendChannelTool) Run(ctx context.Context, env *Env, args map[string]any
 		req.Account = env.CallerAccount
 	}
 	if env.Guest {
-		if env.CallerChatID == "" {
+		if env.CallerChatID == "" || env.CallerChannel == "" || env.CallerAccount == "" {
 			return Result{Output: "sending to messaging channels is restricted to the operator", IsError: true}, nil
 		}
 		cleanRecip := channel.CanonicalID(req.Recipient)
 		cleanCaller := channel.CanonicalID(env.CallerChatID)
-		if cleanRecip != "" && cleanRecip != cleanCaller {
+		if (cleanRecip != "" && cleanRecip != cleanCaller) || !strings.EqualFold(req.Channel, env.CallerChannel) || req.Account != env.CallerAccount {
 			return Result{Output: "guests may only receive files in their own chat", IsError: true}, nil
 		}
 		req.Recipient = env.CallerChatID
-		if req.Channel == "" {
-			req.Channel = strings.ToLower(env.CallerChannel)
-		}
-		if req.Account == "" {
-			req.Account = env.CallerAccount
-		}
+		req.Channel = strings.ToLower(env.CallerChannel)
+		req.Account = env.CallerAccount
 	} else if req.Recipient == "" && env.CallerChatID != "" {
 		req.Recipient = env.CallerChatID
 	}

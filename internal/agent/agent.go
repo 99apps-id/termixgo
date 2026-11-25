@@ -185,7 +185,7 @@ runLoop:
 		// A steer typed while the turn is running is new information, so it also
 		// clears the repetition guard: the operator has a reason for the model to
 		// try again, and the turn should not close just because it was looping.
-		if step > 0 && r.Steer != nil && r.injectSteering(session) {
+		if r.Steer != nil && r.injectSteering(session) {
 			*guard = loopGuard{}
 		}
 
@@ -414,6 +414,14 @@ runLoop:
 				continue
 			}
 			guard.noteProgress()
+			// A steer that landed while this answer streamed has no later step
+			// to wait for, so the turn takes one more instead of dropping it,
+			// unless the step or cost cap leaves no room for another step.
+			if step+1 < maxSteps && !overBudget(r.CostBudgetUSD, sessionCost) && r.Steer != nil && r.injectSteering(session) {
+				*guard = loopGuard{}
+				r.persist()
+				continue
+			}
 			claimed := ClaimsVerification(answer.String())
 			if critic := ReviewFinishWithHints(r.todoSnapshot(), ledger, claimed, criticNudges, r.criticHints(failedTools)); critic.BlockFinish {
 				criticNudges++

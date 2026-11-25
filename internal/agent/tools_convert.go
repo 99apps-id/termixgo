@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/99apps-id/termixgo/internal/proc"
 )
 
 // convertTimeout bounds one conversion. A cold Office or LibreOffice start
@@ -65,7 +67,9 @@ var officeAvailable = func(app string) bool {
 	if progID == "" {
 		return false
 	}
-	return exec.Command("reg", "query", `HKCR\`+progID).Run() == nil
+	cmd := exec.Command("reg", "query", `HKCR\`+progID)
+	proc.Detach(cmd)
+	return cmd.Run() == nil
 }
 
 type convertDocumentTool struct{}
@@ -165,6 +169,7 @@ func convertWithLibreOffice(ctx context.Context, soffice, input, output, format 
 	}
 	cmd := exec.CommandContext(ctx, soffice, "--headless", "--norestore", "--nolockcheck",
 		"-env:UserInstallation="+profile, "--convert-to", target, "--outdir", dir, input)
+	proc.Detach(cmd)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -264,6 +269,7 @@ func convertWithOffice(ctx context.Context, app, input, output, format string) e
 	absOut, _ := filepath.Abs(output)
 	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
 		"-File", script, "-App", app, "-In", absIn, "-Out", absOut, "-Format", format)
+	proc.Detach(cmd)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
