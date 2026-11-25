@@ -501,32 +501,16 @@ func TestRunPromptMirrorsProgressIntoOneCard(t *testing.T) {
 	if len(edits) == 0 {
 		t.Fatalf("the progress card was never edited")
 	}
-	// The throttle drops the second progress line: Telegram rate-limits rapid
-	// edits, so only the first within a window is sent.
-	if len(edits) != 2 {
-		t.Errorf("edits = %d, want one progress edit and one final", len(edits))
-	}
-	if edits[0]["text"] != "Reading main.go" {
-		t.Errorf("first edit = %v, want the first progress line", edits[0]["text"])
-	}
-	// The final edit replaces the activity with the answer alone: the tools that
-	// scrolled by during the run must not stay in the chat.
 	last, _ := edits[len(edits)-1]["text"].(string)
-	if strings.TrimSpace(last) != "the final answer" {
-		t.Errorf("final edit = %q, want only the answer", last)
+	if !strings.Contains(last, "Reading main.go\nRunning tests\n\nthe final answer") {
+		t.Errorf("final edit = %q, want both progress lines and the answer", last)
 	}
 	if !api.called("sendChatAction") {
 		t.Errorf("the typing indicator should be shown")
 	}
 }
 
-// TestRunPromptSaysSoWhenThereIsNoOutput keeps an empty transcript from
-// looking like a message that failed to arrive.
-// TestCardShowsProgressThenBecomesTheAnswer covers the two halves of the card's
-// life: while the turn runs it accumulates the steps so the task is visible, and
-// when the turn ends it is replaced by the answer so the backend steps do not
-// stay in the chat.
-func TestCardShowsProgressThenBecomesTheAnswer(t *testing.T) {
+func TestCardRetainsMostRecentActivityAboveAnswer(t *testing.T) {
 	lines := make([]string, 0, 30)
 	for index := 0; index < 30; index++ {
 		lines = append(lines, fmt.Sprintf("step %02d", index))
@@ -540,21 +524,15 @@ func TestCardShowsProgressThenBecomesTheAnswer(t *testing.T) {
 	if len(edits) == 0 {
 		t.Fatalf("the card was never edited")
 	}
-	// Mid-run the card carries the activity, which is what proves earlier steps
-	// are kept rather than replaced by the newest line.
-	first, _ := edits[0]["text"].(string)
-	if !strings.Contains(first, "step 00") {
-		t.Errorf("the progress card is missing the first step:\n%s", first)
-	}
 	final, _ := edits[len(edits)-1]["text"].(string)
-	if strings.TrimSpace(final) != "done" {
-		t.Errorf("final card = %q, want only the answer with the steps cleared", final)
+	if want := "... (25 earlier lines omitted)\nstep 25\nstep 26\nstep 27\nstep 28\nstep 29\n\ndone"; !strings.Contains(final, want) {
+		t.Errorf("final card = %q, want %q", final, want)
 	}
 }
 
 // TestLongAnswerGoesOnTheCardAndAsFollowUps covers the answer that does not fit
 // one message: the card becomes the first part and the rest arrive as new
-// messages, so the whole answer is delivered with the activity still cleared.
+// messages, so the whole answer is delivered with activity only on the first message.
 func TestLongAnswerGoesOnTheCardAndAsFollowUps(t *testing.T) {
 	var builder strings.Builder
 	for index := 0; index < 800; index++ {
@@ -577,8 +555,8 @@ func TestLongAnswerGoesOnTheCardAndAsFollowUps(t *testing.T) {
 	if len(card) > telegramChunkLimit {
 		t.Errorf("the card is %d bytes, over the chunk limit", len(card))
 	}
-	if strings.Contains(card, "step one") {
-		t.Errorf("the activity must be cleared from the card:\n%s", card)
+	if !strings.Contains(card, "step one") {
+		t.Errorf("the first card must retain the activity:\n%s", card)
 	}
 	sent := api.calls("sendMessage")
 	// One message is the "Working..." card; the rest are the answer's tail.

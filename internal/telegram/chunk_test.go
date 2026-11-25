@@ -44,28 +44,6 @@ func TestNextChunkLeavesBalancedFenceAlone(t *testing.T) {
 	}
 }
 
-func TestCapCardLinesNamesDroppedLines(t *testing.T) {
-	lines := []string{"one", "two", "three", "four", "five"}
-	kept := capCardLines(lines, 12)
-	if len(kept) < 2 {
-		t.Fatalf("expected a marker plus kept lines, got %v", kept)
-	}
-	if !strings.HasPrefix(kept[0], "... (") || !strings.Contains(kept[0], "earlier lines dropped") {
-		t.Errorf("first kept row = %q, want a dropped-lines marker", kept[0])
-	}
-	if kept[len(kept)-1] != "five" {
-		t.Errorf("newest line dropped: %v", kept)
-	}
-}
-
-func TestCapCardLinesKeepsShortListWhole(t *testing.T) {
-	lines := []string{"one", "two"}
-	kept := capCardLines(lines, 100)
-	if len(kept) != 2 || kept[0] != "one" || kept[1] != "two" {
-		t.Errorf("short card was modified: %v", kept)
-	}
-}
-
 func TestIsParseErrorRecognisesEntityVariants(t *testing.T) {
 	cases := []string{
 		"can't parse entities: Unsupported start tag",

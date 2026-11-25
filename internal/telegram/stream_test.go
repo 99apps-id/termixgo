@@ -175,8 +175,8 @@ func TestStreamToolResetClearsPreamble(t *testing.T) {
 		t.Fatalf("expected edits")
 	}
 	final, _ := edits[len(edits)-1]["text"].(string)
-	if final != "Final answer." {
-		t.Errorf("final = %q, want %q", final, "Final answer.")
+	if !strings.HasSuffix(final, "Read foo.go\n\nFinal answer.") || strings.Contains(final, "Let me check") {
+		t.Errorf("final = %q, want tool activity and the answer without the preamble", final)
 	}
 }
 

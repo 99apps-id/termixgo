@@ -64,12 +64,9 @@ func formatStreamDraft(raw string) string {
 	return raw + " " + streamCursor
 }
 
-func needsStreamSplit(raw string) bool {
-	if len(raw) > telegramChunkLimit-16 {
-		return true
-	}
+func needsStreamSplit(raw string, limit int) bool {
 	draft := formatStreamDraft(raw)
-	return len(markdownToTelegramHTML(draft)) > telegramChunkLimit
+	return len(draft) > limit || len(markdownToTelegramHTML(draft)) > limit
 }
 
 // runWithStream runs one turn with OpenClaw/Hermes-style live streaming:
@@ -95,7 +92,7 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 	var (
 		mu              sync.Mutex
 		activeMsgID     = statusMessage.MessageID
-		toolLines       []string
+		activity        activityCard
 		thinkingActive  bool
 		rawSegment      strings.Builder
 		tailBuf         strings.Builder
@@ -138,26 +135,34 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 			return
 		}
 
-		// Snapshot either live streamed text or tool/thinking status.
+		status := ""
+		if committedChunks == 0 {
+			status = activity.status(thinkingActive)
+		}
+		limit := activityAnswerLimit(status)
 		if tailBuf.Len() > 0 {
 			snapSeq := resetSeq
 			snapRawTail := tailBuf.String()
 			snapLen := len(snapRawTail)
 			redactedTail := b.redact(snapRawTail)
 
-			if needsStreamSplit(redactedTail) {
+			if needsStreamSplit(redactedTail, limit) {
 				// The split check measures the draft (cursor and a closing fence
 				// included), so the cut leaves room for them; cutting at the full
 				// limit could return no rest and edit an over-long draft.
-				part, rest := nextChunk(redactedTail, telegramChunkLimit-streamDraftReserve)
+				part, rest := nextChunk(redactedTail, limit-streamDraftReserve)
 				if rest != "" {
 					mu.Unlock()
 					editCtx, cancel := editCtxFor()
-					editErr := b.client.EditMarkdown(editCtx, chatID, msgID, part, nil)
+					editErr := b.editActivity(editCtx, chatID, msgID, status, part)
 					var nextMsg Message
 					var sendErr error
+					nextDraft := "Working..."
+					if !needsStreamSplit(rest, telegramChunkLimit) {
+						nextDraft = formatStreamDraft(rest)
+					}
 					if editErr == nil {
-						nextMsg, sendErr = b.client.SendMarkdown(editCtx, chatID, formatStreamDraft(rest), nil)
+						nextMsg, sendErr = b.client.SendMarkdown(editCtx, chatID, nextDraft, nil)
 					}
 					cancel()
 
@@ -189,7 +194,8 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 						activeMsgID = 0
 					} else if nextMsg.MessageID != 0 {
 						activeMsgID = nextMsg.MessageID
-						lastRendered = formatStreamDraft(rest)
+						lastRendered = markdownToTelegramHTML(nextDraft)
+						notifyFlusher()
 					}
 					mu.Unlock()
 					return
@@ -197,14 +203,15 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 			}
 
 			draft := formatStreamDraft(redactedTail)
-			if draft == lastRendered {
+			_, rendered := renderActivity(status, draft)
+			if rendered == lastRendered {
 				mu.Unlock()
 				return
 			}
 			mu.Unlock()
 
 			editCtx, cancel := editCtxFor()
-			editErr := b.client.EditMarkdown(editCtx, chatID, msgID, draft, nil)
+			editErr := b.editActivity(editCtx, chatID, msgID, status, draft)
 			cancel()
 
 			mu.Lock()
@@ -215,30 +222,22 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 				b.logf("could not edit stream message: %v", editErr)
 			} else {
 				lastEdit = time.Now()
-				lastRendered = draft
+				lastRendered = rendered
 			}
 			mu.Unlock()
 			return
 		}
 
 		// No answer text yet: render compact tool activity or thinking state.
-		var statusBody string
-		if len(toolLines) > 0 {
-			statusBody = strings.Join(toolLines, "\n")
-		} else if thinkingActive {
-			statusBody = "Thinking..."
-		} else {
-			mu.Unlock()
-			return
-		}
-		if statusBody == lastRendered {
+		_, rendered := renderActivity(status, "")
+		if status == "" || rendered == lastRendered {
 			mu.Unlock()
 			return
 		}
 		mu.Unlock()
 
 		editCtx, cancel := editCtxFor()
-		editErr := b.client.EditMarkdown(editCtx, chatID, msgID, statusBody, nil)
+		editErr := b.editActivity(editCtx, chatID, msgID, status, "")
 		cancel()
 
 		mu.Lock()
@@ -249,7 +248,7 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 			b.logf("could not edit status message: %v", editErr)
 		} else {
 			lastEdit = time.Now()
-			lastRendered = statusBody
+			lastRendered = rendered
 		}
 		mu.Unlock()
 	}
@@ -294,7 +293,7 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 		case "turn-start":
 			thinkingActive = false
 		case "thinking":
-			if tailBuf.Len() == 0 && len(toolLines) == 0 && !thinkingActive {
+			if tailBuf.Len() == 0 && !thinkingActive {
 				thinkingActive = true
 				notifyFlusher()
 			}
@@ -303,10 +302,12 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 				mu.Unlock()
 				return
 			}
+			thinkingActive = false
 			rawSegment.WriteString(ev.Text)
 			tailBuf.WriteString(ev.Text)
 			notifyFlusher()
 		case "tool-start":
+			thinkingActive = false
 			label := strings.TrimSpace(ev.Text)
 			if label == "" && ev.ToolName != "" {
 				label = "Running " + ev.ToolName + "..."
@@ -323,11 +324,7 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 					tailBuf.Reset()
 					resetSeq++
 				}
-				line := toolRunningMark + label
-				if len(toolLines) == 0 || toolLines[len(toolLines)-1] != line {
-					toolLines = append(toolLines, line)
-					toolLines = capCardLines(toolLines, telegramChunkLimit)
-				}
+				activity.add(ev.ToolName, toolRunningMark+label, true, false)
 				notifyFlusher()
 			}
 		case "tool-end":
@@ -342,28 +339,12 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 					prefix = toolFailedMark
 					label += " (failed)"
 				}
-				line := prefix + label
-				// Replace matching in-progress line if it's the most recent entry.
-				if len(toolLines) > 0 && strings.HasPrefix(toolLines[len(toolLines)-1], toolRunningMark) {
-					toolLines[len(toolLines)-1] = line
-				} else {
-					toolLines = append(toolLines, line)
-				}
-				toolLines = capCardLines(toolLines, telegramChunkLimit)
+				activity.add(ev.ToolName, prefix+label, false, true)
 				notifyFlusher()
 			}
-		case "notice":
+		case "notice", "error":
 			if line := strings.TrimSpace(ev.Text); line != "" {
-				line = b.redact(line)
-				toolLines = append(toolLines, line)
-				toolLines = capCardLines(toolLines, telegramChunkLimit)
-				notifyFlusher()
-			}
-		case "error":
-			if line := strings.TrimSpace(ev.Text); line != "" {
-				line = b.redact(line)
-				toolLines = append(toolLines, line)
-				toolLines = capCardLines(toolLines, telegramChunkLimit)
+				activity.add("", b.redact(line), false, false)
 				notifyFlusher()
 			}
 		}
@@ -377,6 +358,10 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 	mu.Lock()
 	msgID := activeMsgID
 	commits := committedChunks
+	status := ""
+	if commits == 0 {
+		status = activity.status(false)
+	}
 	spilled := preambleSpilled
 	rawSegStr := rawSegment.String()
 	tailStr := tailBuf.String()
@@ -387,13 +372,7 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 
 	if runErr != nil {
 		failure := b.redact(formatRunFailure(runErr))
-		if msgID == 0 {
-			b.replyMarkdown(finalCtx, chatID, failure)
-			return
-		}
-		if err := b.client.EditMarkdown(finalCtx, chatID, msgID, failure, nil); err != nil {
-			b.replyMarkdown(finalCtx, chatID, failure)
-		}
+		b.finishActivity(finalCtx, chatID, msgID, status, failure)
 		return
 	}
 
@@ -438,17 +417,5 @@ func (b *Bot) runWithStream(ctx context.Context, chatID int64, run func(context.
 	if strings.TrimSpace(finalBody) == "" {
 		return
 	}
-	if msgID == 0 {
-		b.replyMarkdown(finalCtx, chatID, finalBody)
-		return
-	}
-
-	first, rest := nextChunk(finalBody, telegramChunkLimit)
-	if err := b.client.EditMarkdown(finalCtx, chatID, msgID, first, nil); err != nil {
-		b.replyMarkdown(finalCtx, chatID, finalBody)
-		return
-	}
-	if rest != "" {
-		b.replyMarkdown(finalCtx, chatID, rest)
-	}
+	b.finishActivity(finalCtx, chatID, msgID, status, finalBody)
 }

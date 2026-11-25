@@ -47,15 +47,3 @@ func TestToolCardUsesNoEmoji(t *testing.T) {
 		}
 	}
 }
-
-func TestCapCardLinesCarriesTheDroppedCount(t *testing.T) {
-	lines := []string{"aaaa", "bbbb", "cccc"}
-	lines = capCardLines(lines, 9)
-	if lines[0] != "... (1 earlier lines dropped)" {
-		t.Fatalf("first cap = %q", lines)
-	}
-	lines = capCardLines(append(lines, "dddd"), 9)
-	if lines[0] != "... (2 earlier lines dropped)" || lines[len(lines)-1] != "dddd" {
-		t.Fatalf("second cap should carry the count: %q", lines)
-	}
-}

@@ -1620,130 +1620,15 @@ func formatRunFailure(err error) string {
 	return "Run failed: " + redacted
 }
 
-// runWithCard runs one turn behind the single-run gate and mirrors progress
-// into one message that is edited in place instead of flooding the chat.
+// runWithCard adapts older agents to the same Telegram card as streaming agents.
 func (b *Bot) runWithCard(ctx context.Context, chatID int64, run func(context.Context, func(string)) (string, error)) {
-	if !b.tryStartRunChat(chatID) {
-		b.reply(ctx, chatID, "A run is already in progress in this chat. Send /stop to stop it, or send a new instruction to steer it.")
-		return
-	}
-	defer b.endRunChat(chatID)
-
-	statusMessage, err := b.client.SendMessage(ctx, chatID, "Working...", nil)
-	if err != nil {
-		b.logf("could not send the progress message: %v", err)
-	}
-	_ = b.client.SendChatAction(ctx, chatID, "typing")
-	// Telegram clears a typing action after a few seconds, so a long turn
-	// showed no sign of life for most of its run and read as stuck. The
-	// keepalive renews the indicator until the turn returns, which is what
-	// tells the operator the agent is still working.
-	typingDone := make(chan struct{})
-	go b.keepTyping(ctx, chatID, typingDone)
-	defer close(typingDone)
-
-	// The card grows with the turn instead of being replaced by the newest line.
-	// Replacing lost every earlier step: the operator saw one tool at a time and
-	// the task itself scrolled away. An edit the throttle skips is not lost
-	// either, because the next edit carries the whole list.
-	//
-	// The emitter can fire on a background process goroutine as well as the
-	// run's own, so the line list and the throttle clock are guarded.
-	var cardMu sync.Mutex
-	var lines []string
-	var lastEdit time.Time
-	flush := func(force bool) {
-		if statusMessage.MessageID == 0 {
-			return
-		}
-		cardMu.Lock()
-		defer cardMu.Unlock()
-		// Throttle edits: Telegram rate-limits rapid edits to one message.
-		if !force && time.Since(lastEdit) < 2*time.Second {
-			return
-		}
-		lastEdit = time.Now()
-		editCtx := ctx
-		if editCtx == nil || editCtx.Err() != nil {
-			var cancel context.CancelFunc
-			editCtx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-		}
-		if err := b.client.EditMarkdown(editCtx, chatID, statusMessage.MessageID, strings.Join(lines, "\n"), nil); err != nil {
-			// A silent EditMarkdown failure leaves the card stuck at its last
-			// painted state, which reads as the turn being wedged. The log is
-			// the operator's only signal.
-			b.logf("could not edit the progress card: %v", err)
-		}
-	}
-	progress := func(line string) {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			return
-		}
-		// A tool label can echo a path or a command that holds a credential;
-		// the card crosses the same redactor the final answer does.
-		line = b.redact(line)
-		cardMu.Lock()
-		if len(lines) > 0 && lines[len(lines)-1] == line {
-			cardMu.Unlock()
-			return
-		}
-		lines = append(lines, line)
-		lines = capCardLines(lines, telegramChunkLimit)
-		cardMu.Unlock()
-		flush(false)
-	}
-
-	answer, runErr := run(ctx, progress)
-
-	if statusMessage.MessageID == 0 {
-		// No card to edit: deliver the failure or the answer directly.
-		if runErr != nil {
-			b.replyMarkdown(ctx, chatID, channel.Redact(formatRunFailure(runErr), nil))
-			return
-		}
-		if strings.TrimSpace(answer) != "" && channel.Silent(answer) {
-			return
-		}
-		if strings.TrimSpace(answer) == "" {
-			answer = "(no output)"
-		}
-		b.replyMarkdown(ctx, chatID, answer)
-		return
-	}
-
-	if runErr != nil {
-		progress(formatRunFailure(runErr))
-		flush(true)
-		return
-	}
-	if strings.TrimSpace(answer) != "" && channel.Silent(answer) {
-		if err := b.client.DeleteMessage(ctx, chatID, statusMessage.MessageID); err != nil {
-			b.logf("could not delete the silent progress card: %v", err)
-		}
-		return
-	}
-	if strings.TrimSpace(answer) == "" {
-		answer = "(no output)"
-	}
-
-	// The card carried the tool activity while the turn ran. Once the turn is
-	// done that activity has served its purpose, so the card is replaced by the
-	// answer alone: the chat is left with the conversation (the prompt, the
-	// agent's reply) instead of the backend steps behind it. When the answer is
-	// too long for one message the card carries its first part and the rest
-	// follow as new messages, because an edit past the limit is truncated.
-	first, rest := nextChunk(answer, telegramChunkLimit)
-	if err := b.client.EditMarkdown(ctx, chatID, statusMessage.MessageID, first, nil); err != nil {
-		// The card could not be rewritten, so deliver the whole answer as its
-		// own message rather than lose it.
-		b.replyMarkdown(ctx, chatID, answer)
-		return
-	}
-	if rest != "" {
-		b.replyMarkdown(ctx, chatID, rest)
-	}
+	b.runWithStream(ctx, chatID, func(runCtx context.Context, onEvent func(StreamEvent)) (string, error) {
+		return run(runCtx, func(line string) {
+			if strings.TrimSpace(line) != "Working..." {
+				onEvent(StreamEvent{Kind: "notice", Text: line})
+			}
+		})
+	})
 }
 
 // telegramChunkLimit is the body size the bot targets, under Telegram's 4096
@@ -1858,41 +1743,6 @@ func nextChunk(text string, limit int) (string, string) {
 			capBytes = 16
 		}
 	}
-}
-
-// capCardLines keeps the newest lines within limit bytes, dropping the oldest so
-// the growing card never exceeds the Telegram message limit. A row naming how
-// many lines were dropped is kept when the card has to give up earlier steps.
-func capCardLines(lines []string, limit int) []string {
-	// The card is capped again on every update, so an earlier marker carries
-	// its count forward instead of being counted as one dropped line.
-	carried := 0
-	if len(lines) > 0 {
-		if _, err := fmt.Sscanf(lines[0], "... (%d earlier lines dropped)", &carried); err == nil {
-			lines = lines[1:]
-		} else {
-			carried = 0
-		}
-	}
-	total := 0
-	for _, line := range lines {
-		total += len(line) + 1
-	}
-	if len(lines) > 0 {
-		total--
-	}
-	kept := lines
-	dropped := 0
-	for len(kept) > 1 && total > limit {
-		total -= len(kept[0]) + 1
-		kept = kept[1:]
-		dropped++
-	}
-	if dropped += carried; dropped > 0 {
-		marker := fmt.Sprintf("... (%d earlier lines dropped)", dropped)
-		kept = append([]string{marker}, kept...)
-	}
-	return kept
 }
 
 // imageMediaType maps a Telegram file path to a media type; photos it sends are
