@@ -49,10 +49,12 @@ func runChannel(args []string, stdout io.Writer) error {
 		return editChannelGuest(args[1:], stdout)
 	case "pairing":
 		return pairingCommand(args[1:], stdout)
+	case "inbox":
+		return inboxCommand(args[1:], stdout)
 	case "hook":
 		return editChannelHook(args[1:], stdout)
 	default:
-		return fmt.Errorf("usage: termixgo channel [list|add|login|on|off|status|rm|allow|admin|dm|groups|guest|pairing|hook]")
+		return fmt.Errorf("usage: termixgo channel [list|add|login|on|off|status|rm|allow|admin|dm|groups|guest|pairing|inbox|hook]")
 	}
 }
 

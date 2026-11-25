@@ -545,11 +545,7 @@ func (a *App) startTelegramAccount(name string) error {
 	// this bot id and account, so two bots never share a cursor.
 	if id := telegram.BotIDFromToken(token); id != "" {
 		if _, err := config.EnsureHome(); err == nil {
-			file := "telegram-offset-" + id + ".txt"
-			if name != config.FinalAgentName {
-				file = "telegram-offset-" + id + "-" + name + ".txt"
-			}
-			if path, err := config.HomePath(file); err == nil {
+			if path, err := config.HomePath(telegram.CursorFileName(id, name)); err == nil {
 				bot.SetCursorPath(path)
 			}
 		}

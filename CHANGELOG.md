@@ -8,6 +8,12 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ### Added
 
+- **`termixgo channel inbox list|drop`.** An update the Telegram inbox held when the service
+  stopped mid-turn is kept as "uncertain" and never run again on its own, because it may
+  already have sent a message or changed a file. `list` shows what is held (state, chat,
+  sender and a redacted preview, or `--json`), and `drop <id>... | all` removes the
+  interrupted ones once you have checked the chat. A queued or running update cannot be
+  dropped. `--account NAME` selects a non-default account.
 - **Cost, tokens and file changes in `termixgo sessions list`.** Each row now shows what the
   session spent (a dollar figure, or "unpriced" for a plan model), its tokens, and the
   files it changed with added and removed lines, read from its successful edit tool calls.

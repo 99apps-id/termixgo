@@ -317,6 +317,8 @@ termixgo channel guest <type> [agent] --max-steps 15 --cost-budget 0.50 --rate 3
 termixgo channel pairing list                     # List pending pairing requests from unknown senders
 termixgo channel pairing approve <code>           # Approve sender pairing code
 termixgo channel pairing reject <code>            # Reject sender pairing code
+termixgo channel inbox list [--account NAME]       # Telegram updates held after a stop; interrupted ones need review
+termixgo channel inbox drop <id>... | all          # Drop interrupted updates once you have checked the chat
 ```
 
 ---

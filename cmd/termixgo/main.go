@@ -2305,7 +2305,7 @@ Usage:
   termixgo login <provider>       Log in with a device code (xai-oauth, openai-codex)
   termixgo logout <provider>       Remove a stored OAuth token
   termixgo telegram [status|on|off]
-  termixgo channel [list|add|login|on|off|status|rm|allow|admin|groups|guest|pairing]
+  termixgo channel [list|add|login|on|off|status|rm|allow|admin|groups|guest|pairing|inbox]
                                   Manage WhatsApp and Telegram accounts, policy and pairing
   termixgo cron [list|add|remove|on|off|run|runs|status]
                                   Manage scheduled assistant jobs
