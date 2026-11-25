@@ -141,9 +141,12 @@ func Speak(ctx context.Context, request SpeechRequest, credentials Credentials) 
 // which bills half the per-character cost.
 const defaultElevenLabsModel = "eleven_multilingual_v2"
 
-// defaultElevenLabsVoice is the premade voice ElevenLabs ships as Rachel.
-// A caller passes any voice id as the request voice to use another.
-const defaultElevenLabsVoice = "21m00Tcm4TlvDq8ikWAM"
+// defaultElevenLabsVoice is the premade voice ElevenLabs ships as Sarah.
+// The older library voices (Rachel and her generation) are refused over
+// the API on the free tier, while the current premade voices answer on
+// every tier. A caller passes any voice id as the request voice to use
+// another.
+const defaultElevenLabsVoice = "EXAVITQu4vr4xnSDxMaL"
 
 // speakElevenLabs calls the ElevenLabs text to speech endpoint, which takes
 // a voice id in the path and the key in a header of its own. The answer is

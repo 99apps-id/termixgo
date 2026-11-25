@@ -217,7 +217,7 @@ func TestSpeakElevenLabs(t *testing.T) {
 	if err != nil || used != "elevenlabs:eleven_multilingual_v2" || clip.Ext != ".ogg" || string(clip.Data) != "ELABSfakeaudio" {
 		t.Fatalf("clip=%+v used=%q err=%v", clip, used, err)
 	}
-	request := seen["/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"]
+	request := seen["/v1/text-to-speech/EXAVITQu4vr4xnSDxMaL"]
 	if request == nil || request.xi != "elevenlabs-key" {
 		t.Fatalf("request = %+v", request)
 	}
