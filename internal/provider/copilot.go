@@ -123,8 +123,11 @@ func (c *copilotClient) streamResponses(ctx context.Context, headers map[string]
 		payload["tools"] = tools
 		payload["tool_choice"] = "auto"
 	}
+	// Like every Responses endpoint, Copilot's takes the effort inside the
+	// reasoning object: the top-level reasoning_effort spelling is the
+	// chat-completions one and a Responses backend rejects it.
 	if effort := compatibleEffortFor(c.info.ID, req.Model, req.Effort); effort != "" {
-		payload["reasoning_effort"] = effort
+		payload["reasoning"] = map[string]any{"effort": effort}
 	}
 	response, err := c.post(ctx, c.baseURL+"/responses", headers, payload)
 	if err != nil {

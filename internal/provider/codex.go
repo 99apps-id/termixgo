@@ -585,7 +585,15 @@ func (e responsesEvent) message() string {
 
 func isCodexResponsesLiteModel(model string) bool {
 	m := strings.ToLower(model)
-	// The GPT-6 line (6, 6.1, 6.2) and the GPT-5.6 line all take the
-	// responses-lite shape; older Codex models keep the plain one.
-	return strings.Contains(m, "gpt-6") || strings.Contains(m, "gpt-5.6")
+	// The live backend-api/codex/models catalogue and the Codex VSCode client
+	// mark every current model as use_responses_lite, including gpt-reserve,
+	// codex-auto-review and the daybreak ids. gpt-5.5 is the one current model
+	// the newer client carries as false, and the retired legacy generations
+	// predate the shape, so those keep the plain request.
+	for _, plain := range []string{"gpt-5.5", "gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1", "gpt-5-codex"} {
+		if strings.Contains(m, plain) {
+			return false
+		}
+	}
+	return true
 }

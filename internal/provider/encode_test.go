@@ -211,16 +211,20 @@ func TestAnthropicOAuthUsesTheClaudeCodeIdentity(t *testing.T) {
 	if firstBlock["text"] != claudeCodeIdentity {
 		t.Errorf("first system block = %#v, want %q", firstBlock, claudeCodeIdentity)
 	}
-	if _, hasCache := firstBlock["cache_control"]; hasCache {
-		t.Errorf("first system identity block must not carry cache_control")
+	// The CLI caches its system prefix: the identity block carries the
+	// ephemeral 1h breakpoint, as captured from the real client.
+	cache, hasCache := firstBlock["cache_control"].(map[string]any)
+	if !hasCache || cache["type"] != "ephemeral" || cache["ttl"] != "1h" {
+		t.Errorf("identity block cache_control = %#v, want the ephemeral 1h breakpoint", firstBlock["cache_control"])
 	}
 	if recorder.headers.Get("X-Claude-Code-Session-Id") == "" {
 		t.Errorf("X-Claude-Code-Session-Id header missing")
 	}
 }
 
-// TestAnthropicDefaultsMaxTokens guards the value that keeps a thinking model
-// from truncating its own answer when the caller did not set a limit.
+// TestAnthropicDefaultsMaxTokens guards the CLI's own ceiling, which keeps a
+// thinking model from truncating its own answer when the caller did not set a
+// limit: the thinking tokens come out of max_tokens.
 func TestAnthropicDefaultsMaxTokens(t *testing.T) {
 	recorder, server := newPayloadRecorder(t)
 	defer server.Close()
@@ -229,8 +233,8 @@ func TestAnthropicDefaultsMaxTokens(t *testing.T) {
 	collect(t, client, ChatRequest{Model: "claude-sonnet-4-5", Messages: []Message{{Role: RoleUser, Content: "hi"}}})
 
 	body := recorder.payload(t)
-	if number(t, body, "max_tokens") != 8192 {
-		t.Errorf("max_tokens = %v, want the 8192 default", body["max_tokens"])
+	if number(t, body, "max_tokens") != 128000 {
+		t.Errorf("max_tokens = %v, want the CLI ceiling 128000", body["max_tokens"])
 	}
 	if _, present := body["tools"]; present {
 		t.Errorf("tools must be omitted when none were offered")
@@ -598,8 +602,9 @@ func TestRetryableTransportSeparatesTransientFromPermanent(t *testing.T) {
 }
 
 // TestClaudeOAuthCloaksToolsAndDecloaksTheStream covers the OAuth tool
-// cloaking: client tools are suffixed and decoy CLI tools added on the way out,
-// and the suffixed name is restored when the tool call streams back.
+// cloaking: client tools are suffixed on the way out, and the suffixed name
+// is restored when the tool call streams back. No unavailable decoys are
+// sent: the real client offers only tools it serves.
 func TestClaudeOAuthCloaksToolsAndDecloaksTheStream(t *testing.T) {
 	var gotTools []any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -637,21 +642,18 @@ func TestClaudeOAuthCloaksToolsAndDecloaksTheStream(t *testing.T) {
 		t.Errorf("decloaked tool name = %q, want read_file", name)
 	}
 
-	foundClient, foundDecoy := false, false
-	for _, entry := range gotTools {
-		object, _ := entry.(map[string]any)
-		switch object["name"] {
-		case "read_file_ide":
-			foundClient = true
-		case "Bash":
-			foundDecoy = true
-		}
+	if len(gotTools) != 1 {
+		t.Fatalf("tools = %#v, want only the suffixed client tool", gotTools)
 	}
-	if !foundClient {
+	object, _ := gotTools[0].(map[string]any)
+	if object["name"] != "read_file_ide" {
 		t.Errorf("the client tool should be sent suffixed: %#v", gotTools)
 	}
-	if !foundDecoy {
-		t.Errorf("the decoy tools should be present: %#v", gotTools)
+	for _, entry := range gotTools {
+		object, _ := entry.(map[string]any)
+		if name, _ := object["name"].(string); name == "Bash" || name == "Task" || name == "Read" {
+			t.Errorf("tool %q is unavailable and must not be offered: %#v", name, gotTools)
+		}
 	}
 }
 
@@ -775,5 +777,65 @@ func TestAnthropicOAuthRetriesOnClaudeCodeVersionTooOld(t *testing.T) {
 	}
 	if len(userAgents) != 2 || userAgents[1] != "claude-cli/2.1.320 (external, cli)" {
 		t.Errorf("userAgents = %v", userAgents)
+	}
+}
+
+// TestEncodeAnthropicMessagesNeverSendsEmptyTextBlocks covers the 400 the
+// backend answers when a replayed history carries a blank text block: an
+// assistant turn with no replayable content is left out, and merging never
+// invents a blank block.
+func TestEncodeAnthropicMessagesNeverSendsEmptyTextBlocks(t *testing.T) {
+	messages := []Message{
+		{Role: RoleUser, Content: "go"},
+		{Role: RoleAssistant, Content: "", ReasoningItems: []ReasoningItem{{Kind: reasoningKindThinking, ID: "claude-opus-5-5", EncryptedContent: "sig"}}},
+		{Role: RoleUser, Content: ""},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "t1", Name: "read_file", Arguments: "{}"}}},
+		{Role: RoleTool, ToolID: "t1", Content: "out"},
+	}
+	encoded := encodeAnthropicMessagesWith(messages, "")
+	raw, err := json.Marshal(encoded)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), `"text":""`) {
+		t.Errorf("encoded messages carry an empty text block, which the backend refuses: %s", raw)
+	}
+}
+
+// TestStripThinkingBlocksKeepsANonEmptyPlaceholder covers the thinking retry:
+// a turn reduced to nothing keeps a short honest placeholder instead of a
+// blank block, so the alternating roles survive without a 400.
+func TestStripThinkingBlocksKeepsANonEmptyPlaceholder(t *testing.T) {
+	messages := []map[string]any{{
+		"role":    "assistant",
+		"content": []map[string]any{{"type": "thinking", "thinking": "h", "signature": "s"}},
+	}}
+	stripThinkingBlocks(messages)
+	blocks, ok := messages[0]["content"].([]map[string]any)
+	if !ok || len(blocks) != 1 || blocks[0]["type"] != "text" {
+		t.Fatalf("content = %#v, want one text block", messages[0]["content"])
+	}
+	if text, _ := blocks[0]["text"].(string); strings.TrimSpace(text) == "" {
+		t.Errorf("the placeholder must never be blank")
+	}
+}
+
+// TestClaudeSystemCachesIdentityAndLastBlock pins the CLI's own cache
+// breakpoints on the system prefix, as captured from the real client: the
+// identity and the last system block carry the ephemeral 1h marker, and the
+// billing header never does.
+func TestClaudeSystemCachesIdentityAndLastBlock(t *testing.T) {
+	blocks := withClaudeCodeIdentity("be brief", "say hi")
+	if len(blocks) != 3 {
+		t.Fatalf("blocks = %#v, want billing, identity and the prompt", blocks)
+	}
+	if _, has := blocks[0]["cache_control"]; has {
+		t.Errorf("the billing header must not carry cache_control")
+	}
+	for _, index := range []int{1, len(blocks) - 1} {
+		cache, ok := blocks[index]["cache_control"].(map[string]any)
+		if !ok || cache["type"] != "ephemeral" || cache["ttl"] != "1h" {
+			t.Errorf("block %d cache_control = %#v, want the ephemeral 1h breakpoint", index, blocks[index]["cache_control"])
+		}
 	}
 }

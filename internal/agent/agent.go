@@ -366,7 +366,7 @@ runLoop:
 						// (a virtual review model, a reserve model without
 						// capacity) answer exactly like this on every shape.
 						stopReason = "incomplete"
-						emit(Event{Kind: EventError, Err: fmt.Errorf("the backend returned an empty response for model %q (0 output tokens, cut at its output limit); this model does not serve chat turns on this account; switch model with /model", r.Model)})
+						emit(Event{Kind: EventError, Err: fmt.Errorf("the backend returned an empty response for model %q (0 output tokens, cut at its output limit); this model does not serve chat turns on this account right now; switch model with /model, or retry shortly since a transient overload answers the same way", r.Model)})
 						break runLoop
 					}
 					if fruitlessCuts >= 2 {

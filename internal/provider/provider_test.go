@@ -250,7 +250,11 @@ func TestSanitizeGoogleSchemaDropsUnsupportedKeywords(t *testing.T) {
 // TestCatalogueDropsDeadCodexModelsAndFixesHaiku pins two model-id fixes: the
 // Codex models the backend no longer serves, and the dated Claude Haiku id.
 func TestCatalogueDropsDeadCodexModelsAndFixesHaiku(t *testing.T) {
-	for _, id := range []string{"codex-gpt-5.4", "codex-gpt-5.4-codex", "codex-gpt-5.3-codex-spark"} {
+	for _, id := range []string{
+		"codex-gpt-5.4", "codex-gpt-5.4-codex", "codex-gpt-5.3-codex-spark",
+		"codex-gpt-5.3-codex", "codex-gpt-5.2-codex", "codex-gpt-5.1-codex-max",
+		"codex-gpt-5.1-codex", "codex-gpt-5-codex",
+	} {
 		if _, ok := ModelByID(id); ok {
 			t.Errorf("%s returns 400 model is not supported and must not be offered", id)
 		}

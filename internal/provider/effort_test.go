@@ -18,7 +18,10 @@ func TestEffortMappingPerProvider(t *testing.T) {
 		// OpenAI has no level above high, so the deepest request becomes the
 		// highest value it does accept rather than an invalid field.
 		{"openai max folds to high", "openai", EffortMax, "high"},
-		{"codex non-lite carries effort", "openai-codex", EffortHigh, "high"},
+		// openai-codex has no flat mapping: it speaks Responses, not
+		// chat-completions, so its effort is resolved per model by
+		// codexEffort instead of this table.
+		{"codex uses per-model effort", "openai-codex", EffortHigh, ""},
 		{"copilot chat carries effort", "github-copilot", EffortMedium, "medium"},
 		{"deepseek max", "deepseek", EffortMax, "high"},
 		{"xai high", "xai", EffortHigh, "high"},

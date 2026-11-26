@@ -17,10 +17,11 @@ import (
 
 // The Claude Code CLI identity an OAuth token is entitled to. The beta list
 // matches what the current CLI sends; the first entry is what unlocks an
-// OAuth bearer at all.
+// OAuth bearer at all. Both were captured from the installed CLI 2.1.325
+// against a local endpoint.
 const (
 	defaultClaudeCLIVersion = "2.1.325"
-	claudeCodeIdentity      = "You are Claude Code, Anthropic's official CLI for Claude."
+	claudeCodeIdentity      = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
 )
 
 var (
@@ -128,7 +129,7 @@ func stainlessArch() string {
 }
 
 const (
-	claudeOAuthBeta = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11"
+	claudeOAuthBeta = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,thinking-token-count-2026-05-13,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11"
 )
 
 // anthropicClient speaks the Messages streaming protocol.
@@ -148,10 +149,10 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 	thinking := anthropicAdaptiveThinking(model) && claudeThinkingEnabled()
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
-		maxTokens = 8192
-		if thinking {
-			maxTokens = 64000
-		}
+		// The CLI sends 128000: with adaptive thinking the thinking tokens
+		// come out of max_tokens, and a smaller ceiling cuts a reasoning step
+		// off before it answers.
+		maxTokens = 128000
 	}
 	var messages []map[string]any
 	if thinking {
@@ -254,7 +255,9 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 		headers["X-Stainless-Os"] = stainlessOS()
 		headers["X-Stainless-Timeout"] = "600"
 		// The endpoint expects the Claude Code tool names, so client tools are
-		// suffixed and the CLI's own tools are offered as unavailable decoys.
+		// suffixed. No unavailable decoys are sent: the real client offers
+		// only tools it serves, and a decoy name the model calls resolves to
+		// no client tool, which fails the step instead of doing the work.
 		if len(req.Tools) > 0 {
 			tools := encodeAnthropicTools(req.Tools)
 			if len(tools) > 0 {
@@ -312,8 +315,9 @@ func isThinkingRejection(err error) bool {
 }
 
 // stripThinkingBlocks removes every thinking and redacted_thinking block from
-// an encoded history, leaving an empty text block where a turn would
-// otherwise be empty.
+// an encoded history, leaving a short placeholder where a turn would
+// otherwise be empty. The placeholder keeps the alternating roles intact, and
+// it is never blank: an empty text block is refused with 400.
 func stripThinkingBlocks(messages []map[string]any) {
 	for _, message := range messages {
 		blocks, ok := message["content"].([]map[string]any)
@@ -328,7 +332,7 @@ func stripThinkingBlocks(messages []map[string]any) {
 			kept = append(kept, block)
 		}
 		if len(kept) == 0 {
-			kept = append(kept, map[string]any{"type": "text", "text": ""})
+			kept = append(kept, map[string]any{"type": "text", "text": "(thinking omitted)"})
 		}
 		message["content"] = kept
 	}
@@ -620,7 +624,10 @@ func encodeAnthropicMessagesWith(messages []Message, thinkingModel string) []map
 				})
 			}
 			if len(blocks) == 0 {
-				blocks = append(blocks, map[string]any{"type": "text", "text": ""})
+				// A turn with no replayable content carries nothing the next
+				// request can use, and an empty text block is refused with
+				// 400, so the message is left out rather than sent blank.
+				continue
 			}
 			out = append(out, map[string]any{"role": "assistant", "content": blocks})
 		case RoleTool:
@@ -645,7 +652,7 @@ func appendAnthropicUserTurn(out []map[string]any, content any) []map[string]any
 				blocks = []map[string]any{{"type": "text", "text": c}}
 			}
 		case []map[string]any:
-			blocks = c
+			blocks = append(blocks, nonEmptyTextBlocks(c)...)
 		}
 		switch n := content.(type) {
 		case string:
@@ -653,15 +660,32 @@ func appendAnthropicUserTurn(out []map[string]any, content any) []map[string]any
 				blocks = append(blocks, map[string]any{"type": "text", "text": n})
 			}
 		case []map[string]any:
-			blocks = append(blocks, n...)
+			blocks = append(blocks, nonEmptyTextBlocks(n)...)
 		}
 		if len(blocks) == 0 {
-			blocks = []map[string]any{{"type": "text", "text": ""}}
+			// Nothing replayable arrived: an empty text block is refused
+			// with 400, so the turn keeps its existing shape instead.
+			return out
 		}
 		last["content"] = blocks
 		return out
 	}
 	return append(out, map[string]any{"role": "user", "content": content})
+}
+
+// nonEmptyTextBlocks drops blank text blocks. The backend refuses a text
+// block with empty content, so replayed history must never carry one.
+func nonEmptyTextBlocks(blocks []map[string]any) []map[string]any {
+	kept := make([]map[string]any, 0, len(blocks))
+	for _, block := range blocks {
+		if block["type"] == "text" {
+			if text, _ := block["text"].(string); strings.TrimSpace(text) == "" {
+				continue
+			}
+		}
+		kept = append(kept, block)
+	}
+	return kept
 }
 
 func anthropicUserContent(message Message) any {
@@ -834,12 +858,12 @@ func deriveUUIDFromSeed(seed string) string {
 // named read_file is sent as read_file_ide and renamed back on the stream.
 const claudeToolSuffix = "_ide"
 
-// cloakClaudeTools suffixes the client tools and appends the Claude Code decoy
-// tools, which are advertised as unavailable. It returns the aliases mapping a
-// suffixed name back to the original.
+// cloakClaudeTools suffixes the client tools, which is the shape the
+// endpoint expects. It returns the aliases mapping a suffixed name back to
+// the original.
 func cloakClaudeTools(tools []map[string]any) ([]map[string]any, map[string]string) {
 	aliases := make(map[string]string, len(tools))
-	cloaked := make([]map[string]any, 0, len(tools)+len(claudeDecoyTools))
+	cloaked := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
 		name, _ := tool["name"].(string)
 		suffixed := name + claudeToolSuffix
@@ -851,7 +875,7 @@ func cloakClaudeTools(tools []map[string]any) ([]map[string]any, map[string]stri
 		copied["name"] = suffixed
 		cloaked = append(cloaked, copied)
 	}
-	return append(cloaked, claudeDecoyTools...), aliases
+	return cloaked, aliases
 }
 
 // cloakClaudeMessages renames the tool_use blocks in the history to the
@@ -874,14 +898,20 @@ func cloakClaudeMessages(messages []map[string]any) {
 	}
 }
 
-// withClaudeCodeIdentity ensures the first system block is the exact Claude
-// Code identity on its own (without cache_control), and removes duplicate
-// copies of it from subsequent blocks. Anthropic rejects OAuth subscription
-// requests with 429 rate_limit_error when another block precedes it.
+// withClaudeCodeIdentity ensures the first system block is the exact billing
+// header the CLI sends, followed by the CLI identity. The identity and the
+// last system block carry the CLI's own ephemeral 1h cache breakpoints; the
+// billing header never does. Anthropic rejects OAuth subscription requests
+// with 429 rate_limit_error when another block precedes the billing header.
 func withClaudeCodeIdentity(system any, fingerprintText string) []map[string]any {
 	blocks := withClaudeCodeIdentityBlocks(system)
 	billing := map[string]any{"type": "text", "text": claudeBillingHeader(fingerprintText)}
-	return append([]map[string]any{billing}, blocks...)
+	out := append([]map[string]any{billing}, blocks...)
+	out[1]["cache_control"] = map[string]any{"type": "ephemeral", "ttl": "1h"}
+	if len(out) > 2 {
+		out[len(out)-1]["cache_control"] = map[string]any{"type": "ephemeral", "ttl": "1h"}
+	}
+	return out
 }
 
 func withClaudeCodeIdentityBlocks(system any) []map[string]any {
@@ -912,32 +942,6 @@ func withClaudeCodeIdentityBlocks(system any) []map[string]any {
 	default:
 		return []map[string]any{identity}
 	}
-}
-
-// claudeDecoyTools are the Claude Code native tools, offered so the request
-// looks like the CLI. A decoy that gets called resolves to no client tool and
-// surfaces as unavailable, which is the intent.
-var claudeDecoyTools = []map[string]any{
-	{"name": "Task", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "TaskOutput", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "TaskStop", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "TaskCreate", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "TaskGet", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "TaskUpdate", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "TaskList", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "Bash", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "Glob", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "Grep", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "Read", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "Edit", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "Write", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "NotebookEdit", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "WebFetch", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "WebSearch", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "AskUserQuestion", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "Skill", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "EnterPlanMode", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
-	{"name": "ExitPlanMode", "description": "This tool is currently unavailable.", "input_schema": map[string]any{"type": "object", "properties": map[string]any{}}},
 }
 
 // claudeFingerprintSalt and claudeFingerprintIndexes are the constants the
@@ -972,12 +976,20 @@ func claudeBillingHeader(fingerprintText string) string {
 	return fmt.Sprintf("x-anthropic-billing-header: cc_version=%s.%s; cc_entrypoint=cli;", version, claudeFingerprint(fingerprintText, version))
 }
 
-// claudeFingerprintText is the text the fingerprint is taken from: the first
-// user message of the conversation, as the client does.
+// claudeFingerprintText is the text the fingerprint is taken from: the bare
+// prompt of the first user message, as the client does. The harness appends
+// an env block (and possibly a plan reminder after it) to every turn, but the
+// client fingerprints only the prompt, so the wrapper is cut off here.
 func claudeFingerprintText(messages []Message) string {
 	for _, message := range messages {
 		if message.Role == RoleUser && strings.TrimSpace(message.Content) != "" {
-			return message.Content
+			text := message.Content
+			if idx := strings.LastIndex(text, "\n<env>"); idx >= 0 {
+				if head := strings.TrimSpace(text[:idx]); head != "" {
+					return head
+				}
+			}
+			return text
 		}
 	}
 	return ""

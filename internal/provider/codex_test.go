@@ -568,6 +568,62 @@ func TestCodexInputDropsUnreplayableReasoningItems(t *testing.T) {
 	}
 }
 
+// TestCodexReserveTakesTheLiteShape covers the responses-lite classification
+// for the reserve capacity model: the live catalogue marks it
+// use_responses_lite, so it must travel the lite shape (tools and
+// instructions as input prefix items, no top-level fields) with the lite
+// header. Sending it as a plain request is what the backend answered with an
+// empty cut, which the loop misread as an account entitlement gap.
+func TestCodexReserveTakesTheLiteShape(t *testing.T) {
+	var gotBody map[string]any
+	var gotLite string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotLite = request.Header.Get("X-Openai-Internal-Codex-Responses-Lite")
+		raw, _ := io.ReadAll(request.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		writer.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "openai-codex", Label: "Codex", Kind: KindOpenAI}, server.URL, "token")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:  "gpt-reserve",
+		System: "be brief",
+		Messages: []Message{
+			{Role: RoleUser, Content: "hi"},
+			{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "read_file", Arguments: "{}"}}},
+			{Role: RoleTool, ToolID: "c1", Content: "out"},
+		},
+		Tools: []ToolDef{{
+			Name:   "read_file",
+			Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+		}},
+	}, func(StreamEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if gotLite != "true" {
+		t.Errorf("X-Openai-Internal-Codex-Responses-Lite = %q, want true for gpt-reserve", gotLite)
+	}
+	if _, present := gotBody["tools"]; present {
+		t.Errorf("a lite request must not carry top-level tools: %v", gotBody["tools"])
+	}
+	if _, present := gotBody["instructions"]; present {
+		t.Errorf("a lite request must not carry top-level instructions")
+	}
+	input, ok := gotBody["input"].([]any)
+	if !ok || len(input) == 0 {
+		t.Fatalf("input = %#v, want the lite prefix items", gotBody["input"])
+	}
+	if prefix, _ := input[0].(map[string]any); prefix["type"] != "additional_tools" {
+		t.Errorf("input[0] = %#v, want the additional_tools prefix", input[0])
+	}
+}
+
 func TestReasoningItemInputOmitsMalformedProviderID(t *testing.T) {
 	got := reasoningItemInput(ReasoningItem{
 		ID:               "rs_valid:rs_other",

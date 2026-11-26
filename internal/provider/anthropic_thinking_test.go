@@ -93,8 +93,8 @@ func TestAdaptiveThinkingPayloadAndContextManagement(t *testing.T) {
 	if _, has := body["temperature"]; has {
 		t.Errorf("a thinking request must drop temperature, got %v", body["temperature"])
 	}
-	if body["max_tokens"] != float64(64000) {
-		t.Errorf("max_tokens = %v, want the raised default for a thinking request", body["max_tokens"])
+	if body["max_tokens"] != float64(128000) {
+		t.Errorf("max_tokens = %v, want the CLI ceiling 128000 for a thinking request", body["max_tokens"])
 	}
 	if !strings.Contains(beta, "context-management-2025-06-27") {
 		t.Errorf("anthropic-beta = %q, want the context-management beta", beta)

@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -150,5 +152,45 @@ func TestCopilotEscalatesToResponsesWhenChatCompletionsRejectsTheModel(t *testin
 	}
 	if chatHits != 1 || responsesHits != 2 {
 		t.Errorf("second call: chatHits=%d responsesHits=%d, want 1 and 2", chatHits, responsesHits)
+	}
+}
+
+// TestCopilotResponsesCarriesEffortInTheReasoningObject covers the effort
+// shape on the escalated route: a Responses endpoint takes the effort inside
+// the reasoning object, never as the chat-completions top-level field the
+// backend rejects.
+func TestCopilotResponsesCarriesEffortInTheReasoningObject(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasSuffix(request.URL.Path, "/chat/completions") {
+			writer.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(writer, `{"error":{"message":"The requested model is not accessible via the /chat/completions endpoint.","type":"invalid_request_error"}}`)
+			return
+		}
+		raw, _ := io.ReadAll(request.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		writer.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+	}))
+	defer server.Close()
+
+	client, err := newHTTPClient(Provider{ID: "github-copilot", Label: "GitHub Copilot", Kind: KindCopilot, OAuth: true}, server.URL, "copilot-token")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	err = client.Stream(context.Background(), ChatRequest{
+		Model:    "gpt-6-luna",
+		Effort:   EffortHigh,
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	}, func(StreamEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if _, present := gotBody["reasoning_effort"]; present {
+		t.Errorf("a responses request must not carry top-level reasoning_effort: %v", gotBody)
+	}
+	reasoning, _ := gotBody["reasoning"].(map[string]any)
+	if reasoning["effort"] != "high" {
+		t.Errorf("reasoning = %v, want the effort inside the reasoning object", gotBody["reasoning"])
 	}
 }

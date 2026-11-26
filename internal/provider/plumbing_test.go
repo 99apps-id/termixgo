@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -474,20 +475,25 @@ func TestAnthropicToolResultPlacesFalseForAnEmptyResult(t *testing.T) {
 	}
 }
 
-// TestEncodeAnthropicMessagesEmptiesAnAssistantTurnWithNoBlocks keeps a turn
-// that was only a tool call, with no text, from producing an empty content
-// array, which the API rejects.
+// TestEncodeAnthropicMessagesEmptiesAnAssistantTurnWithNoBlocks drops a turn
+// with no replayable content. The backend refuses an empty text block with
+// 400, so a blank assistant message is left out rather than sent blank; a
+// real turn always carries a user message, so the list never ends up empty.
 func TestEncodeAnthropicMessagesEmptiesAnAssistantTurnWithNoBlocks(t *testing.T) {
-	encoded := encodeAnthropicMessages([]Message{{Role: RoleAssistant}})
+	encoded := encodeAnthropicMessages([]Message{
+		{Role: RoleUser, Content: "go"},
+		{Role: RoleAssistant},
+		{Role: RoleUser, Content: "again"},
+	})
 	if len(encoded) != 1 {
-		t.Fatalf("encoded = %#v", encoded)
+		t.Fatalf("encoded = %#v, want the two user turns merged", encoded)
 	}
-	blocks, ok := encoded[0]["content"].([]map[string]any)
-	if !ok || len(blocks) != 1 {
-		t.Fatalf("content = %#v, want one placeholder block", encoded[0]["content"])
+	raw, err := json.Marshal(encoded)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
 	}
-	if blocks[0]["type"] != "text" {
-		t.Errorf("block = %#v", blocks[0])
+	if strings.Contains(string(raw), `"text":""`) {
+		t.Errorf("encoded messages carry an empty text block, which the backend refuses: %s", raw)
 	}
 }
 

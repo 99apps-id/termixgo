@@ -116,15 +116,11 @@ var contextWindows = map[string]int{
 	"codex-gpt-5.6-terra":            272000,
 	"codex-gpt-5.6-sol":              272000,
 	"codex-gpt-5.6-luna":             272000,
-	"codex-gpt-5.5":                  1050000,
-	"codex-gpt-daybreak-blue-latest": 1050000,
+	"codex-gpt-5.5":                  272000,
+	"codex-gpt-daybreak-blue-latest": 272000,
+	"codex-gpt-daybreak-red-latest":  372000,
 	"codex-gpt-reserve":              272000,
 	"codex-auto-review":              272000,
-	"codex-gpt-5.4":                  1050000,
-	"codex-gpt-5.4-codex":            400000,
-	"codex-gpt-5.3-codex":            400000,
-	"codex-gpt-5.3-codex-spark":      400000,
-	"codex-gpt-5.2-codex":            400000,
 
 	// GitHub Copilot models
 	"copilot-gpt-5.4":           1050000,
@@ -155,9 +151,6 @@ var contextWindows = map[string]int{
 	"copilot-grok-4.7":          256000,
 	"copilot-kimi-k3":           256000,
 	"copilot-mai-code-1-flash":  128000,
-	"codex-gpt-5.1-codex-max":   400000,
-	"codex-gpt-5.1-codex":       400000,
-	"codex-gpt-5-codex":         400000,
 	"grok-4.7-oauth":            500000,
 	"grok-4.5-oauth":            500000,
 	"grok-build-0.1-oauth":      256000,
@@ -472,18 +465,18 @@ func Models() []Model {
 		{ID: "codex-gpt-5.6-terra", Provider: "openai-codex", Label: "GPT-5.6 Terra (ChatGPT)", APIID: "gpt-5.6-terra", Description: "Previous balanced generation through a ChatGPT login.", Tags: []string{"reasoning", "tools"}},
 		{ID: "codex-gpt-5.6-sol", Provider: "openai-codex", Label: "GPT-5.6 Sol (ChatGPT)", APIID: "gpt-5.6-sol", Description: "Previous balanced generation through a ChatGPT login.", Tags: []string{"reasoning", "tools"}},
 		{ID: "codex-gpt-5.6-luna", Provider: "openai-codex", Label: "GPT-5.6 Luna (ChatGPT)", APIID: "gpt-5.6-luna", Description: "Previous efficient generation through a ChatGPT login.", Tags: []string{"fast", "tools"}},
-		{ID: "codex-gpt-5.5", Provider: "openai-codex", Label: "GPT-5.5 (ChatGPT)", APIID: "gpt-5.5", Description: "Latest frontier generation through a ChatGPT login.", Tags: []string{"reasoning", "tools", "coding"}},
+		{ID: "codex-gpt-5.5", Provider: "openai-codex", Label: "GPT-5.5 (ChatGPT)", APIID: "gpt-5.5", Description: "Frontier generation through a ChatGPT login.", Tags: []string{"reasoning", "tools", "coding"}},
 		{ID: "codex-gpt-daybreak-blue-latest", Provider: "openai-codex", Label: "GPT Daybreak Blue (ChatGPT)", APIID: "gpt-daybreak-blue-latest", Description: "Live experimental codex model.", Tags: []string{"reasoning", "coding"}},
+		{ID: "codex-gpt-daybreak-red-latest", Provider: "openai-codex", Label: "GPT Daybreak Red (ChatGPT)", APIID: "gpt-daybreak-red-latest", Description: "Live experimental codex model.", Tags: []string{"reasoning", "coding"}},
 		{ID: "codex-gpt-reserve", Provider: "openai-codex", Label: "GPT Reserve (ChatGPT)", APIID: "gpt-reserve", Description: "Reserve capacity model through a ChatGPT login.", Tags: []string{"reasoning", "coding"}},
 		{ID: "codex-auto-review", Provider: "openai-codex", Label: "Codex Auto Review (ChatGPT)", APIID: "codex-auto-review", Description: "Virtual auto-review model through a ChatGPT login.", Tags: []string{"coding"}},
-		// gpt-5.4, gpt-5.4-mini and gpt-5.3-codex-spark are gone from
-		// backend-api/codex/models for ChatGPT accounts and return HTTP 400
-		// "model is not supported", so they are not offered (9router #4202).
-		{ID: "codex-gpt-5.3-codex", Provider: "openai-codex", Label: "GPT-5.3 Codex", APIID: "gpt-5.3-codex", Description: "Agentic software engineering.", Tags: []string{"coding", "tools"}},
-		{ID: "codex-gpt-5.2-codex", Provider: "openai-codex", Label: "GPT-5.2 Codex", APIID: "gpt-5.2-codex", Description: "Previous Codex generation.", Tags: []string{"coding", "tools"}},
-		{ID: "codex-gpt-5.1-codex-max", Provider: "openai-codex", Label: "GPT-5.1 Codex Max", APIID: "gpt-5.1-codex-max", Description: "Long-horizon Codex model.", Tags: []string{"coding", "tools"}},
-		{ID: "codex-gpt-5.1-codex", Provider: "openai-codex", Label: "GPT-5.1 Codex", APIID: "gpt-5.1-codex", Description: "Earlier Codex model.", Tags: []string{"coding", "tools"}},
-		{ID: "codex-gpt-5-codex", Provider: "openai-codex", Label: "GPT-5 Codex", APIID: "gpt-5-codex", Description: "First Codex generation.", Tags: []string{"coding", "tools"}},
+		// The retired Codex generations (gpt-5.4 and older, including the
+		// 5.3/5.2/5.1/5-codex ids) are gone from backend-api/codex/models and
+		// return HTTP 400 "model is not supported", so they are not offered.
+		// The live catalogue is gated by client version and account: a login
+		// identifying as 0.171.0 is served the GPT-6 and GPT-5.6 lines plus
+		// reserve and auto-review, while a newer client also lists gpt-5.5
+		// and the daybreak ids, which the Codex VSCode client serves.
 
 		// Anthropic. Fable is the Mythos tier, above Opus.
 		{ID: "claude-fable-5-2", Provider: "anthropic", Label: "Claude Fable 5.2", Description: "Flagship deep reasoning and long-horizon agentic work.", Tags: []string{"reasoning", "tools", "coding"}},

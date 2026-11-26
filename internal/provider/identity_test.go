@@ -26,6 +26,20 @@ func TestClaudeFingerprintMatchesTheClient(t *testing.T) {
 	}
 }
 
+// TestClaudeFingerprintTextStripsTheEnvWrapper pins what the billing
+// fingerprint is taken from: the bare prompt, not the wrappers the harness
+// appends. The real client fingerprints only the prompt ("say hi" yields
+// 382), while every harness turn carries an env block after it.
+func TestClaudeFingerprintTextStripsTheEnvWrapper(t *testing.T) {
+	content := "say hi\n\n<env>\nworkspace_root: C:\\work\nfolder_trust: trusted\n</env>"
+	if got := claudeFingerprintText([]Message{{Role: RoleUser, Content: content}}); got != "say hi" {
+		t.Errorf("fingerprint text = %q, want the bare prompt", got)
+	}
+	if got := claudeFingerprint("say hi", "2.1.325"); got != "382" {
+		t.Errorf("claudeFingerprint = %q, want 382", got)
+	}
+}
+
 func TestClaudeBillingHeaderLeadsTheSystemBlocks(t *testing.T) {
 	blocks := withClaudeCodeIdentity("be brief", "say hi")
 	if len(blocks) < 2 {
@@ -44,7 +58,11 @@ func TestClaudeBillingHeaderLeadsTheSystemBlocks(t *testing.T) {
 }
 
 func TestClaudeOAuthBetaListMatchesTheClient(t *testing.T) {
-	for _, flag := range []string{"claude-code-20250219", "oauth-2025-04-20", "interleaved-thinking-2025-05-14", "effort-2025-11-24"} {
+	for _, flag := range []string{"claude-code-20250219", "oauth-2025-04-20", "interleaved-thinking-2025-05-14",
+		"context-management-2025-06-27", "per-turn-control-2026-07-01",
+		"mid-conversation-tool-changes-2026-07-01", "inline-tools-2026-09-15",
+		"advisor-tool-2026-03-01", "thinking-token-count-2026-05-13",
+		"advanced-tool-use-2025-11-20", "effort-2025-11-24", "extended-cache-ttl-2025-04-11"} {
 		if !strings.Contains(claudeOAuthBeta, flag) {
 			t.Errorf("beta list lacks %s: %s", flag, claudeOAuthBeta)
 		}
@@ -119,12 +137,21 @@ func TestCodexRequestCarriesTheCLIIdentity(t *testing.T) {
 }
 
 func TestCodexLiteModelsCoverTheGPT6Line(t *testing.T) {
-	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-luna"} {
+	for _, model := range []string{
+		"gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-terra", "gpt-6.1-sol",
+		"gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+		"gpt-reserve", "codex-auto-review",
+		"gpt-daybreak-blue-latest", "gpt-daybreak-red-latest",
+	} {
 		if !isCodexResponsesLiteModel(model) {
 			t.Errorf("%s should take the responses-lite shape", model)
 		}
 	}
-	for _, model := range []string{"gpt-5.5", "gpt-5.3-codex", "gpt-reserve"} {
+	for _, model := range []string{
+		"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex",
+		"gpt-5.2-codex", "gpt-5.1-codex-max", "gpt-5.1-codex", "gpt-5-codex",
+	} {
 		if isCodexResponsesLiteModel(model) {
 			t.Errorf("%s should keep the plain shape", model)
 		}
@@ -138,7 +165,13 @@ func TestCodexCatalogueKeepsGPT56AndAddsGPT62(t *testing.T) {
 			have[model.WireID()] = true
 		}
 	}
-	for _, id := range []string{"gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-terra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+	for _, id := range []string{
+		"gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-terra", "gpt-6.1-sol",
+		"gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+		"gpt-5.5", "gpt-daybreak-blue-latest", "gpt-daybreak-red-latest",
+		"gpt-reserve", "codex-auto-review",
+	} {
 		if !have[id] {
 			t.Errorf("the Codex catalogue lacks %s", id)
 		}

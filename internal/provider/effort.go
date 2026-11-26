@@ -24,7 +24,6 @@ import "strings"
 // rejects the request, and there is no way to discover that before sending it.
 var effortProviders = map[string]bool{
 	"openai":         true,
-	"openai-codex":   true,
 	"github-copilot": true,
 	"xai":            true,
 	"xai-oauth":      true,
