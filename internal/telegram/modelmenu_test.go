@@ -68,6 +68,43 @@ func TestModelMenuListsProvidersThenModelsThenSelects(t *testing.T) {
 	}
 }
 
+// TestModelMenuBackReturnsToProviders covers the back button on the model
+// list: pressing it edits the same message back to the provider menu.
+func TestModelMenuBackReturnsToProviders(t *testing.T) {
+	agent := &scriptedAgent{model: "old-model"}
+	bot, api := pairedBot(t, agent)
+
+	bot.handleMessage(context.Background(), message("/model"))
+	sent := api.calls("sendMessage")
+	if len(sent) == 0 {
+		t.Fatalf("no model menu was sent")
+	}
+	providerData := callbackData(t, sent[len(sent)-1], modelProviderPrefix)
+	if providerData == "" {
+		t.Fatalf("the model menu carried no provider button")
+	}
+
+	bot.handleCallback(context.Background(), callbackMessage(providerData))
+	edits := api.calls("editMessageText")
+	if len(edits) == 0 {
+		t.Fatalf("pressing a provider did not list its models")
+	}
+	backData := callbackData(t, edits[len(edits)-1], modelMenuBack)
+	if backData == "" {
+		t.Fatalf("the model list carried no back button")
+	}
+
+	bot.handleCallback(context.Background(), callbackMessage(backData))
+	edits = api.calls("editMessageText")
+	last := edits[len(edits)-1]
+	if callbackData(t, last, modelProviderPrefix) == "" {
+		t.Errorf("going back did not restore the provider menu: %v", last)
+	}
+	if agent.Model() != "old-model" {
+		t.Errorf("going back switched the model to %q", agent.Model())
+	}
+}
+
 // TestModelMenuIgnoresAStranger keeps the picker behind the pairing gate. The
 // callback handler runs on its own goroutine, so the gate must be checked there
 // rather than only in handleMessage.

@@ -13,6 +13,9 @@ import (
 const (
 	modelProviderPrefix = "mp:"
 	modelSelectPrefix   = "mm:"
+	// modelMenuBack returns the picker from a provider's models to the
+	// provider menu. It carries no payload.
+	modelMenuBack = "mback"
 )
 
 // maxModelButtons bounds one keyboard, under Telegram's 100-button ceiling.
@@ -62,14 +65,10 @@ func buttonsKeyboard(prefix string, labels, values []string) *InlineKeyboard {
 	return keyboard
 }
 
-// sendModelMenu opens the picker: the current model, then one button per
-// active provider that has a catalogue.
-func (b *Bot) sendModelMenu(ctx context.Context, chatID int64) {
+// modelMenuContent builds the picker text and keyboard: the current model,
+// then one button per active provider that has a catalogue.
+func (b *Bot) modelMenuContent() (string, *InlineKeyboard) {
 	providers := b.activeProviders()
-	if len(providers) == 0 {
-		b.reply(ctx, chatID, "No active models or providers are available.")
-		return
-	}
 	labels := make([]string, 0, len(providers))
 	values := make([]string, 0, len(providers))
 	for _, info := range providers {
@@ -77,9 +76,36 @@ func (b *Bot) sendModelMenu(ctx context.Context, chatID int64) {
 		values = append(values, info.ID)
 	}
 	text := "Current model: " + b.agent.Model() + "\nChoose an active provider to select a model:"
-	if _, err := b.client.SendMessage(ctx, chatID, text, buttonsKeyboard(modelProviderPrefix, labels, values)); err != nil {
+	return text, buttonsKeyboard(modelProviderPrefix, labels, values)
+}
+
+// sendModelMenu opens the picker as a new message.
+func (b *Bot) sendModelMenu(ctx context.Context, chatID int64) {
+	if len(b.activeProviders()) == 0 {
+		b.reply(ctx, chatID, "No active models or providers are available.")
+		return
+	}
+	text, keyboard := b.modelMenuContent()
+	if _, err := b.client.SendMessage(ctx, chatID, text, keyboard); err != nil {
 		b.logf("could not send the model menu: %v", err)
 	}
+}
+
+// showModelMenu returns the picker to the provider menu, editing the message
+// the operator is already looking at instead of posting a new one.
+func (b *Bot) showModelMenu(ctx context.Context, query *CallbackQuery) {
+	if query.Message == nil {
+		return
+	}
+	if len(b.activeProviders()) == 0 {
+		_ = b.client.AnswerCallbackQuery(ctx, query.ID, "No active models or providers are available.")
+		return
+	}
+	text, keyboard := b.modelMenuContent()
+	if err := b.client.EditMessageTextWithKeyboard(ctx, query.Message.Chat.ID, query.Message.MessageID, text, keyboard); err != nil {
+		b.logf("could not edit the model menu: %v", err)
+	}
+	_ = b.client.AnswerCallbackQuery(ctx, query.ID, "")
 }
 
 // showProviderModels replaces the picker with one provider's models.
@@ -118,7 +144,9 @@ func (b *Bot) showProviderModels(ctx context.Context, query *CallbackQuery, prov
 	}
 	info, _ := provider.ByID(providerID)
 	text := "Choose a model (" + info.Label + "):"
-	if err := b.client.EditMessageTextWithKeyboard(ctx, query.Message.Chat.ID, query.Message.MessageID, text, buttonsKeyboard(modelSelectPrefix, labels, values)); err != nil {
+	keyboard := buttonsKeyboard(modelSelectPrefix, labels, values)
+	keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, []InlineButton{{Text: "<< Providers", CallbackData: modelMenuBack}})
+	if err := b.client.EditMessageTextWithKeyboard(ctx, query.Message.Chat.ID, query.Message.MessageID, text, keyboard); err != nil {
 		b.logf("could not edit the model menu: %v", err)
 	}
 	_ = b.client.AnswerCallbackQuery(ctx, query.ID, "")

@@ -743,6 +743,8 @@ func (b *Bot) handleCallback(ctx context.Context, query *CallbackQuery) {
 	switch {
 	case strings.HasPrefix(query.Data, "appr:"):
 		b.handleApprovalCallback(ctx, query)
+	case query.Data == modelMenuBack:
+		b.showModelMenu(ctx, query)
 	case strings.HasPrefix(query.Data, modelProviderPrefix):
 		b.showProviderModels(ctx, query, strings.TrimPrefix(query.Data, modelProviderPrefix))
 	case strings.HasPrefix(query.Data, modelSelectPrefix):
