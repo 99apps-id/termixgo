@@ -503,7 +503,7 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
   "showReasoning": true,
   "language": "en",
   "maxSteps": 300,
-  "harnessProfile": "critical",
+  "harnessProfile": "careful",
   "toolSearchEnabled": false,
   "effort": "high",
   "modelEfforts": { "deepseek-v4.1-flash": "low" },
@@ -532,7 +532,7 @@ The non-secret settings live in `~/.termixgo/config.json`. Every key is optional
 | `defaultModel` | the model a new session starts with |
 | `approvalMode` | `ask`, `edits`, `all` or `plan` |
 | `maxSteps` | the whole per-turn ceiling: the agent pauses after this many steps and continues when you reply |
-| `harnessProfile` | `balanced`, `plan_briefly`, `verify_before_finish`, `terminal_first`, `shorter_loop`, `no_todo`, `autonomous` or `critical` |
+| `harnessProfile` | `balanced`, `careful` (the default), `plan_briefly`, `verify_before_finish`, `terminal_first`, `shorter_loop`, `no_todo`, `autonomous` or `critical` |
 | `toolSearchEnabled` | load the ecosystem tools on demand instead of every request |
 | `desktopControl` | offer the local screen, pointer, keyboard and application tools. Off by default |
 | `api` | `{ "enabled": true, "listen": "127.0.0.1:8787" }` for the local HTTP endpoint |

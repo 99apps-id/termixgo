@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-// TestHarnessDefaultsToCritical pins the full-agentic default: an empty id
-// resolves to the critical profile, so every workspace gets evidence-first
-// guidance unless configured otherwise.
-func TestHarnessDefaultsToCritical(t *testing.T) {
+// TestHarnessDefaultsToCareful pins the full-agentic default: an empty id
+// resolves to the careful profile, so every workspace gets meticulous and
+// simple guidance unless configured otherwise.
+func TestHarnessDefaultsToCareful(t *testing.T) {
 	profile := GetHarnessProfile("")
 	if profile.ID != DefaultHarnessProfile {
 		t.Errorf("default profile = %q, want %q", profile.ID, DefaultHarnessProfile)
@@ -62,7 +62,7 @@ func TestHarnessIDsLeadWithTheDefault(t *testing.T) {
 	if ids[0] != DefaultHarnessProfile {
 		t.Errorf("first harness = %q, want the default %q", ids[0], DefaultHarnessProfile)
 	}
-	for _, needed := range []string{"critical", "autonomous", "verify_before_finish", "no_todo"} {
+	for _, needed := range []string{"critical", "autonomous", "verify_before_finish", "no_todo", "careful"} {
 		found := false
 		for _, id := range ids {
 			if id == needed {
@@ -72,6 +72,26 @@ func TestHarnessIDsLeadWithTheDefault(t *testing.T) {
 		if !found {
 			t.Errorf("harness %q is missing from the list", needed)
 		}
+	}
+}
+
+// TestCarefulHarnessDemandsSimplicityAndRobustness pins the careful profile:
+// small tasks get small changes, code handles the edge cases, and no filler
+// ships. It prioritises like critical but hides nothing.
+func TestCarefulHarnessDemandsSimplicityAndRobustness(t *testing.T) {
+	profile := GetHarnessProfile("careful")
+	for _, want := range []string{"overengineer", "robust", "slop"} {
+		if !strings.Contains(strings.ToLower(profile.PromptPrelude), want) {
+			t.Errorf("careful prelude lacks %q:\n%s", want, profile.PromptPrelude)
+		}
+	}
+	base := DefaultRegistry()
+	filtered := RegistryForProfile(base, profile)
+	if got := len(filtered.Tools()); got != len(base.Tools()) {
+		t.Errorf("careful kept %d tools of %d; it hides nothing", got, len(base.Tools()))
+	}
+	if filtered.Tools()[0].Name() != "read_file" {
+		t.Errorf("first tool = %q, want the prioritised read_file", filtered.Tools()[0].Name())
 	}
 }
 

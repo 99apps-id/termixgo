@@ -19,8 +19,9 @@ type HarnessProfile struct {
 	StepBudgetCap   int
 }
 
-// DefaultHarnessProfile is critical: evidence first, frugal with context.
-const DefaultHarnessProfile = "critical"
+// DefaultHarnessProfile is careful: meticulous, simple and robust, with no
+// overengineering for small tasks.
+const DefaultHarnessProfile = "careful"
 
 // DefaultStepBudget bounds one turn when nothing else is configured. It is
 // generous because the budget pauses a turn rather than ending a task: the
@@ -87,6 +88,17 @@ var BuiltinHarnessProfiles = map[string]HarnessProfile{
 			"- After an edit, re-read the changed region and run the smallest check that proves it. Never claim green without running it.\n" +
 			"- Spend tokens like they cost money: prefer grep and glob with offset and limit over whole-file reads, and never echo file contents the tool call already carries.\n" +
 			"- Be concise in prose and complete in substance: answer, name the evidence, stop.",
+		PrioritizeTools: []string{"read_file", "grep", "glob", "edit", "multi_edit", "run_checks"},
+	},
+	"careful": {
+		ID:          "careful",
+		Label:       "Careful and simple",
+		Description: "Meticulous, simple and robust: no overengineering for small tasks, bug-resistant code, professional finish without AI slop.",
+		PromptPrelude: "Work carefully and keep it simple.\n" +
+			"- Match the solution to the size of the task: a small task gets a small change. Do not overengineer, do not add layers, abstractions or guards the request did not ask for.\n" +
+			"- Write robust code: handle the error, edge and empty cases the caller will hit, keep functions small, and never leave a half-wired path.\n" +
+			"- No AI slop: no generic filler, no decorative code, no placeholder that only looks done. Every line earns its place.\n" +
+			"- Verify with the smallest real check before concluding, then stop. Be concise.",
 		PrioritizeTools: []string{"read_file", "grep", "glob", "edit", "multi_edit", "run_checks"},
 	},
 }

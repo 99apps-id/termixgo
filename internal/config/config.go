@@ -233,7 +233,7 @@ type Config struct {
 	// SystemPrompt is appended to the built-in prompt when set.
 	SystemPrompt string `json:"systemPrompt,omitempty"`
 
-	// HarnessProfile selects the agent harness. Empty means critical.
+	// HarnessProfile selects the agent harness. Empty means careful.
 	HarnessProfile string `json:"harnessProfile,omitempty"`
 
 	// ToolSearch keeps the ecosystem tools (GitHub, pipelines, images, skills,
