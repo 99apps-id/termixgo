@@ -915,6 +915,10 @@ func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 			updated, cmd := m.drainNext()
 			return updated, tea.Batch(cmd, doneCmd)
 		}
+		// The finished turn may have consumed everything the steer notice
+		// counted, leaving no drain behind: the stale count is cleared rather
+		// than shown on an idle chat.
+		m.refreshSteerNotice()
 		m.refresh()
 		return m, tea.Batch(tea.SetWindowTitle(m.windowTitle()), doneCmd)
 
@@ -2121,6 +2125,21 @@ func shouldSteer(value string, turnRunning bool) bool {
 // live turn has been handed but not yet taken.
 func (m *Model) queuedCount() int { return len(m.lateSteers) + len(m.queue) + m.app.SteerCount() }
 
+// refreshSteerNotice keeps the steering notice honest. The count is written
+// once when the steer is handed over, but the live turn consumes it silently
+// at its next step; without a recompute the notice keeps claiming a wait that
+// no longer exists, including on an idle chat after the turn ends.
+func (m *Model) refreshSteerNotice() {
+	if !strings.HasPrefix(m.notice, "Steering the run.") {
+		return
+	}
+	if count := m.queuedCount(); count > 0 {
+		m.notice = fmt.Sprintf("Steering the run. (%d waiting)", count)
+	} else {
+		m.notice = ""
+	}
+}
+
 // liveSlashCommands are the commands that may run while a turn is in flight.
 //
 // Two groups belong here. The first is the controls that act on the live turn,
@@ -2311,6 +2330,10 @@ func tick() tea.Cmd {
 
 // applyEvent folds one agent event into the transcript.
 func (m *Model) applyEvent(event agent.Event) {
+	// The live turn consumes a handed steer at its next step with no event of
+	// its own, so the waiting count is recomputed on every event rather than
+	// trusting the number written when the steer was handed over.
+	m.refreshSteerNotice()
 	switch event.Kind {
 	case agent.EventTurnStart:
 		// Nothing to show yet; the first chunk creates its block.

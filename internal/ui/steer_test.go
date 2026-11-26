@@ -126,6 +126,50 @@ func TestQueuedInputSteersALiveTurn(t *testing.T) {
 	waitForTurnToSettle(t, model, before)
 }
 
+// TestSteerNoticeClearsWhenNothingWaits covers the phantom count: a steer the
+// live turn consumed leaves no drain behind, so the notice must not keep
+// claiming a wait on the idle chat.
+func TestSteerNoticeClearsWhenNothingWaits(t *testing.T) {
+	model := chatModel(t)
+	model.notice = "Steering the run. (1 waiting)"
+	next, _ := send(t, model, runDoneMsg{})
+	if next.notice != "" {
+		t.Errorf("stale steer notice = %q, want it cleared with nothing waiting", next.notice)
+	}
+}
+
+// TestSteerNoticeRefreshesWhileTheTurnRuns covers the mid-turn staleness: the
+// count is recomputed from what is actually still waiting on every event.
+func TestSteerNoticeRefreshesWhileTheTurnRuns(t *testing.T) {
+	model := chatModel(t)
+	model.running = true
+	model.app.Steer("first")
+	model.app.Steer("second")
+	model.notice = "Steering the run. (2 waiting)"
+	model.applyEvent(agent.Event{Kind: agent.EventContext})
+	if model.notice != "Steering the run. (2 waiting)" {
+		t.Fatalf("notice = %q, want the live count kept", model.notice)
+	}
+	if taken := model.app.TakeSteer(); len(taken) != 2 {
+		t.Fatalf("TakeSteer = %q, want both steers", taken)
+	}
+	model.applyEvent(agent.Event{Kind: agent.EventContext})
+	if model.notice != "" {
+		t.Errorf("notice = %q, want it cleared once nothing waits", model.notice)
+	}
+}
+
+// TestOtherNoticesSurviveTheSteerRefresh guards the scope: only the steering
+// notice is recomputed, never an unrelated one.
+func TestOtherNoticesSurviveTheSteerRefresh(t *testing.T) {
+	model := chatModel(t)
+	model.notice = "Queue is full (5). Wait for the current turn."
+	model.applyEvent(agent.Event{Kind: agent.EventContext})
+	if model.notice != "Queue is full (5). Wait for the current turn." {
+		t.Errorf("an unrelated notice was rewritten: %q", model.notice)
+	}
+}
+
 // waitForTurnToSettle blocks until a turn started after the session held
 // before messages has run and released the single-run slot.
 func waitForTurnToSettle(t *testing.T, model *Model, before int) {
