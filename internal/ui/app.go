@@ -736,6 +736,9 @@ func (m *Model) updateInline(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
+	if isShiftEnterCSI(message) {
+		message = tea.KeyMsg{Type: tea.KeyCtrlJ}
+	}
 	switch typed := message.(type) {
 	case tea.WindowSizeMsg:
 		prevWidth := m.width
@@ -1517,10 +1520,9 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key.String() {
-	case "shift+enter", "ctrl+j":
-		// Shift+Enter inserts a newline without sending. Where the
-		// terminal does not send Shift+Enter distinctly, Ctrl+J (LF)
-		// also inserts one; a bare Enter still submits.
+	case "shift+enter", "ctrl+j", "alt+enter":
+		// Shift+Enter, Ctrl+J (LF), and Alt+Enter insert a newline without
+		// sending; a bare Enter still submits.
 		m.composer.InsertString("\n")
 		m.updateSlashMatches()
 		m.refresh()
@@ -1590,6 +1592,12 @@ func (m *Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.escPending = true
 		return m, tea.Tick(escSettleDelay, func(time.Time) tea.Msg { return settleEscMsg{} })
 	case "enter":
+		if m.realTerminal && isShiftPressed() {
+			m.composer.InsertString("\n")
+			m.updateSlashMatches()
+			m.refresh()
+			return m, nil
+		}
 		return m.submitComposerValue(m.composer.Value())
 	case "up":
 		if len(m.mentionMatches) > 0 {
