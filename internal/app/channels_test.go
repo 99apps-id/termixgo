@@ -65,6 +65,40 @@ func TestGroupGuestConversationIdentity(t *testing.T) {
 	}
 }
 
+// TestSharedSessionJoinsOperatorDMsAcrossChannels covers the opt-in shared
+// history: two accounts naming the same sharedSession resolve their
+// operator's 1:1 chats to one id, while guests, groups and unset accounts
+// keep their own per-chat ids.
+func TestSharedSessionJoinsOperatorDMsAcrossChannels(t *testing.T) {
+	shared := config.ChannelAccount{SharedSession: "me"}
+	admin := channel.Request{ChatID: "7", Admin: true}
+	tg := channelSessionKey(config.ChannelTelegram, "default", shared, admin)
+	waReq := channel.Request{ChatID: "628999@s.whatsapp.net", Admin: true}
+	wa := channelSessionKey(config.ChannelWhatsApp, "work", shared, waReq)
+	if tg != wa {
+		t.Fatalf("operator DMs landed on %q and %q, want one shared conversation", tg, wa)
+	}
+	if strings.Contains(tg, "7") || strings.Contains(tg, "628999") {
+		t.Errorf("shared id %q must not name one chat", tg)
+	}
+	guest := channelSessionKey(config.ChannelTelegram, "default", shared, channel.Request{ChatID: "7"})
+	if guest == tg {
+		t.Errorf("a guest joined the operator conversation %q", tg)
+	}
+	groupAdmin := channelSessionKey(config.ChannelTelegram, "default", shared, channel.Request{ChatID: "-100", Admin: true, IsGroup: true})
+	if groupAdmin == tg {
+		t.Errorf("a group chat joined the operator conversation %q", tg)
+	}
+	plain := channelSessionKey(config.ChannelTelegram, "default", config.ChannelAccount{}, admin)
+	if plain != channelSessionID(config.ChannelTelegram, "default", "7") {
+		t.Errorf("an account without sharedSession moved to %q", plain)
+	}
+	other := channelSessionKey(config.ChannelTelegram, "default", config.ChannelAccount{SharedSession: "other"}, admin)
+	if other == tg {
+		t.Errorf("a different shared name joined %q", tg)
+	}
+}
+
 func TestRunningWhatsAppAccountSeesAdminChanges(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
 	cfg := config.Default()

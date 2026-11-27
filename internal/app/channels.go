@@ -721,20 +721,20 @@ func (b *telegramBridge) RunPromptWithImageStream(ctx context.Context, request c
 
 // Steer forwards a steering message into an active turn in this chat.
 func (b *telegramBridge) Steer(request channel.Request, prompt string) bool {
-	id := channelSessionIDFor(config.ChannelTelegram, b.name, request)
+	id := channelSessionKey(config.ChannelTelegram, b.name, b.account.ChannelAccount, request)
 	// A guest's steer is data like any guest prompt, never a raw instruction.
 	return b.app.SteerSession(id, b.promptFor(request, prompt))
 }
 
 // IsRunning reports whether a turn is active for this chat.
 func (b *telegramBridge) IsRunning(request channel.Request) bool {
-	id := channelSessionIDFor(config.ChannelTelegram, b.name, request)
+	id := channelSessionKey(config.ChannelTelegram, b.name, b.account.ChannelAccount, request)
 	return b.app.IsSessionSteerable(id)
 }
 
 // StopChat cancels the turn in flight for this chat.
 func (b *telegramBridge) StopChat(request channel.Request) bool {
-	id := channelSessionIDFor(config.ChannelTelegram, b.name, request)
+	id := channelSessionKey(config.ChannelTelegram, b.name, b.account.ChannelAccount, request)
 	return b.app.StopSession(id)
 }
 
@@ -862,7 +862,7 @@ func (b *telegramBridge) session(request channel.Request) (*agent.Session, error
 	if err != nil {
 		return nil, err
 	}
-	id := channelSessionIDFor(config.ChannelTelegram, b.name, request)
+	id := channelSessionKey(config.ChannelTelegram, b.name, b.account.ChannelAccount, request)
 	if loaded, err := agent.LoadSessionIn(dir, id); err == nil {
 		loaded.SetAgent(agentName)
 		loaded.SetGuest(!request.Admin)
@@ -883,7 +883,7 @@ func (b *telegramBridge) freshSession(request channel.Request) (*agent.Session, 
 	if err != nil {
 		return nil, err
 	}
-	id := channelSessionIDFor(config.ChannelTelegram, b.name, request)
+	id := channelSessionKey(config.ChannelTelegram, b.name, b.account.ChannelAccount, request)
 	session, err := agent.NewSessionWithID(agentName, id, b.app.AgentWorkspace(agentName), b.app.CurrentModel().ID)
 	if err != nil {
 		return nil, err
@@ -897,6 +897,19 @@ func (b *telegramBridge) freshSession(request channel.Request) (*agent.Session, 
 // account and the chat, folded onto the characters a session file name accepts.
 func channelSessionID(kind, account, chatID string) string {
 	return "chan-" + sanitizeSessionPart(kind) + "-" + sanitizeSessionPart(account) + "-" + sanitizeSessionPart(chatID)
+}
+
+// channelSessionKey resolves the session id for one chat. An account that
+// names a sharedSession joins its operator's 1:1 chats into that one named
+// conversation across channels and accounts (the file still lives under the
+// serving agent, so two agents never share). Guests and group chats always
+// keep their own per-chat history, so one stranger never reads another's and
+// a group's words never enter the operator's private context.
+func channelSessionKey(kind, account string, policy config.ChannelAccount, request channel.Request) string {
+	if name := strings.TrimSpace(policy.SharedSession); name != "" && request.Admin && !request.IsGroup {
+		return "chan-shared-" + sanitizeSessionPart(name)
+	}
+	return channelSessionIDFor(kind, account, request)
 }
 
 func sanitizeSessionPart(value string) string {

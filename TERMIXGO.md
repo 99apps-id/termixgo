@@ -622,7 +622,13 @@ internal/ui         Bubble Tea model, renderer, setup wizard, plain fallback
   profile, the learned memory and the project notes; and `checkWorkspacePath`
   refuses credential files and runtime state (`guestSensitive`) for a guest.
   Every file tool goes through that one function, so a new tool inherits the
-  rule by using it. A live browser target is checked by `checkBrowserTarget`
+  rule by using it. An account may opt into one shared operator conversation
+  across channels with `sharedSession`: accounts naming the same value join
+  their operator's 1:1 chats into that one history (`channelSessionKey`),
+  still filed under the serving agent, so two agents never share. Guests and
+  group chats never join even when the option is set, the terminal session is
+  never touched, and the previous per-chat files stay on disk while the
+  shared conversation starts fresh. A live browser target is checked by `checkBrowserTarget`
   before a session is started.
 - A tool approval card in a group is answerable only by the operator, an admin
   or the owner; a private chat may answer its own card. `/pair` locks after

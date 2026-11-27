@@ -364,20 +364,20 @@ func (b *whatsappBridge) RunPromptWithImage(ctx context.Context, request channel
 
 // Steer forwards a steering message into an active turn in this chat.
 func (b *whatsappBridge) Steer(request channel.Request, prompt string) bool {
-	id := channelSessionIDFor(config.ChannelWhatsApp, b.name, request)
+	id := channelSessionKey(config.ChannelWhatsApp, b.name, b.account, request)
 	// A guest's steer is data like any guest prompt, never a raw instruction.
 	return b.app.SteerSession(id, b.promptFor(request, prompt))
 }
 
 // IsRunning reports whether a turn is active for this chat.
 func (b *whatsappBridge) IsRunning(request channel.Request) bool {
-	id := channelSessionIDFor(config.ChannelWhatsApp, b.name, request)
+	id := channelSessionKey(config.ChannelWhatsApp, b.name, b.account, request)
 	return b.app.IsSessionSteerable(id)
 }
 
 // StopChat cancels the turn in flight for this chat.
 func (b *whatsappBridge) StopChat(request channel.Request) bool {
-	id := channelSessionIDFor(config.ChannelWhatsApp, b.name, request)
+	id := channelSessionKey(config.ChannelWhatsApp, b.name, b.account, request)
 	return b.app.StopSession(id)
 }
 
@@ -469,7 +469,7 @@ func (b *whatsappBridge) session(request channel.Request) (*agent.Session, error
 	if err != nil {
 		return nil, err
 	}
-	id := channelSessionIDFor(config.ChannelWhatsApp, b.name, request)
+	id := channelSessionKey(config.ChannelWhatsApp, b.name, b.account, request)
 	if loaded, err := agent.LoadSessionIn(dir, id); err == nil {
 		loaded.SetAgent(agentName)
 		loaded.SetGuest(!request.Admin)
@@ -490,7 +490,7 @@ func (b *whatsappBridge) freshSession(request channel.Request) (*agent.Session, 
 	if err != nil {
 		return nil, err
 	}
-	id := channelSessionIDFor(config.ChannelWhatsApp, b.name, request)
+	id := channelSessionKey(config.ChannelWhatsApp, b.name, b.account, request)
 	session, err := agent.NewSessionWithID(agentName, id, b.app.AgentWorkspace(agentName), b.app.CurrentModel().ID)
 	if err != nil {
 		return nil, err

@@ -102,8 +102,14 @@ type ChannelAccount struct {
 	// only, so a guest never reads backend noise.
 	ShowProgress bool `json:"showProgress,omitempty"`
 	// Guest bounds a non-operator conversation. Nil means the defaults.
-	Guest *GuestLimits            `json:"guest,omitempty"`
-	Chats map[string]ChatOverride `json:"chats,omitempty"`
+	Guest *GuestLimits `json:"guest,omitempty"`
+	// SharedSession joins this account's operator 1:1 chats into one named
+	// conversation. Accounts on any channel that name the same value and
+	// serve the same agent read and write the same history, so one
+	// operator keeps one context in Telegram and in WhatsApp. Guests and
+	// group chats never join: they always keep their own per-chat history.
+	SharedSession string                  `json:"sharedSession,omitempty"`
+	Chats         map[string]ChatOverride `json:"chats,omitempty"`
 	// HookURL is an optional REST API endpoint to intercept inbound messages
 	// before they are sent to the LLM (e.g. http://localhost:8080/api/bot/handle).
 	HookURL string `json:"hookUrl,omitempty"`
