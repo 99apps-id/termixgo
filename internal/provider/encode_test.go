@@ -222,19 +222,20 @@ func TestAnthropicOAuthUsesTheClaudeCodeIdentity(t *testing.T) {
 	}
 }
 
-// TestAnthropicDefaultsMaxTokens guards the CLI's own ceiling, which keeps a
-// thinking model from truncating its own answer when the caller did not set a
-// limit: the thinking tokens come out of max_tokens.
+// TestAnthropicDefaultsMaxTokens guards the CLI's own ceiling per thinking
+// shape: 128000 with adaptive thinking, where the thinking tokens come out
+// of max_tokens, and 32000 otherwise. The backend rejects anything above
+// the model's own maximum.
 func TestAnthropicDefaultsMaxTokens(t *testing.T) {
 	recorder, server := newPayloadRecorder(t)
 	defer server.Close()
 
 	client, _ := newHTTPClient(Provider{ID: "anthropic", Label: "Anthropic", Kind: KindAnthropic}, server.URL, "k")
-	collect(t, client, ChatRequest{Model: "claude-sonnet-4-5", Messages: []Message{{Role: RoleUser, Content: "hi"}}})
+	collect(t, client, ChatRequest{Model: "claude-opus-5-5", Messages: []Message{{Role: RoleUser, Content: "hi"}}})
 
 	body := recorder.payload(t)
 	if number(t, body, "max_tokens") != 128000 {
-		t.Errorf("max_tokens = %v, want the CLI ceiling 128000", body["max_tokens"])
+		t.Errorf("max_tokens = %v, want the adaptive CLI ceiling 128000", body["max_tokens"])
 	}
 	if _, present := body["tools"]; present {
 		t.Errorf("tools must be omitted when none were offered")
@@ -244,6 +245,39 @@ func TestAnthropicDefaultsMaxTokens(t *testing.T) {
 	}
 	if _, present := body["temperature"]; present {
 		t.Errorf("temperature must be omitted when the caller did not set one")
+	}
+}
+
+// TestHaiku45UsesClassicThinkingBudget pins the one model that predates
+// adaptive thinking, as captured from the real client: a 32000 ceiling with
+// a classic 31999 thinking budget, no output_config and no temperature even
+// when the caller sets both.
+func TestHaiku45UsesClassicThinkingBudget(t *testing.T) {
+	recorder, server := newPayloadRecorder(t)
+	defer server.Close()
+
+	client, _ := newHTTPClient(Provider{ID: "anthropic", Label: "Anthropic", Kind: KindAnthropic}, server.URL, "k")
+	temperature := 0.2
+	collect(t, client, ChatRequest{
+		Model:       "claude-haiku-4-5",
+		Effort:      EffortHigh,
+		Temperature: &temperature,
+		Messages:    []Message{{Role: RoleUser, Content: "hi"}},
+	})
+
+	body := recorder.payload(t)
+	if number(t, body, "max_tokens") != 32000 {
+		t.Errorf("max_tokens = %v, want the Haiku 4.5 ceiling 32000", body["max_tokens"])
+	}
+	thinking, _ := body["thinking"].(map[string]any)
+	if thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(31999) {
+		t.Errorf("thinking = %v, want the classic 31999 budget", body["thinking"])
+	}
+	if _, present := body["output_config"]; present {
+		t.Errorf("Haiku 4.5 takes no output_config: %v", body["output_config"])
+	}
+	if _, present := body["temperature"]; present {
+		t.Errorf("a thinking request must drop temperature, got %v", body["temperature"])
 	}
 }
 

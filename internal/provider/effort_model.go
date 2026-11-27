@@ -159,3 +159,13 @@ func anthropicAdaptiveThinking(model string) bool {
 func claudeThinkingEnabled() bool {
 	return !strings.EqualFold(strings.TrimSpace(os.Getenv("TERMIXGO_CLAUDE_THINKING")), "off")
 }
+
+// haiku45ThinkingBudget is the classic thinking budget the CLI sends for
+// Haiku 4.5: all but a token of the model's own 32000 ceiling.
+const haiku45ThinkingBudget = 31999
+
+// isHaiku45 reports whether a model id names Haiku 4.5, the one model in the
+// catalogue that takes classic thinking instead of adaptive.
+func isHaiku45(model string) bool {
+	return strings.Contains(normalizedModelID(model), "haiku-4-5")
+}

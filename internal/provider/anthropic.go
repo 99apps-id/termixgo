@@ -145,14 +145,22 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 	}
 	// Adaptive thinking lets the model decide when and how much to think. The
 	// thinking tokens come out of max_tokens, so the default ceiling is raised
-	// with it: 8192 would cut a reasoning step off before it answered.
+	// with it: a small ceiling cuts a reasoning step off before it answers.
 	thinking := anthropicAdaptiveThinking(model) && claudeThinkingEnabled()
+	// Haiku 4.5 predates adaptive thinking and takes the classic thinking
+	// budget instead. The CLI sends it a 32000 ceiling with a 31999 budget
+	// and no output_config; a larger ceiling is refused with 400.
+	classicThinking := !thinking && isHaiku45(model) && claudeThinkingEnabled()
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
-		// The CLI sends 128000: with adaptive thinking the thinking tokens
-		// come out of max_tokens, and a smaller ceiling cuts a reasoning step
-		// off before it answers.
-		maxTokens = 128000
+		// The ceilings are the CLI's own per-model defaults: 128000 with
+		// adaptive thinking, 32000 otherwise. The backend rejects anything
+		// above its per-model maximum, so an unknown model keeps the
+		// smaller default instead of the largest known value.
+		maxTokens = 32000
+		if thinking {
+			maxTokens = 128000
+		}
 	}
 	var messages []map[string]any
 	if thinking {
@@ -191,9 +199,12 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 	// output_config.effort is the Anthropic effort control and needs no beta
 	// header. It is separate from extended thinking: it shapes how much work
 	// the whole response gets, and it is left out entirely when the operator
-	// set no effort, so the model keeps its own default.
-	if effort := anthropicEffort(model, req.Effort); effort != "" {
-		payload["output_config"] = map[string]any{"effort": effort}
+	// set no effort, so the model keeps its own default. The classic
+	// thinking models take no output_config; the CLI never sends them one.
+	if !classicThinking {
+		if effort := anthropicEffort(model, req.Effort); effort != "" {
+			payload["output_config"] = map[string]any{"effort": effort}
+		}
 	}
 
 	if thinking {
@@ -205,6 +216,11 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 		// keeps the cached prefix stable across a tool loop.
 		payload["context_management"] = map[string]any{"edits": []map[string]any{{"type": "clear_thinking_20251015", "keep": "all"}}}
 		// A thinking request takes the default temperature only.
+		delete(payload, "temperature")
+	} else if classicThinking {
+		// The classic budget fills all but a token of the model's own
+		// ceiling, exactly as the CLI sends it.
+		payload["thinking"] = map[string]any{"type": "enabled", "budget_tokens": haiku45ThinkingBudget, "display": "omitted"}
 		delete(payload, "temperature")
 	}
 

@@ -114,7 +114,9 @@ func TestThinkingIsLeftOutForModelsThatLackIt(t *testing.T) {
 		fmt.Fprint(writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 	}))
 	defer server.Close()
-	for _, model := range []string{"claude-haiku-4-5", "claude-sonnet-4-6"} {
+	// Haiku 4.5 is not in this list: it takes the classic thinking budget,
+	// pinned by TestHaiku45UsesClassicThinkingBudget.
+	for _, model := range []string{"claude-sonnet-4-6"} {
 		body = nil
 		if err := thinkingClient(t, server.URL).Stream(context.Background(), ChatRequest{Model: model, Messages: []Message{{Role: RoleUser, Content: "hi"}}}, func(StreamEvent) error { return nil }); err != nil {
 			t.Fatalf("Stream %s: %v", model, err)
