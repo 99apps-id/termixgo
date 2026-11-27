@@ -858,11 +858,12 @@ func (b *Bot) runAudio(ctx context.Context, request channel.Request, audioMsg *w
 	go b.keepTyping(ctx, request.ChatID, done)
 	transcript, err := transcriber.TranscribeAudio(ctx, data, fileName)
 	if err != nil {
+		b.logfLine("voice transcription failed: " + err.Error())
 		close(done)
 		if lang == "id" {
-			b.reply(ctx, request.ChatID, "Gagal menerjemahkan pesan suara: "+err.Error())
+			b.reply(ctx, request.ChatID, "Saya belum bisa mentranskripsikan pesan suara. Tolong kirim ulang sebagai teks.")
 		} else {
-			b.reply(ctx, request.ChatID, "Voice transcription failed: "+err.Error())
+			b.reply(ctx, request.ChatID, "I couldn't transcribe the audio. Please send your message again as text.")
 		}
 		return
 	}

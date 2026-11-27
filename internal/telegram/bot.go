@@ -1549,7 +1549,8 @@ func (b *Bot) runVoice(ctx context.Context, chatID int64, request channel.Reques
 
 	text, err := transcriber.TranscribeAudio(ctx, data, filename)
 	if err != nil {
-		b.reply(ctx, chatID, "Transcription failed: "+err.Error())
+		b.logf("voice transcription failed: %v", err)
+		b.reply(ctx, chatID, "I couldn't transcribe the audio. Please send your message again as text.")
 		return
 	}
 	text = strings.TrimSpace(text)

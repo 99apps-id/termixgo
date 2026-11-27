@@ -599,19 +599,46 @@ func TestSendToAndPairingStore(t *testing.T) {
 
 type voiceAndInspectorAgent struct {
 	fakeAgent
-	transcript string
-	cost       string
-	plan       string
-	compact    string
+	transcript    string
+	transcribeErr error
+	cost          string
+	plan          string
+	compact       string
 }
 
 func (a *voiceAndInspectorAgent) TranscribeAudio(ctx context.Context, data []byte, filename string) (string, error) {
-	return a.transcript, nil
+	return a.transcript, a.transcribeErr
 }
 
 func (a *voiceAndInspectorAgent) RunVoicePrompt(ctx context.Context, req channel.Request, prompt string, progress func(string)) (string, error) {
 	a.prompts = append(a.prompts, prompt)
 	return "voice-reply", nil
+}
+
+func TestVoiceTranscriptionFailureAsksForText(t *testing.T) {
+	agent := &voiceAndInspectorAgent{transcribeErr: errors.New("Whisper API 429: quota exhausted")}
+	bot := New(nil, agent)
+	var replies []string
+	bot.sendHook = func(_, text string) { replies = append(replies, text) }
+	bot.downloadHook = func(context.Context, whatsmeow.DownloadableMessage) ([]byte, error) {
+		return []byte("audio"), nil
+	}
+	bot.SetAccount("default", config.ChannelAccount{
+		Enabled: true,
+		Admins:  []string{"628999@s.whatsapp.net"},
+	}, nil)
+	sender := types.NewJID("628999", types.DefaultUserServer)
+	bot.handleMessage(t.Context(), &events.Message{
+		Info:    types.MessageInfo{MessageSource: types.MessageSource{Chat: sender, Sender: sender}},
+		Message: &waE2E.Message{AudioMessage: &waE2E.AudioMessage{PTT: proto.Bool(true)}},
+	})
+
+	if len(replies) != 1 || !strings.Contains(replies[0], "sebagai teks") || strings.Contains(replies[0], "Whisper") {
+		t.Errorf("replies = %q, want one text retry without provider details", replies)
+	}
+	if len(agent.prompts) != 0 {
+		t.Errorf("unexpected prompts without a transcript: %q", agent.prompts)
+	}
 }
 
 func (a *voiceAndInspectorAgent) CostInfo(req channel.Request, lang string) string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -319,6 +320,50 @@ func TestVoiceMessageTranscribesAndRunsPrompt(t *testing.T) {
 
 	if got := agent.firstPrompt(); got != "run all tests and fix failing ones" {
 		t.Errorf("prompt = %q, want transcribed text", got)
+	}
+}
+
+func TestVoiceTranscriptionFailureAsksForText(t *testing.T) {
+	replies := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getFile"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true, "result": map[string]string{"file_id": "voice1", "file_path": "voice/note.oga"},
+			})
+			return
+		case strings.Contains(r.URL.Path, "/file/"):
+			_, _ = w.Write([]byte("audio"))
+			return
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			var message struct{ Text string }
+			_ = json.NewDecoder(r.Body).Decode(&message)
+			replies <- message.Text
+		}
+		_, _ = io.WriteString(w, `{"ok":true,"result":{"message_id":1}}`)
+	}))
+	defer server.Close()
+
+	agent := &scriptedAgent{transcribeErr: errors.New("ElevenLabs API 429: quota exhausted")}
+	bot := New("123:abc", agent)
+	bot.client = newClientAt("123:abc", server.URL)
+	bot.Pair(7, 9)
+	bot.handleMessage(t.Context(), &Message{
+		Chat:  Chat{ID: 7, Type: "private"},
+		From:  &User{ID: 9},
+		Voice: &Voice{FileID: "voice1"},
+	})
+
+	select {
+	case reply := <-replies:
+		if !strings.Contains(reply, "as text") || strings.Contains(reply, "ElevenLabs") {
+			t.Errorf("reply = %q, want a text retry without provider details", reply)
+		}
+	default:
+		t.Error("expected a plain text message")
+	}
+	if got := agent.firstPrompt(); got != "" {
+		t.Errorf("unexpected prompt without a transcript: %q", got)
 	}
 }
 
