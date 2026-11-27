@@ -1334,6 +1334,7 @@ WhatsApp features:
   deliver an immediate actionable error notice with guidance rather than
   silently dropping messages.
 - **Cross-channel media and message delivery:** Use the `send_channel` tool from the terminal UI, WhatsApp, or Telegram to send text messages, images, or document files across configured WhatsApp and Telegram channels (`whatsapp:default:628xxx`, `telegram:default:123456`).
+- **Shared operator history across channels (opt-in):** Accounts naming the same `sharedSession` in `~/.termixgo/config.json` join the operator's 1:1 Telegram and WhatsApp chats into one conversation. Guests and group chats always keep their own per-chat history.
 - **Voice note transcription:** Voice notes sent in WhatsApp or Telegram are automatically saved and transcribed via `transcribe_audio` (configurable via `termixgo model voice`).
 - **Multi-layer prompt injection and Base64 guardrails:** Non-admin chats cannot execute shell commands, spawn subagents, or upload attachments. Untrusted messages are sanitized against XML boundary breakouts and single/double-encoded Base64 scripts or prompt injections, and outbound replies redact both plaintext and Base64-encoded secrets.
 - **Direct slash commands:** `/models`, `/model <name>`, `/status`, `/new`,

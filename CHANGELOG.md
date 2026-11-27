@@ -6,6 +6,8 @@ All notable changes to Termixgo are recorded here. The format follows
 
 ## Unreleased
 
+## 0.2.14 - 2026-11-27
+
 ### Added
 
 - **ElevenLabs text to speech.** The `text_to_speech` tool can render speech
@@ -14,6 +16,32 @@ All notable changes to Termixgo are recorded here. The format follows
   `speechModel` config, for example `elevenlabs:eleven_multilingual_v2`, or
   `elevenlabs:eleven_flash_v2_5` for half the per-character cost. ElevenLabs
   is never tried silently as a fallback, because it bills per character.
+- **Shared operator conversation across channels.** Accounts naming the same
+  `sharedSession` join their operator's 1:1 chats into one history on
+  Telegram and WhatsApp, filed under the serving agent. Guests and group
+  chats always keep their own per-chat history.
+- **Careful harness, now the default.** The new `careful` profile works
+  meticulously and simply: no overengineering for small tasks, robust code,
+  no AI slop. Use `/harness` to switch; `critical` is still available.
+- **Back button in the Telegram model picker.** The model list ends with a
+  Providers button that edits the message back to the provider menu.
+
+### Fixed
+
+- **Claude Code OAuth wire parity.** Requests now carry the CLI 2.1.325
+  identity, beta list, 128000 ceiling and cache breakpoints captured from
+  the real client, with no empty text blocks and no tool cache marker (a 5m
+  tool breakpoint before the 1h system prefix fails the whole request).
+- **Codex model catalogue.** Reserve and auto-review travel the
+  responses-lite shape the backend serves, retired generations are no
+  longer offered, and daybreak-red is added.
+- **Copilot responses effort.** The escalated route carries the effort
+  inside the reasoning object instead of the rejected top-level field.
+- **Steering notice.** The waiting count is recomputed on every event and
+  cleared when nothing waits, instead of claiming a phantom wait.
+- **Voice transcription failures.** A failed transcription asks for the
+  message again as text without leaking provider error internals into the
+  chat; the cause is still logged server-side.
 
 ## 0.2.13 - 2026-11-25
 
