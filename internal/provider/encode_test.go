@@ -607,11 +607,13 @@ func TestRetryableTransportSeparatesTransientFromPermanent(t *testing.T) {
 // sent: the real client offers only tools it serves.
 func TestClaudeOAuthCloaksToolsAndDecloaksTheStream(t *testing.T) {
 	var gotTools []any
+	var gotSystem []any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		raw, _ := io.ReadAll(request.Body)
 		var body map[string]any
 		_ = json.Unmarshal(raw, &body)
 		gotTools, _ = body["tools"].([]any)
+		gotSystem, _ = body["system"].([]any)
 		writer.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(writer, "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"read_file_ide\"}}\n\n")
 		fmt.Fprint(writer, "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\n")
@@ -654,6 +656,19 @@ func TestClaudeOAuthCloaksToolsAndDecloaksTheStream(t *testing.T) {
 		if name, _ := object["name"].(string); name == "Bash" || name == "Task" || name == "Read" {
 			t.Errorf("tool %q is unavailable and must not be offered: %#v", name, gotTools)
 		}
+		if _, hasCache := object["cache_control"]; hasCache {
+			t.Errorf("tool %v must not carry a cache breakpoint: a 5m tool marker before the 1h system prefix fails the request with 400", object["name"])
+		}
+	}
+	// The 1h system prefix is only valid when no 5m breakpoint precedes it:
+	// with no tool marker, the identity block may carry the 1h breakpoint.
+	if len(gotSystem) < 2 {
+		t.Fatalf("system = %#v, want billing plus identity", gotSystem)
+	}
+	identity, _ := gotSystem[1].(map[string]any)
+	cache, ok := identity["cache_control"].(map[string]any)
+	if !ok || cache["type"] != "ephemeral" || cache["ttl"] != "1h" {
+		t.Errorf("identity cache_control = %#v, want the 1h breakpoint with no 5m tool marker before it", identity["cache_control"])
 	}
 }
 

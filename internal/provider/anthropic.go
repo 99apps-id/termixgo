@@ -258,11 +258,12 @@ func (c *anthropicClient) Stream(ctx context.Context, req ChatRequest, emit func
 		// suffixed. No unavailable decoys are sent: the real client offers
 		// only tools it serves, and a decoy name the model calls resolves to
 		// no client tool, which fails the step instead of doing the work.
+		// The tools also carry no cache breakpoint: Anthropic processes
+		// cache breakpoints in tools, system, messages order and refuses a
+		// 1h block that comes after a 5m one, so a default 5m tool marker
+		// before the 1h system prefix fails the whole request with 400.
 		if len(req.Tools) > 0 {
 			tools := encodeAnthropicTools(req.Tools)
-			if len(tools) > 0 {
-				tools[len(tools)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
-			}
 			cloaked, names := cloakClaudeTools(tools)
 			payload["tools"] = cloaked
 			aliases = names
